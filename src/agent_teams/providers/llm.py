@@ -4,6 +4,7 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from json import dumps
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import ModelEndpointConfig, RunEvent
@@ -14,6 +15,9 @@ from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.tools.agent_builder import build_collaboration_agent
 from agent_teams.tools.registry.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolDeps
+
+if TYPE_CHECKING:
+    from agent_teams.coordination.task_execution_service import TaskExecutionService
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,7 @@ class OpenAICompatibleProvider(LLMProvider):
         workspace_root: Path,
         tool_registry: ToolRegistry,
         allowed_tools: tuple[str, ...],
+        task_execution_service: TaskExecutionService,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -65,6 +70,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._workspace_root = workspace_root
         self._tool_registry = tool_registry
         self._allowed_tools = allowed_tools
+        self._task_execution_service = task_execution_service
 
     def generate(self, request: LLMRequest) -> str:
         tool_rules = f'Available tools: {", ".join(self._allowed_tools)}.'
@@ -105,6 +111,7 @@ class OpenAICompatibleProvider(LLMProvider):
             session_id=request.session_id,
             instance_id=request.instance_id,
             role_id=request.role_id,
+            task_execution_service=self._task_execution_service,
         )
         printed_any = False
         emitted_text_chunks: list[str] = []

@@ -35,6 +35,8 @@ def run_git_bash(*, command: str, workdir: Path, timeout_seconds: int) -> tuple[
             cwd=str(workdir),
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=timeout_seconds,
             check=False,
         )

@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 from agent_teams.agents.instance_pool import InstancePool
-from agent_teams.agents.subagent import SubAgentRunner
 from agent_teams.core.enums import EventType, InstanceStatus, ScopeType, TaskStatus
 from agent_teams.core.ids import new_task_id, new_trace_id
-from agent_teams.core.models import EventEnvelope, IntentInput, RoleDefinition, ScopeRef, TaskEnvelope, VerificationPlan
+from agent_teams.core.models import EventEnvelope, IntentInput, RoleDefinition, TaskEnvelope, VerificationPlan
+from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.events.event_bus import EventBus
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.providers.llm import LLMProvider
@@ -32,6 +32,7 @@ class CoordinatorGraph:
     agent_repo: AgentInstanceRepository
     prompt_builder: RuntimePromptBuilder
     provider_factory: Callable[[RoleDefinition], LLMProvider]
+    task_execution_service: TaskExecutionService
 
     def run(self, intent: IntentInput, trace_id: str | None = None) -> tuple[str, str, str, str]:
         trace_id = trace_id or new_trace_id().value
@@ -45,9 +46,12 @@ class CoordinatorGraph:
             trace_id=trace_id,
             objective=intent.intent,
             parent_instruction=(
-                'You are the workflow coordinator. For complex requests, orchestrate subagents by creating and assigning '
-                'tasks (typically spec_builder -> design_builder -> coder -> verify). For simple requests like greetings, '
-                'respond directly without heavy orchestration.'
+                'You are the workflow coordinator. For complex requests, orchestrate subagents with workflow tools in this '
+                'order: create_workflow_graph -> dispatch_ready_tasks -> get_workflow_status, and after design completion '
+                'call materialize_code_shards_from_design to enable code-parallel execution. For simple requests like '
+                'greetings, respond directly without heavy orchestration. Ignore historical workflows from previous '
+                'runs/sessions and only act on current trace_id tasks. Assignment does not mean completion; rely on '
+                'query_task/get_workflow_status for real status.'
             ),
             scope=('end_to_end_delivery',),
             dod=('response produced',),
@@ -188,87 +192,4 @@ class CoordinatorGraph:
         role_id: str,
         task: TaskEnvelope,
     ) -> str:
-        log_debug(
-            f'[subagent:start] run={task.trace_id} task={task.task_id} '
-            f'instance={instance_id} role={role_id}'
-        )
-        self.instance_pool.mark_running(instance_id)
-        self.agent_repo.mark_status(instance_id, InstanceStatus.RUNNING)
-        self.task_repo.update_status(task.task_id, TaskStatus.RUNNING)
-        self.event_bus.emit(
-            EventEnvelope(
-                event_type=EventType.TASK_STARTED,
-                trace_id=task.trace_id,
-                session_id=task.session_id,
-                task_id=task.task_id,
-                instance_id=instance_id,
-                payload_json='{}',
-            )
-        )
-
-        role = self.role_registry.get(role_id)
-        runner = SubAgentRunner(role=role, prompt_builder=self.prompt_builder, provider=self.provider_factory(role))
-        snapshot = self.shared_store.snapshot(ScopeRef(scope_type=ScopeType.SESSION, scope_id=task.session_id))
-        try:
-            result = runner.run(
-                task=task,
-                instance_id=instance_id,
-                parent_instruction=task.parent_instruction,
-                shared_state_snapshot=snapshot,
-            )
-            self.task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result=result)
-            self.instance_pool.mark_completed(instance_id)
-            self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
-            self.event_bus.emit(
-                EventEnvelope(
-                    event_type=EventType.TASK_COMPLETED,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json='{}',
-                )
-            )
-            log_debug(
-                f'[subagent:done] run={task.trace_id} task={task.task_id} '
-                f'instance={instance_id} role={role_id}'
-            )
-            return result
-        except TimeoutError:
-            self.task_repo.update_status(task.task_id, TaskStatus.TIMEOUT, error_message='Task timeout')
-            self.instance_pool.mark_timeout(instance_id)
-            self.agent_repo.mark_status(instance_id, InstanceStatus.TIMEOUT)
-            self.event_bus.emit(
-                EventEnvelope(
-                    event_type=EventType.TASK_TIMEOUT,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json='{}',
-                )
-            )
-            log_debug(
-                f'[subagent:timeout] run={task.trace_id} task={task.task_id} '
-                f'instance={instance_id} role={role_id}'
-            )
-            raise
-        except Exception as exc:
-            self.task_repo.update_status(task.task_id, TaskStatus.FAILED, error_message=str(exc))
-            self.instance_pool.mark_failed(instance_id)
-            self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
-            self.event_bus.emit(
-                EventEnvelope(
-                    event_type=EventType.TASK_FAILED,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json='{}',
-                )
-            )
-            log_debug(
-                f'[subagent:error] run={task.trace_id} task={task.task_id} '
-                f'instance={instance_id} role={role_id} err={exc}'
-            )
-            raise
+        return self.task_execution_service.execute(instance_id=instance_id, role_id=role_id, task=task)

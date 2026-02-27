@@ -7,6 +7,7 @@ from threading import Thread
 from agent_teams.agents.instance_pool import InstancePool
 from agent_teams.agents.meta_agent import MetaAgent
 from agent_teams.coordination.coordinator import CoordinatorGraph
+from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.core.config import load_runtime_config
 from agent_teams.core.enums import InjectionSource, RunEventType
 from agent_teams.core.ids import new_trace_id
@@ -61,6 +62,8 @@ class AgentTeamsApp:
         injection_manager = RunInjectionManager()
         run_event_hub = RunEventHub()
 
+        prompt_builder = RuntimePromptBuilder()
+
         def provider_factory(role: RoleDefinition) -> LLMProvider:
             provider: LLMProvider
             if effective_model_config is None:
@@ -78,8 +81,20 @@ class AgentTeamsApp:
                     workspace_root=Path.cwd(),
                     tool_registry=tool_registry,
                     allowed_tools=role.tools,
+                    task_execution_service=task_execution_service,
                 )
             return provider
+
+        task_execution_service = TaskExecutionService(
+            role_registry=role_registry,
+            instance_pool=instance_pool,
+            task_repo=task_repo,
+            shared_store=shared_store,
+            event_bus=event_bus,
+            agent_repo=agent_repo,
+            prompt_builder=prompt_builder,
+            provider_factory=provider_factory,
+        )
 
         coordinator = CoordinatorGraph(
             role_registry=role_registry,
@@ -88,8 +103,9 @@ class AgentTeamsApp:
             shared_store=shared_store,
             event_bus=event_bus,
             agent_repo=agent_repo,
-            prompt_builder=RuntimePromptBuilder(),
+            prompt_builder=prompt_builder,
             provider_factory=provider_factory,
+            task_execution_service=task_execution_service,
         )
         self._meta_agent = MetaAgent(coordinator=coordinator)
         self._task_repo = task_repo

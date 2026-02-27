@@ -11,6 +11,11 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
     def query_task(ctx, task_id: str) -> str:
         def _action() -> str:
             record = ctx.deps.task_repo.get(task_id)
+            if ctx.deps.role_id == 'coordinator_agent' and record.envelope.trace_id != ctx.deps.trace_id:
+                raise ValueError(
+                    'Coordinator can only query tasks from current run trace. '
+                    f'task_trace={record.envelope.trace_id}, current_trace={ctx.deps.trace_id}'
+                )
             return record.model_dump_json()
 
         return execute_tool(

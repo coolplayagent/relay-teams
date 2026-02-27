@@ -8,6 +8,8 @@ from agent_teams.core.models import TaskEnvelope, VerificationPlan
 from agent_teams.tools.runtime import ToolDeps
 from agent_teams.tools.tool_helpers import execute_tool
 
+MAX_COORDINATOR_DELEGATED_TASKS = 4
+
 
 def mount(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool
@@ -21,6 +23,15 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
         parent_instruction: str | None = None,
     ) -> str:
         def _action() -> str:
+            if ctx.deps.role_id == 'coordinator_agent':
+                records = ctx.deps.task_repo.list_by_trace(ctx.deps.trace_id)
+                delegated_count = sum(1 for item in records if item.envelope.task_id != ctx.deps.task_id)
+                if delegated_count >= MAX_COORDINATOR_DELEGATED_TASKS:
+                    raise ValueError(
+                        'Coordinator delegated task limit reached for this run '
+                        f'({MAX_COORDINATOR_DELEGATED_TASKS}). Wait for existing tasks to finish.'
+                    )
+
             task_id = f"task_{uuid.uuid4().hex[:12]}"
             envelope = TaskEnvelope(
                 task_id=task_id,

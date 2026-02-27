@@ -37,7 +37,7 @@ def log_debug(message: str) -> None:
 
 def log_model_output(role_id: str, message: str) -> None:
     close_model_stream()
-    print(f'[{role_label(role_id)}] agent output {message}')
+    print(f'[{role_label(role_id)}] {message}')
 
 
 def log_tool_call(role_id: str, tool_name: str, params: dict[str, object]) -> None:
@@ -55,7 +55,7 @@ def log_model_stream_chunk(role_id: str, text: str) -> None:
     global _OPEN_MODEL_STREAM_ROLE_ID
     if _OPEN_MODEL_STREAM_ROLE_ID != role_id:
         close_model_stream()
-        print(f'[{role_label(role_id)}] agent output ', end='', flush=True)
+        print(f'[{role_label(role_id)}] ', end='', flush=True)
         _OPEN_MODEL_STREAM_ROLE_ID = role_id
     print(text, end='', flush=True)
 
