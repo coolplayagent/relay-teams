@@ -16,6 +16,7 @@ class SubAgentRunner:
     def run(
         self,
         task: TaskEnvelope,
+        instance_id: str,
         parent_instruction: str | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
     ) -> str:
@@ -32,6 +33,9 @@ class SubAgentRunner:
                 run_id=task.trace_id,
                 trace_id=task.trace_id,
                 task_id=task.task_id,
+                session_id=task.session_id,
+                instance_id=instance_id,
+                role_id=self.role.role_id,
                 system_prompt=system_prompt,
                 user_prompt=task.objective,
             )

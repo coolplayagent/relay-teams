@@ -8,6 +8,7 @@ from agent_teams.core.config import load_runtime_config
 from agent_teams.core.models import IntentInput
 from agent_teams.interfaces.sdk.client import AgentTeamsApp
 from agent_teams.roles.registry import RoleLoader
+from agent_teams.tools.registry.defaults import build_default_registry
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -52,6 +53,9 @@ def tasks_query(task_id: str, config_dir: Path = Path('.agent_teams')) -> None:
 def roles_validate(config_dir: Path = Path('.agent_teams')) -> None:
     runtime = load_runtime_config(config_dir=config_dir)
     registry = RoleLoader().load_all(runtime.paths.roles_dir)
+    tool_registry = build_default_registry()
+    for role in registry.list_roles():
+        tool_registry.validate_known(role.tools)
     typer.echo(f'Loaded {len(registry.list_roles())} roles')
 
 

@@ -27,10 +27,10 @@ from agent_teams.providers.llm import EchoProvider, LLMProvider, OpenAICompatibl
 from agent_teams.roles.registry import RoleLoader
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_event_hub import RunEventHub
+from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.tools.models import CreateSubAgentRequest, CreateTaskRequest, QueryTaskRequest
-from agent_teams.tools.service import CollaborationTools
+from agent_teams.tools.registry.defaults import build_default_registry
 from agent_teams.workflow.spec import WorkflowSpec
 
 
@@ -46,29 +46,35 @@ class AgentTeamsApp:
         effective_model_config = model_config or runtime.model_endpoint
 
         role_registry = RoleLoader().load_all(runtime.paths.roles_dir)
+        tool_registry = build_default_registry()
+        for role in role_registry.list_roles():
+            tool_registry.validate_known(role.tools)
+
         task_repo = TaskRepository(runtime.paths.db_path)
         shared_store = SharedStore(runtime.paths.db_path)
         event_bus = EventBus(runtime.paths.db_path)
+        agent_repo = AgentInstanceRepository(runtime.paths.db_path)
         instance_pool = InstancePool()
         injection_manager = RunInjectionManager()
         run_event_hub = RunEventHub()
-        tools = CollaborationTools(
-            task_repo=task_repo,
-            instance_pool=instance_pool,
-            shared_store=shared_store,
-            event_bus=event_bus,
-        )
 
-        def provider_factory(_role: RoleDefinition) -> LLMProvider:
+        def provider_factory(role: RoleDefinition) -> LLMProvider:
             provider: LLMProvider
             if effective_model_config is None:
                 provider = EchoProvider()
             else:
                 provider = OpenAICompatibleProvider(
                     effective_model_config,
-                    tools,
-                    injection_manager,
-                    run_event_hub,
+                    task_repo=task_repo,
+                    instance_pool=instance_pool,
+                    shared_store=shared_store,
+                    event_bus=event_bus,
+                    injection_manager=injection_manager,
+                    run_event_hub=run_event_hub,
+                    agent_repo=agent_repo,
+                    workspace_root=Path.cwd(),
+                    tool_registry=tool_registry,
+                    allowed_tools=role.tools,
                 )
             return provider
 
@@ -77,16 +83,19 @@ class AgentTeamsApp:
             instance_pool=instance_pool,
             task_repo=task_repo,
             shared_store=shared_store,
-            tools=tools,
+            event_bus=event_bus,
+            agent_repo=agent_repo,
             prompt_builder=RuntimePromptBuilder(),
             provider_factory=provider_factory,
         )
         self._meta_agent = MetaAgent(coordinator=coordinator)
-        self._tools = tools
+        self._task_repo = task_repo
+        self._instance_pool = instance_pool
         self._role_registry = role_registry
         self._workflows: list[WorkflowSpec] = []
         self._injection_manager = injection_manager
         self._run_event_hub = run_event_hub
+        self._agent_repo = agent_repo
 
     def run_intent(self, intent: IntentInput) -> RunResult:
         run_id = new_trace_id().value
@@ -145,34 +154,48 @@ class AgentTeamsApp:
                 break
 
     def inject_message(self, run_id: str, source: InjectionSource, content: str) -> InjectionMessage:
-        message = self._injection_manager.enqueue(run_id, source=source, content=content)
-        self._run_event_hub.publish(
-            RunEvent(
+        running = self._agent_repo.list_running(run_id)
+        if not running:
+            raise KeyError(f'No RUNNING agent for run_id={run_id}')
+
+        created: InjectionMessage | None = None
+        for record in running:
+            created = self._injection_manager.enqueue(
                 run_id=run_id,
-                trace_id=run_id,
-                task_id=None,
-                event_type=RunEventType.INJECTION_ENQUEUED,
-                payload_json=message.model_dump_json(),
+                recipient_instance_id=record.instance_id,
+                source=source,
+                content=content,
             )
-        )
-        return message
+            self._run_event_hub.publish(
+                RunEvent(
+                    run_id=run_id,
+                    trace_id=run_id,
+                    task_id=None,
+                    event_type=RunEventType.INJECTION_ENQUEUED,
+                    payload_json=created.model_dump_json(),
+                )
+            )
+
+        if created is None:
+            raise KeyError(f'No RUNNING agent for run_id={run_id}')
+        return created
 
     def create_workflow(self, spec: WorkflowSpec) -> str:
         self._workflows.append(spec)
         return spec.workflow_id
 
     def submit_task(self, task: TaskEnvelope) -> str:
-        self._tools.create_task(CreateTaskRequest(envelope=task))
+        self._task_repo.create(task)
         return task.task_id
 
     def query_task(self, task_id: str) -> TaskRecord:
-        return self._tools.query_task(QueryTaskRequest(task_id=task_id))
+        return self._task_repo.get(task_id)
 
     def list_tasks(self) -> tuple[TaskRecord, ...]:
-        return self._tools.list_tasks()
+        return self._task_repo.list_all()
 
     def create_subagent(self, role_id: str) -> SubAgentInstance:
-        return self._tools.create_subagent(CreateSubAgentRequest(role_id=role_id))
+        return self._instance_pool.create_subagent(role_id)
 
     def list_roles(self) -> tuple[RoleDefinition, ...]:
         return self._role_registry.list_roles()

@@ -12,3 +12,6 @@ __pycache__/
 
 tmp.db
 tmp.db-journal
+AGENTS.md
+.tmp_pytest/
+pytest-cache-files-*/

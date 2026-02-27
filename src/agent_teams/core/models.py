@@ -138,8 +138,11 @@ class InjectionMessage(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     run_id: str = Field(min_length=1)
+    recipient_instance_id: str = Field(min_length=1)
     source: InjectionSource
     content: str = Field(min_length=1)
+    sender_instance_id: str | None = None
+    sender_role_id: str | None = None
     priority: int = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -153,3 +156,16 @@ class RunEvent(BaseModel):
     event_type: RunEventType
     payload_json: str = Field(default='{}')
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+class AgentRuntimeRecord(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    run_id: str = Field(min_length=1)
+    trace_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    instance_id: str = Field(min_length=1)
+    role_id: str = Field(min_length=1)
+    status: InstanceStatus
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
