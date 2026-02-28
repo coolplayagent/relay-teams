@@ -22,6 +22,7 @@ class MessageRepository:
             '''
             CREATE TABLE IF NOT EXISTS messages (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   TEXT NOT NULL DEFAULT '',
                 instance_id  TEXT NOT NULL,
                 task_id      TEXT NOT NULL,
                 trace_id     TEXT NOT NULL,
@@ -31,6 +32,10 @@ class MessageRepository:
             )
             '''
         )
+        columns = [r['name'] for r in self._conn.execute('PRAGMA table_info(messages)').fetchall()]
+        if 'session_id' not in columns:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
         self._conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id)'
         )
@@ -42,6 +47,7 @@ class MessageRepository:
     def append(
         self,
         *,
+        session_id: str,
         instance_id: str,
         task_id: str,
         trace_id: str,
@@ -51,6 +57,7 @@ class MessageRepository:
         now = datetime.now(tz=timezone.utc).isoformat()
         rows = [
             (
+                session_id,
                 instance_id,
                 task_id,
                 trace_id,
@@ -61,8 +68,8 @@ class MessageRepository:
             for msg in messages
         ]
         self._conn.executemany(
-            'INSERT INTO messages(instance_id, task_id, trace_id, role, message_json, created_at) '
-            'VALUES(?, ?, ?, ?, ?, ?)',
+            'INSERT INTO messages(session_id, instance_id, task_id, trace_id, role, message_json, created_at) '
+            'VALUES(?, ?, ?, ?, ?, ?, ?)',
             rows,
         )
         self._conn.commit()
@@ -78,6 +85,30 @@ class MessageRepository:
             msgs = ModelMessagesTypeAdapter.validate_json(str(row['message_json']))
             result.extend(msgs)
         return result
+
+    def get_messages_by_session(self, session_id: str) -> list[dict]:
+        """Return all messages for an entire session with their DB metadata."""
+        rows = self._conn.execute(
+            'SELECT instance_id, task_id, trace_id, role, message_json, created_at '
+            'FROM messages WHERE session_id=? ORDER BY id ASC',
+            (session_id,),
+        ).fetchall()
+        
+        import json
+        results = []
+        for row in rows:
+            # message_json is a list [ { ... } ]
+            msg_list = json.loads(str(row['message_json']))
+            msg = msg_list[0] if msg_list else {}
+            results.append({
+                "instance_id": str(row["instance_id"]),
+                "task_id": str(row["task_id"]),
+                "trace_id": str(row["trace_id"]),
+                "role": str(row["role"]),
+                "created_at": str(row["created_at"]),
+                "message": msg
+            })
+        return results
 
     def get_history_for_task(self, instance_id: str, task_id: str) -> list[ModelMessage]:
         """Return messages scoped to a specific task."""

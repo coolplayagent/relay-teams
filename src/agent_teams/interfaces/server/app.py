@@ -116,6 +116,14 @@ def list_session_agents(session_id: str, sdk: AgentTeamsApp = Depends(get_sdk)):
     agents = sdk.list_agents_in_session(session_id)
     return [agent.model_dump() for agent in agents]
 
+@app.get("/session/{session_id}/events")
+def get_session_events(session_id: str, sdk: AgentTeamsApp = Depends(get_sdk)):
+    return sdk.get_global_events(session_id)
+
+@app.get("/session/{session_id}/messages")
+def get_session_all_messages(session_id: str, sdk: AgentTeamsApp = Depends(get_sdk)):
+    return sdk.get_session_messages(session_id)
+
 @app.get("/session/{session_id}/agents/{instance_id}/messages")
 def get_agent_messages(session_id: str, instance_id: str, sdk: AgentTeamsApp = Depends(get_sdk)):
     return sdk.get_agent_messages(instance_id)

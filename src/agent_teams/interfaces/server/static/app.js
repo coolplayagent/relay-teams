@@ -177,8 +177,166 @@ async function buildAgentTabs(sessionId) {
             addAgentTab(agent.role_id, agent.instance_id, false);
         });
         setupTabListeners();
+
+        // Fetch EventSource history for Global Timeline ONLY
+        await loadGlobalHistory(sessionId);
+
+        // Fetch Pydantic-AI Messages history for Agent Tabs ONLY
+        await loadSessionMessages(sessionId);
     } catch (e) {
-        sysLog(`Failed to load agents: ${e.message}`, 'log-error');
+        sysLog(`Failed to load agents/history: ${e.message}`, 'log-error');
+    }
+}
+
+async function loadGlobalHistory(sessionId) {
+    try {
+        const res = await fetch(`/session/${sessionId}/events`);
+        const events = await res.json();
+
+        // Reset states just in case
+        currentAgentDiv = null;
+        currentAgentContent = null;
+        currentToolBlock = null;
+        rawMarkdownBuffer = "";
+
+        // Determine if we need to load base text messages for the orchestrator
+        // since `events` stream text-deltas, but sometimes users want to see the "User" instructions
+        // We can fetch the raw coordinator messages and inject "user" roles as text_deltas
+        try {
+            const rootAgentRes = await fetch(`/session/${sessionId}/agents`);
+            const sessionAgents = await rootAgentRes.json();
+            const coordAgent = sessionAgents.find(a => a.role_id === 'coordinator_agent');
+            if (coordAgent) {
+                const msgRes = await fetch(`/session/${sessionId}/agents/${coordAgent.instance_id}/messages`);
+                const messages = await msgRes.json();
+                messages.forEach(msg => {
+                    if (msg.role === 'user') {
+                        processGlobalEvent('text_delta', {
+                            role_id: 'user',
+                            instance_id: 'main',
+                            text: (msg.parts[0]?.content || '') + '\\n'
+                        }, { trace_id: 'history-user' });
+
+                        // force a fresh block for the next agent
+                        currentAgentDiv = null;
+                    }
+                    // Note: We don't inject model-response here because the SSE `events` already replay 
+                    // the tokens and tool_calls sequentially!
+                });
+            }
+        } catch (e) { console.warn("Could not splice User history", e); }
+
+        events.forEach(eventData => {
+            const evType = eventData.event_type;
+            const payload = JSON.parse(eventData.payload_json || '{}');
+            processGlobalEvent(evType, payload, eventData, true);
+        });
+
+        scrollToBottom();
+    } catch (e) {
+        console.error("Failed loading history", e);
+    }
+}
+
+async function loadSessionMessages(sessionId) {
+    try {
+        const res = await fetch(`/session/${sessionId}/messages`);
+        const messages = await res.json();
+
+        // Group messages by instance_id
+        const byInstance = {};
+        messages.forEach(m => {
+            if (!byInstance[m.instance_id]) byInstance[m.instance_id] = [];
+            byInstance[m.instance_id].push(m);
+        });
+
+        for (const [instanceId, msgs] of Object.entries(byInstance)) {
+            let container = state.agentViews[instanceId];
+            if (!container) continue;
+
+            container.innerHTML = '';
+
+            msgs.forEach(msgItem => {
+                const role = msgItem.role;
+                const msgObj = msgItem.message;
+                if (!msgObj) return;
+
+                const wrapper = document.createElement('div');
+                wrapper.className = 'message';
+                wrapper.dataset.role = role;
+
+                const label = document.createElement('div');
+                label.className = 'msg-header';
+                const roleClass = role === 'user' ? 'role-coordinator_agent' : 'role-agent';
+                label.innerHTML = `<span class="msg-role ${roleClass}">${role.toUpperCase()}</span>`;
+                wrapper.appendChild(label);
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'msg-content';
+
+                let combinedMarkdown = "";
+
+                if (msgObj.parts) {
+                    msgObj.parts.forEach(part => {
+                        if (part.content !== undefined && typeof part.content === 'string') {
+                            combinedMarkdown += part.content + "\\n\\n";
+                        }
+                        if (part.tool_name) {
+                            // tool call
+                            const tb = document.createElement('div');
+                            tb.className = 'tool-block';
+                            tb.innerHTML = `
+                                <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                                    <div class="tool-title">
+                                        <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px; height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
+                                        Tool Call: <span class="name">${part.tool_name}</span>
+                                    </div>
+                                    <div class="tool-status"><svg class="status-icon status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+                                </div>
+                                <div class="tool-body">
+                                    <div class="tool-args">${JSON.stringify(part.args || {}, null, 2)}</div>
+                                </div>
+                            `;
+                            contentDiv.appendChild(tb);
+                        }
+                        if (part.tool_name === undefined && part.content === undefined && part.tool_return !== undefined) {
+                            // PydanticAI sometimes uses tool_return instead of result inside ModelResponse
+                            const tb = document.createElement('div');
+                            tb.className = 'tool-block';
+                            tb.innerHTML = `
+                                <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                                    <div class="tool-title">
+                                        <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px; height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
+                                        Tool Return
+                                    </div>
+                                </div>
+                                <div class="tool-body">
+                                    <div class="tool-result">${JSON.stringify(part.tool_return, null, 2)}</div>
+                                </div>
+                            `;
+                            contentDiv.appendChild(tb);
+                        }
+                    });
+                }
+
+                if (combinedMarkdown) {
+                    const mdDiv = document.createElement('div');
+                    mdDiv.innerHTML = marked.parse(combinedMarkdown);
+                    if (contentDiv.firstChild) {
+                        contentDiv.insertBefore(mdDiv, contentDiv.firstChild);
+                    } else {
+                        contentDiv.appendChild(mdDiv);
+                    }
+                }
+
+                wrapper.appendChild(contentDiv);
+                container.appendChild(wrapper);
+            });
+            container.scrollTop = container.scrollHeight;
+        }
+
+    } catch (e) {
+        console.error("Failed to load session messages", e);
     }
 }
 
@@ -377,128 +535,156 @@ function startIntentStream(promptText) {
         }
     }
 
+    // Shared processing for both realtime SSE and historical events
+    window.processGlobalEvent = function (evType, payload, eventMeta, isHistorical = false) {
+        if (evType === 'run_started') {
+            sysLog(`Run started (trace: ${eventMeta.trace_id})`);
+        }
+        else if (evType === 'model_step_started') {
+            if (payload.instance_id && payload.role_id) {
+                addAgentTab(payload.role_id, payload.instance_id, false);
+            }
+        }
+        else if (evType === 'text_delta') {
+            const roleId = payload.role_id || 'agent';
+            const instanceId = payload.instance_id || 'main';
+            let targetContainer = state.agentViews[instanceId] || state.agentViews['main'];
+
+            if (payload.instance_id && payload.role_id) {
+                addAgentTab(payload.role_id, payload.instance_id, false);
+                // IF replaying history, DO NOT dump SSE strings into the Agent Tab!
+                // Agent Tabs get their data purely from 'loadSessionMessages'
+                if (!isHistorical) {
+                    targetContainer = state.agentViews[payload.instance_id];
+                } else {
+                    targetContainer = state.agentViews['main'];
+                }
+            }
+
+            if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
+                buildAgentContainer(roleId, targetContainer);
+            }
+
+            // remove typing indicator
+            const typing = currentAgentContent.querySelector('.typing-indicator');
+            if (typing) typing.remove();
+
+            // Handle user role differently to bypass markdown formatting and make it stand out
+            if (roleId === 'user') {
+                currentAgentContent.innerHTML = payload.text.replace(/\\n/g, '<br>');
+            } else {
+                rawMarkdownBuffer += payload.text;
+                currentAgentContent.innerHTML = marked.parse(rawMarkdownBuffer);
+            }
+
+            if (targetContainer.id && targetContainer.id.startsWith('view-')) {
+                targetContainer.scrollTop = targetContainer.scrollHeight;
+            } else {
+                scrollToBottom();
+            }
+        }
+        else if (evType === 'tool_call') {
+            const roleId = payload.role_id || 'agent';
+            const instanceId = payload.instance_id || 'main';
+            let targetContainer = state.agentViews[instanceId] || state.agentViews['main'];
+
+            if (payload.instance_id && payload.role_id) {
+                addAgentTab(payload.role_id, payload.instance_id, false);
+                if (!isHistorical) {
+                    targetContainer = state.agentViews[payload.instance_id];
+                } else {
+                    targetContainer = state.agentViews['main'];
+                }
+            }
+
+            if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
+                buildAgentContainer(roleId, targetContainer);
+            }
+
+            // Build a new tool block inside current agent message
+            const toolBlock = document.createElement('div');
+            toolBlock.className = 'tool-block';
+            toolBlock.innerHTML = `
+                <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                    <div class="tool-title">
+                        <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px; height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
+                        Used Tool: <span class="name">${payload.tool_name}</span>
+                    </div>
+                    <div class="tool-status" id="status-${eventMeta.trace_id || eventMeta.id}">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+                <div class="tool-body">
+                    <div class="tool-args">${JSON.stringify(payload.args, null, 2)}</div>
+                    <div class="tool-result" id="result-${eventMeta.trace_id || eventMeta.id}">Processing...</div>
+                </div>
+            `;
+            currentAgentDiv.appendChild(toolBlock);
+            currentToolBlock = toolBlock; // Track it so tool_result knows where to go
+
+            targetContainer = currentAgentDiv.parentElement;
+            if (targetContainer && targetContainer.id && targetContainer.id.startsWith('view-')) {
+                targetContainer.scrollTop = targetContainer.scrollHeight;
+            } else {
+                scrollToBottom();
+            }
+
+            sysLog(`[Tool] Calling ${payload.tool_name}...`);
+        }
+        else if (evType === 'tool_result') {
+            if (currentToolBlock) {
+                const statusIcon = currentToolBlock.querySelector('.tool-status');
+                const resultContainer = currentToolBlock.querySelector('.tool-result');
+
+                if (payload.error) {
+                    statusIcon.innerHTML = `< svg class="status-icon status-error" viewBox = "0 0 24 24" fill = "none" stroke = "currentColor" stroke - width="2" > <path d="M18 6L6 18M6 6l12 12" /></svg > `;
+                    resultContainer.classList.add('error-text');
+                } else {
+                    statusIcon.innerHTML = `< svg class="status-icon status-success" viewBox = "0 0 24 24" fill = "none" stroke = "currentColor" stroke - width="2" > <path d="M20 6L9 17l-5-5" /></svg > `;
+                    resultContainer.classList.remove('error-text');
+                }
+
+                let renderVal = payload.result;
+                if (typeof renderVal === 'object') {
+                    renderVal = JSON.stringify(renderVal, null, 2);
+                }
+                resultContainer.innerHTML = marked.parse(String(renderVal));
+            }
+        }
+        else if (evType === 'run_finished') {
+            sysLog(`Run finished. (trace: ${eventMeta.trace_id})`);
+
+            // Re-enable UI if it's the root orchestrator's run_finished!
+            if (!eventMeta.instance_id) {
+                state.isGenerating = false;
+                els.sendBtn.disabled = false;
+                els.promptInput.disabled = false;
+                els.promptInput.focus();
+
+                currentAgentDiv = null;
+                currentAgentContent = null;
+                currentToolBlock = null;
+            }
+        }
+        else {
+            sysLog(`Unknown event type: ${evType} `, 'log-info');
+        }
+    };
+
     es.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
             const evType = data.event_type;
             const payload = JSON.parse(data.payload_json || '{}');
 
-            // Handle different events
-            if (evType === 'run_started') {
-                sysLog(`Run started (trace: ${data.trace_id})`);
-            }
-            else if (evType === 'model_step_started') {
-                if (payload.instance_id && payload.role_id) {
-                    addAgentTab(payload.role_id, payload.instance_id, false);
-                }
-            }
-            else if (evType === 'text_delta') {
-                const roleId = payload.role_id || 'agent';
-                const instanceId = payload.instance_id || 'main';
-                let targetContainer = state.agentViews[instanceId] || state.agentViews['main'];
-
-                if (payload.instance_id && payload.role_id) {
-                    addAgentTab(payload.role_id, payload.instance_id, false);
-                    targetContainer = state.agentViews[payload.instance_id];
-                }
-
-                if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
-                    buildAgentContainer(roleId, targetContainer);
-                }
-
-                // remove typing indicator
-                const typing = currentAgentContent.querySelector('.typing-indicator');
-                if (typing) typing.remove();
-
-                rawMarkdownBuffer += payload.text;
-                currentAgentContent.innerHTML = marked.parse(rawMarkdownBuffer);
-
-                if (targetContainer.id && targetContainer.id.startsWith('view-')) {
-                    targetContainer.scrollTop = targetContainer.scrollHeight;
-                } else {
-                    scrollToBottom();
-                }
-            }
-            else if (evType === 'tool_call') {
-                const roleId = payload.role_id || 'agent';
-                const instanceId = payload.instance_id || 'main';
-                let targetContainer = state.agentViews[instanceId] || state.agentViews['main'];
-
-                if (payload.instance_id && payload.role_id) {
-                    addAgentTab(payload.role_id, payload.instance_id, false);
-                    targetContainer = state.agentViews[payload.instance_id];
-                }
-
-                if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
-                    buildAgentContainer(roleId, targetContainer);
-                }
-
-                // Build a new tool block inside current agent message
-                const toolBlock = document.createElement('div');
-                toolBlock.className = 'tool-block';
-                toolBlock.innerHTML = `
-                    <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
-                        <div class="tool-title">
-                            <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px; height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
-                            Used Tool: <span class="name">${payload.tool_name}</span>
-                        </div>
-                        <div class="tool-status" id="status-${data.trace_id}">
-                            <div class="spinner"></div>
-                        </div>
-                    </div>
-                    <div class="tool-body">
-                        <div class="tool-args">${JSON.stringify(payload.args, null, 2)}</div>
-                        <div class="tool-result" id="result-${data.trace_id}">Processing...</div>
-                    </div>
-                `;
-                currentAgentDiv.appendChild(toolBlock);
-                currentToolBlock = toolBlock; // Track it so tool_result knows where to go
-
-                targetContainer = currentAgentDiv.parentElement;
-                if (targetContainer.id && targetContainer.id.startsWith('view-')) {
-                    targetContainer.scrollTop = targetContainer.scrollHeight;
-                } else {
-                    scrollToBottom();
-                }
-
-                sysLog(`[Tool] Calling ${payload.tool_name}...`);
-            }
-            else if (evType === 'tool_result') {
-                if (currentToolBlock) {
-                    const statusIcon = currentToolBlock.querySelector('.tool-status');
-                    const resultContainer = currentToolBlock.querySelector('.tool-result');
-
-                    if (payload.error) {
-                        statusIcon.innerHTML = `<svg class="status-icon status-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
-                        resultContainer.classList.add('error-text');
-                    } else {
-                        statusIcon.innerHTML = `<svg class="status-icon status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>`;
-                    }
-
-                    try {
-                        // format JSON if it is parsable
-                        const resObj = JSON.parse(payload.result);
-                        resultContainer.textContent = JSON.stringify(resObj, null, 2);
-                    } catch {
-                        resultContainer.textContent = payload.result;
-                    }
-                }
-                currentToolBlock = null; // reset
-                sysLog(`[Tool] Finished ${payload.tool_name}`);
-                scrollToBottom();
-            }
-            else if (evType === 'run_completed' || evType === 'run_failed') {
-                sysLog(`Run finished with status: ${evType}`);
-                endStream();
-            }
-
+            processGlobalEvent(evType, payload, data);
         } catch (e) {
             console.error("Failed to parse SSE event", event.data, e);
         }
     };
 
     es.onerror = (err) => {
-        sysLog(`SSE Connection error. Stream closed.`, 'log-error');
+        sysLog(`SSE Connection error.Stream closed.`, 'log-error');
         endStream();
     };
 }

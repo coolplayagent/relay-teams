@@ -137,6 +137,7 @@ class AgentTeamsApp:
         self._agent_repo = agent_repo
         self._session_repo = session_repo
         self._message_repo = message_repo
+        self._event_log = event_log
 
     def _ensure_session(self, session_id: str | None) -> str:
         if not session_id:
@@ -289,3 +290,11 @@ class AgentTeamsApp:
         # Use TypeAdapter to properly dump it.
         json_bytes = ModelMessagesTypeAdapter.dump_json(history)
         return json.loads(json_bytes)
+        
+    def get_global_events(self, session_id: str) -> list[dict]:
+        events = self._event_log.list_by_session(session_id)
+        return [e.model_dump() for e in events]
+
+    def get_session_messages(self, session_id: str) -> list[dict]:
+        import json
+        return self._message_repo.get_messages_by_session(session_id)

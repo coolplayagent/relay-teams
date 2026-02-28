@@ -171,6 +171,7 @@ class OpenAICompatibleProvider(LLMProvider):
                         to_save = list(all_new)[saved_count:]
                         if to_save:
                             self._message_repo.append(
+                                session_id=request.session_id,
                                 instance_id=request.instance_id,
                                 task_id=request.task_id,
                                 trace_id=request.trace_id,
@@ -212,6 +213,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 to_save = list(all_new)[saved_count:]
                 if to_save:
                     self._message_repo.append(
+                        session_id=request.session_id,
                         instance_id=request.instance_id,
                         task_id=request.task_id,
                         trace_id=request.trace_id,
