@@ -4,8 +4,6 @@ import json
 import time
 from collections.abc import Callable
 
-from agent_teams.core.enums import RunEventType
-from agent_teams.core.models import RunEvent
 from agent_teams.runtime.console import is_debug, log_debug, log_tool_call, log_tool_error
 from agent_teams.tools.runtime import ToolContext
 
@@ -34,33 +32,6 @@ def emit_tool_result(ctx: ToolContext, tool_name: str) -> None:
     )
 
 
-def with_injections(ctx: ToolContext, base_result: str) -> str:
-    pending = ctx.deps.injection_manager.drain_at_boundary(ctx.deps.run_id, ctx.deps.instance_id)
-    if not pending:
-        return base_result
-
-    running = ctx.deps.agent_repo.list_running(ctx.deps.run_id)
-    running_line = ', '.join(f'{item.instance_id}:{item.role_id}' for item in running) or 'none'
-
-    lines: list[str] = []
-    for item in pending:
-        sender = item.sender_instance_id or 'unknown'
-        sender_role = item.sender_role_id or 'unknown'
-        lines.append(f'[{item.source.value}] from={sender} role={sender_role} msg={item.content}')
-        ctx.deps.run_event_hub.publish(
-            RunEvent(
-                run_id=ctx.deps.run_id,
-                trace_id=ctx.deps.trace_id,
-                task_id=ctx.deps.task_id,
-                event_type=RunEventType.INJECTION_APPLIED,
-                payload_json=item.model_dump_json(),
-            )
-        )
-
-    injected_text = '\n'.join(lines)
-    return f'{base_result}\n\n[InjectedMessages]\n{injected_text}\n\n[RunningAgents]\n{running_line}'
-
-
 def execute_tool(
     ctx: ToolContext,
     *,
@@ -78,8 +49,7 @@ def execute_tool(
     else:
         log_tool_call(ctx.deps.role_id, tool_name, args_summary)
     try:
-        base_result = action()
-        result = with_injections(ctx, base_result)
+        result = action()
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         if is_debug():
             log_debug(f'[tool:ok] tool={tool_name} elapsed_ms={elapsed_ms}')

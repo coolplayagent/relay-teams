@@ -132,57 +132,89 @@ class OpenAICompatibleProvider(LLMProvider):
         emitted_text_chunks: list[str] = []
         history = self._message_repo.get_history(request.instance_id)
         saved_count = 0
+        restarted = False
 
-        async with agent.iter(
-            request.user_prompt,
-            deps=deps,
-            message_history=history,
-        ) as agent_run:
-            async for node in agent_run:
-                if isinstance(node, ModelRequestNode):
-                    # Stream text chunks from this model response in real-time
-                    async with node.stream(agent_run.ctx) as stream:
-                        async for text_delta in stream.stream_text(delta=True):
-                            if text_delta:
-                                if is_debug():
-                                    print(text_delta, end='', flush=True)
-                                else:
-                                    log_model_stream_chunk(request.role_id, text_delta)
-                                printed_any = True
-                                emitted_text_chunks.append(text_delta)
+        while True:
+            restarted = False
+            async with agent.iter(
+                request.user_prompt if not history else None,
+                deps=deps,
+                message_history=history,
+            ) as agent_run:
+                async for node in agent_run:
+                    if isinstance(node, ModelRequestNode):
+                        # Stream text chunks from this model response in real-time
+                        async with node.stream(agent_run.ctx) as stream:
+                            async for text_delta in stream.stream_text(delta=True):
+                                if text_delta:
+                                    if is_debug():
+                                        print(text_delta, end='', flush=True)
+                                    else:
+                                        log_model_stream_chunk(request.role_id, text_delta)
+                                    printed_any = True
+                                    emitted_text_chunks.append(text_delta)
+                                    self._run_event_hub.publish(
+                                        RunEvent(
+                                            run_id=request.run_id,
+                                            trace_id=request.trace_id,
+                                            task_id=request.task_id,
+                                            event_type=RunEventType.TEXT_DELTA,
+                                            payload_json=dumps({'text': text_delta}),
+                                        )
+                                    )
+                        # Flush messages accumulated up to this node
+                        all_new = agent_run.new_messages()
+                        to_save = list(all_new)[saved_count:]
+                        if to_save:
+                            self._message_repo.append(
+                                instance_id=request.instance_id,
+                                task_id=request.task_id,
+                                trace_id=request.trace_id,
+                                messages=to_save,
+                            )
+                            saved_count += len(to_save)
+
+                        # Drain pending user injections at this boundary
+                        injections = self._injection_manager.drain_at_boundary(
+                            request.run_id, request.instance_id
+                        )
+                        if injections:
+                            from pydantic_ai.messages import ModelRequest, UserPromptPart
+                            extra = [
+                                ModelRequest(parts=[UserPromptPart(content=msg.content)])
+                                for msg in injections
+                            ]
+                            for msg in injections:
                                 self._run_event_hub.publish(
                                     RunEvent(
                                         run_id=request.run_id,
                                         trace_id=request.trace_id,
                                         task_id=request.task_id,
-                                        event_type=RunEventType.TEXT_DELTA,
-                                        payload_json=dumps({'text': text_delta}),
+                                        event_type=RunEventType.INJECTION_APPLIED,
+                                        payload_json=msg.model_dump_json(),
                                     )
                                 )
-                    # Flush messages accumulated up to this node
-                    all_new = agent_run.new_messages()
-                    to_save = list(all_new)[saved_count:]
-                    if to_save:
-                        self._message_repo.append(
-                            instance_id=request.instance_id,
-                            task_id=request.task_id,
-                            trace_id=request.trace_id,
-                            messages=to_save,
-                        )
-                        saved_count += len(to_save)
+                            # Restart iter() with injected messages appended to history
+                            history = list(agent_run.new_messages()) + extra
+                            saved_count = len(history) - len(extra)
+                            restarted = True
+                            break  # break inner for-loop, restart while
 
-        result = agent_run.result
+            if not restarted:
+                # Normal completion
+                result = agent_run.result
+                # Flush any remaining messages (e.g. final tool results)
+                all_new = result.new_messages()
+                to_save = list(all_new)[saved_count:]
+                if to_save:
+                    self._message_repo.append(
+                        instance_id=request.instance_id,
+                        task_id=request.task_id,
+                        trace_id=request.trace_id,
+                        messages=to_save,
+                    )
+                break  # done
 
-        # Flush any remaining messages (e.g. final tool results not yet saved)
-        all_new = result.new_messages()
-        to_save = list(all_new)[saved_count:]
-        if to_save:
-            self._message_repo.append(
-                instance_id=request.instance_id,
-                task_id=request.task_id,
-                trace_id=request.trace_id,
-                messages=to_save,
-            )
 
         if printed_any and is_debug():
             print()
