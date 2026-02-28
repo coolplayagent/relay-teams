@@ -12,7 +12,7 @@ from agent_teams.interfaces.sdk.client import AgentTeamsApp
 from agent_teams.roles.registry import RoleLoader
 from agent_teams.tools.defaults import build_default_registry
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
 def _get_project_root() -> Path:
