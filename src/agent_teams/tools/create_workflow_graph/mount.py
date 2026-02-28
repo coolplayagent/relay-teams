@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from agent_teams.core.models import TaskEnvelope, VerificationPlan
-from agent_teams.tools.runtime import ToolDeps
+from agent_teams.roles.registry import RoleRegistry
+from agent_teams.tools.runtime import ToolDeps, ToolContext
 from agent_teams.tools.tool_helpers import execute_tool
 from agent_teams.workflow.runtime_graph import load_graph, save_graph, workflow_tag
 
@@ -24,7 +25,7 @@ class TaskSpecModel(BaseModel):
     parent_instruction: str | None = None
 
 
-WorkflowType = Literal['spec_flow', 'custom']
+WorkflowType = Literal["spec_flow", "custom"]
 
 
 def _parse_tasks_json(tasks_json: str | None) -> list[TaskSpecModel] | None:
@@ -36,7 +37,9 @@ def _parse_tasks_json(tasks_json: str | None) -> list[TaskSpecModel] | None:
     return None
 
 
-def _validate_role_depends(role_registry, tasks: list[TaskSpecModel]) -> None:
+def _validate_role_depends(
+    role_registry: RoleRegistry, tasks: list[TaskSpecModel]
+) -> None:
     available_roles = {r.role_id for r in role_registry.list_roles()}
     role_to_tasks: dict[str, list[str]] = {}
     for task in tasks:
@@ -44,7 +47,9 @@ def _validate_role_depends(role_registry, tasks: list[TaskSpecModel]) -> None:
 
     for task in tasks:
         if task.role_id not in available_roles:
-            raise ValueError(f"Invalid role_id '{task.role_id}'. Available roles: {sorted(available_roles)}")
+            raise ValueError(
+                f"Invalid role_id '{task.role_id}'. Available roles: {sorted(available_roles)}"
+            )
 
         role_def = role_registry.get(task.role_id)
         required_roles = list(role_def.depends_on) or []
@@ -88,41 +93,53 @@ def _create_spec_flow_template(
 ) -> list[TaskSpecModel]:
     return [
         TaskSpecModel(
-            task_name='spec',
-            objective=f'Build requirement spec for: {objective}',
-            role_id='spec_spec',
+            task_name="spec",
+            objective=f"Build requirement spec for: {objective}",
+            role_id="spec_spec",
             depends_on=[],
-            scope=['workflow:' + workflow_id, 'stage:spec'],
-            dod=['spec_document_written', 'acceptance_criteria_defined', 'non_empty_response'],
+            scope=["workflow:" + workflow_id, "stage:spec"],
+            dod=[
+                "spec_document_written",
+                "acceptance_criteria_defined",
+                "non_empty_response",
+            ],
             parent_instruction=parent_instruction
-            or 'This is a workflow task. Produce a complete spec and publish via write_stage_doc.',
+            or "This is a workflow task. Produce a complete spec and publish via write_stage_doc.",
         ),
         TaskSpecModel(
-            task_name='design',
-            objective=f'Design technical approach for: {objective}',
-            role_id='spec_design',
-            depends_on=['spec'],
-            scope=['workflow:' + workflow_id, 'stage:design'],
-            dod=['design_document_written', 'implementation_plan_defined', 'non_empty_response'],
-            parent_instruction='Read spec stage output and produce implementable technical design document.',
+            task_name="design",
+            objective=f"Design technical approach for: {objective}",
+            role_id="spec_design",
+            depends_on=["spec"],
+            scope=["workflow:" + workflow_id, "stage:design"],
+            dod=[
+                "design_document_written",
+                "implementation_plan_defined",
+                "non_empty_response",
+            ],
+            parent_instruction="Read spec stage output and produce implementable technical design document.",
         ),
         TaskSpecModel(
-            task_name='code',
-            objective=f'Implement code for: {objective}',
-            role_id='spec_coder',
-            depends_on=['design'],
-            scope=['workflow:' + workflow_id, 'stage:code'],
-            dod=['implementation_done', 'tests_updated', 'non_empty_response'],
-            parent_instruction='Implement according to spec and design. Keep changes minimal and testable.',
+            task_name="code",
+            objective=f"Implement code for: {objective}",
+            role_id="spec_coder",
+            depends_on=["design"],
+            scope=["workflow:" + workflow_id, "stage:code"],
+            dod=["implementation_done", "tests_updated", "non_empty_response"],
+            parent_instruction="Implement according to spec and design. Keep changes minimal and testable.",
         ),
         TaskSpecModel(
-            task_name='verify',
-            objective=f'Verify implementation quality for: {objective}',
-            role_id='spec_verify',
-            depends_on=['code'],
-            scope=['workflow:' + workflow_id, 'stage:verify'],
-            dod=['verification_document_written', 'pass_fail_decision', 'non_empty_response'],
-            parent_instruction='Validate final implementation against design/spec and publish verification doc.',
+            task_name="verify",
+            objective=f"Verify implementation quality for: {objective}",
+            role_id="spec_verify",
+            depends_on=["code"],
+            scope=["workflow:" + workflow_id, "stage:verify"],
+            dod=[
+                "verification_document_written",
+                "pass_fail_decision",
+                "non_empty_response",
+            ],
+            parent_instruction="Validate final implementation against design/spec and publish verification doc.",
         ),
     ]
 
@@ -130,9 +147,9 @@ def _create_spec_flow_template(
 def mount(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool
     def create_workflow_graph(
-        ctx,
-        workflow_type: WorkflowType = 'spec_flow',
-        objective: str = '',
+        ctx: ToolContext,
+        workflow_type: WorkflowType = "spec_flow",
+        objective: str = "",
         tasks: str | None = None,
         parent_instruction: str | None = None,
     ) -> str:
@@ -150,6 +167,7 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
         Returns:
             Workflow created successfully with task IDs. Use the returned workflow_id in dispatch_ready_tasks.
         """
+
         def _action() -> str:
             parsed_tasks = _parse_tasks_json(tasks)
 
@@ -157,19 +175,19 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
             if existing is not None:
                 return json.dumps(
                     {
-                        'ok': True,
-                        'created': False,
-                        'message': 'A workflow already exists for this task. Use dispatch_ready_tasks to continue, or start a new run for a fresh workflow.',
-                        'workflow_id': existing.get('workflow_id'),
-                        'workflow_type': existing.get('workflow_type'),
-                        'existing_tasks': _format_tasks_for_response(existing),
+                        "ok": True,
+                        "created": False,
+                        "message": "A workflow already exists for this task. Use dispatch_ready_tasks to continue, or start a new run for a fresh workflow.",
+                        "workflow_id": existing.get("workflow_id"),
+                        "workflow_type": existing.get("workflow_type"),
+                        "existing_tasks": _format_tasks_for_response(existing),
                     },
                     ensure_ascii=False,
                 )
 
-            workflow_id = f'workflow_{uuid4().hex[:8]}'
+            workflow_id = f"workflow_{uuid4().hex[:8]}"
 
-            if workflow_type == 'spec_flow':
+            if workflow_type == "spec_flow":
                 parsed_tasks = _create_spec_flow_template(
                     objective=objective,
                     parent_instruction=parent_instruction,
@@ -178,7 +196,7 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
             else:
                 if not parsed_tasks:
                     raise ValueError(
-                        'tasks is required for custom workflow. '
+                        "tasks is required for custom workflow. "
                         'Example: [{"task_name": "code", "objective": "Write hello.py", "role_id": "spec_coder", "depends_on": []}]'
                     )
 
@@ -187,14 +205,14 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
                 _detect_cycle(parsed_tasks)
             except ValueError as e:
                 raise ValueError(
-                    f'Workflow validation failed: {str(e)}. '
-                    'Fix the issues and retry create_workflow_graph with corrected tasks.'
+                    f"Workflow validation failed: {str(e)}. "
+                    "Fix the issues and retry create_workflow_graph with corrected tasks."
                 )
 
             name_to_task_id: dict[str, str] = {}
 
             for spec in parsed_tasks:
-                task_id = f'task_{uuid4().hex[:12]}'
+                task_id = f"task_{uuid4().hex[:12]}"
                 name_to_task_id[spec.task_name] = task_id
 
             for spec in parsed_tasks:
@@ -209,23 +227,25 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
                     parent_instruction=spec.parent_instruction,
                     scope=tuple(spec.scope),
                     dod=tuple(spec.dod),
-                    verification=VerificationPlan(checklist=('non_empty_response',)),
+                    verification=VerificationPlan(checklist=("non_empty_response",)),
                 )
                 ctx.deps.task_repo.create(task_envelope)
 
             graph: dict[str, object] = {
-                'workflow_id': workflow_id,
-                'workflow_type': workflow_type,
-                'objective': objective,
-                'trace_id': ctx.deps.trace_id,
-                'session_id': ctx.deps.session_id,
-                'tasks': {
+                "workflow_id": workflow_id,
+                "workflow_type": workflow_type,
+                "objective": objective,
+                "trace_id": ctx.deps.trace_id,
+                "session_id": ctx.deps.session_id,
+                "tasks": {
                     spec.task_name: {
-                        'task_id': name_to_task_id[spec.task_name],
-                        'role_id': spec.role_id,
-                        'depends_on': spec.depends_on,
-                        'depends_on_task_ids': [
-                            name_to_task_id[dep] for dep in spec.depends_on if dep in name_to_task_id
+                        "task_id": name_to_task_id[spec.task_name],
+                        "role_id": spec.role_id,
+                        "depends_on": spec.depends_on,
+                        "depends_on_task_ids": [
+                            name_to_task_id[dep]
+                            for dep in spec.depends_on
+                            if dep in name_to_task_id
                         ],
                     }
                     for spec in parsed_tasks
@@ -235,46 +255,48 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
 
             task_list = [
                 {
-                    'task_name': spec.task_name,
-                    'task_id': name_to_task_id[spec.task_name],
-                    'role_id': spec.role_id,
-                    'depends_on': spec.depends_on,
+                    "task_name": spec.task_name,
+                    "task_id": name_to_task_id[spec.task_name],
+                    "role_id": spec.role_id,
+                    "depends_on": spec.depends_on,
                 }
                 for spec in parsed_tasks
             ]
 
             return json.dumps(
                 {
-                    'ok': True,
-                    'created': True,
-                    'message': f'Workflow created successfully with {len(task_list)} tasks. Use workflow_id="{workflow_id}" in dispatch_ready_tasks to execute.',
-                    'workflow_id': workflow_id,
-                    'workflow_type': workflow_type,
-                    'tasks': task_list,
-                    'next_action': 'Call dispatch_ready_tasks with this workflow_id to start executing tasks.',
+                    "ok": True,
+                    "created": True,
+                    "message": f'Workflow created successfully with {len(task_list)} tasks. Use workflow_id="{workflow_id}" in dispatch_ready_tasks to execute.',
+                    "workflow_id": workflow_id,
+                    "workflow_type": workflow_type,
+                    "tasks": task_list,
+                    "next_action": "Call dispatch_ready_tasks with this workflow_id to start executing tasks.",
                 },
                 ensure_ascii=False,
             )
 
         return execute_tool(
             ctx,
-            tool_name='create_workflow_graph',
+            tool_name="create_workflow_graph",
             args_summary={
-                'workflow_type': workflow_type,
-                'objective_len': len(objective),
-                'has_tasks': tasks is not None,
-                'task_count': 4 if workflow_type == 'spec_flow' else (len(json.loads(tasks)) if tasks else 0),
-                'has_parent_instruction': bool(parent_instruction),
+                "workflow_type": workflow_type,
+                "objective_len": len(objective),
+                "has_tasks": tasks is not None,
+                "task_count": 4
+                if workflow_type == "spec_flow"
+                else (len(json.loads(tasks)) if tasks else 0),
+                "has_parent_instruction": bool(parent_instruction),
             },
             action=_action,
         )
 
 
 def _format_tasks_for_response(graph: dict[str, object]) -> dict[str, dict[str, str]]:
-    tasks = graph.get('tasks', {})
+    tasks = graph.get("tasks", {})
     if not isinstance(tasks, dict):
         return {}
     return {
-        name: {'task_id': info.get('task_id', ''), 'role_id': info.get('role_id', '')}
+        name: {"task_id": info.get("task_id", ""), "role_id": info.get("role_id", "")}
         for name, info in tasks.items()
     }
