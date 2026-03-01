@@ -1,157 +1,221 @@
 /**
  * core/eventRouter.js
- * Processes SSE `RunEventType` payloads and dispatches rendering to UI components.
+ * Processes SSE RunEventType payloads and dispatches rendering to UI components.
+ * Routes coordinator events to the main chat area; subagent events to agent panels.
  */
 import { state } from './state.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
-import { parseMarkdown } from '../utils/markdown.js';
 import { updateDagActiveNode } from '../components/workflow.js';
-import { buildAgentContainer, scrollToBottom, addAgentTab } from '../components/chat.js';
+import {
+    getOrCreateStreamBlock,
+    appendStreamChunk,
+    finalizeStream,
+    appendToolCallBlock,
+    updateToolResult,
+    clearStreamState,
+} from '../components/messageRenderer.js';
+import {
+    openAgentPanel,
+    getPanelScrollContainer,
+    showGateCard,
+    removeGateCard,
+} from '../components/agentPanel.js';
+import { resolveGate, dispatchHumanTask } from './api.js';
+import { parseMarkdown } from '../utils/markdown.js';
 
-// Variables tracking current streaming state
-export let currentAgentDiv = null;
-export let currentAgentContent = null;
-export let currentToolBlock = null;
-export let rawMarkdownBuffer = "";
+const COORDINATOR_ROLE = 'coordinator_agent';
 
+// ─── Streaming state reset ────────────────────────────────────────────────────
 export function resetDomStreams() {
-    currentAgentDiv = null;
-    currentAgentContent = null;
-    currentToolBlock = null;
-    rawMarkdownBuffer = "";
+    // individual streams are managed by messageRenderer
 }
 
-export function routeEvent(evType, payload, eventMeta, isHistorical = false) {
+// ─── Main event dispatcher ────────────────────────────────────────────────────
+export function routeEvent(evType, payload, eventMeta) {
+    // Always track activeRunId for gate/dispatch calls
+    if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
+    if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
+
+    const instanceId = payload?.instance_id;
+    const roleId = payload?.role_id;
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
     if (evType === 'run_started') {
-        sysLog(`Run started (trace: ${eventMeta.trace_id})`);
-        state.activeAgentRoleId = payload.role_id || 'coordinator_agent';
+        sysLog(`Run started (trace: ${eventMeta?.trace_id})`);
+        state.activeAgentRoleId = COORDINATOR_ROLE;
         updateDagActiveNode();
     }
+
     else if (evType === 'model_step_started') {
-        if (payload.instance_id && payload.role_id) {
-            addAgentTab(payload.role_id, payload.instance_id, false);
+        if (instanceId && roleId) {
+            // Register instance→role mapping in state for DAG click routing
+            if (!state.instanceRoleMap) state.instanceRoleMap = {};
+            state.instanceRoleMap[instanceId] = roleId;
+
+            // If not coordinator → ensure panel exists (don't auto-open, wait for text)
+            if (roleId !== COORDINATOR_ROLE) {
+                getPanelScrollContainer(instanceId, roleId);
+            }
         }
-        state.activeAgentRoleId = payload.role_id || 'coordinator_agent';
+        state.activeAgentRoleId = roleId;
         updateDagActiveNode();
     }
+
+    // ── Text streaming ───────────────────────────────────────────────────────
     else if (evType === 'text_delta') {
-        const roleId = payload.role_id || 'agent';
-        const instanceId = payload.instance_id || 'main';
-        let targetContainer = state.agentViews['main'];
+        const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
+        const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
 
-        if (payload.instance_id && payload.role_id) {
-            addAgentTab(payload.role_id, payload.instance_id, false);
-        }
-
-        if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
-            const result = buildAgentContainer(roleId, targetContainer);
-            currentAgentDiv = result.div;
-            currentAgentContent = result.content;
-            rawMarkdownBuffer = "";
-        }
-
-        const typing = currentAgentDiv.querySelector('.typing-indicator');
-        if (typing) typing.remove();
-
-        if (roleId === 'user') {
-            currentAgentContent.innerHTML = payload.text.replace(/\\n/g, '<br>');
+        if (isCoordinator) {
+            // Accumulate in the main coordinator chat area
+            const container = els.chatMessages;
+            const st = getOrCreateStreamBlock(container, instanceId || 'coordinator', label);
+            appendStreamChunk(instanceId || 'coordinator', payload.text || '');
         } else {
-            rawMarkdownBuffer += payload.text;
-            currentAgentContent.innerHTML = parseMarkdown(rawMarkdownBuffer);
-        }
-
-        if (targetContainer.id && targetContainer.id.startsWith('view-')) {
-            targetContainer.scrollTop = targetContainer.scrollHeight;
-        } else {
-            scrollToBottom(targetContainer);
+            // Route to the subagent panel — auto-open it on first chunk
+            let container = getPanelScrollContainer(instanceId, roleId);
+            openAgentPanel(instanceId, roleId);
+            const st = getOrCreateStreamBlock(container, instanceId, label);
+            appendStreamChunk(instanceId, payload.text || '');
         }
     }
-    else if (evType === 'tool_call') {
-        const roleId = payload.role_id || 'agent';
-        const instanceId = payload.instance_id || 'main';
-        let targetContainer = state.agentViews['main'];
 
-        if (payload.instance_id && payload.role_id) {
-            addAgentTab(payload.role_id, payload.instance_id, false);
-        }
-
-        if (!currentAgentDiv || currentAgentDiv.dataset.role !== roleId || currentAgentDiv.parentElement !== targetContainer) {
-            const result = buildAgentContainer(roleId, targetContainer);
-            currentAgentDiv = result.div;
-            currentAgentContent = result.content;
-            rawMarkdownBuffer = "";
-        }
-
-        const toolBlock = document.createElement('div');
-        toolBlock.className = 'tool-block';
-        toolBlock.innerHTML = `
-            <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
-                <div class="tool-title">
-                    <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px; height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
-                    Used Tool: <span class="name">${payload.tool_name}</span>
-                </div>
-                <div class="tool-status" id="status-${eventMeta.trace_id || eventMeta.id}">
-                    <div class="spinner"></div>
-                </div>
-            </div>
-            <div class="tool-body">
-                <div class="tool-args">${JSON.stringify(payload.args, null, 2)}</div>
-                <div class="tool-result" id="result-${eventMeta.trace_id || eventMeta.id}">Processing...</div>
-            </div>
-        `;
-
-        let containerEl = currentAgentDiv.querySelector('.msg-content');
-        if (containerEl) {
-            containerEl.appendChild(toolBlock);
+    else if (evType === 'run_finished' || evType === 'model_step_done') {
+        if (instanceId) {
+            finalizeStream(instanceId);
         } else {
-            currentAgentDiv.appendChild(toolBlock);
-        }
-        currentToolBlock = toolBlock;
-
-        targetContainer = currentAgentDiv.parentElement;
-        if (targetContainer && targetContainer.id && targetContainer.id.startsWith('view-')) {
-            targetContainer.scrollTop = targetContainer.scrollHeight;
-        } else {
-            scrollToBottom(targetContainer);
+            finalizeStream('coordinator');
         }
 
-        sysLog(`[Tool] Calling ${payload.tool_name}...`);
-    }
-    else if (evType === 'tool_result') {
-        if (currentToolBlock) {
-            const statusIcon = currentToolBlock.querySelector('.tool-status');
-            const resultContainer = currentToolBlock.querySelector('.tool-result');
-
-            if (payload.error) {
-                statusIcon.innerHTML = `<svg class="status-icon status-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
-                resultContainer.classList.add('error-text');
-            } else {
-                statusIcon.innerHTML = `<svg class="status-icon status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>`;
-                resultContainer.classList.remove('error-text');
-            }
-
-            let renderVal = payload.result;
-            if (typeof renderVal === 'object') {
-                renderVal = JSON.stringify(renderVal, null, 2);
-            }
-            resultContainer.innerHTML = parseMarkdown(String(renderVal));
-        }
-    }
-    else if (evType === 'run_finished') {
-        sysLog(`Run finished. (trace: ${eventMeta.trace_id})`);
-
-        if (!eventMeta.instance_id) {
+        if (evType === 'run_finished' && !eventMeta?.instance_id) {
+            sysLog(`Run finished. (trace: ${eventMeta?.trace_id})`);
             state.activeAgentRoleId = null;
-            updateDagActiveNode();
             state.isGenerating = false;
-            els.sendBtn.disabled = false;
-            els.promptInput.disabled = false;
-            els.promptInput.focus();
-            resetDomStreams();
+            if (els.sendBtn) els.sendBtn.disabled = false;
+            if (els.promptInput) els.promptInput.disabled = false;
+            updateDagActiveNode();
         }
     }
-    else {
-        sysLog(`Unknown event type: ${evType} `, 'log-info');
+
+    else if (evType === 'run_completed') {
+        sysLog(`Run completed.`);
+        state.isGenerating = false;
+        state.activeAgentRoleId = null;
+        if (els.sendBtn) els.sendBtn.disabled = false;
+        if (els.promptInput) { els.promptInput.disabled = false; els.promptInput.focus(); }
+        finalizeStream('coordinator');
+        updateDagActiveNode();
     }
+
+    else if (evType === 'run_failed') {
+        sysLog(`Run failed: ${payload?.error || ''}`, 'log-error');
+        state.isGenerating = false;
+        if (els.sendBtn) els.sendBtn.disabled = false;
+        if (els.promptInput) els.promptInput.disabled = false;
+    }
+
+    // ── Tool calls ───────────────────────────────────────────────────────────
+    else if (evType === 'tool_call') {
+        const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
+        const container = isCoordinator
+            ? els.chatMessages
+            : getPanelScrollContainer(instanceId, roleId);
+
+        if (!isCoordinator) openAgentPanel(instanceId, roleId);
+
+        appendToolCallBlock(container, instanceId || 'coordinator', payload.tool_name, payload.args);
+        sysLog(`[Tool] ${payload.tool_name}…`);
+
+        // Live graph update when coordinator creates workflow
+        if (payload.tool_name === 'create_workflow_graph' && isCoordinator) {
+            // The result event will trigger the DAG reload via tool_result below
+        }
+    }
+
+    else if (evType === 'tool_result') {
+        const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
+        updateToolResult(
+            instanceId || 'coordinator',
+            payload.tool_name,
+            payload.result,
+            !!payload.error,
+        );
+    }
+
+    // ── Human orchestration mode ─────────────────────────────────────────────
+    else if (evType === 'awaiting_human_dispatch') {
+        _renderHumanDispatchPanel(payload, eventMeta);
+    }
+
+    else if (evType === 'human_task_dispatched') {
+        document.querySelectorAll('.human-dispatch-panel').forEach(el => el.remove());
+        sysLog(`▶ Task dispatched: ${payload.task_id}`, 'log-info');
+    }
+
+    // ── Confirmation gate ────────────────────────────────────────────────────
+    else if (evType === 'subagent_gate') {
+        const gateInstanceId = payload.instance_id;
+        const gateRoleId = payload.role_id;
+        showGateCard(gateInstanceId, gateRoleId, {
+            session_id: state.currentSessionId,
+            run_id: state.activeRunId,
+            task_id: payload.task_id,
+            summary: payload.summary,
+            role_id: gateRoleId,
+        });
+    }
+
+    else if (evType === 'gate_resolved') {
+        removeGateCard(payload.instance_id || '', payload.task_id);
+        sysLog(`Gate resolved: ${payload.action}`, 'log-info');
+    }
+
+    else {
+        sysLog(`Event: ${evType}`, 'log-info');
+    }
+}
+
+// ─── Human dispatch panel ─────────────────────────────────────────────────────
+
+function _renderHumanDispatchPanel(payload, eventMeta) {
+    document.querySelectorAll('.human-dispatch-panel').forEach(el => el.remove());
+    const container = els.chatMessages;
+    if (!container) return;
+
+    const panel = document.createElement('div');
+    panel.className = 'human-dispatch-panel';
+
+    const tasks = payload.pending_tasks || [];
+    const taskRows = tasks.map(t => `
+        <div class="dispatch-task-row">
+            <span class="dispatch-task-obj">${t.objective || t.task_id}</span>
+            <span class="dispatch-task-role">${t.role_id || ''}</span>
+            <button class="dispatch-btn" data-task-id="${t.task_id}">&#x25B6; 执行</button>
+        </div>
+    `).join('');
+
+    panel.innerHTML = `
+        <div class="dispatch-header">&#x1F9D1;&#x200D;&#x1F4BC; 人工编排 — 请选择要执行的子任务</div>
+        ${taskRows || '<div class="dispatch-empty">（无待执行任务）</div>'}
+    `;
+
+    panel.querySelectorAll('.dispatch-btn').forEach(btn => {
+        btn.onclick = async () => {
+            const taskId = btn.dataset.taskId;
+            if (!state.activeRunId || !state.currentSessionId) return;
+            btn.disabled = true;
+            btn.textContent = '派发中…';
+            try {
+                await dispatchHumanTask(state.currentSessionId, state.activeRunId, taskId);
+            } catch (e) {
+                sysLog(`Dispatch failed: ${e.message}`, 'log-error');
+                btn.disabled = false;
+                btn.textContent = '▶ 执行';
+            }
+        };
+    });
+
+    container.appendChild(panel);
+    container.scrollTop = container.scrollHeight;
 }

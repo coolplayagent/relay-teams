@@ -1,16 +1,18 @@
 /**
  * core/stream.js
- * Connects to the backend EventSource and dispatches chunks to the router.
+ * Connects to the backend SSE EventSource and dispatches chunks to the router.
+ * The GET /intent/stream endpoint starts the intent AND streams events.
  */
 import { state } from './state.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 import { routeEvent } from './eventRouter.js';
 
-export function startIntentStream(promptText, sessionId, onGraphSpawned) {
+export function startIntentStream(promptText, sessionId, executionMode, confirmationGate, onCompleted) {
     state.isGenerating = true;
+    if (els.sendBtn) els.sendBtn.disabled = true;
+    if (els.promptInput) els.promptInput.disabled = true;
 
-    // We defer UI disables to components/chat.js but manage the panel here
     const panel = document.getElementById('workflow-panel');
     if (panel) panel.classList.add('generating');
 
@@ -19,9 +21,9 @@ export function startIntentStream(promptText, sessionId, onGraphSpawned) {
     }
 
     const encodedPrompt = encodeURIComponent(promptText);
-    const url = `/api/v1/session/${sessionId}/intent/stream?intent=${encodedPrompt}`;
+    const url = `/api/v1/session/${sessionId}/intent/stream?intent=${encodedPrompt}&execution_mode=${executionMode}&confirmation_gate=${confirmationGate}`;
 
-    sysLog(`Starting SSE connection to ${url}`);
+    sysLog(`Starting SSE (mode=${executionMode} gate=${confirmationGate})`);
     const es = new EventSource(url);
     state.activeEventSource = es;
 
@@ -31,21 +33,22 @@ export function startIntentStream(promptText, sessionId, onGraphSpawned) {
             const evType = data.event_type;
             const payload = JSON.parse(data.payload_json || '{}');
 
-            // Delegate dom writing to the router
             routeEvent(evType, payload, data);
 
-            // Live graph update if Coordinator spawned the DAG
-            if (evType === 'tool_result' && payload.tool_name === 'create_workflow_graph') {
-                if (onGraphSpawned) onGraphSpawned(sessionId);
+            // End of run → reload history
+            if (evType === 'run_completed' || evType === 'run_failed') {
+                endStream();
+                if (onCompleted) onCompleted(sessionId);
             }
         } catch (e) {
-            console.error("Failed to parse SSE event", event.data, e);
+            console.error('SSE parse error', e, event.data);
         }
     };
 
-    es.onerror = (err) => {
-        sysLog(`SSE Connection error.Stream closed.`, 'log-error');
+    es.onerror = () => {
+        sysLog('SSE connection closed.', 'log-error');
         endStream();
+        if (onCompleted) onCompleted(sessionId);
     };
 }
 
@@ -59,6 +62,11 @@ export function endStream() {
     const panel = document.getElementById('workflow-panel');
     if (panel) panel.classList.remove('generating');
 
-    // UI enables handled elsewhere via state.isGenerating observing
+    if (els.sendBtn) els.sendBtn.disabled = false;
+    if (els.promptInput) {
+        els.promptInput.disabled = false;
+        els.promptInput.focus();
+    }
+
     document.querySelectorAll('.typing-indicator').forEach(el => el.remove());
 }

@@ -20,6 +20,7 @@ ROLE_COORDINATOR = 'coordinator_agent'
 
 
 from agent_teams.state.message_repo import MessageRepository
+from agent_teams.runtime.injection_manager import RunInjectionManager
 
 @dataclass
 class TaskExecutionService:
@@ -32,6 +33,7 @@ class TaskExecutionService:
     message_repo: MessageRepository
     prompt_builder: RuntimePromptBuilder
     provider_factory: Callable[[RoleDefinition], LLMProvider]
+    injection_manager: RunInjectionManager | None = None
 
     def execute(self, *, instance_id: str, role_id: str, task: TaskEnvelope) -> str:
         log_debug(

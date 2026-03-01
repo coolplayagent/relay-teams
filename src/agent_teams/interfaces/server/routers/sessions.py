@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agent_teams.interfaces.sdk.client import AgentTeamsApp
+from agent_teams.core.enums import ExecutionMode
 from agent_teams.core.models import IntentInput, SessionRecord
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,17 @@ class UpdateSessionRequest(BaseModel):
 class IntentRequest(BaseModel):
     intent: str
     parent_instruction: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.AI
+    confirmation_gate: bool = False
+
+
+class GateResolveRequest(BaseModel):
+    action: str          # 'approve' | 'revise'
+    feedback: str = ''
+
+
+class DispatchTaskRequest(BaseModel):
+    task_id: str
 
 @router.post("/", response_model=SessionRecord)
 def create_session(req: CreateSessionRequest, sdk: AgentTeamsApp = Depends(get_sdk)):
@@ -94,16 +106,29 @@ def get_session_workflows(session_id: str, sdk: AgentTeamsApp = Depends(get_sdk)
 @router.post("/{session_id}/intent")
 def run_intent(session_id: str, req: IntentRequest, sdk: AgentTeamsApp = Depends(get_sdk)):
     input_event = IntentInput(
-        session_id=session_id, 
-        intent=req.intent, 
-        parent_instruction=req.parent_instruction
+        session_id=session_id,
+        intent=req.intent,
+        parent_instruction=req.parent_instruction,
+        execution_mode=req.execution_mode,
+        confirmation_gate=req.confirmation_gate,
     )
     result = sdk.run_intent(input_event)
     return result.model_dump()
 
 @router.get("/{session_id}/intent/stream")
-def run_intent_stream(session_id: str, intent: str, sdk: AgentTeamsApp = Depends(get_sdk)):
-    input_event = IntentInput(session_id=session_id, intent=intent)
+def run_intent_stream(
+    session_id: str,
+    intent: str,
+    execution_mode: ExecutionMode = ExecutionMode.AI,
+    confirmation_gate: bool = False,
+    sdk: AgentTeamsApp = Depends(get_sdk),
+):
+    input_event = IntentInput(
+        session_id=session_id,
+        intent=intent,
+        execution_mode=execution_mode,
+        confirmation_gate=confirmation_gate,
+    )
     
     def event_generator() -> Generator[str, None, None]:
         try:
@@ -116,3 +141,54 @@ def run_intent_stream(session_id: str, intent: str, sdk: AgentTeamsApp = Depends
             yield f"data: {err_data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ── Confirmation Gate ─────────────────────────────────────────────────────────
+
+@router.get("/{session_id}/runs/{run_id}/gates")
+def list_open_gates(session_id: str, run_id: str, sdk: AgentTeamsApp = Depends(get_sdk)):
+    """Return all currently open confirmation gates for a run."""
+    return sdk.list_open_gates(run_id)
+
+
+@router.post("/{session_id}/runs/{run_id}/gates/{task_id}/resolve")
+def resolve_gate(
+    session_id: str,
+    run_id: str,
+    task_id: str,
+    req: GateResolveRequest,
+    sdk: AgentTeamsApp = Depends(get_sdk),
+):
+    """Resolve a confirmation gate (approve or revise)."""
+    try:
+        sdk.resolve_gate(run_id=run_id, task_id=task_id, action=req.action, feedback=req.feedback)
+        return {'status': 'ok', 'action': req.action}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ── Human Orchestration Mode ──────────────────────────────────────────────────
+
+@router.post("/{session_id}/runs/{run_id}/dispatch")
+def dispatch_human_task(
+    session_id: str,
+    run_id: str,
+    req: DispatchTaskRequest,
+    sdk: AgentTeamsApp = Depends(get_sdk),
+):
+    """
+    Human mode: tell the coordinator which pending sub-task to execute next.
+    Looks up the coordinator instance for this session automatically.
+    """
+    try:
+        coordinator_instance_id = sdk._agent_repo.get_coordinator_instance_id(session_id)
+        if coordinator_instance_id is None:
+            raise HTTPException(status_code=404, detail='No coordinator instance found for session')
+        sdk.dispatch_task_human(
+            run_id=run_id,
+            task_id=req.task_id,
+            coordinator_instance_id=coordinator_instance_id,
+        )
+        return {'status': 'ok', 'dispatched_task_id': req.task_id}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))

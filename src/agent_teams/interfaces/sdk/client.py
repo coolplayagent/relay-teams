@@ -34,6 +34,7 @@ from agent_teams.providers.llm import (
     OpenAICompatibleProvider,
 )
 from agent_teams.roles.registry import RoleLoader
+from agent_teams.runtime.gate_manager import GateManager
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.console import set_debug
@@ -79,6 +80,7 @@ class AgentTeamsApp:
         instance_pool = InstancePool.from_repo(agent_repo)
         injection_manager = RunInjectionManager()
         run_event_hub = RunEventHub(event_log=event_log)
+        gate_manager = GateManager()
 
         prompt_builder = RuntimePromptBuilder()
 
@@ -115,6 +117,7 @@ class AgentTeamsApp:
             message_repo=message_repo,
             prompt_builder=prompt_builder,
             provider_factory=provider_factory,
+            injection_manager=injection_manager,
         )
 
         coordinator = CoordinatorGraph(
@@ -127,6 +130,8 @@ class AgentTeamsApp:
             prompt_builder=prompt_builder,
             provider_factory=provider_factory,
             task_execution_service=task_execution_service,
+            gate_manager=gate_manager,
+            run_event_hub=run_event_hub,
         )
         self._meta_agent = MetaAgent(coordinator=coordinator)
         self._task_repo = task_repo
@@ -135,6 +140,7 @@ class AgentTeamsApp:
         self._workflows: list[WorkflowSpec] = []
         self._injection_manager = injection_manager
         self._run_event_hub = run_event_hub
+        self._gate_manager = gate_manager
         self._agent_repo = agent_repo
         self._session_repo = session_repo
         self._message_repo = message_repo
@@ -248,6 +254,32 @@ class AgentTeamsApp:
         if created is None:
             raise KeyError(f"No RUNNING agent for run_id={run_id}")
         return created
+
+    def resolve_gate(
+        self, run_id: str, task_id: str, action: str, feedback: str = ''
+    ) -> None:
+        """HTTP handler calls this to let the human approve or request a revision."""
+        from agent_teams.runtime.gate_manager import GateAction
+        self._gate_manager.resolve_gate(run_id, task_id, action=action, feedback=feedback)  # type: ignore[arg-type]
+
+    def list_open_gates(self, run_id: str) -> list[dict]:
+        """Return currently open gate entries for a run."""
+        return self._gate_manager.list_open_gates(run_id)
+
+    def dispatch_task_human(
+        self, run_id: str, task_id: str, coordinator_instance_id: str
+    ) -> None:
+        """
+        Human mode: inject a dispatch marker so the coordinator's polling loop
+        picks up the selected task_id and dispatches it.
+        """
+        import json
+        self._injection_manager.enqueue(
+            run_id=run_id,
+            recipient_instance_id=coordinator_instance_id,
+            source=InjectionSource.USER,
+            content=json.dumps({'__human_dispatch__': task_id}),
+        )
 
     def create_workflow(self, spec: WorkflowSpec) -> str:
         self._workflows.append(spec)

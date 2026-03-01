@@ -49,14 +49,48 @@ export async function fetchAgentMessages(sessionId, instanceId) {
     return res.json();
 }
 
-export async function sendUserPrompt(sessionId, prompt) {
+export async function sendUserPrompt(sessionId, prompt, { executionMode = 'ai', confirmationGate = false } = {}) {
     const res = await fetch(`/api/v1/session/${sessionId}/intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intent: prompt })
+        body: JSON.stringify({
+            intent: prompt,
+            execution_mode: executionMode,
+            confirmation_gate: confirmationGate,
+        })
     });
     if (!res.ok) throw new Error("Failed to send prompt");
     return res;
+}
+
+export async function resolveGate(sessionId, runId, taskId, action, feedback = '') {
+    const res = await fetch(`/api/v1/session/${sessionId}/runs/${runId}/gates/${taskId}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, feedback }),
+    });
+    if (!res.ok) throw new Error('Failed to resolve gate');
+    return res.json();
+}
+
+export async function dispatchHumanTask(sessionId, runId, taskId) {
+    const res = await fetch(`/api/v1/session/${sessionId}/runs/${runId}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId }),
+    });
+    if (!res.ok) throw new Error('Failed to dispatch task');
+    return res.json();
+}
+
+export async function injectMessage(runId, content) {
+    const res = await fetch(`/api/v1/runs/${runId}/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+    });
+    if (!res.ok) throw new Error('Failed to inject message');
+    return res.json();
 }
 
 export async function deleteSession(sessionId) {

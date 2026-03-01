@@ -736,3 +736,255 @@
 .intent-text {
     color: var(--text-primary);
 }
+
+/* ── Orchestration Controls (Mode Selector + Confirmation Gate) ─────────── */
+
+.input-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.4rem 1.25rem 0;
+    flex-wrap: wrap;
+}
+
+.mode-selector-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.mode-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.mode-select {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.mode-select:hover,
+.mode-select:focus {
+    border-color: var(--primary);
+}
+
+.gate-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gate-label input[type="checkbox"] {
+    accent-color: var(--primary);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+}
+
+.gate-label:hover {
+    color: var(--text-primary);
+}
+
+/* ── Human Dispatch Panel ─────────────────────────────────────────────────── */
+
+.human-dispatch-panel {
+    margin: 0.75rem 0;
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.06), rgba(245, 158, 11, 0.02));
+    padding: 1rem;
+    animation: slideUp 0.3s ease;
+}
+
+.dispatch-header {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--warning);
+    margin-bottom: 0.75rem;
+}
+
+.dispatch-task-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dispatch-task-row:last-child {
+    border-bottom: none;
+}
+
+.dispatch-task-obj {
+    flex: 1;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+.dispatch-task-role {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    padding: 0.125rem 0.4rem;
+    background: var(--bg-hover-strong);
+    border-radius: 4px;
+}
+
+.dispatch-btn {
+    background-color: var(--warning);
+    color: #000;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    white-space: nowrap;
+}
+
+.dispatch-btn:hover {
+    opacity: 0.85;
+}
+
+.dispatch-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.dispatch-empty {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 0.5rem 0;
+}
+
+/* ── Subagent Gate Confirmation Card ─────────────────────────────────────── */
+
+.gate-card {
+    margin: 0.75rem 0;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.02));
+    padding: 1rem;
+    animation: slideUp 0.3s ease;
+}
+
+.gate-header {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--primary-hover);
+    margin-bottom: 0.5rem;
+}
+
+.gate-summary {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.gate-role {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.gate-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.gate-approve-btn {
+    background-color: var(--success);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gate-revise-btn {
+    background: none;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.gate-revise-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.gate-approve-btn:hover {
+    opacity: 0.85;
+}
+
+.gate-approve-btn:disabled,
+.gate-revise-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.gate-feedback-area {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.gate-feedback-input {
+    width: 100%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--radius-md);
+    padding: 0.5rem;
+    font-family: var(--font-ui);
+    font-size: 0.875rem;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.gate-feedback-input:focus {
+    border-color: var(--primary);
+}
+
+.gate-submit-revise-btn {
+    align-self: flex-start;
+    background-color: var(--primary);
+    color: var(--text-on-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gate-submit-revise-btn:hover {
+    opacity: 0.85;
+}

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.core.enums import EventType, InjectionSource, InstanceStatus, RunEventType, ScopeType, TaskStatus
+from agent_teams.core.enums import EventType, ExecutionMode, InjectionSource, InstanceStatus, RunEventType, ScopeType, TaskStatus
 
 
 class SamplingConfig(BaseModel):
@@ -51,6 +51,7 @@ class TaskEnvelope(BaseModel):
     scope: tuple[str, ...] = Field(min_length=1)
     dod: tuple[str, ...] = Field(min_length=1)
     verification: VerificationPlan
+    confirmation_gate: bool = False   # if True, pause after this task for human approval
 
 
 class TaskRecord(BaseModel):
@@ -118,6 +119,8 @@ class IntentInput(BaseModel):
     session_id: str | None = None
     intent: str = Field(min_length=1)
     parent_instruction: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.AI
+    confirmation_gate: bool = False   # if True, every sub-task pauses for human approval after completion
 
 
 class RunResult(BaseModel):

@@ -1,11 +1,13 @@
 /**
  * components/workflow.js
- * Responsible for parsing workflow dependencies and rendering the Native Topo DAG.
+ * Renders the Execution Graph DAG.
+ * DAG nodes are clickable and open the subagent panel in the right drawer.
  */
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 import { state } from '../core/state.js';
 import { fetchSessionWorkflows } from '../core/api.js';
+import { openAgentPanel } from './agentPanel.js';
 
 export let currentWorkflows = [];
 
@@ -13,14 +15,9 @@ export async function loadSessionWorkflows(sessionId) {
     try {
         const workflows = await fetchSessionWorkflows(sessionId);
         currentWorkflows = workflows || [];
-
-        if (currentWorkflows.length > 0) {
-            renderNativeDAG(currentWorkflows[currentWorkflows.length - 1]);
-        } else {
-            renderNativeDAG(null);
-        }
+        renderNativeDAG(currentWorkflows.length > 0 ? currentWorkflows[currentWorkflows.length - 1] : null);
     } catch (e) {
-        console.error("Failed loading workflows", e);
+        console.error('Failed loading workflows', e);
     }
 }
 
@@ -37,83 +34,89 @@ export function updateDagActiveNode() {
 export function renderNativeDAG(workflow) {
     const canvas = document.getElementById('workflow-canvas');
     if (!canvas) return;
-
     canvas.innerHTML = '';
 
-    if (!workflow || !workflow.tasks) {
-        return;
-    }
+    if (!workflow?.tasks) return;
 
     const container = document.createElement('div');
     container.className = 'dag-container';
 
+    // ── Compute topological levels ──────────────────────────────────────────
+    const tasks = workflow.tasks;
     const nodeLevels = {};
     let maxLevel = 0;
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const t in tasks) {
+            const deps = tasks[t].depends_on || [];
+            let maxDep = 0;
+            deps.forEach(d => { if (nodeLevels[d] !== undefined) maxDep = Math.max(maxDep, nodeLevels[d]); });
+            const newLevel = maxDep + 1;
+            if (nodeLevels[t] !== newLevel) { nodeLevels[t] = newLevel; changed = true; }
+        }
+    }
+    for (const t in nodeLevels) if (nodeLevels[t] > maxLevel) maxLevel = nodeLevels[t];
 
-    if (workflow && workflow.tasks) {
-        const tasks = workflow.tasks;
-        let changed = true;
-        while (changed) {
-            changed = false;
-            for (const t in tasks) {
-                const deps = tasks[t].depends_on || [];
-                let maxDepLevel = 0;
-                deps.forEach(d => {
-                    if (nodeLevels[d] !== undefined) {
-                        maxDepLevel = Math.max(maxDepLevel, nodeLevels[d]);
-                    }
+    // ── Build layers ────────────────────────────────────────────────────────
+    const layers = [
+        [{ id: 'coordinator', title: 'Coordinator', role: 'coordinator_agent', icon: '🤖', deps: [] }]
+    ];
+    for (let i = 1; i <= maxLevel; i++) {
+        const layerNodes = [];
+        for (const t in nodeLevels) {
+            if (nodeLevels[t] === i) {
+                layerNodes.push({
+                    id: t,
+                    title: t,
+                    role: tasks[t].role_id || t,
+                    icon: '⚡',
+                    deps: tasks[t].depends_on || [],
                 });
-                const newLevel = maxDepLevel + 1;
-                if (nodeLevels[t] !== newLevel) {
-                    nodeLevels[t] = newLevel;
-                    changed = true;
-                }
             }
         }
-        for (let t in nodeLevels) {
-            if (nodeLevels[t] > maxLevel) maxLevel = nodeLevels[t];
-        }
+        if (layerNodes.length > 0) layers.push(layerNodes);
     }
 
-    const layers = [];
-    layers.push([{ id: 'coordinator', title: 'Coordinator Agent', role: 'coordinator_agent', icon: '🤖' }]);
-
-    if (workflow && workflow.tasks) {
-        for (let i = 1; i <= maxLevel; i++) {
-            const layerNodes = [];
-            for (let t in nodeLevels) {
-                if (nodeLevels[t] === i) {
-                    layerNodes.push({
-                        id: t,
-                        title: t,
-                        role: workflow.tasks[t].role_id || t,
-                        icon: '⚡',
-                        deps: workflow.tasks[t].depends_on || []
-                    });
-                }
-            }
-            if (layerNodes.length > 0) layers.push(layerNodes);
-        }
-    }
-
-    layers.forEach((layer, lvlIndex) => {
+    // ── Render nodes ────────────────────────────────────────────────────────
+    layers.forEach((layer) => {
         const col = document.createElement('div');
         col.className = 'dag-layer';
+
         layer.forEach(node => {
             const el = document.createElement('div');
             el.className = 'dag-node';
             el.id = `node-${node.id}`;
             el.dataset.role = node.role;
-            if (state.activeAgentRoleId === node.role) el.classList.add('running');
 
-            // Route click manually to window global from app.js router
-            el.onclick = () => window.switchTabByRole && window.switchTabByRole(node.role);
+            // Resolve instance ID from state map (populated by model_step_started events)
+            const instanceId = _instanceForRole(node.role);
+            if (instanceId) el.dataset.instanceId = instanceId;
+
+            if (state.activeAgentRoleId === node.role) el.classList.add('running');
 
             el.innerHTML = `
                 <div class="node-icon">${node.icon}</div>
                 <div class="node-title">${node.title}</div>
                 <div class="node-role">${node.role}</div>
             `;
+
+            // Click → open agent panel (or coordinator chat)
+            el.onclick = () => {
+                if (node.role === 'coordinator_agent') {
+                    // Just scroll back to top of coordinator chat
+                    if (els.chatMessages) els.chatMessages.scrollTop = 0;
+                    return;
+                }
+                const iid = el.dataset.instanceId || instanceId;
+                if (iid) {
+                    openAgentPanel(iid, node.role);
+                } else {
+                    // Instance not yet running — open a placeholder panel
+                    openAgentPanel(`pending-${node.role}`, node.role);
+                }
+            };
+
             col.appendChild(el);
         });
         container.appendChild(col);
@@ -121,6 +124,7 @@ export function renderNativeDAG(workflow) {
 
     canvas.appendChild(container);
 
+    // ── Draw SVG edges ──────────────────────────────────────────────────────
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'dag-edges');
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -146,7 +150,7 @@ export function renderNativeDAG(workflow) {
             layers.forEach((layer, lvlIndex) => {
                 if (lvlIndex === 0) return;
                 layer.forEach(node => {
-                    let sources = node.deps.length > 0 ? node.deps : ['coordinator'];
+                    const sources = node.deps.length > 0 ? node.deps : ['coordinator'];
                     sources.forEach(srcId => {
                         const srcEl = document.getElementById(`node-${srcId}`);
                         const dstEl = document.getElementById(`node-${node.id}`);
@@ -170,4 +174,13 @@ export function renderNativeDAG(workflow) {
             });
         });
     });
+}
+
+// Look up instance ID from the role→instance map built during SSE events
+function _instanceForRole(roleId) {
+    if (!state.instanceRoleMap) return null;
+    for (const [iid, rid] of Object.entries(state.instanceRoleMap)) {
+        if (rid === roleId) return iid;
+    }
+    return null;
 }

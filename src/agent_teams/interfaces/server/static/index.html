@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agent Teams</title>
-    <!-- Suppress favicon 404 errors -->
     <link rel="icon" href="data:,">
     <!-- Google Fonts -->
     <link
@@ -17,6 +16,7 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/layout.css">
     <link rel="stylesheet" href="/static/css/components.css">
+</head>
 
 <body>
     <div class="app-container">
@@ -36,18 +36,14 @@
 
             <button id="back-btn" class="back-btn" style="display: none;">
                 <svg viewBox="0 0 24 24" fill="none" class="icon">
-                    <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
                 </svg>
                 Back
             </button>
 
-            <div class="rounds-list" id="rounds-list" style="display: none;">
-                <!-- Round items will be dynamically injected here -->
-            </div>
-
-            <div class="sessions-list" id="sessions-list">
-                <!-- Session items will be dynamically injected here -->
-            </div>
+            <div class="rounds-list" id="rounds-list" style="display: none;"></div>
+            <div class="sessions-list" id="sessions-list"></div>
 
             <div class="sidebar-footer">
                 <div class="status-indicator online"><span></span> Backend Connected</div>
@@ -56,7 +52,7 @@
 
         <!-- Main Workspace -->
         <main class="workspace">
-            <!-- Topbar Actions -->
+            <!-- Topbar -->
             <header class="topbar"
                 style="justify-content: space-between; padding: 0 1rem; border-bottom: 1px solid var(--border-color); height: 50px;">
                 <button id="toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
@@ -72,7 +68,7 @@
                             stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
                 </button>
-                <button id="toggle-inspector" class="icon-btn" title="Toggle Inspector">
+                <button id="toggle-inspector" class="icon-btn" title="Toggle Logs">
                     <svg viewBox="0 0 24 24" fill="none" class="icon">
                         <path d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zM9 3v18"
                             stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -82,8 +78,8 @@
 
             <!-- Chat Area -->
             <div class="chat-container">
+                <!-- Coordinator chat messages -->
                 <div class="chat-scroll" id="chat-messages">
-                    <!-- Intro -->
                     <div class="system-intro">
                         <div class="intro-icon">🛸</div>
                         <h1>Welcome to Agent Teams</h1>
@@ -95,8 +91,10 @@
                 <div id="workflow-collapsed" class="workflow-collapsed">
                     <div class="workflow-status-bar">
                         <svg viewBox="0 0 24 24" fill="none" class="icon">
-                            <path d="M3 3v18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M7 16l4-8 4 6 5-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M3 3v18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            <path d="M7 16l4-8 4 6 5-10" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
                         </svg>
                         <span>Execution Graph</span>
                         <span id="workflow-count" class="workflow-count">0</span>
@@ -105,10 +103,11 @@
 
                 <div id="workflow-panel" class="workflow-panel" style="display: none;">
                     <div class="workflow-header">
-                        <h4>Execution Graph</h4>
+                        <h4>Execution Graph — <span class="wf-hint">点击节点查看 Subagent 详情</span></h4>
                         <button id="collapse-workflow" class="icon-btn" title="Collapse">
                             <svg viewBox="0 0 24 24" fill="none" class="icon">
-                                <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round" />
                             </svg>
                         </button>
                     </div>
@@ -129,12 +128,34 @@
                             </button>
                         </div>
                     </form>
-                    <div class="sub-text">Ctrl+Enter for line break. All logic runs in backend.</div>
+                    <div class="input-controls">
+                        <div class="mode-selector-group">
+                            <label for="execution-mode-select" class="mode-label">模式</label>
+                            <select id="execution-mode-select" class="mode-select">
+                                <option value="ai">&#x1F916; AI 编排</option>
+                                <option value="auto">&#x26A1; 全自动</option>
+                                <option value="human">&#x1F9D1; 人工</option>
+                            </select>
+                        </div>
+                        <label class="gate-label">
+                            <input type="checkbox" id="confirmation-gate-check">
+                            <span>确认门</span>
+                        </label>
+                    </div>
+                    <div class="sub-text">Enter to send · Shift+Enter for new line</div>
                 </div>
             </div>
         </main>
 
-        <!-- Logs/Inspector Panel (optional right-side details) -->
+        <!-- Agent Drawer (right side — subagent detail) -->
+        <aside class="agent-drawer" id="agent-drawer">
+            <div class="drawer-placeholder">
+                <div style="font-size:2rem;">⚡</div>
+                <p>点击 Execution Graph 中的节点<br>查看 Subagent 详情</p>
+            </div>
+        </aside>
+
+        <!-- Logs/Inspector Panel -->
         <aside class="inspector" id="inspector-panel">
             <header>
                 <h3>System Logs</h3>

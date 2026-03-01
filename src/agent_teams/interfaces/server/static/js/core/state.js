@@ -6,7 +6,9 @@ export const state = {
     activeEventSource: null,
     agentViews: {},
     activeView: 'main',
-    activeAgentRoleId: null
+    activeAgentRoleId: null,
+    activeRunId: null,
+    instanceRoleMap: {},  // instanceId → roleId, built from model_step_started SSE events
 };
 
 export const els = {
