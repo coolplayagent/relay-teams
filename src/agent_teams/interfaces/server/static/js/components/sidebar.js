@@ -1,0 +1,51 @@
+/**
+ * components/sidebar.js
+ * Handles the session list rendering and sidebar toggle interactions.
+ */
+import { els } from '../utils/dom.js';
+import { sysLog } from '../utils/logger.js';
+import { fetchSessions, startNewSession } from '../core/api.js';
+import { state } from '../core/state.js';
+
+export async function loadSessions() {
+    try {
+        const sessions = await fetchSessions();
+
+        els.sessionsList.innerHTML = '';
+        if (sessions.length === 0) {
+            els.sessionsList.innerHTML = '<div style="padding:1rem; color:var(--text-secondary); font-size:0.8rem; text-align:center;">No previous sessions</div>';
+            return;
+        }
+
+        sessions.forEach(s => {
+            const div = document.createElement('div');
+            div.className = 'session-item';
+            div.onclick = () => window.selectSession(s.session_id);
+            if (s.session_id === state.currentSessionId) div.classList.add('active');
+
+            const time = new Date(s.updated_at).toLocaleString();
+            div.innerHTML = `
+                <span class="session-id">${s.session_id}</span>
+                <span class="session-time">${time}</span>
+            `;
+            els.sessionsList.appendChild(div);
+        });
+    } catch (e) {
+        sysLog(`Error loading sessions: ${e.message}`, 'log-error');
+    }
+}
+
+export async function handleNewSessionClick(manualClick = true) {
+    try {
+        const data = await startNewSession();
+        sysLog(`Created new session: ${data.session_id}`);
+
+        if (manualClick) {
+            els.chatMessages.innerHTML = '';
+        }
+
+        await window.selectSession(data.session_id);
+    } catch (e) {
+        sysLog(`Error creating session: ${e.message}`, 'log-error');
+    }
+}

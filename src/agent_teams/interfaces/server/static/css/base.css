@@ -18,6 +18,13 @@
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --radius-md: 0.5rem;
     --radius-lg: 0.75rem;
+
+    --bg-hover: rgba(255, 255, 255, 0.05);
+    --bg-hover-strong: rgba(255, 255, 255, 0.1);
+    --bg-tool-header: rgba(255, 255, 255, 0.02);
+    --bg-tool-header-hover: rgba(255, 255, 255, 0.05);
+    --bg-tool-body: rgba(0, 0, 0, 0.4);
+    --bg-tool-block: rgba(0, 0, 0, 0.2);
 }
 
 * {
@@ -33,6 +40,27 @@ body {
     line-height: 1.5;
     height: 100vh;
     overflow: hidden;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+body.light-theme {
+    --bg-base: #f8fafc;
+    --bg-surface: #ffffff;
+    --bg-surface-glass: rgba(255, 255, 255, 0.7);
+    --border-color: #e2e8f0;
+    --text-primary: #0f1115;
+    --text-secondary: #64748b;
+
+    --bg-hover: rgba(0, 0, 0, 0.05);
+    --bg-hover-strong: rgba(0, 0, 0, 0.1);
+    --bg-tool-header: rgba(0, 0, 0, 0.01);
+    --bg-tool-header-hover: rgba(0, 0, 0, 0.04);
+    --bg-tool-body: rgba(0, 0, 0, 0.02);
+    --bg-tool-block: rgba(0, 0, 0, 0.03);
+}
+
+body.light-theme .dag-node {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
 
 /* Animations */

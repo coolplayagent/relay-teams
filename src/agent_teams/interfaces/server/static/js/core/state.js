@@ -1,17 +1,13 @@
 // js/state.js
 
 export const state = {
-
     currentSessionId: null,
     isGenerating: false,
     activeEventSource: null,
-    agentViews: {}
-
-    ,
-    activeView: 'main'
-}
-
-    ;
+    agentViews: {},
+    activeView: 'main',
+    activeAgentRoleId: null
+};
 
 export const els = {
     newBtn: document.getElementById('new-btn'),

@@ -65,8 +65,8 @@
 }
 
 .icon-btn:hover {
-    background-color: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background-color: var(--bg-hover-strong);
+    color: var(--primary);
 }
 
 .session-item {
@@ -80,7 +80,7 @@
 }
 
 .session-item:hover {
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: var(--bg-hover);
 }
 
 .session-item.active {
@@ -201,8 +201,9 @@
     font-size: 1.5rem;
     font-weight: 600;
     margin-bottom: 0.5rem;
-    background: linear-gradient(to right, #fff, #94a3b8);
+    background: linear-gradient(to right, var(--text-primary), var(--primary-hover));
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -236,8 +237,8 @@
 }
 
 .role-user {
-    background-color: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background-color: var(--bg-hover-strong);
+    color: var(--text-primary);
 }
 
 .role-agent {
@@ -302,7 +303,7 @@
     margin: 0.5rem 0 1rem 0;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: var(--bg-tool-block);
     overflow: hidden;
 }
 
@@ -311,14 +312,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    background-color: rgba(255, 255, 255, 0.02);
+    background-color: var(--bg-tool-header);
     cursor: pointer;
     user-select: none;
     transition: background-color 0.2s;
 }
 
 .tool-header:hover {
-    background-color: rgba(255, 255, 255, 0.05);
+    background-color: var(--bg-tool-header-hover);
 }
 
 .tool-title {
@@ -343,7 +344,7 @@
 .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.1);
+    border: 2px solid var(--bg-hover-strong);
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 1s linear infinite;
@@ -365,6 +366,7 @@
 .tool-body {
     padding: 1rem;
     border-top: 1px solid var(--border-color);
+    background-color: var(--bg-tool-body);
     font-size: 0.8125rem;
     font-family: var(--font-mono);
     display: none;
