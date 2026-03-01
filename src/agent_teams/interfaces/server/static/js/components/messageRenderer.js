@@ -16,14 +16,15 @@ import { parseMarkdown } from '../utils/markdown.js';
  * @returns {{ wrapper, textEl, pendingToolBlocks }}  — refs for live streaming
  */
 export function renderMessageBlock(container, role, label, parts = []) {
+    const safeLabel = label || 'Agent';
     const wrapper = document.createElement('div');
     wrapper.className = 'message';
     wrapper.dataset.role = role;
 
-    const roleClass = _roleClass(role, label);
+    const roleClass = _roleClass(role, safeLabel);
     wrapper.innerHTML = `
         <div class="msg-header">
-            <span class="msg-role ${roleClass}">${label.toUpperCase()}</span>
+            <span class="msg-role ${roleClass}">${safeLabel.toUpperCase()}</span>
         </div>
         <div class="msg-content"><div class="msg-text"></div></div>
     `;

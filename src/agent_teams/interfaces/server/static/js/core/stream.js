@@ -1,6 +1,6 @@
 /**
  * core/stream.js
- * Connects to the backend SSE EventSource and dispatches chunks to the router.
+ * Connects to the SSE EventSource, dispatches events, handles lifecycle.
  * The GET /intent/stream endpoint starts the intent AND streams events.
  */
 import { state } from './state.js';
@@ -18,14 +18,24 @@ export function startIntentStream(promptText, sessionId, executionMode, confirma
 
     if (state.activeEventSource) {
         state.activeEventSource.close();
+        state.activeEventSource = null;
     }
 
     const encodedPrompt = encodeURIComponent(promptText);
     const url = `/api/v1/session/${sessionId}/intent/stream?intent=${encodedPrompt}&execution_mode=${executionMode}&confirmation_gate=${confirmationGate}`;
 
-    sysLog(`Starting SSE (mode=${executionMode} gate=${confirmationGate})`);
+    sysLog(`SSE start (mode=${executionMode} gate=${confirmationGate})`);
     const es = new EventSource(url);
     state.activeEventSource = es;
+
+    // Guard: only call onCompleted once even if both message and onerror fire
+    let _done = false;
+    function _finish() {
+        if (_done) return;
+        _done = true;
+        endStream();
+        if (onCompleted) onCompleted(sessionId);
+    }
 
     es.onmessage = (event) => {
         try {
@@ -35,20 +45,19 @@ export function startIntentStream(promptText, sessionId, executionMode, confirma
 
             routeEvent(evType, payload, data);
 
-            // End of run → reload history
             if (evType === 'run_completed' || evType === 'run_failed') {
-                endStream();
-                if (onCompleted) onCompleted(sessionId);
+                _finish();
             }
         } catch (e) {
             console.error('SSE parse error', e, event.data);
         }
     };
 
+    // onerror fires when the server closes the connection after run_completed.
+    // The _done guard prevents a second call to onCompleted.
     es.onerror = () => {
-        sysLog('SSE connection closed.', 'log-error');
-        endStream();
-        if (onCompleted) onCompleted(sessionId);
+        sysLog('SSE closed.', 'log-error');
+        _finish();
     };
 }
 
@@ -67,6 +76,4 @@ export function endStream() {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
-
-    document.querySelectorAll('.typing-indicator').forEach(el => el.remove());
 }

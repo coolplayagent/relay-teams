@@ -13,7 +13,6 @@ import {
     finalizeStream,
     appendToolCallBlock,
     updateToolResult,
-    clearStreamState,
 } from '../components/messageRenderer.js';
 import {
     openAgentPanel,
@@ -26,14 +25,9 @@ import { parseMarkdown } from '../utils/markdown.js';
 
 const COORDINATOR_ROLE = 'coordinator_agent';
 
-// ─── Streaming state reset ────────────────────────────────────────────────────
-export function resetDomStreams() {
-    // individual streams are managed by messageRenderer
-}
-
 // ─── Main event dispatcher ────────────────────────────────────────────────────
 export function routeEvent(evType, payload, eventMeta) {
-    // Always track activeRunId for gate/dispatch calls
+    // Track activeRunId
     if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
     if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
 
@@ -49,11 +43,8 @@ export function routeEvent(evType, payload, eventMeta) {
 
     else if (evType === 'model_step_started') {
         if (instanceId && roleId) {
-            // Register instance→role mapping in state for DAG click routing
             if (!state.instanceRoleMap) state.instanceRoleMap = {};
             state.instanceRoleMap[instanceId] = roleId;
-
-            // If not coordinator → ensure panel exists (don't auto-open, wait for text)
             if (roleId !== COORDINATOR_ROLE) {
                 getPanelScrollContainer(instanceId, roleId);
             }
@@ -66,30 +57,28 @@ export function routeEvent(evType, payload, eventMeta) {
     else if (evType === 'text_delta') {
         const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
         const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
+        const streamKey = instanceId || (isCoordinator ? 'coordinator' : roleId);
 
         if (isCoordinator) {
-            // Accumulate in the main coordinator chat area
             const container = els.chatMessages;
-            const st = getOrCreateStreamBlock(container, instanceId || 'coordinator', label);
-            appendStreamChunk(instanceId || 'coordinator', payload.text || '');
+            // 4-arg call: (container, instanceId/key, roleId, displayLabel)
+            getOrCreateStreamBlock(container, streamKey, COORDINATOR_ROLE, label);
+            appendStreamChunk(streamKey, payload.text || '');
         } else {
-            // Route to the subagent panel — auto-open it on first chunk
-            let container = getPanelScrollContainer(instanceId, roleId);
+            const container = getPanelScrollContainer(instanceId, roleId);
             openAgentPanel(instanceId, roleId);
-            const st = getOrCreateStreamBlock(container, instanceId, label);
+            // 4-arg call: (container, instanceId, roleId, displayLabel)
+            getOrCreateStreamBlock(container, instanceId, roleId, label);
             appendStreamChunk(instanceId, payload.text || '');
         }
     }
 
     else if (evType === 'run_finished' || evType === 'model_step_done') {
-        if (instanceId) {
-            finalizeStream(instanceId);
-        } else {
-            finalizeStream('coordinator');
-        }
+        const key = instanceId || 'coordinator';
+        finalizeStream(key);
 
-        if (evType === 'run_finished' && !eventMeta?.instance_id) {
-            sysLog(`Run finished. (trace: ${eventMeta?.trace_id})`);
+        if (evType === 'run_finished' && !instanceId) {
+            sysLog(`Run finished.`);
             state.activeAgentRoleId = null;
             state.isGenerating = false;
             if (els.sendBtn) els.sendBtn.disabled = false;
@@ -121,26 +110,15 @@ export function routeEvent(evType, payload, eventMeta) {
         const container = isCoordinator
             ? els.chatMessages
             : getPanelScrollContainer(instanceId, roleId);
-
         if (!isCoordinator) openAgentPanel(instanceId, roleId);
-
-        appendToolCallBlock(container, instanceId || 'coordinator', payload.tool_name, payload.args);
+        const streamKey = instanceId || 'coordinator';
+        appendToolCallBlock(container, streamKey, payload.tool_name, payload.args);
         sysLog(`[Tool] ${payload.tool_name}…`);
-
-        // Live graph update when coordinator creates workflow
-        if (payload.tool_name === 'create_workflow_graph' && isCoordinator) {
-            // The result event will trigger the DAG reload via tool_result below
-        }
     }
 
     else if (evType === 'tool_result') {
-        const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
-        updateToolResult(
-            instanceId || 'coordinator',
-            payload.tool_name,
-            payload.result,
-            !!payload.error,
-        );
+        const streamKey = instanceId || 'coordinator';
+        updateToolResult(streamKey, payload.tool_name, payload.result, !!payload.error);
     }
 
     // ── Human orchestration mode ─────────────────────────────────────────────
@@ -155,14 +133,12 @@ export function routeEvent(evType, payload, eventMeta) {
 
     // ── Confirmation gate ────────────────────────────────────────────────────
     else if (evType === 'subagent_gate') {
-        const gateInstanceId = payload.instance_id;
-        const gateRoleId = payload.role_id;
-        showGateCard(gateInstanceId, gateRoleId, {
+        showGateCard(payload.instance_id, payload.role_id, {
             session_id: state.currentSessionId,
             run_id: state.activeRunId,
             task_id: payload.task_id,
             summary: payload.summary,
-            role_id: gateRoleId,
+            role_id: payload.role_id,
         });
     }
 
@@ -172,12 +148,11 @@ export function routeEvent(evType, payload, eventMeta) {
     }
 
     else {
-        sysLog(`Event: ${evType}`, 'log-info');
+        sysLog(`[evt] ${evType}`, 'log-info');
     }
 }
 
 // ─── Human dispatch panel ─────────────────────────────────────────────────────
-
 function _renderHumanDispatchPanel(payload, eventMeta) {
     document.querySelectorAll('.human-dispatch-panel').forEach(el => el.remove());
     const container = els.chatMessages;
@@ -196,7 +171,7 @@ function _renderHumanDispatchPanel(payload, eventMeta) {
     `).join('');
 
     panel.innerHTML = `
-        <div class="dispatch-header">&#x1F9D1;&#x200D;&#x1F4BC; 人工编排 — 请选择要执行的子任务</div>
+        <div class="dispatch-header">&#x1F9D1;&#x200D;&#x1F4BC; 人工编排 — 选择要执行的子任务</div>
         ${taskRows || '<div class="dispatch-empty">（无待执行任务）</div>'}
     `;
 
