@@ -19,7 +19,7 @@ export function startIntentStream(promptText, sessionId, onGraphSpawned) {
     }
 
     const encodedPrompt = encodeURIComponent(promptText);
-    const url = `/session/${sessionId}/intent/stream?intent=${encodedPrompt}`;
+    const url = `/api/v1/session/${sessionId}/intent/stream?intent=${encodedPrompt}`;
 
     sysLog(`Starting SSE connection to ${url}`);
     const es = new EventSource(url);

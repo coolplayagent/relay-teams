@@ -85,6 +85,30 @@ class SharedStore:
         self._conn.commit()
         return cursor.rowcount
 
+    def delete_by_session(self, session_id: str, task_ids: list[str], instance_ids: list[str]) -> None:
+        if not task_ids:
+            task_ids = ["__dummy_id__"]
+        if not instance_ids:
+            instance_ids = ["__dummy_id__"]
+            
+        task_placeholders = ",".join("?" * len(task_ids))
+        instance_placeholders = ",".join("?" * len(instance_ids))
+        
+        self._conn.execute(
+            f'''
+            DELETE FROM shared_state WHERE
+            (scope_type=? AND scope_id=?) OR
+            (scope_type=? AND scope_id IN ({task_placeholders})) OR
+            (scope_type=? AND scope_id IN ({instance_placeholders}))
+            ''',
+            (
+                ScopeType.SESSION.value, session_id,
+                ScopeType.TASK.value, *task_ids,
+                ScopeType.INSTANCE.value, *instance_ids
+            )
+        )
+        self._conn.commit()
+
 
 def global_scope() -> ScopeRef:
     return ScopeRef(scope_type=ScopeType.GLOBAL, scope_id='global')

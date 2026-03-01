@@ -85,6 +85,10 @@ class AgentInstanceRepository:
         ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    def delete_by_session(self, session_id: str) -> None:
+        self._conn.execute('DELETE FROM agent_instances WHERE session_id=?', (session_id,))
+        self._conn.commit()
+
     def _to_record(self, row: sqlite3.Row) -> AgentRuntimeRecord:
         return AgentRuntimeRecord(
             run_id=str(row['run_id']),

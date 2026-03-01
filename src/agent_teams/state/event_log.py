@@ -92,6 +92,10 @@ class EventLog:
         ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
 
+    def delete_by_session(self, session_id: str) -> None:
+        self._conn.execute('DELETE FROM events WHERE session_id=?', (session_id,))
+        self._conn.commit()
+
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
         import json
         return {

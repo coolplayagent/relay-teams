@@ -75,6 +75,10 @@ class SessionRepository:
         rows = self._conn.execute('SELECT * FROM sessions ORDER BY created_at DESC').fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    def delete(self, session_id: str) -> None:
+        self._conn.execute('DELETE FROM sessions WHERE session_id=?', (session_id,))
+        self._conn.commit()
+
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
         return SessionRecord(
             session_id=str(row['session_id']),

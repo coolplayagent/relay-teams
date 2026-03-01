@@ -78,7 +78,7 @@ export async function buildAgentTabs(sessionId) {
 
 async function loadGlobalHistory(sessionId) {
     try {
-        const res = await fetch(`/session/${sessionId}/events`);
+        const res = await fetch(`/api/v1/session/${sessionId}/events`);
         const events = await res.json();
 
         // Router currently handles individual processing but skips for historic events unless explicitly pumped, so we use a silent boolean if necessary.
@@ -87,7 +87,7 @@ async function loadGlobalHistory(sessionId) {
             const sessionAgents = await fetchSessionAgents(sessionId);
             const coordAgent = sessionAgents.find(a => a.role_id === 'coordinator_agent');
             if (coordAgent) {
-                const msgRes = await fetch(`/session/${sessionId}/agents/${coordAgent.instance_id}/messages`);
+                const msgRes = await fetch(`/api/v1/session/${sessionId}/agents/${coordAgent.instance_id}/messages`);
                 const messages = await msgRes.json();
 
                 // Directly write user histories here or trigger text_delta pseudo-events:
@@ -105,7 +105,7 @@ async function loadGlobalHistory(sessionId) {
 
 export async function reloadAllSessionMessages(sessionId) {
     try {
-        const res = await fetch(`/session/${sessionId}/messages`);
+        const res = await fetch(`/api/v1/session/${sessionId}/messages`);
         const messages = await res.json();
 
         const byInstance = {};

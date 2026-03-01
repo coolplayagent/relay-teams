@@ -4,13 +4,13 @@
  */
 
 export async function fetchSessions() {
-    const res = await fetch('/session');
+    const res = await fetch('/api/v1/session');
     if (!res.ok) throw new Error("Failed to fetch sessions");
     return res.json();
 }
 
 export async function startNewSession() {
-    const res = await fetch('/session', {
+    const res = await fetch('/api/v1/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -20,31 +20,31 @@ export async function startNewSession() {
 }
 
 export async function fetchSessionHistory(sessionId) {
-    const res = await fetch(`/session/${sessionId}`);
+    const res = await fetch(`/api/v1/session/${sessionId}`);
     if (!res.ok) throw new Error("Failed to fetch session history");
     return res.json();
 }
 
 export async function fetchSessionWorkflows(sessionId) {
-    const res = await fetch(`/session/${sessionId}/workflows`);
+    const res = await fetch(`/api/v1/session/${sessionId}/workflows`);
     if (!res.ok) throw new Error("Failed to fetch session workflows");
     return res.json();
 }
 
 export async function fetchSessionAgents(sessionId) {
-    const res = await fetch(`/session/${sessionId}/agents`);
+    const res = await fetch(`/api/v1/session/${sessionId}/agents`);
     if (!res.ok) throw new Error("Failed to fetch session agents");
     return res.json();
 }
 
 export async function fetchAgentMessages(sessionId, instanceId) {
-    const res = await fetch(`/session/${sessionId}/agents/${instanceId}/messages`);
+    const res = await fetch(`/api/v1/session/${sessionId}/agents/${instanceId}/messages`);
     if (!res.ok) throw new Error("Failed to fetch agent messages");
     return res.json();
 }
 
 export async function sendUserPrompt(sessionId, prompt) {
-    const res = await fetch(`/session/${sessionId}/intent`, {
+    const res = await fetch(`/api/v1/session/${sessionId}/intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ intent: prompt })

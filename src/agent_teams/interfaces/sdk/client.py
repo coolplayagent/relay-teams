@@ -262,6 +262,27 @@ class AgentTeamsApp:
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
         self._session_repo.update_metadata(session_id, metadata)
 
+    def delete_session(self, session_id: str) -> None:
+        # Verify it exists first
+        self._session_repo.get(session_id)
+        
+        # Gather scoped entities to delete from shared_store
+        tasks = self._task_repo.list_by_session(session_id)
+        agents = self._agent_repo.list_by_session(session_id)
+        
+        task_ids = [t.envelope.task_id for t in tasks]
+        instance_ids = [a.instance_id for a in agents]
+
+        # Delete dependent data
+        self._shared_store.delete_by_session(session_id, task_ids, instance_ids)
+        self._message_repo.delete_by_session(session_id)
+        self._event_log.delete_by_session(session_id)
+        self._task_repo.delete_by_session(session_id)
+        self._agent_repo.delete_by_session(session_id)
+        
+        # Finally delete the session itself
+        self._session_repo.delete(session_id)
+
     def get_session(self, session_id: str) -> SessionRecord:
         return self._session_repo.get(session_id)
 

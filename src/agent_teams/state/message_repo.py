@@ -110,6 +110,10 @@ class MessageRepository:
             })
         return results
 
+    def delete_by_session(self, session_id: str) -> None:
+        self._conn.execute('DELETE FROM messages WHERE session_id=?', (session_id,))
+        self._conn.commit()
+
     def get_history_for_task(self, instance_id: str, task_id: str) -> list[ModelMessage]:
         """Return messages scoped to a specific task."""
         rows = self._conn.execute(
