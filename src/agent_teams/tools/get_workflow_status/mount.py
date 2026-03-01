@@ -41,20 +41,30 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
             if not isinstance(tasks, dict):
                 raise ValueError("invalid workflow graph tasks")
 
-            def _status(task_id: str) -> str:
+            def _get_task_info(task_id: str) -> dict:
                 task = records.get(task_id)
                 if task is None:
-                    return "missing"
-                return task.status.value
+                    return {"status": "missing"}
+                info = {"status": task.status.value}
+                if task.status.value == "completed" and task.result:
+                    info["result"] = task.result
+                elif task.status.value in ("failed", "timeout") and task.error_message:
+                    info["error"] = task.error_message
+                return info
 
             task_status = {}
             for task_name, task_info in tasks.items():
                 task_id = task_info.get("task_id", "")
                 role_id = task_info.get("role_id", "")
+                status_info = _get_task_info(task_id)
                 task_status[task_name] = {
-                    "status": _status(task_id),
+                    "status": status_info["status"],
                     "role_id": role_id,
                 }
+                if "result" in status_info:
+                    task_status[task_name]["result"] = status_info["result"]
+                if "error" in status_info:
+                    task_status[task_name]["error"] = status_info["error"]
 
             return json.dumps(
                 {
