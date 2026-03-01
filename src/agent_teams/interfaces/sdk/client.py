@@ -342,6 +342,7 @@ class AgentTeamsApp:
 
     def get_session_rounds(self, session_id: str) -> list[dict]:
         """Aggregate a session timeline into specific rounds dict based on run_id."""
+        import json
         events = self._event_log.list_by_session(session_id)
         
         rounds_map = {}
@@ -379,8 +380,12 @@ class AgentTeamsApp:
                 if msg["role"] == "user":
                     try:
                         pts = content.get("parts", [])
-                        if pts and isinstance(pts[0], dict):
-                            rounds_map[run_id]["intent"] = pts[0].get("content", "")
+                        for pt in pts:
+                            if isinstance(pt, dict) and pt.get("part_kind") == "user-prompt":
+                                # only set if we haven't already for this round
+                                if not rounds_map[run_id]["intent"]:
+                                    rounds_map[run_id]["intent"] = pt.get("content", "")
+                                break
                     except:
                         pass
                 # Append ALL coordinate agent messages to its round history
