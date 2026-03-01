@@ -1,6 +1,7 @@
 ---
 role_id: time
 name: time
+llm_profile: default
 version: 1.0.0
 capabilities:
   - get current time

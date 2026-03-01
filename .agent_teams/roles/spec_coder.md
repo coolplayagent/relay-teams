@@ -1,6 +1,7 @@
 ---
 role_id: spec_coder
 name: Spec Coder
+llm_profile: default
 version: 1.0.0
 capabilities:
   - implementation

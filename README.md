@@ -17,24 +17,53 @@ Start the server with `uv run agent-teams serve` and open http://127.0.0.1:8000 
 uv sync
 ```
 
-### 2) Create runtime config file
+### 2) Create runtime config files
 
 Linux/macOS:
 
 ```bash
-cp .agent_teams/.env.example .agent_teams/.env
+cp .agent_teams/llm.json.example .agent_teams/llm.json
 ```
 
 Windows PowerShell:
 
 ```powershell
-Copy-Item .agent_teams/.env.example .agent_teams/.env
+Copy-Item .agent_teams/llm.json.example .agent_teams/llm.json
 ```
 
-Then edit `.agent_teams/.env`.
+Then edit `.agent_teams/llm.json`. You must configure the `default` profile, and optionally add more profiles for different roles.
 
-- If you set `OPENAI_MODEL`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, it will use your OpenAI-compatible endpoint.
-- If those fields are empty, the app falls back to local `EchoProvider` (still runnable for smoke test).
+```json
+{
+  "default": {
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "${OPENAI_API_KEY}",
+    "temperature": 0.2
+  },
+  "fast": {
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "${OPENAI_API_KEY}",
+    "temperature": 0.1
+  }
+}
+```
+
+#### Per-role model configuration
+
+In each role's markdown file (e.g., `.agent_teams/roles/coordinator_agent.md`), add `llm_profile` to use a specific model:
+
+```yaml
+---
+role_id: coordinator_agent
+name: Coordinator Agent
+llm_profile: fast
+...
+---
+```
+
+Roles without `llm_profile` will use the `default` profile.
 
 ### 3) Validate roles
 

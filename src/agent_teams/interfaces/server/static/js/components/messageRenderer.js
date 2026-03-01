@@ -126,16 +126,37 @@ export function clearAllStreamState() {
 export function appendToolCallBlock(container, instanceId, toolName, args) {
     let st = _streamState.get(instanceId);
     if (!st) {
-        // create a new block if nothing streaming
         const label = toolName ? `tool` : 'agent';
         const { wrapper, textEl, contentEl } = renderMessageBlock(container, 'model', label, []);
         st = { container, wrapper, textEl, contentEl, raw: '', roleId: '', label };
         _streamState.set(instanceId, st);
     }
 
+    let argsStr = '';
+    try {
+        argsStr = typeof args === 'object' ? JSON.stringify(args, null, 2) : String(args || '');
+    } catch(e) {
+        argsStr = String(args);
+    }
+    
+    // Explicit diagnostic fallback in raw text to guarantee visibility in the DOM flow
+    if (!st.raw.includes(`🛠️ **Tool Call**: \`${toolName}\``)) {
+        st.raw += `
+
+> 🛠️ **Tool Call**: \`${toolName}\`
+
+`;
+        if (st.textEl) st.textEl.innerHTML = parseMarkdown(st.raw);
+    }
+
     const toolBlock = document.createElement('div');
     toolBlock.className = 'tool-block';
     toolBlock.dataset.toolName = toolName;
+    
+    // Enforce layout visibility
+    toolBlock.style.display = 'block';
+    toolBlock.style.visibility = 'visible';
+
     toolBlock.innerHTML = `
         <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
             <div class="tool-title">
@@ -145,11 +166,16 @@ export function appendToolCallBlock(container, instanceId, toolName, args) {
             <div class="tool-status"><div class="spinner"></div></div>
         </div>
         <div class="tool-body">
-            <div class="tool-args">${JSON.stringify(args || {}, null, 2)}</div>
-            <div class="tool-result">Processing…</div>
+            <pre class="tool-args" style="white-space:pre-wrap;">${argsStr}</pre>
+            <div class="tool-result">Processing...</div>
         </div>
     `;
-    st.contentEl.appendChild(toolBlock);
+    
+    if (st.contentEl) {
+        st.contentEl.appendChild(toolBlock);
+    } else {
+        container.appendChild(toolBlock);
+    }
     _scrollBottom(container);
     return toolBlock;
 }

@@ -1,6 +1,7 @@
 ---
 role_id: spec_spec
 name: Spec Spec
+llm_profile: default
 version: 1.0.0
 capabilities:
   - requirements

@@ -9,6 +9,7 @@ __pycache__/
 .agent_teams/stage_docs
 .agent_teams/.env
 .agent_teams/*.db
+.agent_teams/llm.json
 
 tmp.db
 tmp.db-journal

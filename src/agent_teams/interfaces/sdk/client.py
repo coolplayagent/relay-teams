@@ -15,7 +15,6 @@ from agent_teams.core.ids import new_trace_id
 from agent_teams.core.models import (
     InjectionMessage,
     IntentInput,
-    ModelEndpointConfig,
     RoleDefinition,
     RunEvent,
     RunResult,
@@ -56,7 +55,6 @@ class AgentTeamsApp:
         self,
         roles_dir: Path | None = None,
         db_path: Path | None = None,
-        model_config: ModelEndpointConfig | None = None,
         config_dir: Path = _get_project_root() / ".agent_teams",
         debug: bool = False,
     ) -> None:
@@ -64,11 +62,10 @@ class AgentTeamsApp:
         runtime = load_runtime_config(
             config_dir=config_dir, roles_dir=roles_dir, db_path=db_path
         )
-        effective_model_config = model_config or runtime.model_endpoint
 
         role_registry = RoleLoader().load_all(runtime.paths.roles_dir)
         tool_registry = build_default_registry()
-        
+
         # Load MCP configs from .agent_teams/mcp.json if it exists
         mcp_specs = []
         mcp_file = config_dir / "mcp.json"
@@ -82,15 +79,16 @@ class AgentTeamsApp:
                     mcp_specs.append(McpServerSpec(name=name, config=wrapped_cfg))
             except Exception as e:
                 print(f"Warning: Failed to load mcp.json: {e}")
-                
+
         mcp_registry = McpRegistry(tuple(mcp_specs))
-        
+
         from agent_teams.skills.discovery import SkillsDirectory
+
         skills_dir = config_dir / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         skill_directory = SkillsDirectory(base_dir=skills_dir)
         skill_registry = SkillRegistry(directory=skill_directory)
-        
+
         for role in role_registry.list_roles():
             tool_registry.validate_known(role.tools)
             mcp_registry.validate_known(role.mcp_servers)
@@ -111,11 +109,16 @@ class AgentTeamsApp:
 
         def provider_factory(role: RoleDefinition) -> LLMProvider:
             provider: LLMProvider
-            if effective_model_config is None:
+            profile_config = runtime.llm_profiles.get(role.llm_profile)
+            config_to_use = profile_config or runtime.llm_profiles.get("default")
+
+            print(f"---------------------{config_to_use}")
+
+            if config_to_use is None:
                 provider = EchoProvider()
             else:
                 provider = OpenAICompatibleProvider(
-                    effective_model_config,
+                    config_to_use,
                     task_repo=task_repo,
                     instance_pool=instance_pool,
                     shared_store=shared_store,
@@ -287,11 +290,14 @@ class AgentTeamsApp:
         return created
 
     def resolve_gate(
-        self, run_id: str, task_id: str, action: str, feedback: str = ''
+        self, run_id: str, task_id: str, action: str, feedback: str = ""
     ) -> None:
         """HTTP handler calls this to let the human approve or request a revision."""
         from agent_teams.runtime.gate_manager import GateAction
-        self._gate_manager.resolve_gate(run_id, task_id, action=action, feedback=feedback)  # type: ignore[arg-type]
+
+        self._gate_manager.resolve_gate(
+            run_id, task_id, action=action, feedback=feedback
+        )  # type: ignore[arg-type]
 
     def list_open_gates(self, run_id: str) -> list[dict]:
         """Return currently open gate entries for a run."""
@@ -305,11 +311,12 @@ class AgentTeamsApp:
         picks up the selected task_id and dispatches it.
         """
         import json
+
         self._injection_manager.enqueue(
             run_id=run_id,
             recipient_instance_id=coordinator_instance_id,
             source=InjectionSource.USER,
-            content=json.dumps({'__human_dispatch__': task_id}),
+            content=json.dumps({"__human_dispatch__": task_id}),
         )
 
     def create_workflow(self, spec: WorkflowSpec) -> str:
@@ -329,11 +336,11 @@ class AgentTeamsApp:
     def delete_session(self, session_id: str) -> None:
         # Verify it exists first
         self._session_repo.get(session_id)
-        
+
         # Gather scoped entities to delete from shared_store
         tasks = self._task_repo.list_by_session(session_id)
         agents = self._agent_repo.list_by_session(session_id)
-        
+
         task_ids = [t.envelope.task_id for t in tasks]
         instance_ids = [a.instance_id for a in agents]
 
@@ -343,7 +350,7 @@ class AgentTeamsApp:
         self._event_log.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
-        
+
         # Finally delete the session itself
         self._session_repo.delete(session_id)
 
@@ -374,13 +381,14 @@ class AgentTeamsApp:
 
     def get_agent_messages(self, session_id: str, instance_id: str) -> list[dict]:
         return self._message_repo.get_messages_for_instance(session_id, instance_id)
-        
+
     def get_global_events(self, session_id: str) -> list[dict]:
         events = self._event_log.list_by_session(session_id)
         return list(events)
 
     def get_session_messages(self, session_id: str) -> list[dict]:
         import json
+
         return self._message_repo.get_messages_by_session(session_id)
 
     def get_session_workflows(self, session_id: str) -> list[dict]:
@@ -400,6 +408,7 @@ class AgentTeamsApp:
     def get_session_rounds(self, session_id: str) -> list[dict]:
         """Aggregate session events into run-scoped rounds for UI rendering."""
         import json
+
         events = self._event_log.list_by_session(session_id)
         rounds_map: dict[str, dict] = {}
         by_run_instance_role: dict[str, dict[str, str]] = {}
@@ -415,7 +424,9 @@ class AgentTeamsApp:
             ev_role = payload.get("role_id")
             if isinstance(ev_instance, str) and isinstance(ev_role, str):
                 by_run_instance_role.setdefault(run_id, {})[ev_instance] = ev_role
-                by_run_role_instance.setdefault(run_id, {}).setdefault(ev_role, ev_instance)
+                by_run_role_instance.setdefault(run_id, {}).setdefault(
+                    ev_role, ev_instance
+                )
 
         # Fallback mapping from repository records for runs with sparse events.
         for rec in self._agent_repo.list_by_session(session_id):
@@ -458,7 +469,10 @@ class AgentTeamsApp:
                 for pt in parts:
                     if not isinstance(pt, dict):
                         continue
-                    if pt.get("part_kind") == "user-prompt" and not round_data["intent"]:
+                    if (
+                        pt.get("part_kind") == "user-prompt"
+                        and not round_data["intent"]
+                    ):
                         round_data["intent"] = pt.get("content", "")
                         break
 
@@ -470,6 +484,7 @@ class AgentTeamsApp:
         tasks = self._task_repo.list_by_session(session_id)
         from agent_teams.core.enums import ScopeType
         from agent_teams.core.models import ScopeRef
+
         for task in tasks:
             run_id = task.envelope.trace_id
             round_data = rounds_map.get(run_id)
@@ -480,7 +495,9 @@ class AgentTeamsApp:
             if wf_str:
                 round_data["workflows"].append(json.loads(wf_str))
 
-        return sorted(list(rounds_map.values()), key=lambda x: x["created_at"], reverse=True)
+        return sorted(
+            list(rounds_map.values()), key=lambda x: x["created_at"], reverse=True
+        )
 
     def get_round(self, session_id: str, run_id: str) -> dict:
         rounds = self.get_session_rounds(session_id)

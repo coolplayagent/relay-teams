@@ -1,6 +1,7 @@
 ---
 role_id: coordinator_agent
 name: Coordinator Agent
+llm_profile: default
 version: 1.0.0
 capabilities:
   - orchestrate

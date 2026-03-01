@@ -1,6 +1,7 @@
 ---
 role_id: spec_verify
 name: Spec Verify
+llm_profile: default
 version: 1.0.0
 capabilities:
   - validation

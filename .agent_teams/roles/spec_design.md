@@ -1,6 +1,7 @@
 ---
 role_id: spec_design
 name: Spec Design
+llm_profile: default
 version: 1.0.0
 capabilities:
   - architecture
