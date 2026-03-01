@@ -4,7 +4,7 @@
  */
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
-import { fetchSessions, startNewSession } from '../core/api.js';
+import { fetchSessions, startNewSession, deleteSession } from '../core/api.js';
 import { state } from '../core/state.js';
 
 export async function loadSessions() {
@@ -27,7 +27,35 @@ export async function loadSessions() {
             div.innerHTML = `
                 <span class="session-id">${s.session_id}</span>
                 <span class="session-time">${time}</span>
+                <button class="session-delete-btn" title="Delete session">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
             `;
+            
+            const deleteBtn = div.querySelector('.session-delete-btn');
+            deleteBtn.onclick = async (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete session ${s.session_id}?`)) {
+                    try {
+                        await deleteSession(s.session_id);
+                        if (s.session_id === state.currentSessionId) {
+                            const remaining = sessions.filter(sess => sess.session_id !== s.session_id);
+                            if (remaining.length > 0) {
+                                await window.selectSession(remaining[0].session_id);
+                            } else {
+                                await handleNewSessionClick(false);
+                            }
+                        } else {
+                            await loadSessions();
+                        }
+                    } catch (e) {
+                        sysLog(`Error deleting session: ${e.message}`, 'log-error');
+                    }
+                }
+            };
+            
             els.sessionsList.appendChild(div);
         });
     } catch (e) {

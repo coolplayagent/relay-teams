@@ -52,3 +52,11 @@ export async function sendUserPrompt(sessionId, prompt) {
     if (!res.ok) throw new Error("Failed to send prompt");
     return res;
 }
+
+export async function deleteSession(sessionId) {
+    const res = await fetch(`/api/v1/session/${sessionId}`, {
+        method: 'DELETE'
+    });
+    if (!res.ok) throw new Error("Failed to delete session");
+    return res.json();
+}
