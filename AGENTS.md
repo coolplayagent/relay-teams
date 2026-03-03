@@ -1,5 +1,7 @@
 # Repository Guidelines (Simplified)
 
+数据库schema与api的修改不需要考虑兼容旧版本，修改后需要同步修改docs目录下对应的文档。
+
 ## Project Layout
 - Core code: `src/agent_teams/`
 - Main modules:

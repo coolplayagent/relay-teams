@@ -12,6 +12,7 @@ import {
     appendStreamChunk,
     finalizeStream,
     appendToolCallBlock,
+    markToolInputValidationFailed,
     updateToolResult,
     attachToolApprovalControls,
     markToolApprovalResolved,
@@ -100,8 +101,25 @@ export function routeEvent(evType, payload, eventMeta) {
             : getPanelScrollContainer(instanceId, roleId);
         if (!isCoordinator) openAgentPanel(instanceId, roleId);
         const streamKey = instanceId || 'coordinator';
-        appendToolCallBlock(container, streamKey, payload.tool_name, payload.args);
+        appendToolCallBlock(
+            container,
+            streamKey,
+            payload.tool_name,
+            payload.args,
+            payload.tool_call_id || null,
+        );
         sysLog(`[Tool] ${payload.tool_name}`);
+    }
+
+    else if (evType === 'tool_input_validation_failed') {
+        const streamKey = instanceId || 'coordinator';
+        const bound = markToolInputValidationFailed(streamKey, payload);
+        if (!bound) {
+            sysLog(
+                `Tool input validation failed (not executed): ${payload.tool_name}`,
+                'log-info',
+            );
+        }
     }
 
     else if (evType === 'tool_result') {
@@ -110,7 +128,13 @@ export function routeEvent(evType, payload, eventMeta) {
         const isError = typeof resultEnvelope === 'object'
             ? resultEnvelope.ok === false
             : !!payload.error;
-        updateToolResult(streamKey, payload.tool_name, resultEnvelope, isError);
+        updateToolResult(
+            streamKey,
+            payload.tool_name,
+            resultEnvelope,
+            isError,
+            payload.tool_call_id || null,
+        );
 
         if (payload.tool_name === 'create_workflow_graph' && resultEnvelope) {
             _tryRenderLiveDAG(resultEnvelope);

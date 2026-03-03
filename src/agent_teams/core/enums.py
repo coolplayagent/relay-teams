@@ -56,6 +56,7 @@ class RunEventType(str, Enum):
     MODEL_STEP_FINISHED = 'model_step_finished'
     TEXT_DELTA = 'text_delta'
     TOOL_CALL = 'tool_call'
+    TOOL_INPUT_VALIDATION_FAILED = 'tool_input_validation_failed'
     TOOL_RESULT = 'tool_result'
     INJECTION_ENQUEUED = 'injection_enqueued'
     INJECTION_APPLIED = 'injection_applied'

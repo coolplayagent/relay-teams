@@ -31,10 +31,21 @@ export async function fetchSessionWorkflows(sessionId) {
     return res.json();
 }
 
-export async function fetchSessionRounds(sessionId) {
-    const res = await fetch(`/api/sessions/${sessionId}/rounds`);
+export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null } = {}) {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursorRunId) params.set('cursor_run_id', cursorRunId);
+    const res = await fetch(`/api/sessions/${sessionId}/rounds?${params.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch session rounds');
-    return res.json();
+    const data = await res.json();
+    if (Array.isArray(data)) {
+        return {
+            items: data,
+            has_more: false,
+            next_cursor: null,
+        };
+    }
+    return data;
 }
 
 export async function fetchSessionAgents(sessionId) {

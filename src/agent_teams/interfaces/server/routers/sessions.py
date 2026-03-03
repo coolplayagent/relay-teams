@@ -75,9 +75,15 @@ def delete_session(
 @router.get("/{session_id}/rounds")
 def get_session_rounds(
     session_id: str,
+    limit: int = 8,
+    cursor_run_id: str | None = None,
     service: AgentTeamsService = Depends(get_service),
-) -> list[dict]:
-    return service.get_session_rounds(session_id)
+) -> dict:
+    return service.get_session_rounds(
+        session_id,
+        limit=limit,
+        cursor_run_id=cursor_run_id,
+    )
 
 
 @router.get("/{session_id}/rounds/{run_id}")

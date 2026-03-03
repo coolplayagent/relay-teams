@@ -17,9 +17,10 @@ class _FakeApprovalManager:
     def __init__(self, wait_result: tuple[str, str] | None = None, timeout: bool = False) -> None:
         self.wait_result = wait_result
         self.timeout = timeout
+        self.last_open: dict[str, object] | None = None
 
     def open_approval(self, **kwargs) -> None:
-        return None
+        self.last_open = kwargs
 
     def wait_for_approval(self, **kwargs):
         if self.timeout:
@@ -55,6 +56,8 @@ class _FakeDeps:
 class _FakeCtx:
     def __init__(self, deps: _FakeDeps) -> None:
         self.deps = deps
+        self.tool_call_id: str | None = None
+        self.retry: int = 0
 
 
 def test_execute_tool_returns_standard_envelope() -> None:
@@ -118,3 +121,23 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
     assert result['error']['type'] == 'approval_timeout'
     assert result['meta']['approval_status'] == 'timeout'
 
+
+def test_execute_tool_approval_uses_model_tool_call_id_when_present() -> None:
+    manager = _FakeApprovalManager(wait_result=('approve', ''))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=_FakePolicy(needs_approval=True),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = 'call-model-123'
+    result = asyncio.run(
+        execute_tool(
+            ctx,
+            tool_name='write',
+            args_summary={'path': 'a.txt'},
+            action=lambda: 'ok',
+        )
+    )
+    assert result['ok'] is True
+    assert manager.last_open is not None
+    assert manager.last_open['tool_call_id'] == 'call-model-123'

@@ -156,7 +156,7 @@ async def _handle_tool_approval(
         meta['approval_status'] = 'not_required'
         return None
 
-    tool_call_id = f'toolcall_{uuid4().hex[:12]}'
+    tool_call_id = ctx.tool_call_id or f'toolcall_{uuid4().hex[:12]}'
     args_preview = _safe_json(args_summary)
     ctx.deps.tool_approval_manager.open_approval(
         run_id=ctx.deps.run_id,

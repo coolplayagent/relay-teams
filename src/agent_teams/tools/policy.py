@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
     {
+        'create_workflow_graph',
+        'dispatch_ready_tasks',
         'shell',
         'write',
         'write_stage_doc',

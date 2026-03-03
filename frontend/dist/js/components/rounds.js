@@ -15,14 +15,18 @@ export let currentRound = null;
 let _scrollBound = false;
 let _activeRunId = null;
 let _activeVisibility = 0;
+const ROUND_PAGE_SIZE = 8;
+let _roundPaging = {
+    hasMore: false,
+    nextCursor: null,
+    loading: false,
+};
 
 export async function loadSessionRounds(sessionId) {
     try {
-        const rounds = await fetchSessionRounds(sessionId);
-        currentRounds = (rounds || []).slice().sort((a, b) =>
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        );
-        renderSessionTimeline(currentRounds);
+        const page = await fetchSessionRounds(sessionId, { limit: ROUND_PAGE_SIZE });
+        _applyRoundPage(page, { prepend: false });
+        renderSessionTimeline(currentRounds, { preserveScroll: false });
     } catch (e) {
         console.error('Failed loading rounds', e);
     }
@@ -100,8 +104,19 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
             </div>`;
         section.appendChild(header);
 
+        const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
+            const roleId = item?.role_id || '';
+            return roleId === '' || roleId === 'coordinator_agent';
+        });
+
         if (round.coordinator_messages?.length > 0) {
-            renderHistoricalMessageList(section, round.coordinator_messages);
+            renderHistoricalMessageList(section, round.coordinator_messages, {
+                pendingToolApprovals: pendingCoordinatorApprovals,
+            });
+        } else if (pendingCoordinatorApprovals.length > 0) {
+            renderHistoricalMessageList(section, [], {
+                pendingToolApprovals: pendingCoordinatorApprovals,
+            });
         } else if (round.run_id !== '__live__') {
             const empty = document.createElement('div');
             empty.className = 'panel-empty';
@@ -141,6 +156,7 @@ function _syncActiveRoundFromScroll() {
     const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
     if (atTop) {
         _activateRoundSection(sections[0], Number.POSITIVE_INFINITY);
+        void _loadOlderRounds();
         return;
     }
     if (atBottom) {
@@ -288,4 +304,49 @@ function _esc(text) {
     const d = document.createElement('div');
     d.textContent = text;
     return d.innerHTML;
+}
+
+function _applyRoundPage(page, { prepend }) {
+    const rawItems = Array.isArray(page?.items) ? page.items : [];
+    const sortedItems = rawItems.slice().sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    if (!prepend) {
+        currentRounds = sortedItems;
+    } else if (sortedItems.length > 0) {
+        const existing = new Set(currentRounds.map(r => r.run_id));
+        const toAdd = sortedItems.filter(r => !existing.has(r.run_id));
+        currentRounds = [...toAdd, ...currentRounds];
+    }
+
+    _roundPaging = {
+        hasMore: !!page?.has_more,
+        nextCursor: page?.next_cursor || null,
+        loading: false,
+    };
+}
+
+async function _loadOlderRounds() {
+    if (!_roundPaging.hasMore || _roundPaging.loading || !state.currentSessionId) return;
+
+    const container = els.chatMessages;
+    if (!container) return;
+
+    _roundPaging.loading = true;
+    const oldHeight = container.scrollHeight;
+    const oldTop = container.scrollTop;
+    try {
+        const page = await fetchSessionRounds(state.currentSessionId, {
+            limit: ROUND_PAGE_SIZE,
+            cursorRunId: _roundPaging.nextCursor,
+        });
+        _applyRoundPage(page, { prepend: true });
+        renderSessionTimeline(currentRounds, { preserveScroll: true });
+        const newHeight = container.scrollHeight;
+        container.scrollTop = newHeight - oldHeight + oldTop;
+    } catch (e) {
+        console.error('Failed loading older rounds', e);
+        _roundPaging.loading = false;
+    }
 }

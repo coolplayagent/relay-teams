@@ -471,6 +471,10 @@
     color: var(--danger);
 }
 
+.status-warning {
+    color: var(--warning);
+}
+
 .tool-body {
     padding: 1rem;
     border-top: 1px solid var(--border-color);
@@ -498,6 +502,10 @@
 
 .tool-result.error-text {
     color: var(--danger);
+}
+
+.tool-result.warning-text {
+    color: var(--warning);
 }
 
 #prompt-input {
