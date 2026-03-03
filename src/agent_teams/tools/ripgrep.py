@@ -7,8 +7,6 @@ import subprocess
 import zipfile
 import tarfile
 from pathlib import Path
-from functools import lru_cache
-
 import httpx
 
 from agent_teams.tools.ripgrep_errors import (
@@ -20,6 +18,7 @@ from agent_teams.tools.ripgrep_types import GrepMatch, GrepResult
 
 VERSION = "14.1.1"
 BIN_DIR = Path.home() / ".agent-teams" / "bin"
+_RG_PATH_CACHE: Path | None = None
 
 PLATFORM_MAP = {
     "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
@@ -36,7 +35,6 @@ def _get_platform_key() -> str:
     return f"{platform.machine()}-{platform.system().lower()}"
 
 
-@lru_cache(maxsize=1)
 async def get_rg_path() -> Path:
     """获取 ripgrep 可执行文件路径 (带缓存)
 
@@ -54,10 +52,16 @@ async def get_rg_path() -> Path:
         ExtractionFailedError: 解压失败
     """
     # 1. 系统 ripgrep
+    global _RG_PATH_CACHE
+
+    if _RG_PATH_CACHE and _RG_PATH_CACHE.is_file():
+        return _RG_PATH_CACHE
+
     system_rg = shutil.which("rg")
     if system_rg:
         p = Path(system_rg)
         if p.is_file():
+            _RG_PATH_CACHE = p
             return p
 
     # 2. 本地缓存
@@ -66,11 +70,21 @@ async def get_rg_path() -> Path:
     local_path = BIN_DIR / f"rg{ext}"
 
     if local_path.exists() and local_path.is_file():
+        _RG_PATH_CACHE = local_path
         return local_path
 
     # 3. 下载
     await _download_rg(local_path)
+    _RG_PATH_CACHE = local_path
     return local_path
+
+
+def _clear_get_rg_path_cache() -> None:
+    global _RG_PATH_CACHE
+    _RG_PATH_CACHE = None
+
+
+get_rg_path.cache_clear = _clear_get_rg_path_cache  # type: ignore[attr-defined]
 
 
 async def _download_rg(target: Path) -> None:
@@ -85,7 +99,7 @@ async def _download_rg(target: Path) -> None:
         f"https://github.com/BurntSushi/ripgrep/releases/download/{VERSION}/{filename}"
     )
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         response = await client.get(url)
         if response.status_code != 200:
             raise DownloadFailedError(url, response.status_code)
@@ -168,6 +182,8 @@ async def grep_search(
         [str(rg), *args, str(cwd)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     matches = []
@@ -230,6 +246,8 @@ async def enumerate_files(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     files: list[Path] = []

@@ -42,6 +42,83 @@ class TestRipgrepFilepath:
 
                 assert path == rg
 
+    @pytest.mark.asyncio
+    async def test_get_rg_path_can_be_awaited_multiple_times(self, tmp_path):
+        """同一进程内多次 await 不应复用已完成 coroutine"""
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        rg_name = "rg.exe" if os.name == "nt" else "rg"
+        rg = cache_dir / rg_name
+        rg.write_bytes(b"fake")
+
+        with patch("shutil.which", return_value=None):
+            with patch("agent_teams.tools.ripgrep.BIN_DIR", cache_dir):
+                from agent_teams.tools import ripgrep
+
+                ripgrep.get_rg_path.cache_clear()
+                first = await ripgrep.get_rg_path()
+                second = await ripgrep.get_rg_path()
+
+                assert first == rg
+                assert second == rg
+
+
+class TestRipgrepDownload:
+    """测试 ripgrep 下载流程"""
+
+    @pytest.mark.asyncio
+    async def test_download_enables_redirect_following(self, tmp_path):
+        """下载时应跟随 GitHub 302 重定向"""
+        from agent_teams.tools import ripgrep
+
+        target = tmp_path / "rg.exe"
+        response = MagicMock(status_code=200, content=b"fake-zip")
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=response)
+        client_cm = AsyncMock()
+        client_cm.__aenter__.return_value = client
+        client_cm.__aexit__.return_value = None
+
+        with patch(
+            "agent_teams.tools.ripgrep.httpx.AsyncClient", return_value=client_cm
+        ) as mock_client_cls:
+            with patch(
+                "agent_teams.tools.ripgrep._get_platform_key",
+                return_value="AMD64-windows",
+            ):
+                with patch("agent_teams.tools.ripgrep._extract_zip") as mock_extract_zip:
+                    with patch("agent_teams.tools.ripgrep.os.chmod"):
+                        await ripgrep._download_rg(target)
+
+        mock_client_cls.assert_called_once_with(follow_redirects=True)
+        client.get.assert_awaited_once()
+        mock_extract_zip.assert_called_once_with(b"fake-zip", target)
+
+    @pytest.mark.asyncio
+    async def test_download_non_200_raises(self, tmp_path):
+        """下载状态非 200 时抛出异常"""
+        from agent_teams.tools import ripgrep
+        from agent_teams.tools.ripgrep_errors import DownloadFailedError
+
+        target = tmp_path / "rg.exe"
+        response = MagicMock(status_code=404, content=b"")
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=response)
+        client_cm = AsyncMock()
+        client_cm.__aenter__.return_value = client
+        client_cm.__aexit__.return_value = None
+
+        with patch("agent_teams.tools.ripgrep.httpx.AsyncClient", return_value=client_cm):
+            with patch(
+                "agent_teams.tools.ripgrep._get_platform_key",
+                return_value="AMD64-windows",
+            ):
+                with pytest.raises(DownloadFailedError) as exc:
+                    await ripgrep._download_rg(target)
+
+        assert exc.value.status == 404
+
 
 class TestGrepSearch:
     """测试 grep 搜索功能 - 直接测试底层逻辑"""
@@ -213,3 +290,40 @@ class TestGrepResultFormat:
         formatted = result.format()
         assert "file1.py:" in formatted
         assert "file2.py:" in formatted
+
+
+class TestRipgrepSubprocessEncoding:
+    """测试子进程输出解码参数"""
+
+    @pytest.mark.asyncio
+    async def test_grep_search_uses_utf8_replace(self):
+        from agent_teams.tools import ripgrep
+
+        mock_result = MagicMock(stdout="", returncode=0)
+        with patch("agent_teams.tools.ripgrep.get_rg_path", new=AsyncMock(return_value=Path("rg.exe"))):
+            with patch("agent_teams.tools.ripgrep.subprocess.run", return_value=mock_result) as mock_run:
+                await ripgrep.grep_search(Path("."), "tasks")
+
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["text"] is True
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+
+    @pytest.mark.asyncio
+    async def test_enumerate_files_uses_utf8_replace(self):
+        from agent_teams.tools import ripgrep
+
+        proc = MagicMock()
+        proc.stdout = ["a.py\n", "b.py\n"]
+        proc.wait = MagicMock()
+
+        with patch("agent_teams.tools.ripgrep.get_rg_path", new=AsyncMock(return_value=Path("rg.exe"))):
+            with patch("agent_teams.tools.ripgrep.subprocess.Popen", return_value=proc) as mock_popen:
+                files, truncated = await ripgrep.enumerate_files(Path("."), "*.py")
+
+        kwargs = mock_popen.call_args.kwargs
+        assert kwargs["text"] is True
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        assert truncated is False
+        assert files == [Path("a.py"), Path("b.py")]

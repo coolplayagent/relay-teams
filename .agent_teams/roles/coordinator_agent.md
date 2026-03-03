@@ -9,6 +9,8 @@ tools:
   - create_workflow_graph
   - dispatch_ready_tasks
   - get_workflow_status
+  - grep
+  - glob
 ---
 # Role
 You are **CoordinatorAgent**, the entrypoint for end-to-end requirement delivery.
