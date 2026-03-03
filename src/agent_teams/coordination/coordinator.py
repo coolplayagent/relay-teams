@@ -76,14 +76,7 @@ class CoordinatorGraph:
         if existing_instance_id and existing_instance_id in known_ids:
             coordinator_instance_id = existing_instance_id
             self.instance_pool.mark_idle(coordinator_instance_id)
-            self.agent_repo.upsert_instance(
-                run_id=trace_id,
-                trace_id=trace_id,
-                session_id=intent.session_id,
-                instance_id=coordinator_instance_id,
-                role_id=ROLE_COORDINATOR,
-                status=InstanceStatus.IDLE,
-            )
+            self.agent_repo.mark_status(coordinator_instance_id, InstanceStatus.IDLE)
             self.task_repo.update_status(
                 task_id=root_task.task_id,
                 status=TaskStatus.ASSIGNED,
@@ -112,11 +105,9 @@ class CoordinatorGraph:
         from pydantic_ai.messages import ModelRequest, UserPromptPart
         self.task_execution_service.message_repo.append(
             session_id=intent.session_id,
-            run_id=trace_id,
             instance_id=coordinator_instance_id,
             task_id=root_task.task_id,
             trace_id=trace_id,
-            role_id=ROLE_COORDINATOR,
             messages=[ModelRequest(parts=[UserPromptPart(content=intent.intent)])]
         )
         log_debug(f'[coord:instance-ready] run={trace_id} instance={coordinator_instance_id} role={ROLE_COORDINATOR}')

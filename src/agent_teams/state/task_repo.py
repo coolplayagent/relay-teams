@@ -116,17 +116,6 @@ class TaskRepository:
         self._conn.execute('DELETE FROM tasks WHERE session_id=?', (session_id,))
         self._conn.commit()
 
-    def delete_tasks(self, task_ids: tuple[str, ...]) -> int:
-        if not task_ids:
-            return 0
-        placeholders = ",".join("?" for _ in task_ids)
-        cursor = self._conn.execute(
-            f"DELETE FROM tasks WHERE task_id IN ({placeholders})",
-            task_ids,
-        )
-        self._conn.commit()
-        return int(cursor.rowcount)
-
     def _to_record(self, row: sqlite3.Row) -> TaskRecord:
         envelope_data = json.loads(str(row['envelope_json']))
         if isinstance(envelope_data, dict):

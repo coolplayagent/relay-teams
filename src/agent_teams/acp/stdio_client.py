@@ -41,8 +41,8 @@ class StdioAcpSessionClient:
 
     async def open(self, spec: SessionInitSpec) -> SessionHandle:
         if self._provider.protocol == "auto":
-            errors_by_protocol: list[tuple[str, Exception]] = []
-            for protocol in _auto_protocol_candidates(self._provider):
+            last_error: Exception | None = None
+            for protocol in _AUTO_PROTOCOL_CANDIDATES:
                 process = await self._spawn_process()
                 state = _StdioSessionState(process=process, lock=asyncio.Lock())
                 try:
@@ -50,7 +50,7 @@ class StdioAcpSessionClient:
                         state=state, spec=spec, protocol=protocol
                     )
                 except Exception as exc:
-                    errors_by_protocol.append((protocol, exc))
+                    last_error = exc
                     await _terminate_process(state.process)
                     continue
 
@@ -63,13 +63,9 @@ class StdioAcpSessionClient:
                     instance_id=spec.instance_id,
                     metadata=metadata,
                 )
-            details = "; ".join(
-                f"{protocol}: {error}"
-                for protocol, error in errors_by_protocol
-            )
             raise RuntimeError(
                 "ACP protocol auto-detection failed for provider "
-                f"'{self._provider.command}'. Errors: {details}"
+                f"'{self._provider.command}'. Last error: {last_error}"
             )
 
         process = await self._spawn_process()
@@ -162,57 +158,27 @@ class StdioAcpSessionClient:
     ) -> str:
         methods = _build_methods(self._provider, protocol)
         if protocol == "opencode_v1":
-            instructions = _compose_opencode_instructions(spec)
-            full_mcp_servers = _build_opencode_mcp_servers(
-                mcp_servers=spec.mcp_servers,
-                skills=spec.skills,
-                cwd=self._provider.cwd or os.getcwd(),
-            )
             await self._rpc(
                 state,
                 method=methods["initialize"],
                 params={"protocolVersion": 1},
                 timeout_ms=self._timeouts.session_init_ms,
             )
-
-            skills_mcp_servers = [
-                server
-                for server in full_mcp_servers
-                if str(server.get("name", "")).strip() == "skills-mcp"
-            ]
-            attempts: list[tuple[str, list[dict[str, object]]]] = [
-                ("full", full_mcp_servers),
-            ]
-            if skills_mcp_servers and skills_mcp_servers != full_mcp_servers:
-                attempts.append(("skills_only", skills_mcp_servers))
-            if full_mcp_servers:
-                attempts.append(("none", []))
-
-            seen: set[str] = set()
-            errors: list[str] = []
-            for label, mcp_servers in attempts:
-                fingerprint = json.dumps(mcp_servers, ensure_ascii=False, default=str)
-                if fingerprint in seen:
-                    continue
-                seen.add(fingerprint)
-                try:
-                    open_result, _ = await self._rpc(
-                        state,
-                        method=methods["open"],
-                        params={
-                            "cwd": self._provider.cwd or os.getcwd(),
-                            "mcpServers": mcp_servers,
-                            "instructions": instructions,
-                        },
-                        timeout_ms=self._timeouts.session_init_ms,
-                    )
-                    return str(open_result.get("sessionId") or spec.instance_id)
-                except Exception as exc:
-                    errors.append(f"{label}: {exc}")
-
-            raise RuntimeError(
-                "ACP opencode session/new failed after retries. " + " | ".join(errors)
+            open_result, _ = await self._rpc(
+                state,
+                method=methods["open"],
+                params={
+                    "cwd": self._provider.cwd or os.getcwd(),
+                    "mcpServers": _build_opencode_mcp_servers(
+                        mcp_servers=spec.mcp_servers,
+                        skills=spec.skills,
+                        cwd=self._provider.cwd or os.getcwd(),
+                    ),
+                    "instructions": _compose_opencode_instructions(spec),
+                },
+                timeout_ms=self._timeouts.session_init_ms,
             )
+            return str(open_result.get("sessionId") or spec.instance_id)
 
         open_result, _ = await self._rpc(
             state,
@@ -464,25 +430,8 @@ def _resolve_handle_protocol(handle: SessionHandle, configured_protocol: str) ->
     if isinstance(metadata_protocol, str) and metadata_protocol:
         return metadata_protocol
     if configured_protocol == "auto":
-        return _auto_protocol_candidates(None)[0]
+        return _AUTO_PROTOCOL_CANDIDATES[0]
     return configured_protocol
-
-
-def _auto_protocol_candidates(provider: AcpProviderConfig | None) -> tuple[str, ...]:
-    if provider is None:
-        return _AUTO_PROTOCOL_CANDIDATES
-    if _looks_like_opencode_provider(provider):
-        return ("opencode_v1",)
-    return _AUTO_PROTOCOL_CANDIDATES
-
-
-def _looks_like_opencode_provider(provider: AcpProviderConfig) -> bool:
-    command_name = Path(provider.command).name.lower()
-    if "opencode" in command_name:
-        return True
-    if provider.args and str(provider.args[0]).lower() == "acp" and "opencode" in command_name:
-        return True
-    return False
 
 
 def _compose_opencode_instructions(spec: SessionInitSpec) -> str:
@@ -544,7 +493,6 @@ def _compose_opencode_instructions(spec: SessionInitSpec) -> str:
                 if resource_names:
                     skill_lines.append("  resources: " + ", ".join(resource_names))
         if skill_lines:
-            # TODO: 不要在提示词注入所有 skills 信息
             lines.append("Enabled skills (catalog):\n" + "\n".join(skill_lines))
             lines.append(
                 "Load skills progressively: list and inspect first, then load only the "

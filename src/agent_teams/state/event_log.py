@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_teams.core.enums import EventType
@@ -22,55 +23,35 @@ class EventLog:
             CREATE TABLE IF NOT EXISTS events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type   TEXT NOT NULL,
-                run_id       TEXT NOT NULL DEFAULT '',
                 trace_id     TEXT NOT NULL,
                 session_id   TEXT NOT NULL,
                 task_id      TEXT,
                 instance_id  TEXT,
-                role_id      TEXT,
                 payload_json TEXT NOT NULL,
                 occurred_at  TEXT NOT NULL
             )
             '''
         )
-        columns = {
-            str(row['name'])
-            for row in self._conn.execute('PRAGMA table_info(events)').fetchall()
-        }
-        if 'run_id' not in columns:
-            self._conn.execute(
-                "ALTER TABLE events ADD COLUMN run_id TEXT NOT NULL DEFAULT ''"
-            )
-            self._conn.execute(
-                "UPDATE events SET run_id = trace_id WHERE run_id = '' OR run_id IS NULL"
-            )
-        if 'role_id' not in columns:
-            self._conn.execute("ALTER TABLE events ADD COLUMN role_id TEXT")
         self._conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id)'
         )
         self._conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)'
         )
-        self._conn.execute(
-            'CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id)'
-        )
         self._conn.commit()
 
     def emit(self, event: EventEnvelope) -> None:
         self._conn.execute(
             '''
-            INSERT INTO events(event_type, run_id, trace_id, session_id, task_id, instance_id, role_id, payload_json, occurred_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events(event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 event.event_type.value,
                 event.trace_id,
-                event.trace_id,
                 event.session_id,
                 event.task_id,
                 event.instance_id,
-                None,
                 event.payload_json,
                 event.occurred_at.isoformat(),
             ),
@@ -80,17 +61,15 @@ class EventLog:
     def emit_run_event(self, event: RunEvent) -> None:
         self._conn.execute(
             '''
-            INSERT INTO events(event_type, run_id, trace_id, session_id, task_id, instance_id, role_id, payload_json, occurred_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events(event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
             ''',
             (
                 event.event_type.value,
-                event.run_id,
                 event.trace_id,
                 event.session_id,
                 event.task_id,
                 event.instance_id,
-                event.role_id,
                 event.payload_json,
                 event.occurred_at.isoformat(),
             ),
@@ -99,7 +78,7 @@ class EventLog:
 
     def list_by_trace(self, trace_id: str) -> tuple[dict, ...]:
         rows = self._conn.execute(
-            'SELECT event_type, run_id, trace_id, session_id, task_id, instance_id, role_id, payload_json, occurred_at '
+            'SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at '
             'FROM events WHERE trace_id=? ORDER BY id ASC',
             (trace_id,),
         ).fetchall()
@@ -107,7 +86,7 @@ class EventLog:
 
     def list_by_session(self, session_id: str) -> tuple[dict, ...]:
         rows = self._conn.execute(
-            'SELECT event_type, run_id, trace_id, session_id, task_id, instance_id, role_id, payload_json, occurred_at '
+            'SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at '
             'FROM events WHERE session_id=? ORDER BY id ASC',
             (session_id,),
         ).fetchall()
@@ -118,14 +97,13 @@ class EventLog:
         self._conn.commit()
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
+        import json
         return {
             "event_type": str(row['event_type']),
-            "run_id": str(row['run_id']) if row['run_id'] is not None else None,
             "trace_id": str(row['trace_id']),
             "session_id": str(row['session_id']),
             "task_id": str(row['task_id']) if row['task_id'] is not None else None,
             "instance_id": str(row['instance_id']) if row['instance_id'] is not None else None,
-            "role_id": str(row['role_id']) if row['role_id'] is not None else None,
             "payload_json": str(row['payload_json']),
             "occurred_at": str(row['occurred_at']),
         }

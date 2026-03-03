@@ -51,13 +51,7 @@ class AgentInstanceRepository:
             INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, status, created_at, updated_at)
             VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(instance_id)
-            DO UPDATE SET
-                run_id=excluded.run_id,
-                trace_id=excluded.trace_id,
-                session_id=excluded.session_id,
-                role_id=excluded.role_id,
-                status=excluded.status,
-                updated_at=excluded.updated_at
+            DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at
             ''',
             (run_id, trace_id, session_id, instance_id, role_id, status.value, now, now),
         )

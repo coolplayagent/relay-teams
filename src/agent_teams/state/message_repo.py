@@ -23,12 +23,10 @@ class MessageRepository:
             CREATE TABLE IF NOT EXISTS messages (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id   TEXT NOT NULL DEFAULT '',
-                run_id       TEXT NOT NULL DEFAULT '',
                 instance_id  TEXT NOT NULL,
                 task_id      TEXT NOT NULL,
                 trace_id     TEXT NOT NULL,
                 role         TEXT NOT NULL,
-                role_id      TEXT,
                 message_json TEXT NOT NULL,
                 created_at   TEXT NOT NULL
             )
@@ -38,19 +36,11 @@ class MessageRepository:
         if 'session_id' not in columns:
             self._conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)")
-        if 'run_id' not in columns:
-            self._conn.execute("ALTER TABLE messages ADD COLUMN run_id TEXT NOT NULL DEFAULT ''")
-            self._conn.execute("UPDATE messages SET run_id = trace_id WHERE run_id = '' OR run_id IS NULL")
-        if 'role_id' not in columns:
-            self._conn.execute("ALTER TABLE messages ADD COLUMN role_id TEXT")
         self._conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id)'
         )
         self._conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id)'
-        )
-        self._conn.execute(
-            'CREATE INDEX IF NOT EXISTS idx_messages_run ON messages(run_id)'
         )
         self._conn.commit()
 
@@ -58,11 +48,9 @@ class MessageRepository:
         self,
         *,
         session_id: str,
-        run_id: str,
         instance_id: str,
         task_id: str,
         trace_id: str,
-        role_id: str | None,
         messages: list[ModelMessage],
     ) -> None:
         """Insert a batch of messages from a single run_sync call."""
@@ -70,20 +58,18 @@ class MessageRepository:
         rows = [
             (
                 session_id,
-                run_id,
                 instance_id,
                 task_id,
                 trace_id,
                 _role(msg),
-                role_id,
                 ModelMessagesTypeAdapter.dump_json([msg]).decode(),
                 now,
             )
             for msg in messages
         ]
         self._conn.executemany(
-            'INSERT INTO messages(session_id, run_id, instance_id, task_id, trace_id, role, role_id, message_json, created_at) '
-            'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO messages(session_id, instance_id, task_id, trace_id, role, message_json, created_at) '
+            'VALUES(?, ?, ?, ?, ?, ?, ?)',
             rows,
         )
         self._conn.commit()
@@ -103,7 +89,7 @@ class MessageRepository:
     def get_messages_by_session(self, session_id: str) -> list[dict]:
         """Return all messages for an entire session with their DB metadata."""
         rows = self._conn.execute(
-            'SELECT run_id, instance_id, task_id, trace_id, role, role_id, message_json, created_at '
+            'SELECT instance_id, task_id, trace_id, role, message_json, created_at '
             'FROM messages WHERE session_id=? ORDER BY id ASC',
             (session_id,),
         ).fetchall()
@@ -115,12 +101,10 @@ class MessageRepository:
             msg_list = json.loads(str(row['message_json']))
             msg = msg_list[0] if msg_list else {}
             results.append({
-                "run_id": str(row["run_id"]) if row["run_id"] is not None else None,
                 "instance_id": str(row["instance_id"]),
                 "task_id": str(row["task_id"]),
                 "trace_id": str(row["trace_id"]),
                 "role": str(row["role"]),
-                "role_id": str(row["role_id"]) if row["role_id"] is not None else None,
                 "created_at": str(row["created_at"]),
                 "message": msg
             })
@@ -131,7 +115,7 @@ class MessageRepository:
     ) -> list[dict]:
         """Return all messages for a single instance scoped to one session."""
         rows = self._conn.execute(
-            'SELECT run_id, instance_id, task_id, trace_id, role, role_id, message_json, created_at '
+            'SELECT instance_id, task_id, trace_id, role, message_json, created_at '
             'FROM messages WHERE session_id=? AND instance_id=? ORDER BY id ASC',
             (session_id, instance_id),
         ).fetchall()
@@ -143,12 +127,10 @@ class MessageRepository:
             msg = msg_list[0] if msg_list else {}
             results.append(
                 {
-                    "run_id": str(row["run_id"]) if row["run_id"] is not None else None,
                     "instance_id": str(row["instance_id"]),
                     "task_id": str(row["task_id"]),
                     "trace_id": str(row["trace_id"]),
                     "role": str(row["role"]),
-                    "role_id": str(row["role_id"]) if row["role_id"] is not None else None,
                     "created_at": str(row["created_at"]),
                     "message": msg,
                 }

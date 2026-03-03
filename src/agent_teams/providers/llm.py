@@ -244,11 +244,9 @@ class OpenAICompatibleProvider(LLMProvider):
                         # Persist to repo
                         self._message_repo.append(
                             session_id=request.session_id,
-                            run_id=request.run_id,
                             instance_id=request.instance_id,
                             task_id=request.task_id,
                             trace_id=request.trace_id,
-                            role_id=request.role_id,
                             messages=new_to_process,
                         )
                         saved_count += len(new_to_process)
@@ -291,11 +289,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 if to_save:
                     self._message_repo.append(
                         session_id=request.session_id,
-                        run_id=request.run_id,
                         instance_id=request.instance_id,
                         task_id=request.task_id,
                         trace_id=request.trace_id,
-                        role_id=request.role_id,
                         messages=to_save,
                     )
                 break  # done

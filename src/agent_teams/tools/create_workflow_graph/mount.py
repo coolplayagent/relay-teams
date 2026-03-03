@@ -7,7 +7,6 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
-from agent_teams.core.enums import TaskStatus
 from agent_teams.core.models import TaskEnvelope, VerificationPlan
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.tools.runtime import ToolDeps, ToolContext
@@ -132,41 +131,17 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
 
             existing = load_graph(ctx.deps.shared_store, task_id=ctx.deps.task_id)
             if existing is not None:
-                existing_task_ids = _get_task_ids(existing)
-                trace_records = {
-                    record.envelope.task_id: record
-                    for record in ctx.deps.task_repo.list_by_trace(ctx.deps.trace_id)
-                }
-                active_statuses = {
-                    TaskStatus.ASSIGNED,
-                    TaskStatus.RUNNING,
-                    TaskStatus.COMPLETED,
-                    TaskStatus.FAILED,
-                    TaskStatus.TIMEOUT,
-                }
-                busy_tasks = [
-                    task_id
-                    for task_id in existing_task_ids
-                    if task_id in trace_records
-                    and trace_records[task_id].status in active_statuses
-                ]
-                if busy_tasks:
-                    return json.dumps(
-                        {
-                            "ok": True,
-                            "created": False,
-                            "message": (
-                                "A workflow already exists and has started execution. "
-                                "Continue with dispatch_ready_tasks/get_workflow_status for this workflow."
-                            ),
-                            "workflow_id": existing.get("workflow_id"),
-                            "workflow_type": existing.get("workflow_type"),
-                            "existing_tasks": _format_tasks_for_response(existing),
-                        },
-                        ensure_ascii=False,
-                    )
-                if existing_task_ids:
-                    ctx.deps.task_repo.delete_tasks(tuple(existing_task_ids))
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "created": False,
+                        "message": "A workflow already exists for this task. Use dispatch_ready_tasks to continue, or start a new run for a fresh workflow.",
+                        "workflow_id": existing.get("workflow_id"),
+                        "workflow_type": existing.get("workflow_type"),
+                        "existing_tasks": _format_tasks_for_response(existing),
+                    },
+                    ensure_ascii=False,
+                )
 
             workflow_id = f"workflow_{uuid4().hex[:8]}"
 
@@ -245,7 +220,6 @@ def mount(agent: Agent[ToolDeps, str]) -> None:
                 {
                     "ok": True,
                     "created": True,
-                    "replaced_existing": existing is not None,
                     "message": f'Workflow created successfully with {len(task_list)} tasks. Use workflow_id="{workflow_id}" in dispatch_ready_tasks to execute.',
                     "workflow_id": workflow_id,
                     "workflow_type": workflow_type,
@@ -278,17 +252,3 @@ def _format_tasks_for_response(graph: dict[str, object]) -> dict[str, dict[str, 
         name: {"task_id": info.get("task_id", ""), "role_id": info.get("role_id", "")}
         for name, info in tasks.items()
     }
-
-
-def _get_task_ids(graph: dict[str, object]) -> list[str]:
-    tasks = graph.get("tasks", {})
-    if not isinstance(tasks, dict):
-        return []
-    task_ids: list[str] = []
-    for info in tasks.values():
-        if not isinstance(info, dict):
-            continue
-        task_id = info.get("task_id")
-        if isinstance(task_id, str) and task_id:
-            task_ids.append(task_id)
-    return task_ids

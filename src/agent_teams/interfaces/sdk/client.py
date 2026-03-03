@@ -175,7 +175,6 @@ class AgentTeamsApp:
                 skills=skill_manifest,
                 mcp_servers=mcp_manifest,
                 run_event_hub=run_event_hub,
-                message_repo=message_repo,
             )
 
         task_execution_service = TaskExecutionService(
@@ -377,7 +376,6 @@ class AgentTeamsApp:
                 skills=skill_manifest,
                 mcp_servers=mcp_manifest,
                 run_event_hub=self._run_event_hub,
-                message_repo=self._message_repo,
             )
 
         self._provider_factory = provider_factory
@@ -652,25 +650,15 @@ class AgentTeamsApp:
         rounds_map: dict[str, dict] = {}
         by_run_instance_role: dict[str, dict[str, str]] = {}
         by_run_role_instance: dict[str, dict[str, str]] = {}
-        run_to_trace: dict[str, str] = {}
-        trace_to_run: dict[str, str] = {}
 
         for ev in events:
-            trace_id = str(ev["trace_id"])
-            raw_run_id = ev.get("run_id")
-            run_id = (
-                str(raw_run_id)
-                if isinstance(raw_run_id, str) and raw_run_id.strip()
-                else trace_id
-            )
-            run_to_trace.setdefault(run_id, trace_id)
-            trace_to_run.setdefault(trace_id, run_id)
+            run_id = ev["trace_id"]
             try:
                 payload = json.loads(ev["payload_json"])
             except Exception:
                 payload = {}
             ev_instance = ev.get("instance_id") or payload.get("instance_id")
-            ev_role = ev.get("role_id") or payload.get("role_id")
+            ev_role = payload.get("role_id")
             if isinstance(ev_instance, str) and isinstance(ev_role, str):
                 by_run_instance_role.setdefault(run_id, {})[ev_instance] = ev_role
                 by_run_role_instance.setdefault(run_id, {}).setdefault(
@@ -679,22 +667,13 @@ class AgentTeamsApp:
 
         # Fallback mapping from repository records for runs with sparse events.
         for rec in self._agent_repo.list_by_session(session_id):
-            run_id = rec.run_id or rec.trace_id
-            run_to_trace.setdefault(run_id, rec.trace_id)
-            trace_to_run.setdefault(rec.trace_id, run_id)
-            run_map = by_run_instance_role.setdefault(run_id, {})
+            run_map = by_run_instance_role.setdefault(rec.run_id, {})
             run_map.setdefault(rec.instance_id, rec.role_id)
-            role_map = by_run_role_instance.setdefault(run_id, {})
+            role_map = by_run_role_instance.setdefault(rec.run_id, {})
             role_map.setdefault(rec.role_id, rec.instance_id)
 
         for ev in events:
-            trace_id = str(ev["trace_id"])
-            raw_run_id = ev.get("run_id")
-            run_id = (
-                str(raw_run_id)
-                if isinstance(raw_run_id, str) and raw_run_id.strip()
-                else trace_id
-            )
+            run_id = ev["trace_id"]
             if run_id not in rounds_map:
                 rounds_map[run_id] = {
                     "run_id": run_id,
@@ -702,8 +681,8 @@ class AgentTeamsApp:
                     "intent": None,
                     "coordinator_messages": [],
                     "workflows": [],
-                    "instance_role_map": dict(by_run_instance_role.get(run_id, {})),
-                    "role_instance_map": dict(by_run_role_instance.get(run_id, {})),
+                    "instance_role_map": by_run_instance_role.get(run_id, {}),
+                    "role_instance_map": by_run_role_instance.get(run_id, {}),
                 }
             # Keep the earliest timestamp as round creation time.
             if ev["occurred_at"] < rounds_map[run_id]["created_at"]:
@@ -712,37 +691,16 @@ class AgentTeamsApp:
         # Fill run messages.
         messages = self.get_session_messages(session_id)
         for msg in messages:
-            trace_id = str(msg["trace_id"])
-            raw_run_id = msg.get("run_id")
-            run_id = (
-                str(raw_run_id)
-                if isinstance(raw_run_id, str) and raw_run_id.strip()
-                else trace_to_run.get(trace_id, trace_id)
-            )
-            if run_id not in rounds_map:
-                rounds_map[run_id] = {
-                    "run_id": run_id,
-                    "created_at": msg["created_at"],
-                    "intent": None,
-                    "coordinator_messages": [],
-                    "workflows": [],
-                    "instance_role_map": dict(by_run_instance_role.get(run_id, {})),
-                    "role_instance_map": dict(by_run_role_instance.get(run_id, {})),
-                }
+            run_id = msg["trace_id"]
             round_data = rounds_map.get(run_id)
             if round_data is None:
                 continue
 
-            role_id = msg.get("role_id") or by_run_instance_role.get(run_id, {}).get(
-                msg["instance_id"]
-            )
+            role_id = by_run_instance_role.get(run_id, {}).get(msg["instance_id"])
             msg["role_id"] = role_id
-            if isinstance(role_id, str):
-                round_data["instance_role_map"][msg["instance_id"]] = role_id
-                round_data["role_instance_map"].setdefault(role_id, msg["instance_id"])
 
             # Infer run intent from coordinator user-prompt message.
-            if msg["role"] == "user" and role_id == "coordinator_agent":
+            if msg["role"] == "user":
                 content = msg.get("message", {})
                 parts = content.get("parts", []) if isinstance(content, dict) else []
                 for pt in parts:
@@ -765,18 +723,7 @@ class AgentTeamsApp:
         from agent_teams.core.models import ScopeRef
 
         for task in tasks:
-            trace_id = task.envelope.trace_id
-            run_id = trace_to_run.get(trace_id, trace_id)
-            if run_id not in rounds_map:
-                rounds_map[run_id] = {
-                    "run_id": run_id,
-                    "created_at": task.created_at.isoformat(),
-                    "intent": None,
-                    "coordinator_messages": [],
-                    "workflows": [],
-                    "instance_role_map": dict(by_run_instance_role.get(run_id, {})),
-                    "role_instance_map": dict(by_run_role_instance.get(run_id, {})),
-                }
+            run_id = task.envelope.trace_id
             round_data = rounds_map.get(run_id)
             if round_data is None:
                 continue
