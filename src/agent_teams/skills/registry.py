@@ -13,7 +13,7 @@ from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.tools.runtime import ToolContext
 from agent_teams.tools.tool_helpers import execute_tool
 
-from agent_teams.skills.models import Skill, SkillMetadata
+from agent_teams.skills.models import SkillMetadata
 
 
 @dataclass
@@ -70,20 +70,6 @@ class SkillRegistry:
             if skill and skill.metadata.instructions:
                 results.append(f"## Skill: {name}\n{skill.metadata.instructions}")
         return "\n\n".join(results)
-
-    def get_skill_metadata(self, skill_name: str) -> SkillMetadata:
-        self.directory.discover()
-        skill = self.directory.get_skill(skill_name)
-        if skill is None:
-            raise KeyError(f"Skill not found: {skill_name}")
-        return skill.metadata
-
-    def get_skill(self, skill_name: str) -> Skill:
-        self.directory.discover()
-        skill = self.directory.get_skill(skill_name)
-        if skill is None:
-            raise KeyError(f"Skill not found: {skill_name}")
-        return skill
 
     async def list_skills(self, ctx: ToolContext) -> list[SkillMetadata]:
         return await execute_tool(

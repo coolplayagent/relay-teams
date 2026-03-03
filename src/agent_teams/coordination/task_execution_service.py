@@ -55,8 +55,7 @@ class TaskExecutionService:
         )
 
         role = self.role_registry.get(role_id)
-        provider = self.provider_factory(role)
-        runner = SubAgentRunner(role=role, prompt_builder=self.prompt_builder, provider=provider)
+        runner = SubAgentRunner(role=role, prompt_builder=self.prompt_builder, provider=self.provider_factory(role))
         snapshot = (
             ()
             if role_id == ROLE_COORDINATOR
@@ -124,7 +123,3 @@ class TaskExecutionService:
                 f'instance={instance_id} role={role_id} err={exc}'
             )
             raise
-        finally:
-            close_instance = getattr(provider, "close_instance", None)
-            if role_id != ROLE_COORDINATOR and callable(close_instance):
-                await close_instance(instance_id)

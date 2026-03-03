@@ -10,7 +10,6 @@ __pycache__/
 .agent_teams/.env
 .agent_teams/*.db
 .agent_teams/model.json
-.agent_teams/acp.json
 
 tmp.db
 tmp.db-journal

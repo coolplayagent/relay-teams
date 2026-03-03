@@ -36,9 +36,3 @@ class McpRegistry:
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs.keys()))
-
-    def get_spec(self, name: str) -> McpServerSpec:
-        spec = self._specs.get(name)
-        if spec is None:
-            raise KeyError(f"Unknown MCP server: {name}")
-        return spec

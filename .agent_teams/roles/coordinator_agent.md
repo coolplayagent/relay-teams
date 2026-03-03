@@ -1,7 +1,7 @@
 ---
 role_id: coordinator_agent
 name: Coordinator Agent
-model_profile: kimi
+model_profile: default
 version: 1.0.0
 depends_on: []
 tools:

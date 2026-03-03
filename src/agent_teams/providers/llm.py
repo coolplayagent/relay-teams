@@ -5,7 +5,7 @@ from collections.abc import AsyncIterable  # noqa: F401  kept for type annotatio
 from dataclasses import dataclass
 from json import dumps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.messages import (

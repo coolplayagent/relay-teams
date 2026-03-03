@@ -9,7 +9,6 @@ from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.coordination.coordinator import CoordinatorGraph
 from agent_teams.coordination.task_execution_service import TaskExecutionService
-from agent_teams.core.acp_config import load_acp_config, resolve_acp_provider_name
 from agent_teams.core.config import load_runtime_config
 from agent_teams.core.enums import InjectionSource, RunEventType
 from agent_teams.core.ids import new_trace_id
@@ -45,15 +44,6 @@ from agent_teams.tools.defaults import build_default_registry
 from agent_teams.workflow.spec import WorkflowSpec
 from agent_teams.mcp.registry import McpRegistry, McpServerSpec
 from agent_teams.skills.registry import SkillRegistry
-from agent_teams.acp.local_wrapper_client import LocalWrappedSessionClient
-from agent_teams.acp.manifest import (
-    build_mcp_manifest,
-    build_skill_manifest,
-    build_tool_manifest,
-)
-from agent_teams.acp.stdio_client import StdioAcpSessionClient
-from agent_teams.acp.session_pool import AcpSessionPool
-from agent_teams.providers.acp_provider import AcpSessionProvider
 
 
 def _get_project_root() -> Path:
@@ -98,12 +88,6 @@ class AgentTeamsApp:
         skills_dir.mkdir(parents=True, exist_ok=True)
         skill_directory = SkillsDirectory(base_dir=skills_dir)
         skill_registry = SkillRegistry(directory=skill_directory)
-        acp_config = load_acp_config(config_dir)
-        acp_session_pool = AcpSessionPool()
-        acp_clients: dict[str, StdioAcpSessionClient] = {
-            name: StdioAcpSessionClient(provider=provider_cfg, timeouts=acp_config.timeouts)
-            for name, provider_cfg in acp_config.providers.items()
-        }
 
         for role in role_registry.list_roles():
             tool_registry.validate_known(role.tools)
@@ -124,58 +108,34 @@ class AgentTeamsApp:
         prompt_builder = RuntimePromptBuilder()
 
         def provider_factory(role: RoleDefinition) -> LLMProvider:
-            routing_name = resolve_acp_provider_name(acp_config, role.role_id)
+            provider: LLMProvider
+            profile_config = runtime.llm_profiles.get(role.model_profile)
+            config_to_use = profile_config or runtime.llm_profiles.get("default")
 
-            tool_manifest = build_tool_manifest(role.tools)
-            skill_manifest = build_skill_manifest(skill_registry, role.skills)
-            mcp_manifest = build_mcp_manifest(mcp_registry, role.mcp_servers)
-
-            if routing_name == "local_wrapper":
-                profile_config = runtime.llm_profiles.get(role.model_profile)
-                config_to_use = profile_config or runtime.llm_profiles.get("default")
-                if config_to_use is None:
-                    delegate_provider: LLMProvider = EchoProvider()
-                else:
-                    delegate_provider = OpenAICompatibleProvider(
-                        config_to_use,
-                        task_repo=task_repo,
-                        instance_pool=instance_pool,
-                        shared_store=shared_store,
-                        event_bus=event_log,
-                        injection_manager=injection_manager,
-                        run_event_hub=run_event_hub,
-                        agent_repo=agent_repo,
-                        workspace_root=Path.cwd(),
-                        tool_registry=tool_registry,
-                        mcp_registry=mcp_registry,
-                        skill_registry=skill_registry,
-                        allowed_tools=role.tools,
-                        allowed_mcp_servers=role.mcp_servers,
-                        allowed_skills=role.skills,
-                        message_repo=message_repo,
-                        role_registry=role_registry,
-                        task_execution_service=task_execution_service,
-                    )
-                session_client = LocalWrappedSessionClient(delegate=delegate_provider)
-                client_id = f"local_wrapper:{role.role_id}"
+            if config_to_use is None:
+                provider = EchoProvider()
             else:
-                session_client = acp_clients.get(routing_name)
-                if session_client is None:
-                    raise ValueError(
-                        f"Unknown ACP provider '{routing_name}' for role '{role.role_id}'. "
-                        f"Known providers: {sorted(acp_clients.keys())}"
-                    )
-                client_id = f"acp:{routing_name}"
-
-            return AcpSessionProvider(
-                session_client=session_client,
-                session_pool=acp_session_pool,
-                client_id=client_id,
-                tools=tool_manifest,
-                skills=skill_manifest,
-                mcp_servers=mcp_manifest,
-                run_event_hub=run_event_hub,
-            )
+                provider = OpenAICompatibleProvider(
+                    config_to_use,
+                    task_repo=task_repo,
+                    instance_pool=instance_pool,
+                    shared_store=shared_store,
+                    event_bus=event_log,
+                    injection_manager=injection_manager,
+                    run_event_hub=run_event_hub,
+                    agent_repo=agent_repo,
+                    workspace_root=Path.cwd(),
+                    tool_registry=tool_registry,
+                    mcp_registry=mcp_registry,
+                    skill_registry=skill_registry,
+                    allowed_tools=role.tools,
+                    allowed_mcp_servers=role.mcp_servers,
+                    allowed_skills=role.skills,
+                    message_repo=message_repo,
+                    role_registry=role_registry,
+                    task_execution_service=task_execution_service,
+                )
+            return provider
 
         task_execution_service = TaskExecutionService(
             role_registry=role_registry,
@@ -222,9 +182,6 @@ class AgentTeamsApp:
         self._runtime = runtime
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
-        self._acp_config = acp_config
-        self._acp_session_pool = acp_session_pool
-        self._acp_clients = acp_clients
         self._tool_registry = tool_registry
         self._provider_factory = provider_factory
         self._task_execution_service = task_execution_service
@@ -256,10 +213,6 @@ class AgentTeamsApp:
             "skills": {
                 "loaded": True,
                 "skills": list(self._skill_registry.list_names()),
-            },
-            "acp": {
-                "loaded": True,
-                "providers": list(self._acp_config.providers.keys()),
             },
         }
 
@@ -315,67 +268,36 @@ class AgentTeamsApp:
             roles_dir=self._roles_dir,
             db_path=self._db_path,
         )
-        self._acp_config = load_acp_config(self._config_dir)
-        self._acp_clients = {
-            name: StdioAcpSessionClient(provider=provider_cfg, timeouts=self._acp_config.timeouts)
-            for name, provider_cfg in self._acp_config.providers.items()
-        }
-        self._acp_session_pool = AcpSessionPool()
         self._recreate_task_execution_service()
 
     def _recreate_task_execution_service(self) -> None:
+        from agent_teams.agents.core.subagent import SubAgentRunner
+
         def provider_factory(role: RoleDefinition) -> LLMProvider:
-            routing_name = resolve_acp_provider_name(self._acp_config, role.role_id)
+            profile_config = self._runtime.llm_profiles.get(role.model_profile)
+            config_to_use = profile_config or self._runtime.llm_profiles.get("default")
 
-            tool_manifest = build_tool_manifest(role.tools)
-            skill_manifest = build_skill_manifest(self._skill_registry, role.skills)
-            mcp_manifest = build_mcp_manifest(self._mcp_registry, role.mcp_servers)
-
-            if routing_name == "local_wrapper":
-                profile_config = self._runtime.llm_profiles.get(role.model_profile)
-                config_to_use = profile_config or self._runtime.llm_profiles.get("default")
-                if config_to_use is None:
-                    delegate_provider: LLMProvider = EchoProvider()
-                else:
-                    delegate_provider = OpenAICompatibleProvider(
-                        config_to_use,
-                        task_repo=self._task_repo,
-                        instance_pool=self._instance_pool,
-                        shared_store=self._shared_store,
-                        event_bus=self._event_log,
-                        injection_manager=self._injection_manager,
-                        run_event_hub=self._run_event_hub,
-                        agent_repo=self._agent_repo,
-                        workspace_root=Path.cwd(),
-                        tool_registry=self._tool_registry,
-                        mcp_registry=self._mcp_registry,
-                        skill_registry=self._skill_registry,
-                        allowed_tools=role.tools,
-                        allowed_mcp_servers=role.mcp_servers,
-                        allowed_skills=role.skills,
-                        message_repo=self._message_repo,
-                        role_registry=self._role_registry,
-                        task_execution_service=self._task_execution_service,
-                    )
-                session_client = LocalWrappedSessionClient(delegate=delegate_provider)
-                client_id = f"local_wrapper:{role.role_id}"
-            else:
-                session_client = self._acp_clients.get(routing_name)
-                if session_client is None:
-                    raise ValueError(
-                        f"Unknown ACP provider '{routing_name}' for role '{role.role_id}'. "
-                        f"Known providers: {sorted(self._acp_clients.keys())}"
-                    )
-                client_id = f"acp:{routing_name}"
-
-            return AcpSessionProvider(
-                session_client=session_client,
-                session_pool=self._acp_session_pool,
-                client_id=client_id,
-                tools=tool_manifest,
-                skills=skill_manifest,
-                mcp_servers=mcp_manifest,
+            if config_to_use is None:
+                return EchoProvider()
+            return OpenAICompatibleProvider(
+                config_to_use,
+                task_repo=self._task_repo,
+                instance_pool=self._instance_pool,
+                shared_store=self._shared_store,
+                event_bus=self._event_log,
+                injection_manager=self._injection_manager,
                 run_event_hub=self._run_event_hub,
+                agent_repo=self._agent_repo,
+                workspace_root=Path.cwd(),
+                tool_registry=self._tool_registry,
+                mcp_registry=self._mcp_registry,
+                skill_registry=self._skill_registry,
+                allowed_tools=role.tools,
+                allowed_mcp_servers=role.mcp_servers,
+                allowed_skills=role.skills,
+                message_repo=self._message_repo,
+                role_registry=self._role_registry,
+                task_execution_service=self._task_execution_service,
             )
 
         self._provider_factory = provider_factory

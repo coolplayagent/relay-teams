@@ -10,7 +10,6 @@ from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import IntentInput
 from agent_teams.interfaces.sdk.client import AgentTeamsApp
 from agent_teams.roles.registry import RoleLoader
-from agent_teams.skills.mcp_server import SkillsMcpServerConfig, run_skills_mcp_server
 from agent_teams.tools.defaults import build_default_registry
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -156,25 +155,6 @@ def serve(
     # We run the Uvicorn ASGI server with the FastAPI app instance from server.app
     typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
     uvicorn.run(fastapi_app, host=host, port=port)
-
-
-@app.command("skills-mcp")
-def skills_mcp(
-    config_dir: Path = typer.Option(
-        DEFAULT_CONFIG_DIR, "--config-dir", help="Agent Teams config directory"
-    ),
-    allowed_skill: list[str] | None = typer.Option(
-        None,
-        "--allowed-skill",
-        help="Enable one skill name (repeat flag for multiple)",
-    ),
-) -> None:
-    run_skills_mcp_server(
-        SkillsMcpServerConfig(
-            config_dir=config_dir,
-            allowed_skills=tuple(allowed_skill or ()),
-        )
-    )
 
 
 def main() -> None:
