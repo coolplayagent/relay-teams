@@ -29,7 +29,3 @@ export async function selectSession(sessionId) {
     await loadSessionRounds(sessionId);
     sysLog(`${isSameSession ? 'Reloaded' : 'Switched to'} session: ${sessionId}`);
 }
-
-export function bindGlobalSelectSession() {
-    window.selectSession = selectSession;
-}

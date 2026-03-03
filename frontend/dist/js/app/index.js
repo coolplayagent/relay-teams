@@ -4,11 +4,12 @@
  */
 import { initApp } from './bootstrap.js';
 import { handleSend } from './prompt.js';
-import { bindGlobalSelectSession, selectSession } from './session.js';
+import { setSelectSessionHandler } from '../components/sidebar.js';
+import { selectSession } from './session.js';
 
 export { selectSession } from './session.js';
 
 export async function startApp() {
-    bindGlobalSelectSession();
+    setSelectSessionHandler(selectSession);
     await initApp(selectSession, handleSend);
 }

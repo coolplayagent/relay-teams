@@ -7,6 +7,19 @@ import { sysLog } from '../utils/logger.js';
 import { fetchSessions, startNewSession, deleteSession } from '../core/api.js';
 import { state } from '../core/state.js';
 
+let selectSessionHandler = null;
+
+export function setSelectSessionHandler(handler) {
+    selectSessionHandler = handler;
+}
+
+async function selectSessionById(sessionId) {
+    if (!selectSessionHandler) {
+        throw new Error('selectSession handler is not configured');
+    }
+    await selectSessionHandler(sessionId);
+}
+
 export async function loadSessions() {
     try {
         const sessions = await fetchSessions();
@@ -20,7 +33,7 @@ export async function loadSessions() {
         sessions.forEach(s => {
             const div = document.createElement('div');
             div.className = 'session-item';
-            div.onclick = () => window.selectSession(s.session_id);
+            div.onclick = () => { void selectSessionById(s.session_id); };
             if (s.session_id === state.currentSessionId) div.classList.add('active');
 
             const time = new Date(s.updated_at).toLocaleString();
@@ -43,7 +56,7 @@ export async function loadSessions() {
                         if (s.session_id === state.currentSessionId) {
                             const remaining = sessions.filter(sess => sess.session_id !== s.session_id);
                             if (remaining.length > 0) {
-                                await window.selectSession(remaining[0].session_id);
+                                await selectSessionById(remaining[0].session_id);
                             } else {
                                 await handleNewSessionClick(false);
                             }
@@ -85,7 +98,7 @@ export async function handleNewSessionClick(manualClick = true) {
         }
 
         await loadSessions();
-        await window.selectSession(data.session_id);
+        await selectSessionById(data.session_id);
     } catch (e) {
         sysLog(`Error creating session: ${e.message}`, 'log-error');
     }
