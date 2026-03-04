@@ -1,40 +1,25 @@
 @echo off
 chcp 65001 >nul
-echo Checking Python environment...
 
+echo Checking Python environment...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [Error] Python not found!
-    pause
+    echo [Error] Python not found.
     exit /b 1
 )
 
-echo Python found, checking uv...
-
+echo Checking uv...
 uv --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [Error] uv not found! Please install uv first:
-    echo   Run: pip install uv
-    echo   Or visit: https://github.com/astral-sh/uv
-    pause
+    echo [Error] uv not found. Please install uv first: https://github.com/astral-sh/uv
     exit /b 1
 )
 
-echo uv found, running uv sync...
-
-uv sync
-
+echo Installing dependencies (including dev tools)...
+uv sync --extra dev
 if %errorlevel% neq 0 (
-    echo [Error] uv sync failed!
-    pause
+    echo [Error] Dependency installation failed.
     exit /b 1
 )
 
-echo.
-echo Starting web server...
-echo Open http://127.0.0.1:8000 in your browser
-echo.
-
-uv run agent-teams serve
-
-pause
+echo Environment setup completed.

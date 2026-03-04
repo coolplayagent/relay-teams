@@ -23,6 +23,8 @@ dependencies = [
 dev = [
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
+  "ruff>=0.6.0",
+  "basedpyright>=1.18.0",
 ]
 
 [project.scripts]
