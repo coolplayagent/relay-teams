@@ -5,7 +5,6 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.application.run_manager import RunManager
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import IntentInput

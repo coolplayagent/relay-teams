@@ -23,6 +23,7 @@ dependencies = [
 dev = [
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
+  "playwright>=1.49.0",
   "ruff>=0.6.0",
   "basedpyright>=1.18.0",
 ]
@@ -31,11 +32,11 @@ dev = [
 agent-teams = "agent_teams.interfaces.cli.app:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["tests/unit_tests", "tests/integration_tests"]
+pythonpath = ["src", "tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pyright]
-extraPaths = ["src"]
+extraPaths = ["src", "tests"]

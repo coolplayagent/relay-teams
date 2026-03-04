@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import pytest
-from pathlib import Path
-
-
 class TestAtomicWrite:
     """测试原子写入"""
 

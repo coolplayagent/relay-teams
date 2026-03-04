@@ -81,6 +81,12 @@ uv run agent-teams serve
 
 Then open http://127.0.0.1:8000 in your browser to access the web interface.
 
+You can override runtime config directory (for isolated environments such as integration tests):
+
+```bash
+uv run agent-teams serve --config-dir ./.agent_teams
+```
+
 ### 5) Run a prompt (CLI via HTTP/SSE)
 
 ```bash
@@ -110,4 +116,30 @@ for event in client.stream_run_events(run.run_id):
 uv run agent-teams tasks-list
 # then:
 uv run agent-teams tasks-query --task-id <task_id>
+```
+
+## Testing Layout
+
+Unit and integration tests are split under `tests/`:
+
+- `tests/unit_tests/`
+- `tests/integration_tests/`
+
+Run unit tests:
+
+```bash
+uv run pytest -q tests/unit_tests
+```
+
+Run integration API tests (real backend process + real HTTP):
+
+```bash
+uv run pytest -q tests/integration_tests/api
+```
+
+Run browser automation tests (Playwright):
+
+```bash
+uv run playwright install chromium
+uv run pytest -q tests/integration_tests/browser
 ```
