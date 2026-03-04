@@ -15,6 +15,9 @@ export async function selectSession(sessionId) {
     state.currentSessionId = sessionId;
     state.instanceRoleMap = {};
     state.roleInstanceMap = {};
+    state.taskInstanceMap = {};
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
     state.autoSwitchedSubagentInstances = {};
     state.pausedSubagent = null;
 

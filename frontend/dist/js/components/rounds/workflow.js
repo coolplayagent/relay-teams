@@ -17,12 +17,14 @@ export function updateWorkflowByRound(round) {
         els.workflowPanel.style.display = 'none';
         state.instanceRoleMap = {};
         state.roleInstanceMap = {};
+        state.taskInstanceMap = {};
         if (canvas) canvas.innerHTML = '';
         return;
     }
 
     state.instanceRoleMap = round.instance_role_map || {};
     state.roleInstanceMap = buildRoleInstanceMap(round);
+    state.taskInstanceMap = round.task_instance_map || {};
 
     const workflowCount = round.workflows?.length ?? 0;
     els.workflowCount.textContent = String(workflowCount);

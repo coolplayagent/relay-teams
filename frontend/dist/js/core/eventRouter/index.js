@@ -34,7 +34,12 @@ export function routeEvent(evType, payload, eventMeta) {
     if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
 
     const instanceId = payload?.instance_id || eventMeta?.instance_id || null;
+    const taskId = payload?.task_id || eventMeta?.task_id || null;
     const roleId = payload?.role_id || eventMeta?.role_id || null;
+    if (instanceId && taskId) {
+        if (!state.taskInstanceMap) state.taskInstanceMap = {};
+        state.taskInstanceMap[taskId] = instanceId;
+    }
 
     if (evType === 'run_started') {
         handleRunStarted(eventMeta);

@@ -31,12 +31,14 @@ export function renderNativeDAG(workflow) {
         const layerNodes = [];
         for (const t of taskIds) {
             if (nodeLevels[t] !== level) continue;
+            const taskDef = tasks[t] || {};
             layerNodes.push({
                 id: t,
                 title: t,
-                role: tasks[t].role_id || t,
-                icon: 'A',
-                deps: tasks[t].depends_on || [],
+                taskId: taskDef.task_id || '',
+                role: taskDef.role_id || t,
+                icon: nodeIconFromTaskName(t),
+                deps: taskDef.depends_on || [],
             });
         }
         if (layerNodes.length > 0) layers.push(layerNodes);
@@ -52,11 +54,18 @@ export function renderNativeDAG(workflow) {
             el.className = 'dag-node';
             el.id = `node-${node.id}`;
             el.dataset.role = node.role;
+            if (node.taskId) el.dataset.taskId = node.taskId;
 
-            const instanceId = currentInstanceForRole(node.role);
+            const instanceId = currentInstanceForTask(node.taskId, node.role);
             if (instanceId) el.dataset.instanceId = instanceId;
 
-            if (state.activeAgentRoleId === node.role) el.classList.add('running');
+            if (state.activeAgentInstanceId) {
+                if (el.dataset.instanceId === state.activeAgentInstanceId) {
+                    el.classList.add('running');
+                }
+            } else if (state.activeAgentRoleId === node.role) {
+                el.classList.add('running');
+            }
 
             el.innerHTML = `
                 <div class="node-icon">${node.icon}</div>
@@ -65,7 +74,7 @@ export function renderNativeDAG(workflow) {
             `;
 
             el.onclick = () => {
-                const latest = currentInstanceForRole(node.role);
+                const latest = currentInstanceForTask(node.taskId, node.role);
                 if (latest) el.dataset.instanceId = latest;
                 const iid = latest || el.dataset.instanceId || null;
                 if (iid) {
@@ -92,6 +101,20 @@ export function renderNativeDAG(workflow) {
             drawEdges(svg, container, layers);
         });
     });
+}
+
+function nodeIconFromTaskName(taskName) {
+    const text = String(taskName || '').trim();
+    if (!text) return '?';
+    return text.charAt(0).toUpperCase();
+}
+
+function currentInstanceForTask(taskId, roleId) {
+    if (taskId) {
+        const byTask = state.taskInstanceMap?.[taskId];
+        if (byTask) return byTask;
+    }
+    return currentInstanceForRole(roleId);
 }
 
 function currentInstanceForRole(roleId) {

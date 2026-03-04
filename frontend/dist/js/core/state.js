@@ -7,10 +7,12 @@ export const state = {
     agentViews: {},
     activeView: 'main',
     activeAgentRoleId: null,
+    activeAgentInstanceId: null,
     activeRunId: null,
     pausedSubagent: null,
     instanceRoleMap: {}, // instanceId -> roleId, built from model_step_started SSE events
     roleInstanceMap: {}, // roleId -> latest instanceId
+    taskInstanceMap: {}, // taskId -> instanceId
     autoSwitchedSubagentInstances: {}, // instanceId -> true, auto-opened once per run
 };
 

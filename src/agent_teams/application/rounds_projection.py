@@ -302,6 +302,7 @@ def build_session_rounds(
     get_session_messages: Callable[[str], list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     events = event_log.list_by_session(session_id)
+    session_tasks = task_repo.list_by_session(session_id)
     parsed_events: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
     for ev in events:
         try:
@@ -318,6 +319,7 @@ def build_session_rounds(
     rounds_map: dict[str, dict[str, object]] = {}
     by_run_instance_role: dict[str, dict[str, str]] = {}
     by_run_role_instance: dict[str, dict[str, str]] = {}
+    by_run_task_instance: dict[str, dict[str, str]] = {}
 
     for ev, payload in parsed_events:
         run_id_value = ev.get("trace_id")
@@ -336,6 +338,14 @@ def build_session_rounds(
         _ = run_map.setdefault(rec.instance_id, rec.role_id)
         role_map = by_run_role_instance.setdefault(rec.run_id, {})
         _ = role_map.setdefault(rec.role_id, rec.instance_id)
+
+    for task in session_tasks:
+        run_id = task.envelope.trace_id
+        assigned_instance_id = task.assigned_instance_id
+        if not assigned_instance_id:
+            continue
+        task_map = by_run_task_instance.setdefault(run_id, {})
+        task_map[task.envelope.task_id] = assigned_instance_id
 
     messages = get_session_messages(session_id)
     for msg in messages:
@@ -377,6 +387,7 @@ def build_session_rounds(
                 "workflows": [],
                 "instance_role_map": by_run_instance_role.get(run_id, {}),
                 "role_instance_map": by_run_role_instance.get(run_id, {}),
+                "task_instance_map": by_run_task_instance.get(run_id, {}),
             }
         occurred_at: str = cast(str, ev["occurred_at"])
         created_at: str = cast(str, rounds_map[run_id]["created_at"])
@@ -412,7 +423,7 @@ def build_session_rounds(
             if isinstance(coordinator_messages, list):
                 coordinator_messages.append(msg)
 
-    for task in task_repo.list_by_session(session_id):
+    for task in session_tasks:
         run_id = task.envelope.trace_id
         round_data = rounds_map.get(run_id)
         if round_data is None:

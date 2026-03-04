@@ -31,7 +31,13 @@ export function clearDagNodeHighlight() {
 export function highlightNode(roleId, instanceId) {
     document.querySelectorAll('.dag-node').forEach(n => {
         n.classList.remove('active-tab');
-        if (n.dataset.instanceId === instanceId || n.dataset.role === roleId) {
+        if (instanceId) {
+            if (n.dataset.instanceId === instanceId) {
+                n.classList.add('active-tab');
+            }
+            return;
+        }
+        if (roleId && n.dataset.role === roleId) {
             n.classList.add('active-tab');
         }
     });

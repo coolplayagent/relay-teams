@@ -28,6 +28,9 @@ export async function handleSend() {
     els.promptInput.style.height = 'auto';
     state.instanceRoleMap = {};
     state.roleInstanceMap = {};
+    state.taskInstanceMap = {};
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
     state.autoSwitchedSubagentInstances = {};
     clearAllStreamState();
 

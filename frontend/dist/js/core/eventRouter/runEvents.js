@@ -24,6 +24,7 @@ import {
 export function handleRunStarted(eventMeta) {
     sysLog(`Run started (trace: ${eventMeta?.trace_id})`);
     state.activeAgentRoleId = COORDINATOR_ROLE;
+    state.activeAgentInstanceId = null;
     updateDagActiveNode();
 }
 
@@ -43,6 +44,7 @@ export function handleModelStepStarted(instanceId, roleId) {
         }
     }
     state.activeAgentRoleId = roleId;
+    state.activeAgentInstanceId = instanceId || null;
     updateDagActiveNode();
 }
 
@@ -69,12 +71,18 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 export function handleModelStepFinished(instanceId) {
     const key = instanceId || 'coordinator';
     finalizeStream(key);
+    if (!instanceId || state.activeAgentInstanceId === instanceId) {
+        state.activeAgentInstanceId = null;
+        state.activeAgentRoleId = null;
+    }
+    updateDagActiveNode();
 }
 
 export function handleRunCompleted() {
     sysLog('Run completed.');
     state.isGenerating = false;
     state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
     if (els.sendBtn) els.sendBtn.disabled = false;
     if (els.stopBtn) {
         els.stopBtn.disabled = true;
@@ -92,6 +100,7 @@ export function handleRunStopped(payload) {
     sysLog(`Run stopped: ${payload?.reason || 'stopped_by_user'}`, 'log-info');
     state.isGenerating = false;
     state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
     state.pausedSubagent = null;
     if (els.sendBtn) els.sendBtn.disabled = false;
     if (els.stopBtn) {
@@ -109,10 +118,13 @@ export function handleRunStopped(payload) {
 export function handleRunFailed(payload) {
     sysLog(`Run failed: ${payload?.error || ''}`, 'log-error');
     state.isGenerating = false;
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
     if (els.sendBtn) els.sendBtn.disabled = false;
     if (els.stopBtn) {
         els.stopBtn.disabled = true;
         els.stopBtn.style.display = 'none';
     }
     if (els.promptInput) els.promptInput.disabled = false;
+    updateDagActiveNode();
 }

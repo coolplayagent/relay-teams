@@ -21,10 +21,16 @@ export async function loadSessionWorkflows(sessionId) {
 
 export function updateDagActiveNode() {
     document.querySelectorAll('.dag-node').forEach(node => {
+        node.classList.remove('running');
+        const activeInstanceId = state.activeAgentInstanceId;
+        if (activeInstanceId) {
+            if (node.dataset.instanceId === activeInstanceId) {
+                node.classList.add('running');
+            }
+            return;
+        }
         if (node.dataset.role === state.activeAgentRoleId) {
             node.classList.add('running');
-        } else {
-            node.classList.remove('running');
         }
     });
 }
