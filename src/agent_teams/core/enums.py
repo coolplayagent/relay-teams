@@ -72,3 +72,5 @@ class RunEventType(str, Enum):
     RUN_FAILED = 'run_failed'
     # Human orchestration mode
     AWAITING_MANUAL_ACTION = 'awaiting_manual_action'
+    # Token consumption statistics
+    TOKEN_USAGE = 'token_usage'

@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 
+from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.application.run_manager import RunManager
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import IntentInput
@@ -20,6 +21,9 @@ from agent_teams.state.task_repo import TaskRepository
 
 
 class _MetaAgent:
+    def __init__(self) -> None:
+        pass
+
     async def handle_intent(self, intent, trace_id: str | None = None):
         await asyncio.sleep(0.01)
         raise AssertionError("not expected in this test")
@@ -77,7 +81,7 @@ def _make_run_manager(control: RunControlManager) -> RunManager:
         instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
     )
-    return RunManager(
+    return RunManager(  # type: ignore
         meta_agent=_MetaAgent(),
         injection_manager=injection,
         run_event_hub=hub,
@@ -89,18 +93,18 @@ def _make_run_manager(control: RunControlManager) -> RunManager:
 def test_create_run_blocked_when_paused_subagent_exists() -> None:
     control = RunControlManager()
     control.pause_subagent(
-        session_id='session-1',
-        run_id='run-1',
-        instance_id='inst-1',
-        role_id='generalist',
-        task_id='task-1',
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="generalist",
+        task_id="task-1",
     )
     manager = _make_run_manager(control)
 
     with pytest.raises(RuntimeError):
         manager.create_run(
-            IntentInput(session_id='session-1', intent='hello'),
-            ensure_session=lambda s: s or 'session-1',
+            IntentInput(session_id="session-1", intent="hello"),
+            ensure_session=lambda s: s or "session-1",
         )
 
 
@@ -117,7 +121,7 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
     )
-    manager = RunManager(
+    manager = RunManager(  # type: ignore
         meta_agent=_MetaAgent(),
         injection_manager=injection,
         run_event_hub=hub,
@@ -126,8 +130,8 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
     )
 
     run_id, _ = manager.create_run(
-        IntentInput(session_id='session-1', intent='hello'),
-        ensure_session=lambda s: s or 'session-1',
+        IntentInput(session_id="session-1", intent="hello"),
+        ensure_session=lambda s: s or "session-1",
     )
     queue = hub.subscribe(run_id)
     manager.stop_run(run_id)

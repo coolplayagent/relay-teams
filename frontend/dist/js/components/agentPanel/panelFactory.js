@@ -27,6 +27,7 @@ export function createPanel(instanceId, roleId, onClose) {
                 <span class="panel-role">${friendlyRole}</span>
                 <span class="panel-id">${instanceId.slice(0, 8)}</span>
             </div>
+            <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
             <button class="agent-panel-stop" title="Stop this subagent">Stop</button>
             <button class="agent-panel-close" title="Close">x</button>
         </div>

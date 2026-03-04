@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
@@ -6,9 +6,22 @@ from json import dumps
 from typing import Callable, Literal
 
 from agent_teams.agents.management.instance_pool import InstancePool
-from agent_teams.core.enums import EventType, ExecutionMode, InstanceStatus, RunEventType, TaskStatus
+from agent_teams.core.enums import (
+    EventType,
+    ExecutionMode,
+    InstanceStatus,
+    RunEventType,
+    TaskStatus,
+)
 from agent_teams.core.ids import new_task_id, new_trace_id
-from agent_teams.core.models import EventEnvelope, IntentInput, RoleDefinition, RunEvent, TaskEnvelope, VerificationPlan
+from agent_teams.core.models import (
+    EventEnvelope,
+    IntentInput,
+    RoleDefinition,
+    RunEvent,
+    TaskEnvelope,
+    VerificationPlan,
+)
 from agent_teams.coordination.verification import verify_task
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.state.event_log import EventLog
@@ -23,7 +36,7 @@ from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 
-ROLE_COORDINATOR = 'coordinator_agent'
+ROLE_COORDINATOR = "coordinator_agent"
 MAX_ORCHESTRATION_CYCLES = 8
 
 
@@ -46,14 +59,22 @@ class CoordinatorGraph:
         self,
         intent: IntentInput,
         trace_id: str | None = None,
-    ) -> tuple[str, str, Literal['completed', 'failed'], str]:
+    ) -> tuple[str, str, Literal["completed", "failed"], str]:
         trace_id = trace_id or new_trace_id().value
         session_id = intent.session_id
         if session_id is None:
-            raise ValueError('IntentInput.session_id is required before coordinator run')
+            raise ValueError(
+                "IntentInput.session_id is required before coordinator run"
+            )
         log_debug(
-            f'[coord:start] run={trace_id} mode={intent.execution_mode.value} '
-            f'session={session_id} intent={intent.intent[:120]}'
+            "[coord:start] run="
+            + trace_id
+            + " mode="
+            + intent.execution_mode.value
+            + " session="
+            + session_id
+            + " intent="
+            + intent.intent[:120]
         )
 
         root_task = TaskEnvelope(
@@ -62,22 +83,24 @@ class CoordinatorGraph:
             parent_task_id=None,
             trace_id=trace_id,
             objective=intent.intent,
-            verification=VerificationPlan(checklist=('non_empty_response',)),
+            verification=VerificationPlan(checklist=("non_empty_response",)),
         )
-        self.task_repo.create(root_task)
+        _ = self.task_repo.create(root_task)
         self.event_bus.emit(
             EventEnvelope(
                 event_type=EventType.TASK_CREATED,
                 trace_id=trace_id,
                 session_id=session_id,
                 task_id=root_task.task_id,
-                payload_json='{}',
+                payload_json="{}",
             )
         )
 
         mode = intent.execution_mode
         if mode == ExecutionMode.MANUAL:
-            result = self._initialize_manual_mode(intent=intent, trace_id=trace_id, root_task=root_task)
+            result = self._initialize_manual_mode(
+                intent=intent, trace_id=trace_id, root_task=root_task
+            )
         elif mode == ExecutionMode.AI:
             coordinator_instance_id = self._ensure_coordinator_instance(
                 session_id=session_id,
@@ -90,27 +113,35 @@ class CoordinatorGraph:
                 coordinator_instance_id=coordinator_instance_id,
             )
         else:
-            raise ValueError(f'Unknown execution mode: {mode}')
+            raise ValueError(f"Unknown execution mode: {mode}")
 
         verification = verify_task(self.task_repo, self.event_bus, root_task.task_id)
-        status: Literal['completed', 'failed'] = 'completed' if verification.passed else 'failed'
-        log_debug(f'[coord:finish] run={trace_id} mode={mode.value} status={status} root_task={root_task.task_id}')
+        status: Literal["completed", "failed"] = (
+            "completed" if verification.passed else "failed"
+        )
+        log_debug(
+            f"[coord:finish] run={trace_id} mode={mode.value} status={status} root_task={root_task.task_id}"
+        )
         return trace_id, root_task.task_id, status, result
 
-    def _initialize_manual_mode(self, *, intent: IntentInput, trace_id: str, root_task: TaskEnvelope) -> str:
+    def _initialize_manual_mode(
+        self, *, intent: IntentInput, trace_id: str, root_task: TaskEnvelope
+    ) -> str:
         result = (
-            'Manual orchestration initialized. Use workflow APIs or tools to create a workflow and '
+            "Manual orchestration initialized. Use workflow APIs or tools to create a workflow and "
             'drive dispatch_tasks(action="revise"|"next").'
         )
         session_id = root_task.session_id
-        self.task_repo.update_status(root_task.task_id, TaskStatus.COMPLETED, result=result)
+        self.task_repo.update_status(
+            root_task.task_id, TaskStatus.COMPLETED, result=result
+        )
         self.event_bus.emit(
             EventEnvelope(
                 event_type=EventType.TASK_COMPLETED,
                 trace_id=trace_id,
                 session_id=session_id,
                 task_id=root_task.task_id,
-                payload_json='{}',
+                payload_json="{}",
             )
         )
         self._publish_run_event(
@@ -121,7 +152,7 @@ class CoordinatorGraph:
             instance_id=None,
             role_id=None,
             event_type=RunEventType.AWAITING_MANUAL_ACTION,
-            payload={'root_task_id': root_task.task_id},
+            payload={"root_task_id": root_task.task_id},
         )
         return result
 
@@ -137,25 +168,27 @@ class CoordinatorGraph:
             role_id=ROLE_COORDINATOR,
             task=root_task,
         )
-        log_debug(f'[coord:ai:first-pass-done] run={trace_id}')
+        log_debug(f"[coord:ai:first-pass-done] run={trace_id}")
 
         cycle = 0
         while cycle < MAX_ORCHESTRATION_CYCLES:
             cycle += 1
-            log_debug(f'[coord:ai:cycle] run={trace_id} cycle={cycle}')
+            log_debug(f"[coord:ai:cycle] run={trace_id} cycle={cycle}")
             ran_any = await self._run_pending_delegated_tasks(
                 trace_id=trace_id,
                 root_task_id=root_task.task_id,
             )
             if not ran_any:
-                log_debug(f'[coord:ai:cycle-stop] run={trace_id} cycle={cycle} reason=no-pending-subtasks')
+                log_debug(
+                    f"[coord:ai:cycle-stop] run={trace_id} cycle={cycle} reason=no-pending-subtasks"
+                )
                 break
             coordinator_result = await self._task_executor(
                 instance_id=coordinator_instance_id,
                 role_id=ROLE_COORDINATOR,
                 task=root_task,
             )
-            log_debug(f'[coord:ai:cycle-pass-done] run={trace_id} cycle={cycle}')
+            log_debug(f"[coord:ai:cycle-pass-done] run={trace_id} cycle={cycle}")
 
         return coordinator_result
 
@@ -183,8 +216,10 @@ class CoordinatorGraph:
             try:
                 instance = self.instance_pool.get(record.assigned_instance_id)
             except KeyError:
-                msg = f'Assigned instance not found: {record.assigned_instance_id}'
-                self.task_repo.update_status(task.task_id, TaskStatus.FAILED, error_message=msg)
+                msg = f"Assigned instance not found: {record.assigned_instance_id}"
+                self.task_repo.update_status(
+                    task.task_id, TaskStatus.FAILED, error_message=msg
+                )
                 self.event_bus.emit(
                     EventEnvelope(
                         event_type=EventType.TASK_FAILED,
@@ -192,7 +227,7 @@ class CoordinatorGraph:
                         session_id=task.session_id,
                         task_id=task.task_id,
                         instance_id=record.assigned_instance_id,
-                        payload_json='{}',
+                        payload_json="{}",
                     )
                 )
                 continue
@@ -219,7 +254,7 @@ class CoordinatorGraph:
         trace_id: str,
         root_task: TaskEnvelope,
     ) -> str:
-        self.role_registry.get(ROLE_COORDINATOR)
+        _ = self.role_registry.get(ROLE_COORDINATOR)
         existing_instance_id = self.agent_repo.get_coordinator_instance_id(session_id)
         known_ids = {i.instance_id for i in self.instance_pool.list_instances()}
         if existing_instance_id and existing_instance_id in known_ids:
@@ -238,13 +273,13 @@ class CoordinatorGraph:
                     session_id=session_id,
                     task_id=root_task.task_id,
                     instance_id=coordinator_instance_id,
-                    payload_json='{}',
+                    payload_json="{}",
                 )
             )
             return coordinator_instance_id
 
         instance = self.instance_pool.create_subagent(ROLE_COORDINATOR)
-        self.task_repo.update_status(
+        _ = self.task_repo.update_status(
             task_id=root_task.task_id,
             status=TaskStatus.ASSIGNED,
             assigned_instance_id=instance.instance_id,
@@ -264,7 +299,7 @@ class CoordinatorGraph:
                 session_id=session_id,
                 task_id=root_task.task_id,
                 instance_id=instance.instance_id,
-                payload_json='{}',
+                payload_json="{}",
             )
         )
         self.event_bus.emit(
@@ -274,7 +309,7 @@ class CoordinatorGraph:
                 session_id=session_id,
                 task_id=root_task.task_id,
                 instance_id=instance.instance_id,
-                payload_json='{}',
+                payload_json="{}",
             )
         )
         return instance.instance_id
@@ -305,5 +340,9 @@ class CoordinatorGraph:
             )
         )
 
-    async def _task_executor(self, *, instance_id: str, role_id: str, task: TaskEnvelope) -> str:
-        return await self.task_execution_service.execute(instance_id=instance_id, role_id=role_id, task=task)
+    async def _task_executor(
+        self, *, instance_id: str, role_id: str, task: TaskEnvelope
+    ) -> str:
+        return await self.task_execution_service.execute(
+            instance_id=instance_id, role_id=role_id, task=task
+        )

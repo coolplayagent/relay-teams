@@ -211,10 +211,34 @@ Purpose: append-only structured runtime logs.
 
 ---
 
+### 2.8 `token_usage`
+
+```sql
+CREATE TABLE IF NOT EXISTS token_usage (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
+    run_id        TEXT NOT NULL,
+    instance_id   TEXT NOT NULL,
+    role_id       TEXT NOT NULL,
+    input_tokens  INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    requests      INTEGER DEFAULT 0,
+    tool_calls    INTEGER DEFAULT 0,
+    recorded_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
+```
+
+Purpose: one row per `agent.iter()` completion cycle (coordinator or subagent). Multiple rows may exist for the same `instance_id` within a run if injection-restarts occurred. Rows are deleted when the owning session is deleted.
+
+---
+
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `tasks`, `agent_instances`, `events`, `messages`.
-- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`.
+- `session_id`: session-level retrieval across `sessions`, `tasks`, `agent_instances`, `events`, `messages`, `token_usage`.
+- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.

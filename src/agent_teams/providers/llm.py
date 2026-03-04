@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from json import dumps
 from pathlib import Path
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.messages import (
@@ -17,13 +17,20 @@ from pydantic_ai.messages import (
 
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import ModelEndpointConfig, RunEvent
-from agent_teams.runtime.console import close_model_stream, is_debug, log_debug, log_model_output, log_model_stream_chunk
+from agent_teams.runtime.console import (
+    close_model_stream,
+    is_debug,
+    log_debug,
+    log_model_output,
+    log_model_stream_chunk,
+)
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.message_repo import MessageRepository
+from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.builders.collaboration_agent import build_collaboration_agent
 from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
@@ -54,8 +61,9 @@ class LLMProvider:
 
 
 class EchoProvider(LLMProvider):
+    @override
     async def generate(self, request: LLMRequest) -> str:
-        return f'ECHO: {request.user_prompt}'
+        return f"ECHO: {request.user_prompt}"
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -78,11 +86,12 @@ class OpenAICompatibleProvider(LLMProvider):
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
         message_repo: MessageRepository,
-        role_registry: 'RoleRegistry',
-        task_execution_service: 'TaskExecutionService',
+        role_registry: "RoleRegistry",
+        task_execution_service: "TaskExecutionService",
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
+        token_usage_repo: TokenUsageRepository | None = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -105,16 +114,18 @@ class OpenAICompatibleProvider(LLMProvider):
         self._message_repo = message_repo
         self._tool_approval_manager = tool_approval_manager
         self._tool_approval_policy = tool_approval_policy
+        self._token_usage_repo = token_usage_repo
 
+    @override
     async def generate(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
 
     async def _generate_async(self, request: LLMRequest) -> str:
-        tool_rules = f'Available tools: {", ".join(self._allowed_tools)}.'
+        tool_rules = f"Available tools: {', '.join(self._allowed_tools)}."
         if is_debug():
             log_debug(
-                f'[llm:start] role={request.role_id} run={request.run_id} '
-                f'task={request.task_id} instance={request.instance_id}'
+                f"[llm:start] role={request.role_id} run={request.run_id} "
+                f"task={request.task_id} instance={request.instance_id}"
             )
         self._run_event_hub.publish(
             RunEvent(
@@ -125,14 +136,16 @@ class OpenAICompatibleProvider(LLMProvider):
                 instance_id=request.instance_id,
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_STARTED,
-                payload_json=dumps({'role_id': request.role_id, 'instance_id': request.instance_id}),
+                payload_json=dumps(
+                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                ),
             )
         )
         agent = build_collaboration_agent(
             model_name=self._config.model,
             base_url=self._config.base_url,
             api_key=self._config.api_key,
-            system_prompt=f'{request.system_prompt}\n\n{tool_rules}',
+            system_prompt=f"{request.system_prompt}\n\n{tool_rules}",
             allowed_tools=self._allowed_tools,
             allowed_mcp_servers=self._allowed_mcp_servers,
             allowed_skills=self._allowed_skills,
@@ -190,9 +203,11 @@ class OpenAICompatibleProvider(LLMProvider):
                                 control_ctx.raise_if_cancelled()
                                 if text_delta:
                                     if is_debug():
-                                        print(text_delta, end='', flush=True)
+                                        print(text_delta, end="", flush=True)
                                     else:
-                                        log_model_stream_chunk(request.role_id, text_delta)
+                                        log_model_stream_chunk(
+                                            request.role_id, text_delta
+                                        )
                                     printed_any = True
                                     emitted_text_chunks.append(text_delta)
                                     self._run_event_hub.publish(
@@ -204,11 +219,13 @@ class OpenAICompatibleProvider(LLMProvider):
                                             instance_id=request.instance_id,
                                             role_id=request.role_id,
                                             event_type=RunEventType.TEXT_DELTA,
-                                            payload_json=dumps({
-                                                'text': text_delta,
-                                                'role_id': request.role_id,
-                                                'instance_id': request.instance_id
-                                            }),
+                                            payload_json=dumps(
+                                                {
+                                                    "text": text_delta,
+                                                    "role_id": request.role_id,
+                                                    "instance_id": request.instance_id,
+                                                }
+                                            ),
                                         )
                                     )
 
@@ -238,6 +255,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                     if injections:
                         from pydantic_ai.messages import ModelRequest, UserPromptPart
+
                         extra = [
                             ModelRequest(parts=[UserPromptPart(content=msg.content)])
                             for msg in injections
@@ -263,12 +281,11 @@ class OpenAICompatibleProvider(LLMProvider):
 
             if not restarted:
                 # Normal completion
-                run_result = agent_run.result
-                if run_result is None:
-                    raise RuntimeError('Model run finished without a result object')
-                result = run_result
+                result = agent_run.result
+                if result is None:
+                    raise RuntimeError("Model run finished without a result object")
                 # Flush any remaining messages (e.g. final tool results)
-                all_new = run_result.new_messages()
+                all_new = result.new_messages()
                 to_save = list(all_new)[saved_count:]
                 if to_save:
                     self._message_repo.append(
@@ -278,10 +295,43 @@ class OpenAICompatibleProvider(LLMProvider):
                         trace_id=request.trace_id,
                         messages=to_save,
                     )
+                # Record and publish token usage
+                usage = result.usage()
+                if self._token_usage_repo is not None:
+                    self._token_usage_repo.record(
+                        session_id=request.session_id,
+                        run_id=request.run_id,
+                        instance_id=request.instance_id,
+                        role_id=request.role_id,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        requests=usage.requests,
+                        tool_calls=usage.tool_calls,
+                    )
+                self._run_event_hub.publish(
+                    RunEvent(
+                        session_id=request.session_id,
+                        run_id=request.run_id,
+                        trace_id=request.trace_id,
+                        task_id=request.task_id,
+                        instance_id=request.instance_id,
+                        role_id=request.role_id,
+                        event_type=RunEventType.TOKEN_USAGE,
+                        payload_json=dumps({
+                            'input_tokens': usage.input_tokens,
+                            'output_tokens': usage.output_tokens,
+                            'total_tokens': usage.total_tokens,
+                            'requests': usage.requests,
+                            'tool_calls': usage.tool_calls,
+                            'role_id': request.role_id,
+                            'instance_id': request.instance_id,
+                        }),
+                    )
+                )
                 break  # done
 
         if result is None:
-            raise RuntimeError('Model run completed without a result')
+            raise RuntimeError("Model run completed without a result")
 
         if printed_any and is_debug():
             print()
@@ -290,7 +340,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
         text = self._extract_text(result.response)
         if not text and emitted_text_chunks:
-            text = ''.join(emitted_text_chunks)
+            text = "".join(emitted_text_chunks)
         elif text and not emitted_text_chunks:
             self._run_event_hub.publish(
                 RunEvent(
@@ -301,11 +351,13 @@ class OpenAICompatibleProvider(LLMProvider):
                     instance_id=request.instance_id,
                     role_id=request.role_id,
                     event_type=RunEventType.TEXT_DELTA,
-                    payload_json=dumps({
-                        'text': text,
-                        'role_id': request.role_id,
-                        'instance_id': request.instance_id
-                    }),
+                    payload_json=dumps(
+                        {
+                            "text": text,
+                            "role_id": request.role_id,
+                            "instance_id": request.instance_id,
+                        }
+                    ),
                 )
             )
         if text and not printed_any:
@@ -319,30 +371,33 @@ class OpenAICompatibleProvider(LLMProvider):
                 instance_id=request.instance_id,
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_FINISHED,
-                payload_json=dumps({'role_id': request.role_id, 'instance_id': request.instance_id}),
+                payload_json=dumps(
+                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                ),
             )
         )
         if is_debug():
             log_debug(
-                f'[llm:done] role={request.role_id} run={request.run_id} '
-                f'task={request.task_id} chars={len(text)}'
+                f"[llm:done] role={request.role_id} run={request.run_id} "
+                f"task={request.task_id} chars={len(text)}"
             )
         return text
 
     def _extract_text(self, response: object) -> str:
-        parts = getattr(response, 'parts', None)
+        parts = getattr(response, "parts", None)
         if isinstance(parts, list):
             texts: list[str] = []
             for part in parts:
-                content = getattr(part, 'content', None)
+                content = getattr(part, "content", None)
                 if isinstance(content, str) and content:
                     texts.append(content)
             if texts:
-                return ''.join(texts)
+                return "".join(texts)
         return str(response)
 
     def _to_json(self, obj: object) -> str:
         import json
+
         try:
             return json.dumps(obj, ensure_ascii=False, default=str)
         except Exception:

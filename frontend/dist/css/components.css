@@ -936,6 +936,7 @@
     .round-nav-float {
         width: 220px;
     }
+
     .workflow-float-card {
         width: 280px;
     }
@@ -945,6 +946,7 @@
     .round-nav-float {
         display: none !important;
     }
+
     .workflow-float-card {
         display: none !important;
     }
@@ -1224,8 +1226,8 @@
     max-width: 700px;
     width: 90%;
     max-height: 80vh;
-;
-    display:    overflow: hidden flex;
+    overflow: hidden;
+    display: flex;
     flex-direction: column;
 }
 
@@ -1473,4 +1475,80 @@
     font-style: italic;
     text-align: center;
     padding: 2rem;
+}
+
+/* ── Token Usage Badges ───────────────────────────────────────── */
+
+/* In-panel header badge region */
+.agent-token-usage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 0.5rem;
+}
+
+.token-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+    transition: background 0.2s;
+}
+
+.token-badge:hover {
+    background: rgba(99, 102, 241, 0.2);
+}
+
+.token-in {
+    color: #34d399;
+    /* emerald-400 */
+}
+
+.token-out {
+    color: #60a5fa;
+    /* blue-400 */
+}
+
+.token-tools {
+    color: var(--text-secondary);
+}
+
+/* Round header token summary pill */
+.round-token-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.4rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: default;
+    width: fit-content;
+    animation: fadeIn 0.4s ease backwards;
+}
+
+.round-token-summary .token-in {
+    color: #34d399;
+}
+
+.round-token-summary .token-out {
+    color: #60a5fa;
+}
+
+.round-token-summary .token-tools {
+    color: var(--text-secondary);
 }

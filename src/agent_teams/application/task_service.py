@@ -1,22 +1,30 @@
 from __future__ import annotations
 
-from agent_teams.core.models import RoleDefinition, SubAgentInstance, TaskEnvelope, TaskRecord
+from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.core.models import (
+    RoleDefinition,
+    SubAgentInstance,
+    TaskEnvelope,
+    TaskRecord,
+)
+from agent_teams.roles.registry import RoleRegistry
+from agent_teams.state.task_repo import TaskRepository
 
 
 class TaskService:
     def __init__(
         self,
         *,
-        task_repo,
-        instance_pool,
-        role_registry,
+        task_repo: TaskRepository,
+        instance_pool: InstancePool,
+        role_registry: RoleRegistry,
     ) -> None:
-        self._task_repo = task_repo
-        self._instance_pool = instance_pool
-        self._role_registry = role_registry
+        self._task_repo: TaskRepository = task_repo
+        self._instance_pool: InstancePool = instance_pool
+        self._role_registry: RoleRegistry = role_registry
 
     def submit_task(self, task: TaskEnvelope) -> str:
-        self._task_repo.create(task)
+        _ = self._task_repo.create(task)
         return task.task_id
 
     def query_task(self, task_id: str) -> TaskRecord:

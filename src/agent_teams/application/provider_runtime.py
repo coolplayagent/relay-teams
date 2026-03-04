@@ -7,18 +7,27 @@ from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.core.config import RuntimeConfig
 from agent_teams.core.models import RoleDefinition
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
-from agent_teams.providers.llm import EchoProvider, LLMProvider, OpenAICompatibleProvider
+from agent_teams.providers.llm import (
+    EchoProvider,
+    LLMProvider,
+    OpenAICompatibleProvider,
+)
+from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalManager
+from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
+from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.tools.policy import ToolApprovalPolicy
+from agent_teams.tools.registry import ToolRegistry
 
 
 def create_provider_factory(
@@ -31,15 +40,16 @@ def create_provider_factory(
     injection_manager: RunInjectionManager,
     run_event_hub: RunEventHub,
     agent_repo: AgentInstanceRepository,
-    tool_registry,
-    mcp_registry,
-    skill_registry,
+    tool_registry: ToolRegistry,
+    mcp_registry: McpRegistry,
+    skill_registry: SkillRegistry,
     message_repo: MessageRepository,
-    role_registry,
+    role_registry: RoleRegistry,
     run_control_manager: RunControlManager,
     tool_approval_manager: ToolApprovalManager,
     tool_approval_policy: ToolApprovalPolicy,
     get_task_execution_service: Callable[[], TaskExecutionService],
+    token_usage_repo: TokenUsageRepository | None = None,
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
         profile_config = runtime.llm_profiles.get(role.model_profile)
@@ -69,6 +79,7 @@ def create_provider_factory(
             run_control_manager=run_control_manager,
             tool_approval_manager=tool_approval_manager,
             tool_approval_policy=tool_approval_policy,
+            token_usage_repo=token_usage_repo,
         )
 
     return provider_factory
@@ -76,7 +87,7 @@ def create_provider_factory(
 
 def create_task_execution_service(
     *,
-    role_registry,
+    role_registry: RoleRegistry,
     instance_pool: InstancePool,
     task_repo: TaskRepository,
     shared_store: SharedStore,

@@ -68,10 +68,10 @@ def test_build_session_rounds_uses_latest_instance_for_same_role() -> None:
 
     rounds = build_session_rounds(
         session_id=session_id,
-        event_log=_FakeEventLog(events),
-        agent_repo=_FakeAgentRepo(),
-        task_repo=_FakeTaskRepo(),
-        shared_store=_FakeSharedStore(),
+        event_log=_FakeEventLog(events),  # type: ignore
+        agent_repo=_FakeAgentRepo(),  # type: ignore
+        task_repo=_FakeTaskRepo(),  # type: ignore
+        shared_store=_FakeSharedStore(),  # type: ignore
         get_session_messages=lambda _: [],
     )
 

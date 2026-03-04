@@ -29,8 +29,6 @@ class ConfigManager:
         config = _load_json_object(model_file)
         result: dict[str, JsonObject] = {}
         for name, profile in config.items():
-            if not isinstance(name, str):
-                continue
             if not isinstance(profile, dict):
                 continue
             result[name] = {
@@ -49,7 +47,7 @@ class ConfigManager:
         if model_file.exists():
             config = _load_json_object(model_file)
         config[name] = profile
-        model_file.write_text(dumps(config, indent=2), encoding="utf-8")
+        _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
 
     def delete_model_profile(self, name: str) -> None:
         model_file = self._config_dir / "model.json"
@@ -58,11 +56,11 @@ class ConfigManager:
         config = _load_json_object(model_file)
         if name in config:
             del config[name]
-            model_file.write_text(dumps(config, indent=2), encoding="utf-8")
+            _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
 
     def save_model_config(self, config: JsonObject) -> None:
         model_file = self._config_dir / "model.json"
-        model_file.write_text(dumps(config, indent=2), encoding="utf-8")
+        _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
 
     def load_mcp_registry(self) -> McpRegistry:
         mcp_specs: list[McpServerSpec] = []
@@ -74,8 +72,6 @@ class ConfigManager:
                 if not isinstance(maybe_servers, dict):
                     maybe_servers = {}
                 for name, cfg in maybe_servers.items():
-                    if not isinstance(name, str):
-                        continue
                     wrapped_cfg: JsonObject = {
                         "mcpServers": {name: _normalize_json_value(cfg)},
                     }
@@ -94,7 +90,7 @@ class ConfigManager:
 
 
 def _load_json_object(file_path: Path) -> JsonObject:
-    raw = loads(file_path.read_text("utf-8"))
+    raw: object = loads(file_path.read_text("utf-8"))
     if isinstance(raw, dict):
         return cast(JsonObject, raw)
     return {}
@@ -108,6 +104,7 @@ def _normalize_json_value(value: object) -> JsonValue:
     if isinstance(value, dict):
         normalized: JsonObject = {}
         for key, item in value.items():
-            normalized[str(key)] = _normalize_json_value(item)
+            key_str: str = str(key)
+            normalized[key_str] = _normalize_json_value(item)
         return normalized
     return str(value)

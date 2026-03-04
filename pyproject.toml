@@ -39,4 +39,3 @@ where = ["src"]
 
 [tool.pyright]
 extraPaths = ["src"]
-failOnWarnings = false

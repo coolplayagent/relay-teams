@@ -26,10 +26,12 @@ class RuntimeConfig(BaseModel):
 
 
 def load_runtime_config(
-    config_dir: Path = Path(".agent_teams"),
+    config_dir: Path | None = None,
     roles_dir: Path | None = None,
     db_path: Path | None = None,
 ) -> RuntimeConfig:
+    if config_dir is None:
+        config_dir = Path(".agent_teams")
     config_dir.mkdir(parents=True, exist_ok=True)
     env_file = config_dir / ".env"
     pairs = _parse_env_file(env_file) if env_file.exists() else ()

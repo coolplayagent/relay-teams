@@ -27,4 +27,6 @@ export {
     reloadMcpConfig,
     reloadSkillsConfig,
     stopRun,
+    fetchRunTokenUsage,
+    fetchSessionTokenUsage,
 } from './api/index.js';

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import cast
 
 from agent_teams.application.rounds_projection import (
     build_session_rounds,
@@ -10,25 +11,31 @@ from agent_teams.application.rounds_projection import (
 )
 from agent_teams.core.enums import ScopeType
 from agent_teams.core.models import AgentRuntimeRecord, ScopeRef, SessionRecord
+from agent_teams.state.agent_repo import AgentInstanceRepository
+from agent_teams.state.event_log import EventLog
+from agent_teams.state.message_repo import MessageRepository
+from agent_teams.state.session_repo import SessionRepository
+from agent_teams.state.shared_store import SharedStore
+from agent_teams.state.task_repo import TaskRepository
 
 
 class SessionService:
     def __init__(
         self,
         *,
-        session_repo,
-        task_repo,
-        agent_repo,
-        shared_store,
-        message_repo,
-        event_log,
+        session_repo: SessionRepository,
+        task_repo: TaskRepository,
+        agent_repo: AgentInstanceRepository,
+        shared_store: SharedStore,
+        message_repo: MessageRepository,
+        event_log: EventLog,
     ) -> None:
-        self._session_repo = session_repo
-        self._task_repo = task_repo
-        self._agent_repo = agent_repo
-        self._shared_store = shared_store
-        self._message_repo = message_repo
-        self._event_log = event_log
+        self._session_repo: SessionRepository = session_repo
+        self._task_repo: TaskRepository = task_repo
+        self._agent_repo: AgentInstanceRepository = agent_repo
+        self._shared_store: SharedStore = shared_store
+        self._message_repo: MessageRepository = message_repo
+        self._event_log: EventLog = event_log
 
     def create_session(
         self,
@@ -44,7 +51,7 @@ class SessionService:
         self._session_repo.update_metadata(session_id, metadata)
 
     def delete_session(self, session_id: str) -> None:
-        self._session_repo.get(session_id)
+        _ = self._session_repo.get(session_id)
 
         tasks = self._task_repo.list_by_session(session_id)
         agents = self._agent_repo.list_by_session(session_id)
@@ -67,15 +74,23 @@ class SessionService:
     def list_agents_in_session(self, session_id: str) -> tuple[AgentRuntimeRecord, ...]:
         return self._agent_repo.list_by_session(session_id)
 
-    def get_agent_messages(self, session_id: str, instance_id: str) -> list[dict[str, object]]:
-        return self._message_repo.get_messages_for_instance(session_id, instance_id)
+    def get_agent_messages(
+        self, session_id: str, instance_id: str
+    ) -> list[dict[str, object]]:
+        return cast(
+            list[dict[str, object]],
+            self._message_repo.get_messages_for_instance(session_id, instance_id),
+        )
 
     def get_global_events(self, session_id: str) -> list[dict[str, object]]:
         events = self._event_log.list_by_session(session_id)
-        return list(events)
+        return cast(list[dict[str, object]], list(events))
 
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
-        return self._message_repo.get_messages_by_session(session_id)
+        return cast(
+            list[dict[str, object]],
+            self._message_repo.get_messages_by_session(session_id),
+        )
 
     def get_session_workflows(self, session_id: str) -> list[dict[str, object]]:
         workflows: list[dict[str, object]] = []
@@ -84,7 +99,7 @@ class SessionService:
             scope = ScopeRef(scope_type=ScopeType.TASK, scope_id=task.envelope.task_id)
             obj = self._shared_store.get_state(scope, "workflow_graph")
             if obj:
-                workflows.append(json.loads(obj))
+                workflows.append(cast(dict[str, object], json.loads(obj)))
         return workflows
 
     def build_session_rounds(self, session_id: str) -> list[dict[str, object]]:

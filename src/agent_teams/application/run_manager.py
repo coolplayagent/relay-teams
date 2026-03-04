@@ -5,6 +5,7 @@ from json import dumps
 import logging
 from typing import Callable, cast
 
+from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.core.enums import InjectionSource, RunEventType
 from agent_teams.core.ids import new_trace_id
 from agent_teams.core.models import IntentInput, RunEvent, RunResult
@@ -12,7 +13,10 @@ from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.logging import get_logger, log_event
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
-from agent_teams.runtime.tool_approval_manager import ToolApprovalAction, ToolApprovalManager
+from agent_teams.runtime.tool_approval_manager import (
+    ToolApprovalAction,
+    ToolApprovalManager,
+)
 from agent_teams.runtime.trace import bind_trace_context
 
 logger = get_logger(__name__)
@@ -22,17 +26,17 @@ class RunManager:
     def __init__(
         self,
         *,
-        meta_agent,
+        meta_agent: MetaAgent,
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
     ) -> None:
-        self._meta_agent = meta_agent
-        self._injection_manager = injection_manager
-        self._run_event_hub = run_event_hub
-        self._run_control_manager = run_control_manager
-        self._tool_approval_manager = tool_approval_manager
+        self._meta_agent: MetaAgent = meta_agent
+        self._injection_manager: RunInjectionManager = injection_manager
+        self._run_event_hub: RunEventHub = run_event_hub
+        self._run_control_manager: RunControlManager = run_control_manager
+        self._tool_approval_manager: ToolApprovalManager = tool_approval_manager
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
 
@@ -47,16 +51,21 @@ class RunManager:
         self._run_control_manager.assert_session_allows_main_input(session_id)
         run_id = new_trace_id().value
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
-            log_event(logger, logging.INFO, event='run.started.direct', message='Direct run started')
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.started.direct",
+                message="Direct run started",
+            )
             self._injection_manager.activate(run_id)
             try:
                 result = await self._meta_agent.handle_intent(intent, trace_id=run_id)
                 log_event(
                     logger,
                     logging.INFO,
-                    event='run.completed.direct',
-                    message='Direct run completed',
-                    payload={'root_task_id': result.root_task_id},
+                    event="run.completed.direct",
+                    message="Direct run completed",
+                    payload={"root_task_id": result.root_task_id},
                 )
                 return result
             finally:
@@ -74,7 +83,12 @@ class RunManager:
         run_id = new_trace_id().value
         self._pending_runs[run_id] = intent
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
-            log_event(logger, logging.INFO, event='run.queued', message='Run queued for streaming execution')
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.queued",
+                message="Run queued for streaming execution",
+            )
         return run_id, session_id
 
     def ensure_run_started(self, run_id: str) -> None:
@@ -82,15 +96,17 @@ class RunManager:
             return
         intent = self._pending_runs.get(run_id)
         if intent is None:
-            raise KeyError(f'Run {run_id} not found')
+            raise KeyError(f"Run {run_id} not found")
 
         self._running_run_ids.add(run_id)
         self._injection_manager.activate(run_id)
         session_id = intent.session_id
         if session_id is None:
-            raise RuntimeError(f'Run {run_id} is missing session id')
+            raise RuntimeError(f"Run {run_id} is missing session id")
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
-            log_event(logger, logging.INFO, event='run.started', message='Run worker started')
+            log_event(
+                logger, logging.INFO, event="run.started", message="Run worker started"
+            )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=session_id,
@@ -98,7 +114,7 @@ class RunManager:
                 trace_id=run_id,
                 task_id=None,
                 event_type=RunEventType.RUN_STARTED,
-                payload_json=dumps({'session_id': session_id}),
+                payload_json=dumps({"session_id": session_id}),
             )
         )
 
@@ -115,27 +131,31 @@ class RunManager:
                         payload_json=dumps(result.model_dump()),
                     )
                 )
-                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+                with bind_trace_context(
+                    trace_id=run_id, run_id=run_id, session_id=session_id
+                ):
                     log_event(
                         logger,
                         logging.INFO,
-                        event='run.completed',
-                        message='Run completed',
-                        payload={'root_task_id': result.root_task_id},
+                        event="run.completed",
+                        message="Run completed",
+                        payload={"root_task_id": result.root_task_id},
                     )
             except asyncio.CancelledError:
                 self._run_control_manager.publish_run_stopped(
                     session_id=session_id,
                     run_id=run_id,
-                    reason='stopped_by_user',
+                    reason="stopped_by_user",
                 )
-                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+                with bind_trace_context(
+                    trace_id=run_id, run_id=run_id, session_id=session_id
+                ):
                     log_event(
                         logger,
                         logging.WARNING,
-                        event='run.stopped',
-                        message='Run cancelled',
-                        payload={'reason': 'stopped_by_user'},
+                        event="run.stopped",
+                        message="Run cancelled",
+                        payload={"reason": "stopped_by_user"},
                     )
             except Exception as exc:
                 self._run_event_hub.publish(
@@ -145,22 +165,24 @@ class RunManager:
                         trace_id=run_id,
                         task_id=None,
                         event_type=RunEventType.RUN_FAILED,
-                        payload_json=dumps({'error': str(exc)}),
+                        payload_json=dumps({"error": str(exc)}),
                     )
                 )
-                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+                with bind_trace_context(
+                    trace_id=run_id, run_id=run_id, session_id=session_id
+                ):
                     log_event(
                         logger,
                         logging.ERROR,
-                        event='run.failed',
-                        message='Run failed',
+                        event="run.failed",
+                        message="Run failed",
                         exc_info=exc,
                     )
             finally:
                 self._injection_manager.deactivate(run_id)
                 self._run_control_manager.unregister_run_task(run_id)
                 self._running_run_ids.discard(run_id)
-                self._pending_runs.pop(run_id, None)
+                _ = self._pending_runs.pop(run_id, None)
 
         task = asyncio.create_task(_worker())
         self._run_control_manager.register_run_task(
@@ -212,17 +234,17 @@ class RunManager:
             intent = self._pending_runs.pop(run_id)
             session_id = intent.session_id
             if session_id is None:
-                raise RuntimeError(f'Run {run_id} is missing session id')
+                raise RuntimeError(f"Run {run_id} is missing session id")
             self._run_control_manager.publish_run_stopped(
                 session_id=session_id,
                 run_id=run_id,
-                reason='stopped_before_start',
+                reason="stopped_before_start",
             )
             return
 
         requested = self._run_control_manager.request_run_stop(run_id)
         if not requested and run_id not in self._running_run_ids:
-            raise KeyError(f'Run {run_id} not found')
+            raise KeyError(f"Run {run_id} not found")
 
     def stop_subagent(self, run_id: str, instance_id: str) -> dict[str, str]:
         return self._run_control_manager.stop_subagent(
@@ -248,10 +270,10 @@ class RunManager:
         run_id: str,
         tool_call_id: str,
         action: str,
-        feedback: str = '',
+        feedback: str = "",
     ) -> None:
-        if action not in {'approve', 'deny'}:
-            raise ValueError(f'Unsupported action: {action}')
+        if action not in {"approve", "deny"}:
+            raise ValueError(f"Unsupported action: {action}")
         self._tool_approval_manager.resolve_approval(
             run_id=run_id,
             tool_call_id=tool_call_id,

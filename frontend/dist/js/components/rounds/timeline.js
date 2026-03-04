@@ -4,6 +4,7 @@
  */
 import { els } from '../../utils/dom.js';
 import { state } from '../../core/state.js';
+import { fetchRunTokenUsage } from '../../core/api.js';
 import { clearAllPanels, setRoundPendingApprovals } from '../agentPanel.js';
 import { clearAllStreamState, renderHistoricalMessageList } from '../messageRenderer.js';
 import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
@@ -142,6 +143,24 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         }
 
         container.appendChild(section);
+
+        // Lazily load token usage for completed (non-live) rounds
+        if (round.run_id !== '__live__' && state.currentSessionId) {
+            const headerEl = header;
+            void fetchRunTokenUsage(state.currentSessionId, round.run_id).then(usage => {
+                if (!usage || usage.total_tokens === 0) return;
+                const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+                const pill = document.createElement('div');
+                pill.className = 'round-token-summary';
+                pill.title = `Input: ${usage.total_input_tokens} | Output: ${usage.total_output_tokens} | Requests: ${usage.total_requests}`;
+                pill.innerHTML = `
+                    <span class="token-in">↑${fmt(usage.total_input_tokens)}</span>
+                    <span class="token-out">↓${fmt(usage.total_output_tokens)}</span>
+                    ${usage.total_tool_calls > 0 ? `<span class="token-tools">🔧${usage.total_tool_calls}</span>` : ''}
+                `;
+                headerEl.appendChild(pill);
+            });
+        }
     });
 
     renderRoundNavigator(rounds, selectRound);

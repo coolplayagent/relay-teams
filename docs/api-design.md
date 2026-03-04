@@ -53,6 +53,7 @@ Common status codes:
 - `run_completed`
 - `run_failed`
 - `awaiting_manual_action`
+- `token_usage`
 
 ---
 
@@ -190,6 +191,57 @@ Lists messages for one agent instance.
 
 ### `GET /sessions/{session_id}/workflows`
 Lists persisted workflow graphs discovered from session tasks.
+
+### `GET /sessions/{session_id}/token-usage`
+Returns aggregated token consumption for the entire session, grouped by `role_id`.
+
+Response:
+```json
+{
+  "session_id": "...",
+  "total_input_tokens": 12345,
+  "total_output_tokens": 3456,
+  "total_tokens": 15801,
+  "total_requests": 10,
+  "total_tool_calls": 7,
+  "by_role": {
+    "coordinator_agent": {
+      "role_id": "coordinator_agent",
+      "input_tokens": 8000,
+      "output_tokens": 2000,
+      "total_tokens": 10000,
+      "requests": 5,
+      "tool_calls": 3
+    }
+  }
+}
+```
+
+### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
+Returns token consumption for a single run, broken down per agent instance.
+
+Response:
+```json
+{
+  "run_id": "...",
+  "total_input_tokens": 5000,
+  "total_output_tokens": 1500,
+  "total_tokens": 6500,
+  "total_requests": 4,
+  "total_tool_calls": 2,
+  "by_agent": [
+    {
+      "instance_id": "...",
+      "role_id": "coordinator_agent",
+      "input_tokens": 3000,
+      "output_tokens": 800,
+      "total_tokens": 3800,
+      "requests": 2,
+      "tool_calls": 1
+    }
+  ]
+}
+```
 
 ---
 

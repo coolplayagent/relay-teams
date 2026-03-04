@@ -137,3 +137,59 @@ def get_session_workflows(
     service: AgentTeamsService = Depends(get_service),
 ) -> list[dict[str, object]]:
     return service.get_session_workflows(session_id)
+
+
+@router.get("/{session_id}/token-usage")
+def get_session_token_usage(
+    session_id: str,
+    service: AgentTeamsService = Depends(get_service),
+) -> dict[str, object]:
+    summary = service.get_token_usage_by_session(session_id)
+    return {
+        'session_id': summary.session_id,
+        'total_input_tokens': summary.total_input_tokens,
+        'total_output_tokens': summary.total_output_tokens,
+        'total_tokens': summary.total_tokens,
+        'total_requests': summary.total_requests,
+        'total_tool_calls': summary.total_tool_calls,
+        'by_role': {
+            role_id: {
+                'role_id': agent.role_id,
+                'input_tokens': agent.input_tokens,
+                'output_tokens': agent.output_tokens,
+                'total_tokens': agent.total_tokens,
+                'requests': agent.requests,
+                'tool_calls': agent.tool_calls,
+            }
+            for role_id, agent in summary.by_role.items()
+        },
+    }
+
+
+@router.get("/{session_id}/runs/{run_id}/token-usage")
+def get_run_token_usage(
+    session_id: str,
+    run_id: str,
+    service: AgentTeamsService = Depends(get_service),
+) -> dict[str, object]:
+    usage = service.get_token_usage_by_run(run_id)
+    return {
+        'run_id': usage.run_id,
+        'total_input_tokens': usage.total_input_tokens,
+        'total_output_tokens': usage.total_output_tokens,
+        'total_tokens': usage.total_tokens,
+        'total_requests': usage.total_requests,
+        'total_tool_calls': usage.total_tool_calls,
+        'by_agent': [
+            {
+                'instance_id': a.instance_id,
+                'role_id': a.role_id,
+                'input_tokens': a.input_tokens,
+                'output_tokens': a.output_tokens,
+                'total_tokens': a.total_tokens,
+                'requests': a.requests,
+                'tool_calls': a.tool_calls,
+            }
+            for a in usage.by_agent
+        ],
+    }

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Callable
+from typing import Callable, cast
 
 from agent_teams.core.enums import RunEventType, ScopeType
-from agent_teams.core.types import JsonObject, JsonValue
+from agent_teams.core.types import JsonObject
 from agent_teams.core.models import ScopeRef
+from agent_teams.state.agent_repo import AgentInstanceRepository
+from agent_teams.state.event_log import EventLog
+from agent_teams.state.shared_store import SharedStore
+from agent_teams.state.task_repo import TaskRepository
 
 
 def collect_pending_tool_approvals(
@@ -33,7 +37,9 @@ def collect_pending_tool_approvals(
                     "tool_name": str(payload.get("tool_name") or ""),
                     "args_preview": str(payload.get("args_preview") or ""),
                     "role_id": str(payload.get("role_id") or ""),
-                    "instance_id": str(payload.get("instance_id") or ev.get("instance_id") or ""),
+                    "instance_id": str(
+                        payload.get("instance_id") or ev.get("instance_id") or ""
+                    ),
                     "requested_at": str(ev.get("occurred_at") or ""),
                     "status": "requested",
                     "feedback": "",
@@ -41,9 +47,13 @@ def collect_pending_tool_approvals(
                 },
             )
             entry["tool_name"] = str(payload.get("tool_name") or entry["tool_name"])
-            entry["args_preview"] = str(payload.get("args_preview") or entry["args_preview"])
+            entry["args_preview"] = str(
+                payload.get("args_preview") or entry["args_preview"]
+            )
             entry["role_id"] = str(payload.get("role_id") or entry["role_id"])
-            entry["instance_id"] = str(payload.get("instance_id") or entry["instance_id"])
+            entry["instance_id"] = str(
+                payload.get("instance_id") or entry["instance_id"]
+            )
             entry["requested_at"] = str(ev.get("occurred_at") or entry["requested_at"])
             entry["status"] = "requested"
         elif event_type == RunEventType.TOOL_APPROVAL_RESOLVED.value:
@@ -100,7 +110,11 @@ def collect_pending_stream_snapshots(
         if not run_id:
             continue
         instance_id = str(msg.get("instance_id") or "")
-        role_id = str(msg.get("role_id") or by_run_instance_role.get(run_id, {}).get(instance_id) or "")
+        role_id = str(
+            msg.get("role_id")
+            or by_run_instance_role.get(run_id, {}).get(instance_id)
+            or ""
+        )
         text = _extract_text_from_message(msg.get("message"))
         if not text:
             continue
@@ -168,13 +182,13 @@ def collect_pending_stream_snapshots(
             continue
 
         if event_type == RunEventType.MODEL_STEP_FINISHED.value:
-            active_steps.pop(state_key, None)
+            _ = active_steps.pop(state_key, None)
             continue
 
         if event_type in terminal_events:
             stale_keys = [key for key in active_steps.keys() if key[0] == run_id]
             for key in stale_keys:
-                active_steps.pop(key, None)
+                _ = active_steps.pop(key, None)
 
     snapshots: dict[str, JsonObject] = {}
     for state in active_steps.values():
@@ -256,7 +270,7 @@ def _subtract_persisted_text(pending_text: str, persisted_text: str) -> str:
     if not persisted.strip():
         return pending
     if pending.startswith(persisted):
-        delta = pending[len(persisted):]
+        delta = pending[len(persisted) :]
         return delta if delta.strip() else ""
 
     pending_norm = _normalize_text(pending)
@@ -281,18 +295,21 @@ def _subtract_persisted_text(pending_text: str, persisted_text: str) -> str:
 def build_session_rounds(
     *,
     session_id: str,
-    event_log,
-    agent_repo,
-    task_repo,
-    shared_store,
+    event_log: EventLog,
+    agent_repo: AgentInstanceRepository,
+    task_repo: TaskRepository,
+    shared_store: SharedStore,
     get_session_messages: Callable[[str], list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     events = event_log.list_by_session(session_id)
-    parsed_events: list[tuple[dict[str, object], dict[str, object]]] = []
+    parsed_events: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
     for ev in events:
         try:
-            payload = json.loads(ev["payload_json"])
-            if not isinstance(payload, dict):
+            payload_json: str = cast(str, ev["payload_json"])
+            payload_obj: object = json.loads(payload_json)
+            if isinstance(payload_obj, dict):
+                payload = payload_obj
+            else:
                 payload = {}
         except Exception:
             payload = {}
@@ -316,9 +333,9 @@ def build_session_rounds(
 
     for rec in agent_repo.list_by_session(session_id):
         run_map = by_run_instance_role.setdefault(rec.run_id, {})
-        run_map.setdefault(rec.instance_id, rec.role_id)
+        _ = run_map.setdefault(rec.instance_id, rec.role_id)
         role_map = by_run_role_instance.setdefault(rec.run_id, {})
-        role_map.setdefault(rec.role_id, rec.instance_id)
+        _ = role_map.setdefault(rec.role_id, rec.instance_id)
 
     messages = get_session_messages(session_id)
     for msg in messages:
@@ -361,7 +378,9 @@ def build_session_rounds(
                 "instance_role_map": by_run_instance_role.get(run_id, {}),
                 "role_instance_map": by_run_role_instance.get(run_id, {}),
             }
-        if ev["occurred_at"] < rounds_map[run_id]["created_at"]:
+        occurred_at: str = cast(str, ev["occurred_at"])
+        created_at: str = cast(str, rounds_map[run_id]["created_at"])
+        if occurred_at < created_at:
             rounds_map[run_id]["created_at"] = ev["occurred_at"]
 
     for msg in messages:
@@ -373,7 +392,9 @@ def build_session_rounds(
             continue
         instance_id = msg.get("instance_id")
         instance_key = instance_id if isinstance(instance_id, str) else ""
-        role_id = msg.get("role_id") or by_run_instance_role.get(run_id, {}).get(instance_key)
+        role_id = msg.get("role_id") or by_run_instance_role.get(run_id, {}).get(
+            instance_key
+        )
         msg["role_id"] = role_id
 
         if msg.get("role") == "user":
