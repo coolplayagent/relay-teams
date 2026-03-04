@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
+
+from agent_teams.runtime.logging import get_logger, log_event
 
 _DEBUG_ENABLED = False
 _OPEN_MODEL_STREAM_ROLE_ID: str | None = None
+logger = get_logger(__name__)
 
 ROLE_LABELS = {
     'coordinator_agent': 'Coordinator Agent',
@@ -33,31 +37,57 @@ def log_debug(message: str) -> None:
     if _DEBUG_ENABLED:
         close_model_stream()
         print(message)
+    log_event(logger, logging.DEBUG, event='runtime.debug', message=message)
 
 
 def log_model_output(role_id: str, message: str) -> None:
     close_model_stream()
-    print(f'[{role_label(role_id)}] {message}')
+    if _DEBUG_ENABLED:
+        print(f'[{role_label(role_id)}] {message}')
+    log_event(
+        logger,
+        logging.INFO,
+        event='model.output',
+        message='Model output emitted',
+        payload={'role_id': role_id, 'output': _safe_json(message)},
+    )
 
 
 def log_tool_call(role_id: str, tool_name: str, params: dict[str, object]) -> None:
     close_model_stream()
     short = _safe_json(params)
-    print(f'[{role_label(role_id)}] tool call [{tool_name} {short}]')
+    if _DEBUG_ENABLED:
+        print(f'[{role_label(role_id)}] tool call [{tool_name} {short}]')
+    log_event(
+        logger,
+        logging.INFO,
+        event='tool.call.started',
+        message='Tool call started',
+        payload={'role_id': role_id, 'tool_name': tool_name, 'params': short},
+    )
 
 
 def log_tool_error(role_id: str, payload: str) -> None:
     close_model_stream()
-    print(f'[{role_label(role_id)}] tool error {payload}')
+    if _DEBUG_ENABLED:
+        print(f'[{role_label(role_id)}] tool error {payload}')
+    log_event(
+        logger,
+        logging.ERROR,
+        event='tool.call.failed',
+        message='Tool call failed',
+        payload={'role_id': role_id, 'detail': payload},
+    )
 
 
 def log_model_stream_chunk(role_id: str, text: str) -> None:
     global _OPEN_MODEL_STREAM_ROLE_ID
-    if _OPEN_MODEL_STREAM_ROLE_ID != role_id:
-        close_model_stream()
-        print(f'[{role_label(role_id)}] ', end='', flush=True)
-        _OPEN_MODEL_STREAM_ROLE_ID = role_id
-    print(text, end='', flush=True)
+    if _DEBUG_ENABLED:
+        if _OPEN_MODEL_STREAM_ROLE_ID != role_id:
+            close_model_stream()
+            print(f'[{role_label(role_id)}] ', end='', flush=True)
+            _OPEN_MODEL_STREAM_ROLE_ID = role_id
+        print(text, end='', flush=True)
 
 
 def close_model_stream() -> None:

@@ -20,6 +20,9 @@
 ```json
 {"detail": "error message"}
 ```
+- 追踪头：
+  - 请求可选携带 `X-Request-Id` 与 `X-Trace-Id`；
+  - 服务端会在响应头回传 `X-Request-Id` / `X-Trace-Id` 便于端到端排障。
 
 常见状态码：
 
@@ -118,6 +121,10 @@
 
 - `GET /roles`
 - `POST /roles:validate`
+
+### 4.6 Logs
+
+- `POST /logs/frontend`（前端日志批量上报）
 
 ## 5. 关键流程
 
@@ -327,3 +334,30 @@ Semantics:
 - `coordinator_instance_id`: coordinator instance id if available.
 - `by_instance`: unpersisted stream deltas keyed by subagent instance id.
 - Empty strings/maps mean no pending stream delta should be rendered.
+
+
+### 5.7 前端日志上报
+
+请求：
+```http
+POST /api/logs/frontend
+Content-Type: application/json
+
+{
+  "events": [
+    {
+      "level": "error",
+      "event": "sse.disconnect",
+      "message": "event stream disconnected unexpectedly",
+      "trace_id": "trace_xxx",
+      "run_id": "run_xxx",
+      "payload": {"ready_state": 2}
+    }
+  ]
+}
+```
+
+响应：
+```json
+{"accepted": 1}
+```

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from json import dumps
+import logging
 from typing import Callable, cast
 
 from agent_teams.core.enums import InjectionSource, RunEventType
@@ -9,9 +10,13 @@ from agent_teams.core.ids import new_trace_id
 from agent_teams.core.models import IntentInput, RunEvent, RunResult
 from agent_teams.runtime.gate_manager import GateManager
 from agent_teams.runtime.injection_manager import RunInjectionManager
+from agent_teams.runtime.logging import get_logger, log_event
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalAction, ToolApprovalManager
+from agent_teams.runtime.trace import bind_trace_context
+
+logger = get_logger(__name__)
 
 
 class RunManager:
@@ -43,11 +48,21 @@ class RunManager:
         intent.session_id = ensure_session(intent.session_id)
         self._run_control_manager.assert_session_allows_main_input(intent.session_id)
         run_id = new_trace_id().value
-        self._injection_manager.activate(run_id)
-        try:
-            return await self._meta_agent.handle_intent(intent, trace_id=run_id)
-        finally:
-            self._injection_manager.deactivate(run_id)
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+            log_event(logger, logging.INFO, event='run.started.direct', message='Direct run started')
+            self._injection_manager.activate(run_id)
+            try:
+                result = await self._meta_agent.handle_intent(intent, trace_id=run_id)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event='run.completed.direct',
+                    message='Direct run completed',
+                    payload={'root_task_id': result.root_task_id},
+                )
+                return result
+            finally:
+                self._injection_manager.deactivate(run_id)
 
     def create_run(
         self,
@@ -59,6 +74,8 @@ class RunManager:
         self._run_control_manager.assert_session_allows_main_input(intent.session_id)
         run_id = new_trace_id().value
         self._pending_runs[run_id] = intent
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+            log_event(logger, logging.INFO, event='run.queued', message='Run queued for streaming execution')
         return run_id, intent.session_id
 
     def ensure_run_started(self, run_id: str) -> None:
@@ -70,6 +87,8 @@ class RunManager:
 
         self._running_run_ids.add(run_id)
         self._injection_manager.activate(run_id)
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+            log_event(logger, logging.INFO, event='run.started', message='Run worker started')
         self._run_event_hub.publish(
             RunEvent(
                 session_id=intent.session_id,
@@ -94,12 +113,28 @@ class RunManager:
                         payload_json=dumps(result.model_dump()),
                     )
                 )
+                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event='run.completed',
+                        message='Run completed',
+                        payload={'root_task_id': result.root_task_id},
+                    )
             except asyncio.CancelledError:
                 self._run_control_manager.publish_run_stopped(
                     session_id=intent.session_id,
                     run_id=run_id,
                     reason='stopped_by_user',
                 )
+                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event='run.stopped',
+                        message='Run cancelled',
+                        payload={'reason': 'stopped_by_user'},
+                    )
             except Exception as exc:
                 self._run_event_hub.publish(
                     RunEvent(
@@ -111,6 +146,14 @@ class RunManager:
                         payload_json=dumps({'error': str(exc)}),
                     )
                 )
+                with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=intent.session_id):
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        event='run.failed',
+                        message='Run failed',
+                        exc_info=exc,
+                    )
             finally:
                 self._injection_manager.deactivate(run_id)
                 self._run_control_manager.unregister_run_task(run_id)

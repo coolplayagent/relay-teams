@@ -4,7 +4,7 @@
 
 每次建立连接时均执行 `PRAGMA foreign_keys = ON`，启用外键约束。
 
-共有 **6 张表**，各司其职：
+共有 **7 张表**，各司其职：
 
 | 表名 | 所在模块 | 职责 |
 |---|---|---|
@@ -14,6 +14,7 @@
 | `shared_state` | `state/shared_store.py` | 跨 agent 的共享 KV 状态 |
 | `events` | `state/event_log.py` | 业务事件流水（append-only） |
 | `messages` | `state/message_repo.py` | LLM 对话消息历史（append-only） |
+| `system_logs` | `state/log_repo.py` | 结构化系统日志持久化（append-only） |
 
 ---
 
@@ -204,6 +205,54 @@ CREATE INDEX idx_events_session ON events(session_id)
 | `instance_recycled` | 空闲实例被回收清理 |
 | `verification_passed` | 任务验收通过 |
 | `verification_failed` | 任务验收未通过 |
+
+---
+
+
+## `system_logs`
+
+结构化运行日志的 **append-only 持久化表**，用于跨进程排障和按 `trace_id/run_id/request_id` 检索。由 `state/log_repo.py` 管理，日志由 `runtime/log_persistence.py` 异步批量写入。
+
+```sql
+CREATE TABLE IF NOT EXISTS system_logs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,
+    level         TEXT NOT NULL,
+    event         TEXT,
+    trace_id      TEXT,
+    request_id    TEXT,
+    session_id    TEXT,
+    run_id        TEXT,
+    task_id       TEXT,
+    instance_id   TEXT,
+    logger        TEXT,
+    message       TEXT NOT NULL,
+    payload_json  TEXT,
+    error_json    TEXT,
+    raw_json      TEXT NOT NULL
+)
+CREATE INDEX idx_system_logs_ts      ON system_logs(ts)
+CREATE INDEX idx_system_logs_level   ON system_logs(level)
+CREATE INDEX idx_system_logs_event   ON system_logs(event)
+CREATE INDEX idx_system_logs_trace   ON system_logs(trace_id)
+CREATE INDEX idx_system_logs_run     ON system_logs(run_id)
+CREATE INDEX idx_system_logs_request ON system_logs(request_id)
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | INTEGER (PK) | 自增主键，保证写入顺序。 |
+| `ts` | TEXT | 日志时间戳（ISO 8601 UTC）。 |
+| `level` | TEXT | 日志级别（DEBUG/INFO/WARNING/ERROR）。 |
+| `event` | TEXT (nullable) | 结构化事件名（如 `run.created`）。 |
+| `trace_id` | TEXT (nullable) | 端到端链路 ID。 |
+| `request_id` | TEXT (nullable) | HTTP 请求 ID。 |
+| `session_id/run_id/task_id/instance_id` | TEXT (nullable) | 业务上下文字段。 |
+| `logger` | TEXT | logger 名称。 |
+| `message` | TEXT | 可读消息摘要。 |
+| `payload_json` | TEXT (nullable) | 结构化 payload。 |
+| `error_json` | TEXT (nullable) | 异常结构（type/message/stack）。 |
+| `raw_json` | TEXT | 原始完整 JSON 日志，便于二次解析。 |
 
 ---
 
