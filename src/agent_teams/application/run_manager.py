@@ -9,8 +9,8 @@ from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.core.enums import InjectionSource, RunEventType
 from agent_teams.core.ids import new_trace_id
 from agent_teams.core.models import IntentInput, RunEvent, RunResult
+from agent_teams.logger import get_logger, log_event
 from agent_teams.runtime.injection_manager import RunInjectionManager
-from agent_teams.runtime.logging import get_logger, log_event
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import (

@@ -1,36 +1,45 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass
+import logging
 from json import dumps
 from pathlib import Path
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Protocol, cast, final, override
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import ModelEndpointConfig, RunEvent
-from agent_teams.runtime.console import (
+from agent_teams.core.types import JsonValue
+from agent_teams.state.event_log import EventLog
+from agent_teams.logger import (
     close_model_stream,
-    is_debug,
-    log_debug,
+    get_logger,
+    log_event,
     log_model_output,
     log_model_stream_chunk,
 )
+from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.message_repo import MessageRepository
+from agent_teams.state.shared_store import SharedStore
+from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.builders.collaboration_agent import build_collaboration_agent
 from agent_teams.tools.policy import ToolApprovalPolicy
@@ -42,6 +51,17 @@ from agent_teams.skills.registry import SkillRegistry
 if TYPE_CHECKING:
     from agent_teams.coordination.task_execution_service import TaskExecutionService
     from agent_teams.roles.registry import RoleRegistry
+
+LOGGER = get_logger(__name__)
+
+
+class _AgentRunResult(Protocol):
+    @property
+    def response(self) -> object: ...
+
+    def new_messages(self) -> Sequence[ModelMessage]: ...
+
+    def usage(self) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -57,7 +77,7 @@ class LLMRequest:
 
 
 class LLMProvider:
-    async def generate(self, request: LLMRequest) -> str:
+    async def generate(self, _request: LLMRequest) -> str:
         raise NotImplementedError
 
 
@@ -67,15 +87,16 @@ class EchoProvider(LLMProvider):
         return f"ECHO: {request.user_prompt}"
 
 
+@final
 class OpenAICompatibleProvider(LLMProvider):
     def __init__(
         self,
         config: ModelEndpointConfig,
         *,
-        task_repo,
-        instance_pool,
-        shared_store,
-        event_bus,
+        task_repo: TaskRepository,
+        instance_pool: InstancePool,
+        shared_store: SharedStore,
+        event_bus: EventLog,
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
         agent_repo: AgentInstanceRepository,
@@ -123,11 +144,15 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def _generate_async(self, request: LLMRequest) -> str:
         tool_rules = f"Available tools: {', '.join(self._allowed_tools)}."
-        if is_debug():
-            log_debug(
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message=(
                 f"[llm:start] role={request.role_id} run={request.run_id} "
                 f"task={request.task_id} instance={request.instance_id}"
-            )
+            ),
+        )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=request.session_id,
@@ -188,10 +213,12 @@ class OpenAICompatibleProvider(LLMProvider):
 
         printed_any = False
         emitted_text_chunks: list[str] = []
-        history = self._message_repo.get_history(request.instance_id)
+        history: list[ModelRequest | ModelResponse] = self._filter_model_messages(
+            self._message_repo.get_history(request.instance_id)
+        )
         saved_count = 0
         restarted = False
-        result = None
+        result: _AgentRunResult | None = None
         is_first_iteration = True
         request_level_input_tokens = 0
         request_level_output_tokens = 0
@@ -217,12 +244,7 @@ class OpenAICompatibleProvider(LLMProvider):
                             async for text_delta in stream.stream_text(delta=True):
                                 control_ctx.raise_if_cancelled()
                                 if text_delta:
-                                    if is_debug():
-                                        print(text_delta, end="", flush=True)
-                                    else:
-                                        log_model_stream_chunk(
-                                            request.role_id, text_delta
-                                        )
+                                    log_model_stream_chunk(request.role_id, text_delta)
                                     printed_any = True
                                     emitted_text_chunks.append(text_delta)
                                     self._run_event_hub.publish(
@@ -286,8 +308,6 @@ class OpenAICompatibleProvider(LLMProvider):
                         request.run_id, request.instance_id
                     )
                     if injections:
-                        from pydantic_ai.messages import ModelRequest, UserPromptPart
-
                         extra = [
                             ModelRequest(parts=[UserPromptPart(content=msg.content)])
                             for msg in injections
@@ -306,16 +326,19 @@ class OpenAICompatibleProvider(LLMProvider):
                                 )
                             )
                         # Restart iter() with injected messages appended to history
-                        history = list(agent_run.new_messages()) + extra
+                        history = self._filter_model_messages(
+                            list(agent_run.new_messages()) + extra
+                        )
                         saved_count = len(history) - len(extra)
                         restarted = True
                         break  # break inner for-loop, restart while
 
             if not restarted:
                 # Normal completion
-                result = agent_run.result
-                if result is None:
+                maybe_result = agent_run.result
+                if maybe_result is None:
                     raise RuntimeError("Model run finished without a result object")
+                result = maybe_result
                 # Flush any remaining messages (e.g. final tool results)
                 all_new = result.new_messages()
                 to_save = list(all_new)[saved_count:]
@@ -357,25 +380,24 @@ class OpenAICompatibleProvider(LLMProvider):
                         instance_id=request.instance_id,
                         role_id=request.role_id,
                         event_type=RunEventType.TOKEN_USAGE,
-                        payload_json=dumps({
-                            'input_tokens': input_tokens,
-                            'output_tokens': output_tokens,
-                            'total_tokens': input_tokens + output_tokens,
-                            'requests': requests,
-                            'tool_calls': tool_calls,
-                            'role_id': request.role_id,
-                            'instance_id': request.instance_id,
-                        }),
+                        payload_json=dumps(
+                            {
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": input_tokens + output_tokens,
+                                "requests": requests,
+                                "tool_calls": tool_calls,
+                                "role_id": request.role_id,
+                                "instance_id": request.instance_id,
+                            }
+                        ),
                     )
                 )
                 break  # done
 
-        if result is None:
-            raise RuntimeError("Model run completed without a result")
+        assert result is not None
 
-        if printed_any and is_debug():
-            print()
-        if printed_any and not is_debug():
+        if printed_any:
             close_model_stream()
 
         text = self._extract_text(result.response)
@@ -416,11 +438,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 ),
             )
         )
-        if is_debug():
-            log_debug(
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message=(
                 f"[llm:done] role={request.role_id} run={request.run_id} "
                 f"task={request.task_id} chars={len(text)}"
-            )
+            ),
+        )
         return text
 
     def _usage_field_int(self, usage_obj: object, field_name: str) -> int:
@@ -433,7 +459,9 @@ class OpenAICompatibleProvider(LLMProvider):
             return max(0, int(value))
         return 0
 
-    def _usage_delta_int(self, *, after: object, before: object, field_name: str) -> int:
+    def _usage_delta_int(
+        self, *, after: object, before: object, field_name: str
+    ) -> int:
         after_value = self._usage_field_int(after, field_name)
         before_value = self._usage_field_int(before, field_name)
         delta = after_value - before_value
@@ -443,7 +471,7 @@ class OpenAICompatibleProvider(LLMProvider):
         parts = getattr(response, "parts", None)
         if isinstance(parts, list):
             texts: list[str] = []
-            for part in parts:
+            for part in cast(list[object], parts):
                 content = getattr(part, "content", None)
                 if isinstance(content, str) and content:
                     texts.append(content)
@@ -452,12 +480,15 @@ class OpenAICompatibleProvider(LLMProvider):
         return str(response)
 
     def _to_json(self, obj: object) -> str:
-        import json
-
         try:
             return json.dumps(obj, ensure_ascii=False, default=str)
         except Exception:
             return json.dumps({"error": "unserializable", "repr": str(obj)})
+
+    def _filter_model_messages(
+        self, messages: Sequence[ModelRequest | ModelResponse]
+    ) -> list[ModelRequest | ModelResponse]:
+        return list(messages)
 
     def _publish_tool_events_from_messages(
         self,
@@ -490,14 +521,16 @@ class OpenAICompatibleProvider(LLMProvider):
                             ),
                         )
                     )
-            elif isinstance(msg, ModelRequest):
+            else:
                 for part in msg.parts:
                     if isinstance(part, ToolReturnPart):
-                        result_payload = part.content
-                        is_error = bool(
-                            isinstance(result_payload, dict)
-                            and result_payload.get("ok") is False
+                        result_payload = self._to_json_compatible(
+                            cast(object, part.content)
                         )
+                        is_error = False
+                        if isinstance(result_payload, dict):
+                            payload_map = cast(dict[str, object], result_payload)
+                            is_error = payload_map.get("ok") is False
                         self._run_event_hub.publish(
                             RunEvent(
                                 session_id=request.session_id,
@@ -509,8 +542,12 @@ class OpenAICompatibleProvider(LLMProvider):
                                 event_type=RunEventType.TOOL_RESULT,
                                 payload_json=self._to_json(
                                     {
-                                        "tool_name": part.tool_name,
-                                        "tool_call_id": part.tool_call_id,
+                                        "tool_name": str(part.tool_name),
+                                        "tool_call_id": (
+                                            str(part.tool_call_id)
+                                            if part.tool_call_id
+                                            else ""
+                                        ),
                                         "result": result_payload,
                                         "error": is_error,
                                         "role_id": request.role_id,
@@ -541,3 +578,17 @@ class OpenAICompatibleProvider(LLMProvider):
                                 ),
                             )
                         )
+
+    def _to_json_compatible(self, value: object) -> JsonValue:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, list):
+            entries = cast(list[object], value)
+            return [self._to_json_compatible(entry) for entry in entries]
+        if isinstance(value, dict):
+            entries = cast(dict[object, object], value)
+            return {
+                str(key): self._to_json_compatible(entry)
+                for key, entry in entries.items()
+            }
+        return str(value)

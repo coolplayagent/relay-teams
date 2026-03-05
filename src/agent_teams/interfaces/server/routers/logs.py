@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.core.types import JsonObject
-from agent_teams.runtime.logging import get_logger, log_event
+from agent_teams.logger import get_logger, log_event
 from agent_teams.runtime.trace import bind_trace_context, generate_trace_id
 
-router = APIRouter(prefix='/logs', tags=['Logs'])
+router = APIRouter(prefix="/logs", tags=["Logs"])
 logger = get_logger(__name__)
 
 
 class FrontendLogEvent(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    level: str = Field(pattern='^(debug|info|warn|error)$')
+    level: str = Field(pattern="^(debug|info|warn|error)$")
     event: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=2000)
     trace_id: str | None = None
@@ -32,12 +33,12 @@ class FrontendLogEvent(BaseModel):
 
 
 class FrontendLogBatchRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     events: list[FrontendLogEvent] = Field(min_length=1, max_length=200)
 
 
-@router.post('/frontend')
+@router.post("/frontend")
 def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
     accepted = 0
     for item in req.events:
@@ -53,19 +54,19 @@ def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
             log_event(
                 logger,
                 _to_level(item.level),
-                event=f'frontend.{item.event}',
+                event=f"frontend.{item.event}",
                 message=item.message,
-                payload={'frontend_ts': item.ts.isoformat(), **item.payload},
+                payload={"frontend_ts": item.ts.isoformat(), **item.payload},
             )
             accepted += 1
-    return {'accepted': accepted}
+    return {"accepted": accepted}
 
 
 def _to_level(level: str) -> int:
     table = {
-        'debug': logging.DEBUG,
-        'info': logging.INFO,
-        'warn': logging.WARNING,
-        'error': logging.ERROR,
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warn": logging.WARNING,
+        "error": logging.ERROR,
     }
     return table[level]

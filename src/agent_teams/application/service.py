@@ -46,7 +46,6 @@ from agent_teams.application.rounds_projection import (
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.providers.llm import LLMProvider
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.runtime.console import set_debug
 from agent_teams.runtime.gate_manager import GateManager
 from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_control_manager import RunControlManager
@@ -59,7 +58,11 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.token_usage_repo import TokenUsageRepository, RunTokenUsage, SessionTokenUsage
+from agent_teams.state.token_usage_repo import (
+    TokenUsageRepository,
+    RunTokenUsage,
+    SessionTokenUsage,
+)
 from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workflow.spec import WorkflowSpec
@@ -79,7 +82,7 @@ class AgentTeamsService:
     ) -> None:
         if config_dir is None:
             config_dir = _get_project_root() / ".agent_teams"
-        set_debug(debug)
+        _ = debug
         components = build_service_components(
             config_dir=config_dir,
             roles_dir=roles_dir,

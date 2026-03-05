@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -13,20 +14,19 @@ from agent_teams.core.models import (
     ScopeRef,
     TaskEnvelope,
 )
-from agent_teams.state.event_log import EventLog
+from agent_teams.logger import get_logger, log_event
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.runtime.console import log_debug
+from agent_teams.runtime.injection_manager import RunInjectionManager
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
+from agent_teams.state.event_log import EventLog
+from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 
 ROLE_COORDINATOR = "coordinator_agent"
-
-
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.runtime.injection_manager import RunInjectionManager
+LOGGER = get_logger(__name__)
 
 
 @dataclass
@@ -70,15 +70,18 @@ class TaskExecutionService:
     async def _execute_inner(
         self, *, instance_id: str, role_id: str, task: TaskEnvelope
     ) -> str:
-        log_debug(
-            "[subagent:start] run="
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message="[subagent:start] run="
             + task.trace_id
             + " task="
             + task.task_id
             + " instance="
             + instance_id
             + " role="
-            + role_id
+            + role_id,
         )
         _ = self.instance_pool.mark_running(instance_id)
         _ = self.agent_repo.mark_status(instance_id, InstanceStatus.RUNNING)
@@ -128,15 +131,18 @@ class TaskExecutionService:
                     payload_json="{}",
                 )
             )
-            log_debug(
-                "[subagent:done] run="
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message="[subagent:done] run="
                 + task.trace_id
                 + " task="
                 + task.task_id
                 + " instance="
                 + instance_id
                 + " role="
-                + role_id
+                + role_id,
             )
             return result
         except asyncio.CancelledError:
@@ -152,7 +158,7 @@ class TaskExecutionService:
                     TaskStatus.FAILED,
                     error_message="Task cancelled",
                 )
-                self.instance_pool.mark_failed(instance_id)
+                _ = self.instance_pool.mark_failed(instance_id)
                 self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
                 self.event_bus.emit(
                     EventEnvelope(
@@ -164,8 +170,11 @@ class TaskExecutionService:
                         payload_json="{}",
                     )
                 )
-            log_debug(
-                "[subagent:"
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message="[subagent:"
                 + ("stopped" if stopped else "cancelled")
                 + "] run="
                 + task.trace_id
@@ -174,7 +183,7 @@ class TaskExecutionService:
                 + " instance="
                 + instance_id
                 + " role="
-                + role_id
+                + role_id,
             )
             raise
         except TimeoutError:
@@ -193,15 +202,18 @@ class TaskExecutionService:
                     payload_json="{}",
                 )
             )
-            log_debug(
-                "[subagent:timeout] run="
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message="[subagent:timeout] run="
                 + task.trace_id
                 + " task="
                 + task.task_id
                 + " instance="
                 + instance_id
                 + " role="
-                + role_id
+                + role_id,
             )
             raise
         except Exception as exc:
@@ -220,8 +232,13 @@ class TaskExecutionService:
                     payload_json="{}",
                 )
             )
-            log_debug(
-                f"[subagent:error] run={task.trace_id} task={task.task_id} "
-                f"instance={instance_id} role={role_id} err={exc}"
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message=(
+                    f"[subagent:error] run={task.trace_id} task={task.task_id} "
+                    f"instance={instance_id} role={role_id} err={exc}"
+                ),
             )
             raise

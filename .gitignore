@@ -12,6 +12,9 @@ coverage.json
 .agent_teams/*.db
 .agent_teams/*.db-journal
 .agent_teams/model.json
+.agent_teams/logs
+.agent_teams/skills
+.agent_teams/mcp.json
 
 tmp.db
 tmp.db-journal

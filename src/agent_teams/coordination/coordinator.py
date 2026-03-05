@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from json import dumps
 from typing import Callable, Literal
@@ -28,7 +29,7 @@ from agent_teams.state.event_log import EventLog
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.providers.llm import LLMProvider
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.runtime.console import log_debug
+from agent_teams.logger import get_logger, log_event
 from agent_teams.runtime.gate_manager import GateManager
 from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
@@ -38,6 +39,7 @@ from agent_teams.state.task_repo import TaskRepository
 
 ROLE_COORDINATOR = "coordinator_agent"
 MAX_ORCHESTRATION_CYCLES = 8
+LOGGER = get_logger(__name__)
 
 
 @dataclass
@@ -66,15 +68,18 @@ class CoordinatorGraph:
             raise ValueError(
                 "IntentInput.session_id is required before coordinator run"
             )
-        log_debug(
-            "[coord:start] run="
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message="[coord:start] run="
             + trace_id
             + " mode="
             + intent.execution_mode.value
             + " session="
             + session_id
             + " intent="
-            + intent.intent[:120]
+            + intent.intent[:120],
         )
 
         root_task = TaskEnvelope(
@@ -99,7 +104,7 @@ class CoordinatorGraph:
         mode = intent.execution_mode
         if mode == ExecutionMode.MANUAL:
             result = self._initialize_manual_mode(
-                intent=intent, trace_id=trace_id, root_task=root_task
+                trace_id=trace_id, root_task=root_task
             )
         elif mode == ExecutionMode.AI:
             coordinator_instance_id = self._ensure_coordinator_instance(
@@ -119,14 +124,18 @@ class CoordinatorGraph:
         status: Literal["completed", "failed"] = (
             "completed" if verification.passed else "failed"
         )
-        log_debug(
-            f"[coord:finish] run={trace_id} mode={mode.value} status={status} root_task={root_task.task_id}"
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message=(
+                f"[coord:finish] run={trace_id} mode={mode.value} "
+                f"status={status} root_task={root_task.task_id}"
+            ),
         )
         return trace_id, root_task.task_id, status, result
 
-    def _initialize_manual_mode(
-        self, *, intent: IntentInput, trace_id: str, root_task: TaskEnvelope
-    ) -> str:
+    def _initialize_manual_mode(self, *, trace_id: str, root_task: TaskEnvelope) -> str:
         result = (
             "Manual orchestration initialized. Use workflow APIs or tools to create a workflow and "
             'drive dispatch_tasks(action="revise"|"next").'
@@ -168,19 +177,35 @@ class CoordinatorGraph:
             role_id=ROLE_COORDINATOR,
             task=root_task,
         )
-        log_debug(f"[coord:ai:first-pass-done] run={trace_id}")
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message=f"[coord:ai:first-pass-done] run={trace_id}",
+        )
 
         cycle = 0
         while cycle < MAX_ORCHESTRATION_CYCLES:
             cycle += 1
-            log_debug(f"[coord:ai:cycle] run={trace_id} cycle={cycle}")
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message=f"[coord:ai:cycle] run={trace_id} cycle={cycle}",
+            )
             ran_any = await self._run_pending_delegated_tasks(
                 trace_id=trace_id,
                 root_task_id=root_task.task_id,
             )
             if not ran_any:
-                log_debug(
-                    f"[coord:ai:cycle-stop] run={trace_id} cycle={cycle} reason=no-pending-subtasks"
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="runtime.debug",
+                    message=(
+                        f"[coord:ai:cycle-stop] run={trace_id} cycle={cycle} "
+                        "reason=no-pending-subtasks"
+                    ),
                 )
                 break
             coordinator_result = await self._task_executor(
@@ -188,7 +213,12 @@ class CoordinatorGraph:
                 role_id=ROLE_COORDINATOR,
                 task=root_task,
             )
-            log_debug(f"[coord:ai:cycle-pass-done] run={trace_id} cycle={cycle}")
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message=f"[coord:ai:cycle-pass-done] run={trace_id} cycle={cycle}",
+            )
 
         return coordinator_result
 
@@ -232,7 +262,7 @@ class CoordinatorGraph:
                 )
                 continue
             try:
-                await self._task_executor(
+                _ = await self._task_executor(
                     instance_id=instance.instance_id,
                     role_id=instance.role_id,
                     task=task,
@@ -259,8 +289,10 @@ class CoordinatorGraph:
         known_ids = {i.instance_id for i in self.instance_pool.list_instances()}
         if existing_instance_id and existing_instance_id in known_ids:
             coordinator_instance_id = existing_instance_id
-            self.instance_pool.mark_idle(coordinator_instance_id)
-            self.agent_repo.mark_status(coordinator_instance_id, InstanceStatus.IDLE)
+            _ = self.instance_pool.mark_idle(coordinator_instance_id)
+            _ = self.agent_repo.mark_status(
+                coordinator_instance_id, InstanceStatus.IDLE
+            )
             self.task_repo.update_status(
                 task_id=root_task.task_id,
                 status=TaskStatus.ASSIGNED,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from json import dumps
@@ -12,9 +13,11 @@ from uuid import uuid4
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.types import JsonObject, JsonValue
 from agent_teams.core.models import RunEvent
-from agent_teams.runtime.console import is_debug, log_debug, log_tool_call, log_tool_error
+from agent_teams.logger import get_logger, log_event, log_tool_call, log_tool_error
 from agent_teams.tools.models import ToolError, ToolResultEnvelope
 from agent_teams.tools.runtime import ToolContext
+
+LOGGER = get_logger(__name__)
 
 
 async def execute_tool(
@@ -32,10 +35,16 @@ async def execute_tool(
     return envelope, and error normalization.
     """
     started = time.perf_counter()
-    if is_debug():
-        log_debug(
-            f'[tool:start] tool={tool_name} run={ctx.deps.run_id} '
-            f'task={ctx.deps.task_id} instance={ctx.deps.instance_id} args={_safe_json(args_summary)}'
+    if LOGGER.isEnabledFor(logging.DEBUG):
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="runtime.debug",
+            message=(
+                f"[tool:start] tool={tool_name} run={ctx.deps.run_id} "
+                f"task={ctx.deps.task_id} instance={ctx.deps.instance_id} "
+                f"args={_safe_json(args_summary)}"
+            ),
         )
     else:
         log_tool_call(ctx.deps.role_id, tool_name, args_summary)
@@ -50,7 +59,7 @@ async def execute_tool(
     )
     if approval_error is not None:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        meta['duration_ms'] = elapsed_ms
+        meta["duration_ms"] = elapsed_ms
         return _envelope(
             ok=False,
             tool_name=tool_name,
@@ -71,10 +80,15 @@ async def execute_tool(
         normalized_result = _normalize_json_value(result)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        meta['duration_ms'] = elapsed_ms
+        meta["duration_ms"] = elapsed_ms
 
-        if is_debug():
-            log_debug(f'[tool:ok] tool={tool_name} elapsed_ms={elapsed_ms}')
+        if LOGGER.isEnabledFor(logging.DEBUG):
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message=f"[tool:ok] tool={tool_name} elapsed_ms={elapsed_ms}",
+            )
 
         return _envelope(
             ok=True,
@@ -84,20 +98,25 @@ async def execute_tool(
         )
     except Exception as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        meta['duration_ms'] = elapsed_ms
+        meta["duration_ms"] = elapsed_ms
         error = _error_payload(exc)
 
-        if is_debug():
-            log_debug(
-                f'[tool:error] tool={tool_name} elapsed_ms={elapsed_ms} '
-                f'err_type={error.type} msg={error.message}'
+        if LOGGER.isEnabledFor(logging.DEBUG):
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="runtime.debug",
+                message=(
+                    f"[tool:error] tool={tool_name} elapsed_ms={elapsed_ms} "
+                    f"err_type={error.type} msg={error.message}"
+                ),
             )
         else:
             compact = json.dumps(
                 {
-                    'tool': tool_name,
-                    'type': error.type,
-                    'message': error.message,
+                    "tool": tool_name,
+                    "type": error.type,
+                    "message": error.message,
                 },
                 ensure_ascii=False,
             )
@@ -111,24 +130,24 @@ async def execute_tool(
 
 
 def _error_payload(exc: Exception) -> ToolError:
-    err_type = 'internal_error'
+    err_type = "internal_error"
     retryable = False
-    suggested_fix: str | None = 'Retry with corrected tool parameters.'
+    suggested_fix: str | None = "Retry with corrected tool parameters."
     message = str(exc) or exc.__class__.__name__
 
     if isinstance(exc, ValueError):
-        err_type = 'validation_error'
+        err_type = "validation_error"
         retryable = True
-        if 'scope_type' in message:
-            suggested_fix = 'Use one of allowed_values for scope_type.'
+        if "scope_type" in message:
+            suggested_fix = "Use one of allowed_values for scope_type."
     elif isinstance(exc, KeyError):
-        err_type = 'not_found'
+        err_type = "not_found"
         retryable = True
-        suggested_fix = 'Check IDs and ensure target exists before retrying.'
+        suggested_fix = "Check IDs and ensure target exists before retrying."
     elif isinstance(exc, PermissionError):
-        err_type = 'permission_error'
+        err_type = "permission_error"
         retryable = True
-        suggested_fix = 'Use a path within workspace or permitted scope.'
+        suggested_fix = "Use a path within workspace or permitted scope."
 
     return ToolError(
         type=err_type,
@@ -144,7 +163,7 @@ def _safe_json(value: object) -> str:
     except TypeError:
         text = str(value)
     if len(text) > 500:
-        return text[:500] + '...(truncated)'
+        return text[:500] + "...(truncated)"
     return text
 
 
@@ -152,10 +171,12 @@ def _normalize_json_value(value: object) -> JsonValue:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
-        return [_normalize_json_value(item) for item in value]
+        items = cast(list[object], value)
+        return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
+        entries = cast(dict[object, object], value)
         normalized: JsonObject = {}
-        for key, item in value.items():
+        for key, item in entries.items():
             normalized[str(key)] = _normalize_json_value(item)
         return normalized
     return str(value)
@@ -176,12 +197,12 @@ async def _handle_tool_approval(
     meta: JsonObject,
 ) -> ToolError | None:
     approval_required = ctx.deps.tool_approval_policy.requires_approval(tool_name)
-    meta['approval_required'] = approval_required
+    meta["approval_required"] = approval_required
     if not approval_required:
-        meta['approval_status'] = 'not_required'
+        meta["approval_status"] = "not_required"
         return None
 
-    tool_call_id = ctx.tool_call_id or f'toolcall_{uuid4().hex[:12]}'
+    tool_call_id = ctx.tool_call_id or f"toolcall_{uuid4().hex[:12]}"
     args_preview = _safe_json(args_summary)
     ctx.deps.tool_approval_manager.open_approval(
         run_id=ctx.deps.run_id,
@@ -190,18 +211,18 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
-        risk_level='high',
+        risk_level="high",
     )
     _publish_tool_approval_event(
         ctx=ctx,
         event_type=RunEventType.TOOL_APPROVAL_REQUESTED,
         payload={
-            'tool_call_id': tool_call_id,
-            'tool_name': tool_name,
-            'args_preview': args_preview,
-            'instance_id': ctx.deps.instance_id,
-            'role_id': ctx.deps.role_id,
-            'risk_level': 'high',
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "args_preview": args_preview,
+            "instance_id": ctx.deps.instance_id,
+            "role_id": ctx.deps.role_id,
+            "risk_level": "high",
         },
     )
     try:
@@ -215,49 +236,49 @@ async def _handle_tool_approval(
         ctx.deps.tool_approval_manager.close_approval(
             run_id=ctx.deps.run_id, tool_call_id=tool_call_id
         )
-        meta['approval_status'] = 'timeout'
+        meta["approval_status"] = "timeout"
         _publish_tool_approval_event(
             ctx=ctx,
             event_type=RunEventType.TOOL_APPROVAL_RESOLVED,
             payload={
-                'tool_call_id': tool_call_id,
-                'tool_name': tool_name,
-                'action': 'timeout',
-                'instance_id': ctx.deps.instance_id,
-                'role_id': ctx.deps.role_id,
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "action": "timeout",
+                "instance_id": ctx.deps.instance_id,
+                "role_id": ctx.deps.role_id,
             },
         )
         return ToolError(
-            type='approval_timeout',
-            message='Tool approval timed out.',
+            type="approval_timeout",
+            message="Tool approval timed out.",
             retryable=True,
-            suggested_fix='Approve or deny this tool call via tool-approvals API and retry.',
+            suggested_fix="Approve or deny this tool call via tool-approvals API and retry.",
         )
 
     ctx.deps.tool_approval_manager.close_approval(
         run_id=ctx.deps.run_id, tool_call_id=tool_call_id
     )
-    meta['approval_status'] = action
+    meta["approval_status"] = action
     if feedback:
-        meta['approval_feedback'] = feedback
+        meta["approval_feedback"] = feedback
     _publish_tool_approval_event(
         ctx=ctx,
         event_type=RunEventType.TOOL_APPROVAL_RESOLVED,
         payload={
-            'tool_call_id': tool_call_id,
-            'tool_name': tool_name,
-            'action': action,
-            'feedback': feedback,
-            'instance_id': ctx.deps.instance_id,
-            'role_id': ctx.deps.role_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "action": action,
+            "feedback": feedback,
+            "instance_id": ctx.deps.instance_id,
+            "role_id": ctx.deps.role_id,
         },
     )
-    if action == 'deny':
+    if action == "deny":
         return ToolError(
-            type='approval_denied',
-            message='Tool call was denied by user.',
+            type="approval_denied",
+            message="Tool call was denied by user.",
             retryable=True,
-            suggested_fix='Adjust the approach and request a safer tool call.',
+            suggested_fix="Adjust the approach and request a safer tool call.",
         )
     return None
 
@@ -297,4 +318,4 @@ def _envelope(
         error=error,
         meta=meta or {},
     )
-    return cast(JsonObject, envelope.model_dump(mode='json'))
+    return cast(JsonObject, envelope.model_dump(mode="json"))
