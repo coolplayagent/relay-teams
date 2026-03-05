@@ -5,23 +5,36 @@ Database schema and API changes do not need to maintain backward compatibility. 
 ## Project Layout
 - Core code: `src/agent_teams/`
 - Main modules:
+  - `agents/`: agent construction, lifecycle, and execution composition
   - `application/`: application services and facades
-  - `core/`: models, enums, IDs, and configuration
-  - `agents/`, `coordination/`, `workflow/`: orchestration logic
+  - `coordination/`: cross-role coordination strategies
+  - `core/`: domain models, enums, IDs, and base contracts
+  - `env/`: runtime environment loading and env-related CLI support
+  - `interfaces/`: external interfaces
+    - `interfaces/server/`: FastAPI HTTP/SSE API and routers
+    - `interfaces/cli/`: Typer CLI entrypoints and HTTP/SSE client behavior
+    - `interfaces/sdk/`: Python HTTP client SDK
+  - `logger/`, `trace/`: structured logging and trace context
+  - `mcp/`: MCP capability integration
+  - `paths/`: path and filesystem location helpers
+  - `prompting/`: prompt assembly and prompt-layer abstractions
   - `providers/`: LLM provider integrations
-  - `state/`, `runtime/`: persistence, runtime events, and dependency injection
-  - `interfaces/server`: FastAPI HTTP/SSE API
-  - `interfaces/cli`: CLI (HTTP client)
-  - `interfaces/sdk`: Python HTTP client
-- Frontend: `frontend/` (served from `frontend/dist`)
+  - `roles/`: role definitions and role validation
+  - `runtime/`: run-time orchestration and approval-related flows
+  - `skills/`: skill loading/registry support
+  - `state/`: persistence and state repositories
+  - `tools/`: built-in tools (`stage/`, `workflow/`, `workspace/`)
+  - `triggers/`: trigger management and event ingestion flows
+  - `workflow/`: workflow orchestration core
+- Frontend: `frontend/dist` (currently `css/` and `js/` assets)
 - Tests:
-  - `tests/unit_tests/`: unit tests (must mirror `src/agent_teams/` structure)
-  - `tests/integration_tests/`: integration tests (API/SSE and end-to-end backend flows)
+  - `tests/unit_tests/`: unit tests, currently covering `agents/`, `application/`, `core/`, `env/`, `interfaces/`, `paths/`, `providers/`, `roles/`, `runtime/`, `skills/`, `tools/`, `trace/`, `triggers/`
+  - `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
 
 ## Core Principles
-- **提交规范**: 禁止绕过pre-commit的检查
-- **文件编码规范**: 在python文件头统一添加utf-8编码声明
-- **编程规范**: 禁止使用os.path，应该使用pathlib.path
+- **提交规范**: 禁止绕过 pre-commit 检查。
+- **文件编码规范**: 所有文件统一使用 utf-8 编码，Python 文件头统一添加 utf-8 编码声明。
+- **编程规范**: 禁止使用 `os.path`，应使用 `pathlib.Path`。
 - **Strong typing**: Never use untyped `{}` structures, `typing.Any`, or `dataclass` for domain contracts. Use explicit strong types and Pydantic v2 models for schema safety.
 - **Clean code**: Follow SOLID principles, keep modules high-cohesion/low-coupling, and depend on abstractions rather than concrete implementations.
 - **Public interfaces**: Expose package-level public APIs through `__init__.py`.
@@ -44,9 +57,10 @@ Run setup before starting implementation work.
 
 ## Development Commands
 - Install dependencies: `uv sync --extra dev`
-- Start server: `uv run agent-teams serve`
-- CLI prompt: `uv run agent-teams prompt -m "hello"`
-- Validate roles: `uv run agent-teams roles-validate`
+- Start server: `uv run agent-teams server serve`
+- Run a one-off prompt: `uv run agent-teams -m "hello"`
+- Validate roles: `uv run agent-teams roles validate`
+- List merged environment variables: `uv run agent-teams env list`
 - Run all tests: `uv run pytest -q`
 - Run unit tests: `uv run pytest -q tests/unit_tests`
 - Run integration tests: `uv run pytest -q tests/integration_tests`

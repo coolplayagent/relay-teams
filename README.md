@@ -3,6 +3,34 @@
 Role-driven multi-agent orchestration framework built with strong typing and tool-only collaboration flow.
 Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
 
+## Project Layout
+
+Core code lives under `src/agent_teams/`:
+
+- `agents/`: agent construction, lifecycle, and execution composition
+- `application/`: application services and facades
+- `coordination/`: cross-role coordination strategies
+- `core/`: domain models, enums, IDs, and base contracts
+- `env/`: runtime environment loading and env-related CLI support
+- `interfaces/`: external interfaces
+  - `interfaces/server/`: FastAPI HTTP/SSE API and routers
+  - `interfaces/cli/`: Typer CLI entrypoints and HTTP/SSE client behavior
+  - `interfaces/sdk/`: Python HTTP client SDK
+- `logger/`, `trace/`: structured logging and trace context
+- `mcp/`: MCP capability integration
+- `paths/`: path and filesystem location helpers
+- `prompting/`: prompt assembly and prompt-layer abstractions
+- `providers/`: LLM provider integrations
+- `roles/`: role definitions and role validation
+- `runtime/`: run-time orchestration and approval-related flows
+- `skills/`: skill loading/registry support
+- `state/`: persistence and state repositories
+- `tools/`: built-in tools (`stage/`, `workflow/`, `workspace/`)
+- `triggers/`: trigger management and event ingestion flows
+- `workflow/`: workflow orchestration core
+
+Frontend assets are built into `frontend/dist` (`css/` and `js/`) and served by the backend.
+
 ## Web Interface
 
 ![Agent Teams Web Interface](docs/agent_teams.png)
@@ -65,7 +93,7 @@ model_profile: fast
 ---
 ```
 
-Roles without `llm_profile` will use the `default` profile.
+Roles without `model_profile` will use the `default` profile.
 
 ### 3) Validate roles
 
@@ -110,20 +138,24 @@ for event in client.stream_run_events(run.run_id):
     print(event.get("event_type"))
 ```
 
-### 6) Query task records
+### 6) List triggers
 
 ```bash
-uv run agent-teams tasks-list
-# then:
-uv run agent-teams tasks-query --task-id <task_id>
+uv run agent-teams triggers list
+```
+
+### 6.1) Query tool approvals for a run
+
+```bash
+uv run agent-teams approvals list --run-id <run_id>
 ```
 
 ## Testing Layout
 
 Unit and integration tests are split under `tests/`:
 
-- `tests/unit_tests/`
-- `tests/integration_tests/`
+- `tests/unit_tests/`: mirrors backend modules (`agents/`, `application/`, `core/`, `env/`, `interfaces/`, `paths/`, `providers/`, `roles/`, `runtime/`, `skills/`, `tools/`, `trace/`, `triggers/`)
+- `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
 
 Run unit tests:
 
