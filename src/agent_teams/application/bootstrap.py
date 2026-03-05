@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
+
+from pydantic import BaseModel, ConfigDict
 
 from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.agents.management.instance_pool import InstancePool
@@ -38,8 +39,9 @@ from agent_teams.skills.registry import SkillRegistry
 from agent_teams.providers.llm import LLMProvider
 
 
-@dataclass(slots=True)
-class ServiceComponents:
+class ServiceComponents(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     runtime: RuntimeConfig
     config_manager: ConfigManager
     role_registry: RoleRegistry
@@ -71,7 +73,9 @@ def build_service_components(
     roles_dir: Path | None,
     db_path: Path | None,
 ) -> ServiceComponents:
-    runtime = load_runtime_config(config_dir=config_dir, roles_dir=roles_dir, db_path=db_path)
+    runtime = load_runtime_config(
+        config_dir=config_dir, roles_dir=roles_dir, db_path=db_path
+    )
     config_manager = ConfigManager(config_dir=config_dir)
 
     role_registry = RoleLoader().load_all(runtime.paths.roles_dir)

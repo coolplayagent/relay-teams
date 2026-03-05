@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass
-class GrepMatch:
+class GrepMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     """单条 grep 匹配"""
 
     path: str
@@ -16,8 +17,9 @@ class GrepMatch:
         return f"{prefix}Line {self.line_num}: {self.line_text}"
 
 
-@dataclass
-class GrepResult:
+class GrepResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     """grep 搜索结果"""
 
     matches: list[GrepMatch]

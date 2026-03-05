@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 
-GateAction = Literal['approve', 'revise']
+
+GateAction = Literal["approve", "revise"]
 
 
-@dataclass
-class _GateEntry:
+class _GateEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     instance_id: str
     role_id: str
     summary: str
-    event: threading.Event = field(default_factory=threading.Event)
+    event: threading.Event = Field(default_factory=threading.Event)
     action: GateAction | None = None
-    feedback: str = ''
+    feedback: str = ""
 
 
 class GateManager:
@@ -53,13 +55,13 @@ class GateManager:
         run_id: str,
         task_id: str,
         action: GateAction,
-        feedback: str = '',
+        feedback: str = "",
     ) -> None:
         """Called by the HTTP handler when the user clicks Approve or Revise."""
         with self._lock:
             entry = self._gates.get(run_id, {}).get(task_id)
         if entry is None:
-            raise KeyError(f'No open gate for run={run_id} task={task_id}')
+            raise KeyError(f"No open gate for run={run_id} task={task_id}")
         entry.action = action
         entry.feedback = feedback
         entry.event.set()
@@ -77,12 +79,16 @@ class GateManager:
         with self._lock:
             entry = self._gates.get(run_id, {}).get(task_id)
         if entry is None:
-            raise KeyError(f'No gate registered for run={run_id} task={task_id}')
+            raise KeyError(f"No gate registered for run={run_id} task={task_id}")
         triggered = entry.event.wait(timeout=timeout)
         if not triggered:
-            raise TimeoutError(f'Gate timed out after {timeout}s: run={run_id} task={task_id}')
+            raise TimeoutError(
+                f"Gate timed out after {timeout}s: run={run_id} task={task_id}"
+            )
         if entry.action is None:
-            raise RuntimeError(f'Gate resolved without action: run={run_id} task={task_id}')
+            raise RuntimeError(
+                f"Gate resolved without action: run={run_id} task={task_id}"
+            )
         return entry.action, entry.feedback
 
     def close_gate(self, run_id: str, task_id: str) -> None:
@@ -98,10 +104,12 @@ class GateManager:
         result: list[dict[str, str]] = []
         for task_id, entry in entries.items():
             if not entry.event.is_set():
-                result.append({
-                    'task_id': task_id,
-                    'instance_id': entry.instance_id,
-                    'role_id': entry.role_id,
-                    'summary': entry.summary,
-                })
+                result.append(
+                    {
+                        "task_id": task_id,
+                        "instance_id": entry.instance_id,
+                        "role_id": entry.role_id,
+                        "summary": entry.summary,
+                    }
+                )
         return result

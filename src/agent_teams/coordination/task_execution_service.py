@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from collections.abc import Callable
+
+from pydantic import BaseModel, ConfigDict
 
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.agents.core.subagent import SubAgentRunner
@@ -29,8 +30,9 @@ ROLE_COORDINATOR = "coordinator_agent"
 LOGGER = get_logger(__name__)
 
 
-@dataclass
-class TaskExecutionService:
+class TaskExecutionService(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     role_registry: RoleRegistry
     instance_pool: InstancePool
     task_repo: TaskRepository

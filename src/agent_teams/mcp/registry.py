@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 
 from agent_teams.core.types import JsonObject
 
-@dataclass(frozen=True)
-class McpServerSpec:
+
+class McpServerSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     name: str
     config: JsonObject
+
 
 class McpRegistry:
     def __init__(self, specs: tuple[McpServerSpec, ...] = ()) -> None:
@@ -19,8 +22,8 @@ class McpRegistry:
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[FastMCPToolset, ...]:
         missing = [name for name in names if name not in self._specs]
         if missing:
-            raise ValueError(f'Unknown MCP servers: {missing}')
-        
+            raise ValueError(f"Unknown MCP servers: {missing}")
+
         toolsets = []
         for name in names:
             if name not in self._toolsets:
@@ -33,7 +36,7 @@ class McpRegistry:
     def validate_known(self, names: tuple[str, ...]) -> None:
         missing = [name for name in names if name not in self._specs]
         if missing:
-            raise ValueError(f'Unknown MCP servers: {missing}')
+            raise ValueError(f"Unknown MCP servers: {missing}")
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs.keys()))

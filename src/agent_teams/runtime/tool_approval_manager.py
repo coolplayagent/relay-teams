@@ -1,23 +1,25 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 
-ToolApprovalAction = Literal['approve', 'deny']
+
+ToolApprovalAction = Literal["approve", "deny"]
 
 
-@dataclass
-class _ToolApprovalEntry:
+class _ToolApprovalEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     instance_id: str
     role_id: str
     tool_name: str
     args_preview: str
     risk_level: str
-    event: threading.Event = field(default_factory=threading.Event)
+    event: threading.Event = Field(default_factory=threading.Event)
     action: ToolApprovalAction | None = None
-    feedback: str = ''
+    feedback: str = ""
 
 
 class ToolApprovalManager:
@@ -34,7 +36,7 @@ class ToolApprovalManager:
         role_id: str,
         tool_name: str,
         args_preview: str,
-        risk_level: str = 'medium',
+        risk_level: str = "medium",
     ) -> None:
         with self._lock:
             self._approvals.setdefault(run_id, {})[tool_call_id] = _ToolApprovalEntry(
@@ -51,12 +53,14 @@ class ToolApprovalManager:
         run_id: str,
         tool_call_id: str,
         action: ToolApprovalAction,
-        feedback: str = '',
+        feedback: str = "",
     ) -> None:
         with self._lock:
             entry = self._approvals.get(run_id, {}).get(tool_call_id)
         if entry is None:
-            raise KeyError(f'No open tool approval for run={run_id} tool_call_id={tool_call_id}')
+            raise KeyError(
+                f"No open tool approval for run={run_id} tool_call_id={tool_call_id}"
+            )
         entry.action = action
         entry.feedback = feedback
         entry.event.set()
@@ -71,15 +75,17 @@ class ToolApprovalManager:
         with self._lock:
             entry = self._approvals.get(run_id, {}).get(tool_call_id)
         if entry is None:
-            raise KeyError(f'No tool approval registered for run={run_id} tool_call_id={tool_call_id}')
+            raise KeyError(
+                f"No tool approval registered for run={run_id} tool_call_id={tool_call_id}"
+            )
         triggered = entry.event.wait(timeout=timeout)
         if not triggered:
             raise TimeoutError(
-                f'Tool approval timed out after {timeout}s: run={run_id} tool_call_id={tool_call_id}'
+                f"Tool approval timed out after {timeout}s: run={run_id} tool_call_id={tool_call_id}"
             )
         if entry.action is None:
             raise RuntimeError(
-                f'Tool approval resolved without action: run={run_id} tool_call_id={tool_call_id}'
+                f"Tool approval resolved without action: run={run_id} tool_call_id={tool_call_id}"
             )
         return entry.action, entry.feedback
 
@@ -96,12 +102,12 @@ class ToolApprovalManager:
             if not entry.event.is_set():
                 result.append(
                     {
-                        'tool_call_id': tool_call_id,
-                        'instance_id': entry.instance_id,
-                        'role_id': entry.role_id,
-                        'tool_name': entry.tool_name,
-                        'args_preview': entry.args_preview,
-                        'risk_level': entry.risk_level,
+                        "tool_call_id": tool_call_id,
+                        "instance_id": entry.instance_id,
+                        "role_id": entry.role_id,
+                        "tool_name": entry.tool_name,
+                        "args_preview": entry.args_preview,
+                        "risk_level": entry.risk_level,
                     }
                 )
         return result

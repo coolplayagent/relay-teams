@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from collections.abc import Generator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from pydantic import BaseModel, ConfigDict
+
 from agent_teams.core.types import JsonObject, JsonValue
 
 
-@dataclass(frozen=True)
-class RunHandle:
+class RunHandle(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     run_id: str
     session_id: str
 
@@ -63,7 +65,9 @@ class AgentTeamsClient:
 
     def stream_run_events(self, run_id: str) -> Generator[JsonObject, None, None]:
         url = f"{self._base_url}/api/runs/{run_id}/events"
-        request = Request(url=url, method="GET", headers={"Accept": "text/event-stream"})
+        request = Request(
+            url=url, method="GET", headers={"Accept": "text/event-stream"}
+        )
 
         try:
             with urlopen(request, timeout=self._stream_timeout_seconds) as response:
@@ -77,7 +81,9 @@ class AgentTeamsClient:
                     yield json.loads(payload)
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} while streaming run events: {body}") from exc
+            raise RuntimeError(
+                f"HTTP {exc.code} while streaming run events: {body}"
+            ) from exc
         except URLError as exc:
             raise RuntimeError(f"Failed to connect to server: {exc}") from exc
 
@@ -101,7 +107,7 @@ class AgentTeamsClient:
         self,
         run_id: str,
         objective: str,
-        workflow_type: str = 'custom',
+        workflow_type: str = "custom",
         tasks: list[JsonObject] | None = None,
     ) -> JsonObject:
         tasks_payload: list[JsonValue] | None = None

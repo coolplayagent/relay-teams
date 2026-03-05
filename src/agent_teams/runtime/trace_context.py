@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
 from uuid import uuid4
 
-_TRACE_CONTEXT: ContextVar[TraceContext | None] = ContextVar('agent_teams_trace_context', default=None)
+from pydantic import BaseModel, ConfigDict
+
+_TRACE_CONTEXT: ContextVar[TraceContext | None] = ContextVar(
+    "agent_teams_trace_context", default=None
+)
 
 
-@dataclass(frozen=True)
-class TraceContext:
+class TraceContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     trace_id: str | None = None
     request_id: str | None = None
     session_id: str | None = None
@@ -19,16 +23,16 @@ class TraceContext:
     role_id: str | None = None
     tool_call_id: str | None = None
 
-    def merged(self, **updates: str | None) -> 'TraceContext':
+    def merged(self, **updates: str | None) -> "TraceContext":
         return TraceContext(
-            trace_id=updates.get('trace_id', self.trace_id),
-            request_id=updates.get('request_id', self.request_id),
-            session_id=updates.get('session_id', self.session_id),
-            run_id=updates.get('run_id', self.run_id),
-            task_id=updates.get('task_id', self.task_id),
-            instance_id=updates.get('instance_id', self.instance_id),
-            role_id=updates.get('role_id', self.role_id),
-            tool_call_id=updates.get('tool_call_id', self.tool_call_id),
+            trace_id=updates.get("trace_id", self.trace_id),
+            request_id=updates.get("request_id", self.request_id),
+            session_id=updates.get("session_id", self.session_id),
+            run_id=updates.get("run_id", self.run_id),
+            task_id=updates.get("task_id", self.task_id),
+            instance_id=updates.get("instance_id", self.instance_id),
+            role_id=updates.get("role_id", self.role_id),
+            tool_call_id=updates.get("tool_call_id", self.tool_call_id),
         )
 
 
@@ -40,11 +44,11 @@ def get_trace_context() -> TraceContext:
 
 
 def generate_request_id() -> str:
-    return f'req_{uuid4().hex[:16]}'
+    return f"req_{uuid4().hex[:16]}"
 
 
 def generate_trace_id() -> str:
-    return f'trace_{uuid4().hex[:16]}'
+    return f"trace_{uuid4().hex[:16]}"
 
 
 def set_trace_context(**updates: str | None) -> Token[TraceContext | None]:

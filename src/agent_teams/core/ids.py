@@ -1,31 +1,37 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict
 
-@dataclass(frozen=True)
-class RoleId:
+
+class RoleId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     value: str
 
 
-@dataclass(frozen=True)
-class InstanceId:
+class InstanceId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     value: str
 
 
-@dataclass(frozen=True)
-class TaskId:
+class TaskId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     value: str
 
 
-@dataclass(frozen=True)
-class WorkflowId:
+class WorkflowId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     value: str
 
 
-@dataclass(frozen=True)
-class TraceId:
+class TraceId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     value: str
 
 

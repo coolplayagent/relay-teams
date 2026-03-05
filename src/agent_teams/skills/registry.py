@@ -4,8 +4,8 @@ import io
 import inspect
 import importlib.util
 from contextlib import redirect_stdout
-from dataclasses import dataclass
 from pydantic_ai import Tool
+from pydantic import BaseModel, ConfigDict
 
 from agent_teams.core.types import JsonObject, JsonValue
 from agent_teams.skills.discovery import SkillsDirectory
@@ -15,13 +15,12 @@ from agent_teams.tools.tool_helpers import execute_tool
 from agent_teams.skills.models import SkillMetadata
 
 
-@dataclass
-class SkillRegistry:
+class SkillRegistry(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     directory: SkillsDirectory
 
-    def get_toolset_tools(
-        self, skill_names: tuple[str, ...]
-    ) -> list[Tool[ToolDeps]]:
+    def get_toolset_tools(self, skill_names: tuple[str, ...]) -> list[Tool[ToolDeps]]:
         # This returns the core tools for managing skills, not the skills themselves
         tools: list[Tool[ToolDeps]] = [
             Tool(
@@ -76,7 +75,8 @@ class SkillRegistry:
             tool_name="list_skills",
             args_summary={},
             action=lambda: [
-                _skill_metadata_to_json(s.metadata) for s in self.directory.list_skills()
+                _skill_metadata_to_json(s.metadata)
+                for s in self.directory.list_skills()
             ],
         )
 

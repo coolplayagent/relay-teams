@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from json import dumps
 from typing import Callable, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.core.enums import (
@@ -42,8 +43,9 @@ MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
 
 
-@dataclass
-class CoordinatorGraph:
+class CoordinatorGraph(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     role_registry: RoleRegistry
     instance_pool: InstancePool
     task_repo: TaskRepository
@@ -54,7 +56,7 @@ class CoordinatorGraph:
     provider_factory: Callable[[RoleDefinition], LLMProvider]
     task_execution_service: TaskExecutionService
     run_control_manager: RunControlManager
-    gate_manager: GateManager = field(default_factory=GateManager)
+    gate_manager: GateManager = Field(default_factory=GateManager)
     run_event_hub: RunEventHub | None = None
 
     async def run(

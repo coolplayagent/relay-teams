@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from json import dumps
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from agent_teams.core.enums import InjectionSource, InstanceStatus, RunEventType, TaskStatus, EventType
-from agent_teams.core.models import InjectionMessage, RunEvent, TaskEnvelope, EventEnvelope
+from agent_teams.core.enums import (
+    InjectionSource,
+    InstanceStatus,
+    RunEventType,
+    TaskStatus,
+    EventType,
+)
+from agent_teams.core.models import (
+    InjectionMessage,
+    RunEvent,
+    TaskEnvelope,
+    EventEnvelope,
+)
 
 if TYPE_CHECKING:
     from agent_teams.agents.management.instance_pool import InstancePool
@@ -22,21 +33,31 @@ if TYPE_CHECKING:
     from agent_teams.state.task_repo import TaskRepository
 
 
-@dataclass(frozen=True)
-class RunControlContext:
-    manager: 'RunControlManager'
+class RunControlContext(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        arbitrary_types_allowed=True,
+    )
+
+    manager: "RunControlManager"
     run_id: str
     instance_id: str | None = None
 
     def is_cancelled(self) -> bool:
-        return self.manager.is_cancelled(run_id=self.run_id, instance_id=self.instance_id)
+        return self.manager.is_cancelled(
+            run_id=self.run_id, instance_id=self.instance_id
+        )
 
     def raise_if_cancelled(self) -> None:
-        self.manager.raise_if_cancelled(run_id=self.run_id, instance_id=self.instance_id)
+        self.manager.raise_if_cancelled(
+            run_id=self.run_id, instance_id=self.instance_id
+        )
 
 
-@dataclass(frozen=True)
-class PausedSubagent:
+class PausedSubagent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     session_id: str
     run_id: str
     instance_id: str
@@ -83,7 +104,9 @@ class RunControlManager:
         self._instance_pool = instance_pool
         self._event_bus = event_bus
 
-    def context(self, *, run_id: str, instance_id: str | None = None) -> RunControlContext:
+    def context(
+        self, *, run_id: str, instance_id: str | None = None
+    ) -> RunControlContext:
         return RunControlContext(manager=self, run_id=run_id, instance_id=instance_id)
 
     def is_cancelled(self, *, run_id: str, instance_id: str | None = None) -> bool:
@@ -93,7 +116,9 @@ class RunControlManager:
             return False
         return self.is_subagent_stop_requested(run_id=run_id, instance_id=instance_id)
 
-    def raise_if_cancelled(self, *, run_id: str, instance_id: str | None = None) -> None:
+    def raise_if_cancelled(
+        self, *, run_id: str, instance_id: str | None = None
+    ) -> None:
         if self.is_cancelled(run_id=run_id, instance_id=instance_id):
             raise asyncio.CancelledError
 
@@ -102,8 +127,8 @@ class RunControlManager:
         if paused is None:
             return
         raise RuntimeError(
-            f'Subagent {paused.role_id} ({paused.instance_id}) is paused in run {paused.run_id}. '
-            'Please send a follow-up message to that subagent before messaging the main agent.'
+            f"Subagent {paused.role_id} ({paused.instance_id}) is paused in run {paused.run_id}. "
+            "Please send a follow-up message to that subagent before messaging the main agent."
         )
 
     def register_run_task(
@@ -145,7 +170,7 @@ class RunControlManager:
                 trace_id=run_id,
                 task_id=None,
                 event_type=RunEventType.RUN_STOPPED,
-                payload_json=dumps({'reason': reason}),
+                payload_json=dumps({"reason": reason}),
             )
         )
 
@@ -160,7 +185,7 @@ class RunControlManager:
         created: InjectionMessage | None = None
         running = agent_repo.list_running(run_id)
         if not running:
-            raise KeyError(f'No RUNNING agent for run_id={run_id}')
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
         for record in running:
             created = self._require_injection_manager().enqueue(
                 run_id=run_id,
@@ -170,7 +195,7 @@ class RunControlManager:
             )
             self._publish_injection_event(run_id=run_id, record=record, created=created)
         if created is None:
-            raise KeyError(f'No RUNNING agent for run_id={run_id}')
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
         return created
 
     def register_instance_task(
@@ -197,9 +222,9 @@ class RunControlManager:
     def stop_subagent(self, *, run_id: str, instance_id: str) -> dict[str, str]:
         record = self._require_agent_repo().get_instance(instance_id)
         if record.run_id != run_id:
-            raise KeyError(f'Instance {instance_id} does not belong to run {run_id}')
-        if record.role_id == 'coordinator_agent':
-            raise ValueError('Stopping coordinator via subagent API is not allowed')
+            raise KeyError(f"Instance {instance_id} does not belong to run {run_id}")
+        if record.role_id == "coordinator_agent":
+            raise ValueError("Stopping coordinator via subagent API is not allowed")
 
         paused = self.request_subagent_stop(run_id=run_id, instance_id=instance_id)
         if paused is None:
@@ -208,7 +233,9 @@ class RunControlManager:
                 run_id=run_id,
                 instance_id=instance_id,
                 role_id=record.role_id,
-                task_id=self._find_task_for_instance(run_id=run_id, instance_id=instance_id),
+                task_id=self._find_task_for_instance(
+                    run_id=run_id, instance_id=instance_id
+                ),
             )
 
         if paused.task_id:
@@ -216,7 +243,7 @@ class RunControlManager:
                 task_id=paused.task_id,
                 status=TaskStatus.STOPPED,
                 assigned_instance_id=instance_id,
-                error_message='Task stopped by user',
+                error_message="Task stopped by user",
             )
         self._require_agent_repo().mark_status(instance_id, InstanceStatus.STOPPED)
 
@@ -231,20 +258,20 @@ class RunControlManager:
                 event_type=RunEventType.SUBAGENT_STOPPED,
                 payload_json=dumps(
                     {
-                        'instance_id': instance_id,
-                        'role_id': record.role_id,
-                        'task_id': paused.task_id,
-                        'reason': paused.reason,
+                        "instance_id": instance_id,
+                        "role_id": record.role_id,
+                        "task_id": paused.task_id,
+                        "reason": paused.reason,
                     }
                 ),
             )
         )
         return {
-            'status': 'paused',
-            'instance_id': instance_id,
-            'role_id': record.role_id,
-            'task_id': paused.task_id or '',
-            'run_id': run_id,
+            "status": "paused",
+            "instance_id": instance_id,
+            "role_id": record.role_id,
+            "task_id": paused.task_id or "",
+            "run_id": run_id,
         }
 
     def resume_subagent_with_message(
@@ -256,13 +283,13 @@ class RunControlManager:
     ) -> None:
         record = self._require_agent_repo().get_instance(instance_id)
         if record.run_id != run_id:
-            raise KeyError(f'Instance {instance_id} does not belong to run {run_id}')
+            raise KeyError(f"Instance {instance_id} does not belong to run {run_id}")
 
         paused = self.get_paused_subagent(record.session_id)
         if paused is not None and paused.instance_id != instance_id:
             raise RuntimeError(
-                f'Subagent {paused.role_id} ({paused.instance_id}) is paused. '
-                'Please continue that paused subagent first.'
+                f"Subagent {paused.role_id} ({paused.instance_id}) is paused. "
+                "Please continue that paused subagent first."
             )
 
         task_id = self._find_task_for_instance(run_id=run_id, instance_id=instance_id)
@@ -276,12 +303,15 @@ class RunControlManager:
         self._require_message_repo().append(
             session_id=record.session_id,
             instance_id=instance_id,
-            task_id=task_id or 'subagent-followup',
+            task_id=task_id or "subagent-followup",
             trace_id=run_id,
             messages=[ModelRequest(parts=[UserPromptPart(content=content)])],
         )
 
-        if self._require_injection_manager().is_active(run_id) and record.status == InstanceStatus.RUNNING:
+        if (
+            self._require_injection_manager().is_active(run_id)
+            and record.status == InstanceStatus.RUNNING
+        ):
             created = self._require_injection_manager().enqueue(
                 run_id=run_id,
                 recipient_instance_id=instance_id,
@@ -290,7 +320,9 @@ class RunControlManager:
             )
             self._publish_injection_event(run_id=run_id, record=record, created=created)
 
-        self.release_paused_subagent(session_id=record.session_id, instance_id=instance_id)
+        self.release_paused_subagent(
+            session_id=record.session_id, instance_id=instance_id
+        )
         self._require_agent_repo().mark_status(instance_id, InstanceStatus.IDLE)
 
         self._require_run_event_hub().publish(
@@ -304,9 +336,9 @@ class RunControlManager:
                 event_type=RunEventType.SUBAGENT_RESUMED,
                 payload_json=dumps(
                     {
-                        'instance_id': instance_id,
-                        'role_id': record.role_id,
-                        'task_id': task_id,
+                        "instance_id": instance_id,
+                        "role_id": record.role_id,
+                        "task_id": task_id,
                     }
                 ),
             )
@@ -323,7 +355,7 @@ class RunControlManager:
             self._require_task_repo().update_status(
                 task.task_id,
                 TaskStatus.STOPPED,
-                error_message='Task stopped by user',
+                error_message="Task stopped by user",
             )
             self._require_instance_pool().mark_stopped(instance_id)
             self._require_agent_repo().mark_status(instance_id, InstanceStatus.STOPPED)
@@ -334,7 +366,7 @@ class RunControlManager:
                     session_id=task.session_id,
                     task_id=task.task_id,
                     instance_id=instance_id,
-                    payload_json='{}',
+                    payload_json="{}",
                 )
             )
             self._require_event_bus().emit(
@@ -344,14 +376,14 @@ class RunControlManager:
                     session_id=task.session_id,
                     task_id=task.task_id,
                     instance_id=instance_id,
-                    payload_json='{}',
+                    payload_json="{}",
                 )
             )
         else:
             self._require_task_repo().update_status(
                 task.task_id,
                 TaskStatus.FAILED,
-                error_message='Task cancelled',
+                error_message="Task cancelled",
             )
             self._require_instance_pool().mark_failed(instance_id)
             self._require_agent_repo().mark_status(instance_id, InstanceStatus.FAILED)
@@ -362,12 +394,14 @@ class RunControlManager:
                     session_id=task.session_id,
                     task_id=task.task_id,
                     instance_id=instance_id,
-                    payload_json='{}',
+                    payload_json="{}",
                 )
             )
         return stopped
 
-    def request_subagent_stop(self, *, run_id: str, instance_id: str) -> PausedSubagent | None:
+    def request_subagent_stop(
+        self, *, run_id: str, instance_id: str
+    ) -> PausedSubagent | None:
         key = (run_id, instance_id)
         with self._lock:
             context = self._instance_context.get(key)
@@ -380,7 +414,7 @@ class RunControlManager:
                 instance_id=instance_id,
                 role_id=role_id,
                 task_id=task_id,
-                reason='stopped_by_user',
+                reason="stopped_by_user",
                 paused_at=datetime.now(tz=timezone.utc),
             )
             self._paused_by_session[session_id] = paused
@@ -398,7 +432,7 @@ class RunControlManager:
         instance_id: str,
         role_id: str,
         task_id: str | None,
-        reason: str = 'stopped_by_user',
+        reason: str = "stopped_by_user",
     ) -> PausedSubagent:
         paused = PausedSubagent(
             session_id=session_id,
@@ -448,7 +482,9 @@ class RunControlManager:
             for session_id, paused in list(self._paused_by_session.items()):
                 if paused.run_id == run_id:
                     self._paused_by_session.pop(session_id, None)
-                    self._subagent_stop_requested.discard((paused.run_id, paused.instance_id))
+                    self._subagent_stop_requested.discard(
+                        (paused.run_id, paused.instance_id)
+                    )
 
     def get_coordinator_instance_id(self, session_id: str) -> str | None:
         return self._require_agent_repo().get_coordinator_instance_id(session_id)
@@ -466,7 +502,9 @@ class RunControlManager:
                 return record.envelope.task_id
         return None
 
-    def _publish_injection_event(self, *, run_id: str, record, created: InjectionMessage) -> None:
+    def _publish_injection_event(
+        self, *, run_id: str, record, created: InjectionMessage
+    ) -> None:
         self._require_run_event_hub().publish(
             RunEvent(
                 session_id=record.session_id,
@@ -482,35 +520,37 @@ class RunControlManager:
 
     def _require_run_event_hub(self) -> RunEventHub:
         if self._run_event_hub is None:
-            raise RuntimeError('RunControlManager is not bound: run_event_hub missing')
+            raise RuntimeError("RunControlManager is not bound: run_event_hub missing")
         return self._run_event_hub
 
     def _require_injection_manager(self) -> RunInjectionManager:
         if self._injection_manager is None:
-            raise RuntimeError('RunControlManager is not bound: injection_manager missing')
+            raise RuntimeError(
+                "RunControlManager is not bound: injection_manager missing"
+            )
         return self._injection_manager
 
     def _require_agent_repo(self) -> AgentInstanceRepository:
         if self._agent_repo is None:
-            raise RuntimeError('RunControlManager is not bound: agent_repo missing')
+            raise RuntimeError("RunControlManager is not bound: agent_repo missing")
         return self._agent_repo
 
     def _require_task_repo(self) -> TaskRepository:
         if self._task_repo is None:
-            raise RuntimeError('RunControlManager is not bound: task_repo missing')
+            raise RuntimeError("RunControlManager is not bound: task_repo missing")
         return self._task_repo
 
     def _require_message_repo(self) -> MessageRepository:
         if self._message_repo is None:
-            raise RuntimeError('RunControlManager is not bound: message_repo missing')
+            raise RuntimeError("RunControlManager is not bound: message_repo missing")
         return self._message_repo
 
     def _require_instance_pool(self) -> InstancePool:
         if self._instance_pool is None:
-            raise RuntimeError('RunControlManager is not bound: instance_pool missing')
+            raise RuntimeError("RunControlManager is not bound: instance_pool missing")
         return self._instance_pool
 
     def _require_event_bus(self) -> EventLog:
         if self._event_bus is None:
-            raise RuntimeError('RunControlManager is not bound: event_bus missing')
+            raise RuntimeError("RunControlManager is not bound: event_bus missing")
         return self._event_bus

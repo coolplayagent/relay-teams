@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import cast
 
+from pydantic import BaseModel, ConfigDict
+
 from agent_teams.core.models import RoleDefinition, TaskEnvelope
-from agent_teams.prompting.runtime_prompt_builder import PromptBuildInput, RuntimePromptBuilder
+from agent_teams.prompting.runtime_prompt_builder import (
+    PromptBuildInput,
+    RuntimePromptBuilder,
+)
 
 
-@dataclass(frozen=True)
-class SubAgentRequest:
+class SubAgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     run_id: str
     trace_id: str
     task_id: str
@@ -19,8 +24,10 @@ class SubAgentRequest:
     system_prompt: str
     user_prompt: str
 
-@dataclass
-class SubAgentRunner:
+
+class SubAgentRunner(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
     role: RoleDefinition
     prompt_builder: RuntimePromptBuilder
     provider: object
@@ -38,7 +45,9 @@ class SubAgentRunner:
                 shared_state_snapshot=shared_state_snapshot,
             )
         )
-        generate = cast(Callable[[object], Awaitable[str]], getattr(self.provider, "generate"))
+        generate = cast(
+            Callable[[object], Awaitable[str]], getattr(self.provider, "generate")
+        )
         return await generate(
             SubAgentRequest(
                 run_id=task.trace_id,

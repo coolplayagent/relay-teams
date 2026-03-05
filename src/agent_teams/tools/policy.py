@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 
 DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
     {
-        'create_workflow_graph',
-        'dispatch_tasks',
-        'shell',
-        'write',
-        'write_stage_doc',
+        "create_workflow_graph",
+        "dispatch_tasks",
+        "shell",
+        "write",
+        "write_stage_doc",
     }
 )
 
 
-@dataclass(frozen=True)
-class ToolApprovalPolicy:
+class ToolApprovalPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     approval_required_tools: frozenset[str] = DEFAULT_APPROVAL_REQUIRED_TOOLS
     timeout_seconds: float = 300.0
 

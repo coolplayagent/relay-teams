@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from dataclasses import dataclass
 import logging
 from json import dumps
 from pathlib import Path
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol, cast, final, override
 
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.messages import (
     ModelMessage,
@@ -64,8 +64,9 @@ class _AgentRunResult(Protocol):
     def usage(self) -> object: ...
 
 
-@dataclass(frozen=True)
-class LLMRequest:
+class LLMRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     run_id: str
     trace_id: str
     task_id: str
