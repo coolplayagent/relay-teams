@@ -21,6 +21,7 @@ Database schema and API changes do not need to maintain backward compatibility. 
 ## Core Principles
 - **提交规范**: 禁止绕过pre-commit的检查
 - **文件编码规范**: 在python文件头统一添加utf-8编码声明
+- **编程规范**: 禁止使用os.path，应该使用pathlib.path
 - **Strong typing**: Never use untyped `{}` structures, `typing.Any`, or `dataclass` for domain contracts. Use explicit strong types and Pydantic v2 models for schema safety.
 - **Clean code**: Follow SOLID principles, keep modules high-cohesion/low-coupling, and depend on abstractions rather than concrete implementations.
 - **Public interfaces**: Expose package-level public APIs through `__init__.py`.

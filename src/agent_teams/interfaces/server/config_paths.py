@@ -1,13 +1,16 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
+from agent_teams.paths import get_project_root as resolve_project_root
+
 CONFIG_DIR_ENV_VAR = "AGENT_TEAMS_CONFIG_DIR"
 
 
 def get_project_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent.parent
+    return resolve_project_root()
 
 
 def get_config_dir() -> Path:

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -44,6 +45,7 @@ from agent_teams.application.rounds_projection import (
     paginate_rounds,
 )
 from agent_teams.mcp.registry import McpRegistry
+from agent_teams.paths import get_project_root
 from agent_teams.providers.llm import LLMProvider
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runtime.gate_manager import GateManager
@@ -68,10 +70,6 @@ from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workflow.spec import WorkflowSpec
 
 
-def _get_project_root() -> Path:
-    return Path(__file__).parent.parent.parent.parent.parent
-
-
 class AgentTeamsService:
     def __init__(
         self,
@@ -81,7 +79,7 @@ class AgentTeamsService:
         debug: bool = False,
     ) -> None:
         if config_dir is None:
-            config_dir = _get_project_root() / ".agent_teams"
+            config_dir = get_project_root() / ".agent_teams"
         _ = debug
         components = build_service_components(
             config_dir=config_dir,

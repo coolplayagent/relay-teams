@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -5,7 +6,6 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -13,15 +13,12 @@ from urllib.request import Request, urlopen
 import typer
 
 from agent_teams.core.enums import RunEventType
+from agent_teams.paths import get_project_root
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 
-def _get_project_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent.parent
-
-
-DEFAULT_CONFIG_DIR = _get_project_root() / ".agent_teams"
+DEFAULT_CONFIG_DIR = get_project_root() / ".agent_teams"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
@@ -63,7 +60,9 @@ def _request_json(
 
 def _is_server_healthy(base_url: str) -> bool:
     try:
-        health = _request_json(base_url, "GET", "/api/system/health", timeout_seconds=1.5)
+        health = _request_json(
+            base_url, "GET", "/api/system/health", timeout_seconds=1.5
+        )
         return health.get("status") == "ok"
     except Exception:
         return False
@@ -82,7 +81,9 @@ def _start_server_daemon(host: str, port: int) -> None:
     ]
 
     if sys.platform.startswith("win"):
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        )
         subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
@@ -114,7 +115,9 @@ def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
         return
 
     if not autostart:
-        raise RuntimeError("Agent Teams server is not running and --no-autostart was provided")
+        raise RuntimeError(
+            "Agent Teams server is not running and --no-autostart was provided"
+        )
 
     parsed = urlparse(base_url)
     host = parsed.hostname or "127.0.0.1"
@@ -160,7 +163,10 @@ def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
                     event_payload.get("text", event_payload.get("content", "")),
                     nl=False,
                 )
-            if event_type in {RunEventType.RUN_COMPLETED.value, RunEventType.RUN_FAILED.value}:
+            if event_type in {
+                RunEventType.RUN_COMPLETED.value,
+                RunEventType.RUN_FAILED.value,
+            }:
                 break
 
 
@@ -244,7 +250,9 @@ def chat(
         created = _request_json(base_url, "POST", "/api/sessions", {})
         session_id = _require_str_field(created, "session_id")
 
-    typer.echo(f"Starting interactive chat (Session: {session_id}). Type 'exit' or 'quit' to stop.")
+    typer.echo(
+        f"Starting interactive chat (Session: {session_id}). Type 'exit' or 'quit' to stop."
+    )
 
     while True:
         try:
