@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
+from importlib import import_module
 import json
 import os
 import subprocess
 import sys
 import time
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -13,12 +16,13 @@ from urllib.request import Request, urlopen
 import typer
 
 from agent_teams.core.enums import RunEventType
-from agent_teams.paths import get_project_root
+from agent_teams.env.env_cli import env_app
 
-app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
+server_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+roles_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+approvals_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
-
-DEFAULT_CONFIG_DIR = get_project_root() / ".agent_teams"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
@@ -28,7 +32,7 @@ def _request_json(
     path: str,
     payload: dict[str, object] | None = None,
     timeout_seconds: float = 30.0,
-) -> dict[str, object]:
+) -> dict[str, object] | list[object]:
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -50,6 +54,8 @@ def _request_json(
             data = json.loads(raw)
             if isinstance(data, dict):
                 return data
+            if isinstance(data, list):
+                return data
             return {"data": data}
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -60,9 +66,10 @@ def _request_json(
 
 def _is_server_healthy(base_url: str) -> bool:
     try:
-        health = _request_json(
+        health_response = _request_json(
             base_url, "GET", "/api/system/health", timeout_seconds=1.5
         )
+        health = _require_object_response(health_response, "/api/system/health")
         return health.get("status") == "ok"
     except Exception:
         return False
@@ -73,6 +80,7 @@ def _start_server_daemon(host: str, port: int) -> None:
         sys.executable,
         "-m",
         "agent_teams",
+        "server",
         "serve",
         "--host",
         host,
@@ -170,22 +178,57 @@ def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
                 break
 
 
-@app.command("prompt")
-def prompt(
-    message: str = typer.Option(..., "-m", "--message"),
-    session_id: str | None = typer.Option(None, "--session-id"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    execution_mode: str = typer.Option("ai", "--mode"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    debug: bool = typer.Option(False, "--debug"),
+@app.callback(invoke_without_command=True)
+def root_command(
+    ctx: typer.Context,
+    message: str | None = typer.Option(
+        None,
+        "-m",
+        "--message",
+        help="Run a single prompt with default settings.",
+    ),
+) -> None:
+    if message is not None:
+        if ctx.invoked_subcommand is not None:
+            raise typer.BadParameter("Cannot combine --message with subcommands")
+        _run_single_prompt(message=message)
+        return
+
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+
+
+def _run_single_prompt(message: str) -> None:
+    normalized_message = message.strip()
+    if not normalized_message:
+        raise typer.BadParameter("message must not be empty")
+    _execute_prompt(
+        message=normalized_message,
+        session_id=None,
+        base_url=DEFAULT_BASE_URL,
+        execution_mode="ai",
+        autostart=True,
+        debug=False,
+    )
+
+
+def _execute_prompt(
+    *,
+    message: str,
+    session_id: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    execution_mode: str = "ai",
+    autostart: bool = True,
+    debug: bool = False,
 ) -> None:
     _auto_start_if_needed(base_url, autostart=autostart)
 
     if not session_id:
-        created = _request_json(base_url, "POST", "/api/sessions", {})
+        created_response = _request_json(base_url, "POST", "/api/sessions", {})
+        created = _require_object_response(created_response, "/api/sessions")
         session_id = _require_str_field(created, "session_id")
 
-    run = _request_json(
+    run_response = _request_json(
         base_url,
         "POST",
         "/api/runs",
@@ -195,6 +238,7 @@ def prompt(
             "execution_mode": execution_mode,
         },
     )
+    run = _require_object_response(run_response, "/api/runs")
     run_id = _require_str_field(run, "run_id")
 
     _stream_events(base_url, run_id, debug=debug)
@@ -202,81 +246,7 @@ def prompt(
         typer.echo()
 
 
-@app.command("run-intent")
-def run_intent(
-    intent: str = typer.Option(..., "--intent"),
-    session_id: str | None = typer.Option(None, "--session-id"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    debug: bool = typer.Option(False, "--debug"),
-) -> None:
-    prompt(
-        message=intent,
-        session_id=session_id,
-        base_url=base_url,
-        execution_mode="ai",
-        autostart=autostart,
-        debug=debug,
-    )
-
-
-@app.command("run-intent-stream")
-def run_intent_stream(
-    intent: str = typer.Option(..., "--intent"),
-    session_id: str | None = typer.Option(None, "--session-id"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    debug: bool = typer.Option(False, "--debug"),
-) -> None:
-    prompt(
-        message=intent,
-        session_id=session_id,
-        base_url=base_url,
-        execution_mode="ai",
-        autostart=autostart,
-        debug=debug,
-    )
-
-
-@app.command("chat")
-def chat(
-    session_id: str | None = typer.Option(None, "--session-id"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    debug: bool = typer.Option(False, "--debug"),
-) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-    if not session_id:
-        created = _request_json(base_url, "POST", "/api/sessions", {})
-        session_id = _require_str_field(created, "session_id")
-
-    typer.echo(
-        f"Starting interactive chat (Session: {session_id}). Type 'exit' or 'quit' to stop."
-    )
-
-    while True:
-        try:
-            text = typer.prompt("Prompt")
-        except typer.Abort:
-            typer.echo()
-            break
-
-        if text.strip().lower() in {"exit", "quit"}:
-            break
-        if not text.strip():
-            continue
-
-        prompt(
-            message=text,
-            session_id=session_id,
-            base_url=base_url,
-            execution_mode="ai",
-            autostart=autostart,
-            debug=debug,
-        )
-
-
-@app.command("serve")
+@server_app.command("serve")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the server to"),
     port: int = typer.Option(8000, "--port", help="Port to bind the server to"),
@@ -286,17 +256,21 @@ def serve(
         help="Override runtime config directory (default: ./.agent_teams)",
     ),
 ) -> None:
-    import uvicorn
-
     if config_dir:
         os.environ["AGENT_TEAMS_CONFIG_DIR"] = config_dir
-    from agent_teams.interfaces.server.app import app as fastapi_app
+
+    uvicorn_module = import_module("uvicorn")
+    server_module = import_module("agent_teams.interfaces.server.app")
+    fastapi_app = getattr(server_module, "app")
+    uvicorn_run = cast(
+        Callable[[object, str, int], None], getattr(uvicorn_module, "run")
+    )
 
     typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
-    uvicorn.run(fastapi_app, host=host, port=port)
+    uvicorn_run(fastapi_app, host, port)
 
 
-@app.command("roles-validate")
+@roles_app.command("validate")
 def roles_validate(
     base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
     autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
@@ -306,7 +280,7 @@ def roles_validate(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
-@app.command("tool-approvals-list")
+@approvals_app.command("list")
 def tool_approvals_list(
     run_id: str = typer.Option(..., "--run-id"),
     base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
@@ -318,7 +292,7 @@ def tool_approvals_list(
     typer.echo(json.dumps(approvals, ensure_ascii=False))
 
 
-@app.command("tool-approvals-resolve")
+@approvals_app.command("resolve")
 def tool_approvals_resolve(
     run_id: str = typer.Option(..., "--run-id"),
     tool_call_id: str = typer.Option(..., "--tool-call-id"),
@@ -339,6 +313,12 @@ def tool_approvals_resolve(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+app.add_typer(server_app, name="server")
+app.add_typer(roles_app, name="roles")
+app.add_typer(approvals_app, name="approvals")
+app.add_typer(env_app, name="env")
+
+
 def main() -> None:
     app()
 
@@ -348,3 +328,11 @@ def _require_str_field(payload: dict[str, object], key: str) -> str:
     if isinstance(value, str):
         return value
     raise RuntimeError(f"Field '{key}' must be a string")
+
+
+def _require_object_response(
+    payload: dict[str, object] | list[object], path: str
+) -> dict[str, object]:
+    if isinstance(payload, dict):
+        return payload
+    raise RuntimeError(f"Expected JSON object from {path}")

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from types import ModuleType
@@ -24,7 +25,9 @@ def test_serve_sets_config_dir_env_and_runs_uvicorn(monkeypatch) -> None:
     setattr(fake_server_module, "app", sentinel_app)
 
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
-    monkeypatch.setitem(sys.modules, "agent_teams.interfaces.server.app", fake_server_module)
+    monkeypatch.setitem(
+        sys.modules, "agent_teams.interfaces.server.app", fake_server_module
+    )
     monkeypatch.delenv("AGENT_TEAMS_CONFIG_DIR", raising=False)
 
     cli_app.serve(host="127.0.0.1", port=8911, config_dir="D:/tmp/at-config")

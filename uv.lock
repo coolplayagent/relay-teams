@@ -3449,7 +3449,7 @@ wheels = [
 
 [[package]]
 name = "xai-sdk"
-version = "1.7.0"
+version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -3461,9 +3461,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/3e/cf9ffdf444ec3d495b8f4a6b3934c86088900aeb131cf2d81535b218e615/xai_sdk-1.7.0.tar.gz", hash = "sha256:649e7c3bff01510326f13a709dff824256fcdfd2850e21606d25870208989bd1", size = 390582, upload-time = "2026-02-18T20:53:23.352Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8f/cd/752bf4a3e13619e6eb6c2ca0df18890aa70b21f299a51c126079e3c1c7b6/xai_sdk-1.8.0.tar.gz", hash = "sha256:614301eed7f7e986897ac8d6836900391756d0cdee725370d21e1a2c1b4b8bc3", size = 391420, upload-time = "2026-03-05T06:50:47.091Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/e9/e0fb57dc5b2580aa6390a836cf81d507f8017888ab8197600489118cc677/xai_sdk-1.7.0-py3-none-any.whl", hash = "sha256:332672c46ee73a7aad9b05e82db5a5044174bb3f5f038a7acf703f0b0ce6bad0", size = 241650, upload-time = "2026-02-18T20:53:22.016Z" },
+    { url = "https://files.pythonhosted.org/packages/98/cd/183e7541990f46474ce33aaf2b2573f8848e71871669e01ed1fb02e6bc3b/xai_sdk-1.8.0-py3-none-any.whl", hash = "sha256:af63766db7f8a070d57e15e052fb57fdfacacbc604590c4350ad1aef03dda374", size = 242349, upload-time = "2026-03-05T06:50:45.789Z" },
 ]
 
 [[package]]

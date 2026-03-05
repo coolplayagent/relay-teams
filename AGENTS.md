@@ -28,6 +28,7 @@ Database schema and API changes do not need to maintain backward compatibility. 
 - **Test-driven changes**: Every feature and bug fix must be guarded by unit tests. Unit test directories and files must correspond one-to-one with business code paths (for example, `src/agent_teams/tools/` -> `tests/unit_tests/tools/`).
 - **No emoji policy**: Do not use emoji in code, comments, docs, or commit messages.
 - **Import policy**: Do not place imports inside functions; keep imports at module top level to expose circular dependencies early.
+- **CLI 模块规范**: 每个模块必须提供本模块的 CLI 子命令，且列表/查询类输出必须同时支持表格（默认）与 `--format json`。
 
 ## Development Setup
 Run setup before starting implementation work.

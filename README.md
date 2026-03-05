@@ -7,7 +7,7 @@ Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
 
 ![Agent Teams Web Interface](docs/agent_teams.png)
 
-Start the server with `uv run agent-teams serve` and open http://127.0.0.1:8000 in your browser.
+Start the server with `uv run agent-teams server serve` and open http://127.0.0.1:8000 in your browser.
 
 Frontend assets are now decoupled under `frontend/dist` and served by the backend.
 
@@ -70,13 +70,13 @@ Roles without `llm_profile` will use the `default` profile.
 ### 3) Validate roles
 
 ```bash
-uv run agent-teams roles-validate
+uv run agent-teams roles validate
 ```
 
 ### 4) Start web server
 
 ```bash
-uv run agent-teams serve
+uv run agent-teams server serve
 ```
 
 Then open http://127.0.0.1:8000 in your browser to access the web interface.
@@ -84,19 +84,19 @@ Then open http://127.0.0.1:8000 in your browser to access the web interface.
 You can override runtime config directory (for isolated environments such as integration tests):
 
 ```bash
-uv run agent-teams serve --config-dir ./.agent_teams
+uv run agent-teams server serve --config-dir ./.agent_teams
 ```
 
 ### 5) Run a prompt (CLI via HTTP/SSE)
 
 ```bash
-uv run agent-teams prompt -m "Draft a release note"
+uv run agent-teams -m "Draft a release note"
 ```
 
-### 5.1) Legacy alias
+### 5.1) List merged environment variables
 
 ```bash
-uv run agent-teams run-intent --intent "Draft a release note"
+uv run agent-teams env list
 ```
 
 ### 5.2) Create a run and stream events (HTTP SDK)
