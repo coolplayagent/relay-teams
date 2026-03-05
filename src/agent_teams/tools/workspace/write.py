@@ -88,12 +88,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     raise ValueError(f"Path is a directory: {path}")
                 old_content = file_path.read_text(encoding="utf-8")
 
-            diff = generate_diff(str(file_path), old_content, content)
+            generate_diff(str(file_path), old_content, content)
             diff_short = format_diff_short(old_content, content)
 
             atomic_write(file_path, content, encoding="utf-8")
 
-            output = f"Wrote file successfully.\n\n"
+            output = "Wrote file successfully.\n\n"
             output += f"Diff:\n{diff_short}"
 
             return output

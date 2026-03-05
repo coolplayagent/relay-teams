@@ -31,6 +31,7 @@ dev = [
   "pre-commit >= 4.5.0",
   "ruff>=0.9.10",
   "basedpyright>=1.36.2",
+  "pyright>=1.1.408",
 ]
 
 [project.scripts]
@@ -45,3 +46,4 @@ where = ["src"]
 
 [tool.pyright]
 extraPaths = ["src", "tests"]
+typeCheckingMode = "standard"

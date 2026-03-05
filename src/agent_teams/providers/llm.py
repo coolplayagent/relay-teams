@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, cast, final, override
 
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai._agent_graph import ModelRequestNode
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -168,7 +169,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 ),
             )
         )
-        model_settings: dict[str, object] = {
+        model_settings: OpenAIChatModelSettings = {
             # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
             "openai_continuous_usage_stats": True,

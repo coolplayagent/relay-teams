@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from agent_teams.tools.registry import ToolRegistry
@@ -17,7 +17,7 @@ def build_collaboration_agent(
     api_key: str,
     system_prompt: str,
     allowed_tools: tuple[str, ...],
-    model_settings: dict[str, object] | None = None,
+    model_settings: OpenAIChatModelSettings | None = None,
     allowed_mcp_servers: tuple[str, ...] = (),
     allowed_skills: tuple[str, ...] = (),
     tool_registry: ToolRegistry,
@@ -27,7 +27,7 @@ def build_collaboration_agent(
     toolsets = []
     if mcp_registry and allowed_mcp_servers:
         toolsets.extend(mcp_registry.get_toolsets(allowed_mcp_servers))
-        
+
     skill_tools = []
     if skill_registry and allowed_skills:
         skill_registry.validate_known(allowed_skills)
@@ -53,5 +53,5 @@ def build_collaboration_agent(
     tool_registers = tool_registry.require(allowed_tools)
     for register in tool_registers:
         register(agent)
-    
+
     return agent
