@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 from pathlib import Path
 from typing import cast
@@ -18,13 +19,17 @@ from agent_teams.runtime.run_control_manager import RunControlManager
 from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
+from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository
+from agent_teams.state.shared_store import SharedStore
+from agent_teams.state.task_repo import TaskRepository
 from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.agents.management.instance_pool import InstancePool
 
 
 class _FakeRunEventHub:
@@ -43,6 +48,22 @@ class _FakeRunControlManager:
         return False
 
 
+class _FakeTaskRepository:
+    pass
+
+
+class _FakeInstancePool:
+    pass
+
+
+class _FakeSharedStore:
+    pass
+
+
+class _FakeEventLog:
+    pass
+
+
 def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
     config = ModelEndpointConfig(
         model='gpt-test',
@@ -51,10 +72,10 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
     )
     return OpenAICompatibleProvider(
         config,
-        task_repo=None,
-        instance_pool=None,
-        shared_store=None,
-        event_bus=None,
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),
+        instance_pool=cast(InstancePool, cast(object, _FakeInstancePool())),
+        shared_store=cast(SharedStore, cast(object, _FakeSharedStore())),
+        event_bus=cast(EventLog, cast(object, _FakeEventLog())),
         injection_manager=cast(RunInjectionManager, object()),
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=cast(AgentInstanceRepository, object()),

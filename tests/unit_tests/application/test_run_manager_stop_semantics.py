@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -5,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from agent_teams.agents.core.meta_agent import MetaAgent
 from agent_teams.application.run_manager import RunManager
 from agent_teams.core.enums import RunEventType
 from agent_teams.core.models import IntentInput
@@ -80,8 +82,8 @@ def _make_run_manager(control: RunControlManager) -> RunManager:
         instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
     )
-    return RunManager(  # type: ignore
-        meta_agent=_MetaAgent(),
+    return RunManager(
+        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -120,8 +122,8 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
     )
-    manager = RunManager(  # type: ignore
-        meta_agent=_MetaAgent(),
+    manager = RunManager(
+        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,

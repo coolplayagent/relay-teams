@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -20,16 +21,21 @@ from agent_teams.runtime.run_event_hub import RunEventHub
 from agent_teams.runtime.tool_approval_manager import ToolApprovalManager
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
+from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository
+from agent_teams.state.shared_store import SharedStore
+from agent_teams.state.task_repo import TaskRepository
+from agent_teams.core.models import RunEvent
 from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
+from agent_teams.agents.management.instance_pool import InstancePool
 
 
 class _FakeRunEventHub:
     def __init__(self) -> None:
-        self.events: list[object] = []
+        self.events: list[RunEvent] = []
 
-    def publish(self, event: object) -> None:
+    def publish(self, event: RunEvent) -> None:
         self.events.append(event)
 
 
@@ -48,6 +54,22 @@ class _FakeInjectionManager:
     def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
         _ = (run_id, instance_id)
         return []
+
+
+class _FakeTaskRepository:
+    pass
+
+
+class _FakeInstancePool:
+    pass
+
+
+class _FakeSharedStore:
+    pass
+
+
+class _FakeEventLog:
+    pass
 
 
 class _FakeMessageRepo:
@@ -300,10 +322,10 @@ def _build_provider(message_repo: _FakeMessageRepo, hub: _FakeRunEventHub) -> Op
     )
     return OpenAICompatibleProvider(
         config,
-        task_repo=None,
-        instance_pool=None,
-        shared_store=None,
-        event_bus=None,
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),
+        instance_pool=cast(InstancePool, cast(object, _FakeInstancePool())),
+        shared_store=cast(SharedStore, cast(object, _FakeSharedStore())),
+        event_bus=cast(EventLog, cast(object, _FakeEventLog())),
         injection_manager=cast(RunInjectionManager, cast(object, _FakeInjectionManager())),
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=cast(AgentInstanceRepository, object()),
