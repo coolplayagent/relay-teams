@@ -5,7 +5,7 @@ from types import ModuleType
 import os
 import sys
 
-from agent_teams.interfaces.cli import app as cli_app
+from agent_teams.interfaces.server import cli as server_cli
 
 
 def test_serve_sets_config_dir_env_and_runs_uvicorn(monkeypatch) -> None:
@@ -30,7 +30,7 @@ def test_serve_sets_config_dir_env_and_runs_uvicorn(monkeypatch) -> None:
     )
     monkeypatch.delenv("AGENT_TEAMS_CONFIG_DIR", raising=False)
 
-    cli_app.serve(host="127.0.0.1", port=8911, config_dir="D:/tmp/at-config")
+    server_cli.serve(host="127.0.0.1", port=8911, config_dir="D:/tmp/at-config")
 
     assert os.environ["AGENT_TEAMS_CONFIG_DIR"] == "D:/tmp/at-config"
     assert captured == {

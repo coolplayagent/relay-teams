@@ -1,28 +1,29 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
-from importlib import import_module
 import json
-import os
 import subprocess
 import sys
 import time
-from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import typer
 
-from agent_teams.core.enums import RunEventType
 from agent_teams.env.env_cli import env_app
+from agent_teams.interfaces.cli.prompt_cli import (
+    execute_prompt as _execute_prompt_impl,
+    root_command as _root_command_impl,
+    run_single_prompt as _run_single_prompt_impl,
+    stream_events as _stream_events_impl,
+)
+from agent_teams.interfaces.server.cli import build_server_app
+from agent_teams.roles.cli import build_roles_app
+from agent_teams.runtime.cli import build_approvals_app
 from agent_teams.triggers.cli import build_triggers_app
 
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
-server_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
-roles_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
-approvals_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
@@ -175,6 +176,35 @@ def _trigger_auto_start(base_url: str, autostart: bool) -> None:
     _auto_start_if_needed(base_url, autostart=autostart)
 
 
+def _module_request_json(
+    base_url: str,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None = None,
+) -> dict[str, object] | list[object]:
+    return _request_json(
+        base_url=base_url,
+        method=method,
+        path=path,
+        payload=payload,
+    )
+
+
+def _module_auto_start(base_url: str, autostart: bool) -> None:
+    _auto_start_if_needed(base_url, autostart=autostart)
+
+
+server_app = build_server_app()
+roles_app = build_roles_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
+approvals_app = build_approvals_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 triggers_app = build_triggers_app(
     request_json=_trigger_request_json,
     auto_start_if_needed=_trigger_auto_start,
@@ -183,41 +213,7 @@ triggers_app = build_triggers_app(
 
 
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
-    request = Request(
-        url=f"{base_url.rstrip('/')}/api/runs/{run_id}/events",
-        method="GET",
-        headers={"Accept": "text/event-stream"},
-    )
-
-    with urlopen(request, timeout=600.0) as response:
-        for raw_line in response:
-            line = raw_line.decode("utf-8").strip()
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload:
-                continue
-
-            event = json.loads(payload)
-            if "error" in event:
-                raise RuntimeError(event["error"])
-
-            if debug:
-                typer.echo(json.dumps(event, ensure_ascii=False))
-                continue
-
-            event_type = event.get("event_type")
-            if event_type == RunEventType.TEXT_DELTA.value:
-                event_payload = json.loads(event.get("payload_json", "{}"))
-                typer.echo(
-                    event_payload.get("text", event_payload.get("content", "")),
-                    nl=False,
-                )
-            if event_type in {
-                RunEventType.RUN_COMPLETED.value,
-                RunEventType.RUN_FAILED.value,
-            }:
-                break
+    _stream_events_impl(base_url, run_id, debug)
 
 
 @app.callback(invoke_without_command=True)
@@ -230,27 +226,14 @@ def root_command(
         help="Run a single prompt with default settings.",
     ),
 ) -> None:
-    if message is not None:
-        if ctx.invoked_subcommand is not None:
-            raise typer.BadParameter("Cannot combine --message with subcommands")
-        _run_single_prompt(message=message)
-        return
-
-    if ctx.invoked_subcommand is None:
-        typer.echo(ctx.get_help())
+    _root_command_impl(ctx, message, run_single_prompt=_run_single_prompt)
 
 
 def _run_single_prompt(message: str) -> None:
-    normalized_message = message.strip()
-    if not normalized_message:
-        raise typer.BadParameter("message must not be empty")
-    _execute_prompt(
-        message=normalized_message,
-        session_id=None,
-        base_url=DEFAULT_BASE_URL,
-        execution_mode="ai",
-        autostart=True,
-        debug=False,
+    _run_single_prompt_impl(
+        message,
+        default_base_url=DEFAULT_BASE_URL,
+        execute_prompt=_execute_prompt,
     )
 
 
@@ -263,94 +246,17 @@ def _execute_prompt(
     autostart: bool = True,
     debug: bool = False,
 ) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-
-    if not session_id:
-        created_response = _request_json(base_url, "POST", "/api/sessions", {})
-        created = _require_object_response(created_response, "/api/sessions")
-        session_id = _require_str_field(created, "session_id")
-
-    run_response = _request_json(
+    _execute_prompt_impl(
+        message,
+        session_id,
         base_url,
-        "POST",
-        "/api/runs",
-        {
-            "session_id": session_id,
-            "intent": message,
-            "execution_mode": execution_mode,
-        },
+        execution_mode,
+        autostart,
+        debug,
+        auto_start_if_needed=_module_auto_start,
+        request_json=_module_request_json,
+        stream_events=_stream_events,
     )
-    run = _require_object_response(run_response, "/api/runs")
-    run_id = _require_str_field(run, "run_id")
-
-    _stream_events(base_url, run_id, debug=debug)
-    if not debug:
-        typer.echo()
-
-
-@server_app.command("serve")
-def serve(
-    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind the server to"),
-    port: int = typer.Option(8000, "--port", help="Port to bind the server to"),
-    config_dir: str | None = typer.Option(
-        None,
-        "--config-dir",
-        help="Override runtime config directory (default: ./.agent_teams)",
-    ),
-) -> None:
-    if config_dir:
-        os.environ["AGENT_TEAMS_CONFIG_DIR"] = config_dir
-
-    uvicorn_module = import_module("uvicorn")
-    server_module = import_module("agent_teams.interfaces.server.app")
-    fastapi_app = getattr(server_module, "app")
-    uvicorn_run = cast(Callable[..., None], getattr(uvicorn_module, "run"))
-
-    typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
-    uvicorn_run(fastapi_app, host=host, port=port)
-
-
-@roles_app.command("validate")
-def roles_validate(
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-    result = _request_json(base_url, "POST", "/api/roles:validate", {})
-    typer.echo(json.dumps(result, ensure_ascii=False))
-
-
-@approvals_app.command("list")
-def tool_approvals_list(
-    run_id: str = typer.Option(..., "--run-id"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-    result = _request_json(base_url, "GET", f"/api/runs/{run_id}/tool-approvals")
-    approvals = result if isinstance(result, list) else result.get("data", [])
-    typer.echo(json.dumps(approvals, ensure_ascii=False))
-
-
-@approvals_app.command("resolve")
-def tool_approvals_resolve(
-    run_id: str = typer.Option(..., "--run-id"),
-    tool_call_id: str = typer.Option(..., "--tool-call-id"),
-    action: str = typer.Option(..., "--action", help="approve or deny"),
-    feedback: str = typer.Option("", "--feedback"),
-    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url"),
-    autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-    if action not in {"approve", "deny"}:
-        raise typer.BadParameter("action must be approve or deny")
-    result = _request_json(
-        base_url,
-        "POST",
-        f"/api/runs/{run_id}/tool-approvals/{tool_call_id}/resolve",
-        {"action": action, "feedback": feedback},
-    )
-    typer.echo(json.dumps(result, ensure_ascii=False))
 
 
 app.add_typer(server_app, name="server")
@@ -362,13 +268,6 @@ app.add_typer(triggers_app, name="triggers")
 
 def main() -> None:
     app()
-
-
-def _require_str_field(payload: dict[str, object], key: str) -> str:
-    value = payload.get(key)
-    if isinstance(value, str):
-        return value
-    raise RuntimeError(f"Field '{key}' must be a string")
 
 
 def _require_object_response(
