@@ -135,6 +135,74 @@ def test_get_project_root_or_none_returns_none_on_git_failure(
     assert root_paths.get_project_root_or_none(start_dir=tmp_path) is None
 
 
+def test_get_project_root_or_none_returns_none_on_os_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: str,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, cwd, check, capture_output, text, timeout)
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(root_paths.subprocess, "run", fake_run)
+
+    assert root_paths.get_project_root_or_none(start_dir=tmp_path) is None
+
+
+def test_get_project_root_or_none_returns_none_on_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: str,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, cwd, check, capture_output, text, timeout)
+        raise subprocess.TimeoutExpired(cmd="git", timeout=5.0)
+
+    monkeypatch.setattr(root_paths.subprocess, "run", fake_run)
+
+    assert root_paths.get_project_root_or_none(start_dir=tmp_path) is None
+
+
+def test_get_project_root_or_none_returns_none_on_blank_stdout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: str,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (cwd, check, capture_output, text, timeout)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="\n\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(root_paths.subprocess, "run", fake_run)
+
+    assert root_paths.get_project_root_or_none(start_dir=tmp_path) is None
+
+
 def test_get_project_config_dir_uses_project_root_when_available(monkeypatch) -> None:
     project_root = Path("D:/repo-root").resolve()
     monkeypatch.setattr(root_paths, "get_project_root_or_none", lambda: project_root)
@@ -183,3 +251,41 @@ def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
     config_dir = root_paths.get_user_config_dir(user_home_dir=user_home_dir)
 
     assert config_dir == user_home_dir.resolve() / ".agent_teams"
+
+
+def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> None:
+    unresolved_project_root = tmp_path / "parent" / ".." / "project-root"
+    unresolved_project_root.mkdir(parents=True)
+
+    config_dir = root_paths.get_project_config_dir(project_root=unresolved_project_root)
+
+    assert config_dir == (tmp_path / "project-root").resolve() / ".agent_teams"
+
+
+
+
+def test_resolve_start_dir_defaults_to_cwd(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    resolved = root_paths._resolve_start_dir(start_dir=None)
+
+    assert resolved == tmp_path.resolve()
+
+
+def test_resolve_start_dir_keeps_directory_input(tmp_path: Path) -> None:
+    nested_dir = tmp_path / "nested-dir"
+    nested_dir.mkdir()
+
+    resolved = root_paths._resolve_start_dir(start_dir=nested_dir)
+
+    assert resolved == nested_dir.resolve()
+
+def test_resolve_start_dir_uses_parent_for_file_path(tmp_path: Path) -> None:
+    nested_dir = tmp_path / "nested"
+    nested_dir.mkdir()
+    file_path = nested_dir / "source.txt"
+    file_path.write_text("data", encoding="utf-8")
+
+    resolved = root_paths._resolve_start_dir(start_dir=file_path)
+
+    assert resolved == nested_dir.resolve()

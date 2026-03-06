@@ -1,15 +1,19 @@
-import pytest
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
 from pathlib import Path
+
+import pytest
 
 from agent_teams.tools.stage_tools.docs import (
     current_stage_doc_path,
     previous_stage_doc_path,
+    write_stage_doc_once,
 )
-from agent_teams.tools.stage_tools.docs import write_stage_doc_once
 
 
-def test_stage_doc_paths() -> None:
-    root = Path("D:/workspace/agent_teams")
+def test_stage_doc_paths(tmp_path: Path) -> None:
+    root = tmp_path / "workspace" / "agent_teams"
     run_id = "run123"
 
     assert current_stage_doc_path(
@@ -43,9 +47,10 @@ def test_write_stage_doc_once_rejects_duplicate(
         return written["exists"]
 
     def _mkdir(_: Path, parents: bool, exist_ok: bool) -> None:
-        return None
+        _ = (parents, exist_ok)
 
     def _write_text(_: Path, content: str, encoding: str) -> int:
+        _ = encoding
         written["exists"] = True
         return len(content)
 
