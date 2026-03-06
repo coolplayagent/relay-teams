@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from agent_teams.interfaces.server.deps import get_system_config_service
 from agent_teams.interfaces.server.routers import system
+from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
 
 
 class _FakeSystemService:
@@ -53,6 +54,29 @@ class _FakeSystemService:
     def save_notification_config(self, config: dict[str, object]) -> None:
         self.saved_notification_config = config
 
+    def get_provider_models(
+        self,
+        *,
+        provider: ProviderType | None = None,
+    ) -> tuple[ProviderModelInfo, ...]:
+        models = (
+            ProviderModelInfo(
+                profile="default",
+                provider=ProviderType.OPENAI_COMPATIBLE,
+                model="gpt-4o-mini",
+                base_url="https://example.com/v1",
+            ),
+            ProviderModelInfo(
+                profile="echo",
+                provider=ProviderType.ECHO,
+                model="echo",
+                base_url="http://localhost",
+            ),
+        )
+        if provider is None:
+            return models
+        return tuple(model for model in models if model.provider == provider)
+
 
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
@@ -91,3 +115,28 @@ def test_save_notification_config() -> None:
     run_completed = service.saved_notification_config["run_completed"]
     assert isinstance(run_completed, dict)
     assert run_completed["enabled"] is True
+
+
+def test_get_provider_models() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/model/providers/models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 2
+    assert payload[0]["profile"] == "default"
+
+
+def test_get_provider_models_with_filter() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get(
+        "/api/system/configs/model/providers/models",
+        params={"provider": ProviderType.ECHO.value},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["provider"] == ProviderType.ECHO.value

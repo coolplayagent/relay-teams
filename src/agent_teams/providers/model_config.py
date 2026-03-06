@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProviderType(StrEnum):
+    OPENAI_COMPATIBLE = "openai_compatible"
+    ECHO = "echo"
 
 
 class SamplingConfig(BaseModel):
@@ -16,7 +23,17 @@ class SamplingConfig(BaseModel):
 class ModelEndpointConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
+
+
+class ProviderModelInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    profile: str = Field(min_length=1)
+    provider: ProviderType
+    model: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)

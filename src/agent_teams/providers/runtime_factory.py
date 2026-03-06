@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,16 +10,13 @@ from agent_teams.env.runtime_config import RuntimeConfig
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
-from agent_teams.providers.llm import (
-    EchoProvider,
-    LLMProvider,
-    OpenAICompatibleProvider,
-)
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.providers.llm import EchoProvider, LLMProvider, OpenAICompatibleProvider
+from agent_teams.providers.registry import create_default_provider_registry
 from agent_teams.roles.models import RoleDefinition
-from agent_teams.runs.injection_queue import RunInjectionManager
+from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
@@ -58,31 +56,34 @@ def create_provider_factory(
         if config_to_use is None:
             return EchoProvider()
 
-        return OpenAICompatibleProvider(
-            config_to_use,
-            task_repo=task_repo,
-            instance_pool=instance_pool,
-            shared_store=shared_store,
-            event_bus=event_log,
-            injection_manager=injection_manager,
-            run_event_hub=run_event_hub,
-            agent_repo=agent_repo,
-            workspace_root=Path.cwd(),
-            tool_registry=tool_registry,
-            mcp_registry=mcp_registry,
-            skill_registry=skill_registry,
-            allowed_tools=role.tools,
-            allowed_mcp_servers=role.mcp_servers,
-            allowed_skills=role.skills,
-            message_repo=message_repo,
-            role_registry=role_registry,
-            task_execution_service=get_task_execution_service(),
-            run_control_manager=run_control_manager,
-            tool_approval_manager=tool_approval_manager,
-            tool_approval_policy=tool_approval_policy,
-            notification_service=notification_service,
-            token_usage_repo=token_usage_repo,
+        provider_registry = create_default_provider_registry(
+            openai_compatible_builder=lambda config: OpenAICompatibleProvider(
+                config,
+                task_repo=task_repo,
+                instance_pool=instance_pool,
+                shared_store=shared_store,
+                event_bus=event_log,
+                injection_manager=injection_manager,
+                run_event_hub=run_event_hub,
+                agent_repo=agent_repo,
+                workspace_root=Path.cwd(),
+                tool_registry=tool_registry,
+                mcp_registry=mcp_registry,
+                skill_registry=skill_registry,
+                allowed_tools=role.tools,
+                allowed_mcp_servers=role.mcp_servers,
+                allowed_skills=role.skills,
+                message_repo=message_repo,
+                role_registry=role_registry,
+                task_execution_service=get_task_execution_service(),
+                run_control_manager=run_control_manager,
+                tool_approval_manager=tool_approval_manager,
+                tool_approval_policy=tool_approval_policy,
+                notification_service=notification_service,
+                token_usage_repo=token_usage_repo,
+            ),
         )
+        return provider_registry.create(config_to_use)
 
     return provider_factory
 

@@ -9,7 +9,11 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_teams.env import load_merged_env_vars
 from agent_teams.paths import get_project_config_dir
-from agent_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
+from agent_teams.providers.model_config import (
+    ModelEndpointConfig,
+    ProviderType,
+    SamplingConfig,
+)
 
 
 class RuntimePaths(BaseModel):
@@ -84,9 +88,14 @@ def load_llm_configs(
 
     profiles: dict[str, ModelEndpointConfig] = {}
     for name, cfg in data.items():
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Invalid profile '{name}': expected an object.")
+
         model = cfg.get("model")
         base_url = cfg.get("base_url")
         api_key = _resolve_env_var(cfg.get("api_key", ""), env_values)
+        provider_raw = cfg.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
+        provider = ProviderType(provider_raw)
 
         if not model or not base_url or not api_key:
             raise ValueError(
@@ -99,6 +108,7 @@ def load_llm_configs(
         top_k = cfg.get("top_k")
 
         profiles[name] = ModelEndpointConfig(
+            provider=provider,
             model=model,
             base_url=base_url,
             api_key=api_key,

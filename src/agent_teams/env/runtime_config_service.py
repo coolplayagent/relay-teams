@@ -9,6 +9,8 @@ from agent_teams.env.config_manager import ConfigManager
 from agent_teams.env.runtime_config import RuntimeConfig, load_runtime_config
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationConfig
+from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
+from agent_teams.providers.registry import list_provider_models
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.skills.registry import SkillRegistry
@@ -67,6 +69,13 @@ class RuntimeConfigService:
 
     def get_model_profiles(self) -> dict[str, JsonObject]:
         return self._config_manager.get_model_profiles()
+
+    def get_provider_models(
+        self,
+        *,
+        provider: ProviderType | None = None,
+    ) -> tuple[ProviderModelInfo, ...]:
+        return list_provider_models(self._runtime.llm_profiles, provider)
 
     def save_model_profile(self, name: str, profile: JsonObject) -> None:
         self._config_manager.save_model_profile(name, profile)

@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.env.runtime_config_service import RuntimeConfigService
 from agent_teams.interfaces.server.deps import get_system_config_service
+from agent_teams.providers.model_config import ProviderType
 from agent_teams.shared_types.json_types import JsonObject
 
 router = APIRouter(prefix="/system", tags=["System"])
@@ -39,6 +40,7 @@ def get_model_profiles(
 class ModelProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     model: str
     base_url: str
     api_key: str
@@ -58,6 +60,7 @@ def save_model_profile(
             name,
             {
                 "model": req.model,
+                "provider": req.provider.value,
                 "base_url": req.base_url,
                 "api_key": req.api_key,
                 "temperature": req.temperature,
@@ -68,6 +71,17 @@ def save_model_profile(
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/model/providers/models")
+def get_provider_models(
+    provider: ProviderType | None = Query(default=None),
+    service: RuntimeConfigService = Depends(get_system_config_service),
+) -> list[JsonObject]:
+    return [
+        model.model_dump(mode="json")
+        for model in service.get_provider_models(provider=provider)
+    ]
 
 
 @router.delete("/configs/model/profiles/{name}")
@@ -156,5 +170,4 @@ def reload_skills_config(
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
 

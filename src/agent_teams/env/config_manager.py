@@ -33,6 +33,7 @@ class ConfigManager:
             if not isinstance(profile, dict):
                 continue
             result[name] = {
+                "provider": profile.get("provider", "openai_compatible"),
                 "model": profile.get("model", ""),
                 "base_url": profile.get("base_url", ""),
                 "has_api_key": bool(profile.get("api_key")),

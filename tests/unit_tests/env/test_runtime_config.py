@@ -43,3 +43,24 @@ def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None
         runtime_config.load_llm_configs(tmp_path, {})
 
     assert "Please create model.json with a 'default' profile." in str(exc_info.value)
+
+
+def test_load_llm_configs_reads_provider_field(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "plain-text-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["default"].provider.value == "openai_compatible"

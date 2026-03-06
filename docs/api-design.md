@@ -83,6 +83,7 @@ Upsert a model profile.
 Request:
 ```json
 {
+  "provider": "openai_compatible",
   "model": "gpt-4o-mini",
   "base_url": "https://api.openai.com/v1",
   "api_key": "***",
@@ -90,6 +91,24 @@ Request:
   "top_p": 1.0,
   "max_tokens": 4096
 }
+```
+
+### `GET /system/configs/model/providers/models`
+Returns queryable provider model metadata generated from runtime profiles.
+
+Optional query parameter:
+- `provider`: provider type filter (`openai_compatible`, `echo`)
+
+Response:
+```json
+[
+  {
+    "profile": "default",
+    "provider": "openai_compatible",
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1"
+  }
+]
 ```
 
 ### `DELETE /system/configs/model/profiles/{name}`
