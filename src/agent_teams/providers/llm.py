@@ -38,16 +38,18 @@ from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.runs.models import RunEvent
-from agent_teams.tools.approval_state import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.builders.collaboration_agent import build_collaboration_agent
-from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.tools.runtime import ToolDeps
+from agent_teams.tools.runtime import (
+    ToolApprovalManager,
+    ToolApprovalPolicy,
+    ToolDeps,
+)
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.prompting.provider_augment import (

@@ -35,10 +35,11 @@ from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.approval_state import ToolApprovalManager
-from agent_teams.tools.defaults import build_default_registry
-from agent_teams.tools.policy import ToolApprovalPolicy
-from agent_teams.tools.registry import ToolRegistry
+from agent_teams.tools.registry import ToolRegistry, build_default_registry
+from agent_teams.tools.runtime import (
+    ToolApprovalManager,
+    ToolApprovalPolicy,
+)
 from agent_teams.triggers import TriggerRepository, TriggerService
 from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
 
@@ -60,7 +61,9 @@ class ServerContainer:
         self.runtime: RuntimeConfig = runtime
 
         self.config_manager: ConfigManager = ConfigManager(config_dir=config_dir)
-        self.role_registry: RoleRegistry = RoleLoader().load_all(runtime.paths.roles_dir)
+        self.role_registry: RoleRegistry = RoleLoader().load_all(
+            runtime.paths.roles_dir
+        )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.config_manager.load_mcp_registry()
         self.skill_registry: SkillRegistry = self.config_manager.load_skill_registry()
@@ -82,7 +85,9 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.trigger_repo: TriggerRepository = TriggerRepository(runtime.paths.db_path)
-        self.trigger_service: TriggerService = TriggerService(trigger_repo=self.trigger_repo)
+        self.trigger_service: TriggerService = TriggerService(
+            trigger_repo=self.trigger_repo
+        )
 
         self.instance_pool: InstancePool = InstancePool.from_repo(self.agent_repo)
         self.injection_manager: RunInjectionManager = RunInjectionManager()

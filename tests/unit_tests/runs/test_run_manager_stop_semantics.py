@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +20,7 @@ from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.tools.approval_state import ToolApprovalManager
+from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository
@@ -164,5 +164,3 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
     assert event.event_type == RunEventType.RUN_STOPPED
     notification_event = queue.get_nowait()
     assert notification_event.event_type == RunEventType.NOTIFICATION_REQUESTED
-
-

@@ -18,7 +18,7 @@ from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.tools.approval_state import ToolApprovalManager
+from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.prompting.provider_augment import PromptSkillInstruction
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
@@ -27,7 +27,7 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.runs.models import RunEvent
-from agent_teams.tools.policy import ToolApprovalPolicy
+from agent_teams.tools.runtime import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.agents.management.instance_pool import InstancePool
 

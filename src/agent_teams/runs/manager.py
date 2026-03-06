@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from json import dumps
@@ -20,10 +20,7 @@ from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.runs.ids import new_trace_id
 from agent_teams.runs.models import IntentInput, RunEvent, RunResult
 from agent_teams.state.session_repo import SessionRepository
-from agent_teams.tools.approval_state import (
-    ToolApprovalAction,
-    ToolApprovalManager,
-)
+from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
 from agent_teams.trace import bind_trace_context
 
 logger = get_logger(__name__)
@@ -346,4 +343,3 @@ class RunManager:
                 trace_id=trace_id,
             ),
         )
-

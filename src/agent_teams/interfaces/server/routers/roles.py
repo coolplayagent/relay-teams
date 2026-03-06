@@ -7,7 +7,7 @@ from agent_teams.env.runtime_config import load_runtime_config
 from agent_teams.interfaces.server.config_paths import get_config_dir
 from agent_teams.interfaces.server.deps import get_role_registry
 from agent_teams.roles.registry import RoleLoader, RoleRegistry
-from agent_teams.tools.defaults import build_default_registry
+from agent_teams.tools.registry import build_default_registry
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
 

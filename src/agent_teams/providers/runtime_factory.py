@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable
@@ -19,7 +19,6 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.tools.approval_state import ToolApprovalManager
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
@@ -27,8 +26,8 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_store import SharedStore
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.policy import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
+from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 
 
 def create_provider_factory(
@@ -114,4 +113,3 @@ def create_task_execution_service(
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
     )
-

@@ -14,8 +14,7 @@ from pydantic_ai import Tool
 from agent_teams.shared_types.json_types import JsonObject, JsonValue
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.models import Skill, SkillInstructionEntry
-from agent_teams.tools.runtime import ToolContext, ToolDeps
-from agent_teams.tools.tool_helpers import execute_tool
+from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 type SkillEntrypoint = Callable[..., object]
 
