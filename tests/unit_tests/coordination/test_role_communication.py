@@ -17,6 +17,8 @@ from agent_teams.coordination import (
     RoleStateTransition,
     bind_role_to_agent_instance,
     build_memory_scope_from_binding,
+    build_role_workspace_memory_scope_from_binding,
+    build_task_memory_scope_from_binding,
     evaluate_feedback_loop,
     evaluate_feedback_loop_recursively,
     execute_role_transition,
@@ -129,7 +131,7 @@ def test_exchange_rejects_mismatched_memory_scope_role() -> None:
         )
 
 
-def test_build_memory_scope_from_binding_returns_role_scoped_identity() -> None:
+def test_build_memory_scope_from_binding_returns_conversation_scope_identity() -> None:
     binding = RoleAgentBinding(
         role_id="reviewer",
         instance_id="instance-r1",
@@ -142,6 +144,36 @@ def test_build_memory_scope_from_binding_returns_role_scoped_identity() -> None:
     assert memory_scope.workspace_id == "workspace-alpha"
     assert memory_scope.role_id == "reviewer"
     assert memory_scope.conversation_id == "session-a:reviewer"
+
+
+def test_build_role_workspace_memory_scope_from_binding_returns_role_scope_identity() -> None:
+    binding = RoleAgentBinding(
+        role_id="reviewer",
+        instance_id="instance-r1",
+        workspace_id="workspace-alpha",
+        conversation_id="session-a:reviewer",
+    )
+
+    memory_scope = build_role_workspace_memory_scope_from_binding(binding)
+
+    assert memory_scope.workspace_id == "workspace-alpha"
+    assert memory_scope.role_id == "reviewer"
+
+
+def test_build_task_memory_scope_from_binding_returns_task_scope_identity() -> None:
+    binding = RoleAgentBinding(
+        role_id="reviewer",
+        instance_id="instance-r1",
+        workspace_id="workspace-alpha",
+        conversation_id="session-a:reviewer",
+    )
+
+    memory_scope = build_task_memory_scope_from_binding(binding, task_id="task-7")
+
+    assert memory_scope.workspace_id == "workspace-alpha"
+    assert memory_scope.role_id == "reviewer"
+    assert memory_scope.conversation_id == "session-a:reviewer"
+    assert memory_scope.task_id == "task-7"
 
 
 def test_execute_role_transition_enforces_role_boundary() -> None:

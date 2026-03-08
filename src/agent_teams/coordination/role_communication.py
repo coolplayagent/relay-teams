@@ -50,12 +50,28 @@ class RoleStateSpace(BaseModel):
         )
 
 
+class RoleWorkspaceMemoryScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    role_id: str = Field(min_length=1)
+
+
 class RoleConversationMemoryScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: str = Field(min_length=1)
     role_id: str = Field(min_length=1)
     conversation_id: str = Field(min_length=1)
+
+
+class RoleTaskMemoryScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    role_id: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
 
 
 class RoleCommunicationExchange(BaseModel):
@@ -132,6 +148,15 @@ def bind_role_to_agent_instance(
     )
 
 
+def build_role_workspace_memory_scope_from_binding(
+    binding: RoleAgentBinding,
+) -> RoleWorkspaceMemoryScope:
+    return RoleWorkspaceMemoryScope(
+        workspace_id=binding.workspace_id,
+        role_id=binding.role_id,
+    )
+
+
 def build_memory_scope_from_binding(
     binding: RoleAgentBinding,
 ) -> RoleConversationMemoryScope:
@@ -139,6 +164,18 @@ def build_memory_scope_from_binding(
         workspace_id=binding.workspace_id,
         role_id=binding.role_id,
         conversation_id=binding.conversation_id,
+    )
+
+
+def build_task_memory_scope_from_binding(
+    binding: RoleAgentBinding,
+    task_id: str,
+) -> RoleTaskMemoryScope:
+    return RoleTaskMemoryScope(
+        workspace_id=binding.workspace_id,
+        role_id=binding.role_id,
+        conversation_id=binding.conversation_id,
+        task_id=task_id,
     )
 
 
