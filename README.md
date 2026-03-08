@@ -32,6 +32,10 @@ Core code lives under `src/agent_teams/`:
 
 Frontend assets are built into `frontend/dist` (`css/` and `js/`) and served by the backend.
 
+## Skills
+
+Skills are composable capability modules. Agents load skills at runtime based on the current task context, so the same role can attach different capability sets for different runs.
+
 ## Web Interface
 
 ![Agent Teams Web Interface](docs/agent_teams.png)
@@ -209,4 +213,3 @@ Run browser automation tests (Playwright):
 uv run playwright install chromium
 uv run pytest -q tests/integration_tests/browser
 ```
-

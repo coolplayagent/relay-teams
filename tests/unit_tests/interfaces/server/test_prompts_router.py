@@ -18,7 +18,7 @@ from agent_teams.tools.registry import ToolRegistry
 
 class _FakeSkillRegistry:
     def __init__(self) -> None:
-        self._known = {"time"}
+        self._known = {"time", "planner"}
 
     def validate_known(self, skill_names: tuple[str, ...]) -> None:
         unknown = [name for name in skill_names if name not in self._known]
@@ -32,7 +32,11 @@ class _FakeSkillRegistry:
         return tuple(
             SkillInstructionEntry(
                 name=name,
-                instructions="Normalize all times to UTC.",
+                instructions=(
+                    "Normalize all times to UTC."
+                    if name == "time"
+                    else "Break objectives into executable plans."
+                ),
             )
             for name in skill_names
         )
@@ -96,6 +100,25 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert payload["tool_prompt"].startswith("## Tool Rules")
     assert payload["skill_prompt"].startswith("## Skill Instructions")
 
+
+
+def test_prompts_preview_skill_override_replaces_role_default() -> None:
+    client = _create_client()
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "coordinator_agent",
+            "skills": ["planner"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["skills"] == ["planner"]
+    assert "### Skill: planner" in payload["provider_system_prompt"]
+    assert "Break objectives into executable plans." in payload["provider_system_prompt"]
+    assert "### Skill: time" not in payload["provider_system_prompt"]
 
 def test_prompts_preview_returns_404_for_unknown_role() -> None:
     client = _create_client()
