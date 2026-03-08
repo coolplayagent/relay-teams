@@ -34,6 +34,16 @@ The workspace design should satisfy the following goals:
 
 Continuity must not be owned by `instance`.
 
+Normative ownership model:
+- Memory does not belong to an `Agent` instance; it belongs to a role scope.
+- `Role` defines the state space, while an `Agent` instance is only an execution process running inside that state space.
+- To guarantee continuity, recoverability, and auditability, role memory is split into three stability layers:
+  - `workspace + role`: long-term role memory for durable knowledge, responsibility boundaries, and cross-thread continuity.
+  - `workspace + role + conversation`: thread memory for phase context inside one collaboration thread.
+  - `workspace + role + conversation + task`: task-temporary memory for in-task working memory and transient state.
+- Instance lifecycle (creation, teardown, migration, re-entry) must restore continuity by reloading role-scoped state.
+- Role scope includes both cognitive-memory boundary and execution boundary. The execution boundary must at least define working directory, readable/writable paths, and branch binding; Git worktree is the preferred engineering carrier for a role-scoped workspace.
+
 Continuity should instead be owned by:
 - `workspace`
 - `role thread`
