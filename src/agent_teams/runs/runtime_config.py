@@ -47,8 +47,9 @@ def load_runtime_config(
     env_file = resolved_config_dir / ".env"
     merged_env = load_merged_env_vars(extra_env_files=(env_file,))
 
-    resolved_roles_dir = roles_dir or Path(
-        merged_env.get("AGENT_TEAMS_ROLES_DIR", str(resolved_config_dir / "roles"))
+    resolved_roles_dir = _resolve_path(
+        resolved_config_dir,
+        str(roles_dir or merged_env.get("AGENT_TEAMS_ROLES_DIR", "roles")),
     )
     resolved_db_path = db_path or _resolve_path(
         resolved_config_dir,

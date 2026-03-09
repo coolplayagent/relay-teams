@@ -38,6 +38,35 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
 
 
+def test_load_runtime_config_resolves_relative_roles_dir_from_env(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent_teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "default": {
+                    "model": "fake-model",
+                    "base_url": "http://localhost:8000/v1",
+                    "api_key": "test-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runtime_config,
+        "load_merged_env_vars",
+        lambda **kwargs: {"AGENT_TEAMS_ROLES_DIR": "roles"},
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.paths.roles_dir == (config_dir / "roles")
+
+
 def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError) as exc_info:
         runtime_config.load_llm_configs(tmp_path, {})
