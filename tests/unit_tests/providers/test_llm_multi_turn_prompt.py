@@ -589,7 +589,7 @@ async def test_generate_persists_current_turn_prompt_even_with_existing_history(
 
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: fake_agent,
     )
 
@@ -647,7 +647,7 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
 
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: fake_agent,
     )
 
@@ -686,7 +686,7 @@ async def test_generate_enables_continuous_stream_usage_stats(
         captured_kwargs.update(kwargs)
         return fake_agent
 
-    monkeypatch.setattr(llm_module, "build_collaboration_agent", _fake_builder)
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
 
     request = LLMRequest(
         run_id="run-3",
@@ -737,7 +737,7 @@ async def test_generate_builds_augmented_system_prompt(
         captured_kwargs.update(kwargs)
         return fake_agent
 
-    monkeypatch.setattr(llm_module, "build_collaboration_agent", _fake_builder)
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
 
     request = LLMRequest(
         run_id="run-augment",
@@ -782,7 +782,7 @@ async def test_generate_token_usage_tracks_request_level_delta(
     monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: fake_agent,
     )
 
@@ -827,7 +827,7 @@ async def test_generate_token_usage_delta_works_with_mutated_usage_object(
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: fake_agent,
     )
 
@@ -893,7 +893,7 @@ async def test_subagent_resume_after_stream_cancellation_reuses_db_history(
     monkeypatch.setattr(llm_module, "ModelRequestNode", _StreamingTextNode)
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: cancelled_agent,
     )
     request = LLMRequest(
@@ -931,7 +931,7 @@ async def test_subagent_resume_after_stream_cancellation_reuses_db_history(
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: resumed_agent,
     )
 
@@ -988,7 +988,7 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: cancelled_agent,
     )
     request = LLMRequest(
@@ -1050,7 +1050,7 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: resumed_agent,
     )
 
@@ -1128,7 +1128,7 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: completed_agent,
     )
     request = LLMRequest(
@@ -1170,7 +1170,7 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
     )
     monkeypatch.setattr(
         llm_module,
-        "build_collaboration_agent",
+        "build_coordination_agent",
         lambda **kwargs: resumed_agent,
     )
 

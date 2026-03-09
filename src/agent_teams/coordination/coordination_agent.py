@@ -12,7 +12,7 @@ from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolDeps
 
 
-def build_collaboration_agent(
+def build_coordination_agent(
     *,
     model_name: str,
     base_url: str,
@@ -26,6 +26,11 @@ def build_collaboration_agent(
     mcp_registry: McpRegistry | None = None,
     skill_registry: SkillRegistry | None = None,
 ) -> Agent[ToolDeps, str]:
+    """Build the lean meta-orchestrator for collaboration management.
+
+    It drives the full task lifecycle, evaluates task complexity, and chooses the
+    most suitable execution path.
+    """
     toolsets = []
     if mcp_registry and allowed_mcp_servers:
         toolsets.extend(mcp_registry.get_toolsets(allowed_mcp_servers))

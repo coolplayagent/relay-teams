@@ -45,7 +45,7 @@ from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
-from agent_teams.agents.builders.collaboration_agent import build_collaboration_agent
+from agent_teams.coordination.coordination_agent import build_coordination_agent
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
@@ -228,7 +228,7 @@ class OpenAICompatibleProvider(LLMProvider):
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
             "openai_continuous_usage_stats": True,
         }
-        agent = build_collaboration_agent(
+        agent = build_coordination_agent(
             model_name=self._config.model,
             base_url=self._config.base_url,
             api_key=self._config.api_key,

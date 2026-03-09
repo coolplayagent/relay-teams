@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from agent_teams.coordination.coordination_agent import build_coordination_agent
 from agent_teams.coordination.human_gate import GateAction, GateManager
 from agent_teams.coordination.role_communication import (
     FeedbackLoopEvaluation,
@@ -40,6 +41,7 @@ __all__ = [
     "RoleTaskMemoryScope",
     "RoleWorkspaceMemoryScope",
     "bind_role_to_agent_instance",
+    "build_coordination_agent",
     "build_memory_scope_from_binding",
     "build_role_workspace_memory_scope_from_binding",
     "build_task_memory_scope_from_binding",

@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.builders import collaboration_agent
+from agent_teams.coordination import coordination_agent
 from agent_teams.tools.registry import ToolRegistry
 
 
@@ -34,7 +34,7 @@ class _FakeToolRegistry:
         return ()
 
 
-def test_build_collaboration_agent_passes_proxy_http_client(
+def test_build_coordination_agent_passes_proxy_http_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -63,27 +63,27 @@ def test_build_collaboration_agent_passes_proxy_http_client(
         return agent
 
     monkeypatch.setattr(
-        collaboration_agent,
+        coordination_agent,
         "build_llm_http_client",
         _fake_build_llm_http_client,
     )
     monkeypatch.setattr(
-        collaboration_agent,
+        coordination_agent,
         "OpenAIProvider",
         _fake_openai_provider,
     )
     monkeypatch.setattr(
-        collaboration_agent,
+        coordination_agent,
         "OpenAIChatModel",
         _fake_openai_chat_model,
     )
     monkeypatch.setattr(
-        collaboration_agent,
+        coordination_agent,
         "Agent",
         _fake_agent,
     )
 
-    agent = collaboration_agent.build_collaboration_agent(
+    agent = coordination_agent.build_coordination_agent(
         model_name="gpt-test",
         base_url="https://example.test/v1",
         api_key="secret",
