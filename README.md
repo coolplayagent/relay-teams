@@ -1,4 +1,4 @@
-﻿# agent-teams
+# agent-teams
 
 Role-driven multi-agent orchestration framework built with strong typing and tool-only collaboration flow.
 Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
@@ -83,6 +83,13 @@ Then edit `.agent_teams/model.json`. You must configure the `default` profile, a
     "temperature": 0.1
   }
 }
+```
+
+If you use placeholders such as `${OPENAI_API_KEY}`, define them in the ignored `.agent_teams/.env` file or in the process environment before starting the server.
+
+```dotenv
+OPENAI_API_KEY=<your-openai-api-key>
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
 ```
 
 #### Per-role model configuration
@@ -213,3 +220,4 @@ Run browser automation tests (Playwright):
 uv run playwright install chromium
 uv run pytest -q tests/integration_tests/browser
 ```
+

@@ -94,7 +94,12 @@ def load_llm_configs(
 
         model = cfg.get("model")
         base_url = cfg.get("base_url")
-        api_key = _resolve_env_var(cfg.get("api_key", ""), env_values)
+        api_key = _resolve_required_config_value(
+            cfg.get("api_key", ""),
+            env_values,
+            profile_name=name,
+            field_name="api_key",
+        )
         provider_raw = cfg.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
         provider = ProviderType(provider_raw)
 
@@ -124,10 +129,30 @@ def load_llm_configs(
     return profiles
 
 
-def _resolve_env_var(value: str, env_values: Mapping[str, str]) -> str:
+def _resolve_required_config_value(
+    value: str,
+    env_values: Mapping[str, str],
+    *,
+    profile_name: str,
+    field_name: str,
+) -> str:
     if value.startswith("${") and value.endswith("}"):
-        env_key = value[2:-1]
-        return env_values.get(env_key, value)
+        env_key = value[2:-1].strip()
+        if not env_key:
+            raise ValueError(
+                f"Invalid profile '{profile_name}': empty environment variable placeholder for {field_name}."
+            )
+
+        resolved_value = env_values.get(env_key)
+        if resolved_value is None:
+            raise ValueError(
+                f"Invalid profile '{profile_name}': environment variable '{env_key}' referenced by {field_name} is not set."
+            )
+        if not resolved_value:
+            raise ValueError(
+                f"Invalid profile '{profile_name}': environment variable '{env_key}' referenced by {field_name} is empty."
+            )
+        return resolved_value
     return value
 
 

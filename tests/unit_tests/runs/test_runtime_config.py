@@ -93,3 +93,52 @@ def test_load_llm_configs_reads_provider_field(tmp_path: Path) -> None:
     profiles = runtime_config.load_llm_configs(tmp_path, {})
 
     assert profiles["default"].provider.value == "openai_compatible"
+
+
+def test_load_llm_configs_resolves_api_key_env_placeholder(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "${OPENAI_API_KEY}",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(
+        tmp_path,
+        {"OPENAI_API_KEY": "resolved-secret"},
+    )
+
+    assert profiles["default"].api_key == "resolved-secret"
+
+
+def test_load_llm_configs_errors_when_api_key_env_placeholder_is_missing(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "${OPENAI_API_KEY}",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime_config.load_llm_configs(tmp_path, {})
+
+    assert (
+        "environment variable 'OPENAI_API_KEY' referenced by api_key is not set"
+        in str(exc_info.value)
+    )
