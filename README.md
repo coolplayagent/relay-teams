@@ -90,7 +90,21 @@ If you use placeholders such as `${OPENAI_API_KEY}`, define them in the ignored 
 ```dotenv
 OPENAI_API_KEY=<your-openai-api-key>
 ANTHROPIC_API_KEY=<your-anthropic-api-key>
+# Optional: proxy settings used by LLM requests and all MCP transports
+HTTP_PROXY=http://proxy.example:8080
+HTTPS_PROXY=http://proxy.example:8080
+NO_PROXY=localhost,127.0.0.1
+# Optional: disable TLS verification for LLM API requests behind a corporate proxy
+AGENT_TEAMS_LLM_SSL_VERIFY=false
 ```
+
+Proxy behavior:
+- LLM OpenAI-compatible requests read proxy settings from the merged env (`.agent_teams/.env`, user env, process env).
+- All MCP transports read proxy settings from the merged env.
+- Every MCP server config inherits merged proxy env values in its `env` settings.
+- stdio MCP servers consume those values when Agent Teams launches subprocess transports such as `uvx` and `npx`.
+- Remote MCP transports (`sse`, `http`, `streamable-http`) also use the merged proxy env through the backend process environment.
+- If an MCP server defines explicit `env` entries in `mcp.json`, those values override the inherited proxy defaults.
 
 #### Per-role model configuration
 
@@ -144,6 +158,11 @@ uv run agent-teams env list
 `mcp` config now follows module-local scope merge rules:
 - `~/.agent_teams/mcp.json` (user scope)
 - `.agent_teams/mcp.json` (project scope, overrides user servers with the same name)
+- All MCP transports read proxy env values from merged runtime env.
+- Every MCP server config inherits merged proxy env values in its `env` settings.
+- stdio MCP servers consume those values when Agent Teams starts subprocess transports.
+- Remote MCP transports (`sse`, `http`, `streamable-http`) also use those merged proxy env values through the backend process environment.
+- If an MCP server defines its own `env` entries in `mcp.json`, those explicit values override the inherited proxy defaults.
 
 ```bash
 uv run agent-teams mcp list

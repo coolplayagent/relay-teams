@@ -5,10 +5,11 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from agent_teams.mcp.registry import McpRegistry
+from agent_teams.providers.http_client_factory import build_llm_http_client
+from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolDeps
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.skills.registry import SkillRegistry
 
 
 def build_collaboration_agent(
@@ -34,9 +35,14 @@ def build_collaboration_agent(
         skill_registry.validate_known(allowed_skills)
         skill_tools = skill_registry.get_toolset_tools(allowed_skills)
 
+    llm_http_client = build_llm_http_client()
     model = OpenAIChatModel(
         model_name,
-        provider=OpenAIProvider(base_url=base_url, api_key=api_key),
+        provider=OpenAIProvider(
+            base_url=base_url,
+            api_key=api_key,
+            http_client=llm_http_client,
+        ),
     )
     agent: Agent[ToolDeps, str] = Agent(
         model=model,

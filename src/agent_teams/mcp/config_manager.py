@@ -5,6 +5,11 @@ from json import loads
 from pathlib import Path
 from typing import cast
 
+from agent_teams.env import (
+    apply_proxy_env_to_process_env,
+    extract_proxy_env_vars,
+    load_merged_env_vars,
+)
 from agent_teams.logger import get_logger
 from agent_teams.mcp.models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.registry import McpRegistry
@@ -14,6 +19,7 @@ from agent_teams.trace import trace_span
 
 logger = get_logger(__name__)
 _MCP_FILE_NAME = "mcp.json"
+_ENV_FILE_NAME = ".env"
 
 
 def get_user_mcp_file_path(user_home_dir: Path | None = None) -> Path:
@@ -42,8 +48,17 @@ class McpConfigManager:
             attributes={"project_config_dir": str(self._project_config_dir)},
         ):
             merged_specs: dict[str, McpServerSpec] = {}
+            merged_env = load_merged_env_vars(
+                user_home_dir=self._user_home_dir,
+                extra_env_files=(self._project_config_dir / _ENV_FILE_NAME,),
+            )
+            proxy_env = apply_proxy_env_to_process_env(merged_env)
             for source, file_path in self._iter_sources():
-                for spec in _load_specs_from_file(file_path=file_path, source=source):
+                for spec in _load_specs_from_file(
+                    file_path=file_path,
+                    source=source,
+                    proxy_env=proxy_env,
+                ):
                     merged_specs[spec.name] = spec
             return McpRegistry(tuple(merged_specs.values()))
 
@@ -55,7 +70,7 @@ class McpConfigManager:
 
 
 def _load_specs_from_file(
-    *, file_path: Path, source: McpConfigScope
+    *, file_path: Path, source: McpConfigScope, proxy_env: dict[str, str]
 ) -> tuple[McpServerSpec, ...]:
     with trace_span(
         logger,
@@ -80,14 +95,18 @@ def _load_specs_from_file(
         for raw_name, raw_config in maybe_servers.items():
             name = str(raw_name)
             normalized_server_config = _normalize_to_json_object(raw_config)
+            effective_server_config = _apply_proxy_env_to_mcp_server_config(
+                normalized_server_config,
+                proxy_env,
+            )
             wrapped_config: JsonObject = {
-                "mcpServers": {name: normalized_server_config},
+                "mcpServers": {name: effective_server_config},
             }
             specs.append(
                 McpServerSpec(
                     name=name,
                     config=wrapped_config,
-                    server_config=normalized_server_config,
+                    server_config=effective_server_config,
                     source=source,
                 )
             )
@@ -121,3 +140,26 @@ def _normalize_json_value(value: object) -> JsonValue:
             normalized[str(key)] = _normalize_json_value(item)
         return normalized
     return str(value)
+
+
+def _apply_proxy_env_to_mcp_server_config(
+    server_config: JsonObject,
+    proxy_env: dict[str, str],
+) -> JsonObject:
+    if not proxy_env:
+        return server_config
+
+    merged_config: JsonObject = dict(server_config)
+    existing_env = server_config.get("env")
+    normalized_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+    normalized_env_strings = {
+        key: value for key, value in normalized_env.items() if isinstance(value, str)
+    }
+    explicit_proxy_env = extract_proxy_env_vars(normalized_env_strings)
+    merged_env: JsonObject = {key: value for key, value in proxy_env.items()}
+    for key, value in explicit_proxy_env.items():
+        merged_env[key] = value
+    for key, value in normalized_env.items():
+        merged_env[key] = value
+    merged_config["env"] = merged_env
+    return merged_config

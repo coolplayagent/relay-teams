@@ -132,6 +132,11 @@ MCP config merge order:
 - `~/.agent_teams/mcp.json` (user scope)
 - `.agent_teams/mcp.json` (project scope, overrides user scope by server name)
 
+Behavior notes:
+- All MCP transports inherit merged proxy env values (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`).
+- Every MCP server config receives those values in its merged `env` settings.
+- stdio MCP servers consume them through subprocess `env` injection, while remote transports (`sse`, `http`, `streamable-http`) also read them through the backend process environment.
+- Explicit `env` entries inside an MCP server config override inherited proxy defaults.
 
 ### `POST /system/configs/skills:reload`
 Reloads skills config into runtime.
@@ -449,6 +454,10 @@ Validates role files against registered tools.
 
 ### `GET /mcp/servers`
 Lists effective MCP servers after user/project merge.
+
+Notes:
+- MCP proxy inheritance affects execution behavior for both stdio and remote transports.
+- This inheritance affects runtime connectivity, not the response payload of this endpoint.
 
 Response:
 ```json
