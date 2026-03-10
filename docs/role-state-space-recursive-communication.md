@@ -4,7 +4,7 @@
 
 This document describes how the current `roles`, `agents`, and `coordination` modules implement role-scoped communication based on state-space boundaries and recursive feedback loops.
 
-多 Agent 协作的本质，不是消息传递，而是角色作用域状态空间之间，在约束下进行的递归状态变换与反馈控制。
+澶?Agent 鍗忎綔鐨勬湰璐紝涓嶆槸娑堟伅浼犻€掞紝鑰屾槸瑙掕壊浣滅敤鍩熺姸鎬佺┖闂翠箣闂达紝鍦ㄧ害鏉熶笅杩涜鐨勯€掑綊鐘舵€佸彉鎹笌鍙嶉鎺у埗銆?
 
 The design follows these principles:
 
@@ -117,3 +117,14 @@ Stop condition:
 - `src/agent_teams/agents/models.py`
 - `tests/unit_tests/coordination/test_role_communication.py`
 - `docs/role-workspace-memory-design.md`
+
+## 7. Workflow Boundary Supplement
+
+Additional boundary rules:
+- Role is the HR layer: it defines stable identity, responsibility boundary, and executable capability.
+- Workflow is the institutional layer: it defines fixed stage order, task decomposition, and dependency topology.
+- Coordination is the decision layer: it interprets intent, selects the most suitable workflow dynamically, and instantiates the executable workflow graph.
+- The same set of roles may be reused by different industries with different workflows, so fixed flow must not be encoded in role markdown.
+- If a dependency such as `depends_on` appears in role metadata, treat it as a design error and move it into workflow definitions or custom workflow task graphs.
+
+

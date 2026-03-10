@@ -29,7 +29,6 @@ role_id: coordinator_agent
 name: Coordinator Agent
 version: 1.0.0
 model_profile: default
-depends_on: []
 tools: []
 ---
 You are a deterministic coordinator used for integration testing.

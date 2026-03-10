@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.agents.enums import InstanceStatus
@@ -18,28 +16,20 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
-from agent_teams.workspace import (
-    build_conversation_id,
-    build_workspace_id,
-)
-from agent_teams.workflow.runtime_graph import get_ready_tasks
+from agent_teams.workspace import build_conversation_id, build_workspace_id
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
+from agent_teams.workflow.registry import WorkflowRegistry
+from agent_teams.workflow.constants import CUSTOM_WORKFLOW_ID
+from agent_teams.workflow.runtime_graph import get_ready_tasks
+from agent_teams.workflow.spec import WorkflowTaskSpec
 from agent_teams.workflow.status_snapshot import (
     build_task_status_row,
     build_task_status_snapshot,
 )
 
-WorkflowType = Literal["spec_flow", "custom"]
-DispatchAction = Literal["next", "revise"]
-
-
-class WorkflowTaskSpecInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    task_name: str = Field(min_length=1)
-    objective: str = Field(min_length=1)
-    role_id: str = Field(min_length=1)
-    depends_on: list[str] = Field(default_factory=list)
+DispatchAction = str
+WorkflowTaskSpecInput = WorkflowTaskSpec
 
 
 class WorkflowOrchestrationService:
@@ -50,6 +40,7 @@ class WorkflowOrchestrationService:
         shared_store: SharedStateRepository,
         workflow_graph_repo: WorkflowGraphRepository,
         role_registry: RoleRegistry,
+        workflow_registry: WorkflowRegistry,
         instance_pool: InstancePool,
         agent_repo: AgentInstanceRepository,
         task_execution_service: TaskExecutionService,
@@ -60,6 +51,7 @@ class WorkflowOrchestrationService:
         self._shared_store: SharedStateRepository = shared_store
         self._workflow_graph_repo: WorkflowGraphRepository = workflow_graph_repo
         self._role_registry: RoleRegistry = role_registry
+        self._workflow_registry: WorkflowRegistry = workflow_registry
         self._instance_pool: InstancePool = instance_pool
         self._agent_repo: AgentInstanceRepository = agent_repo
         self._task_execution_service: TaskExecutionService = task_execution_service
@@ -71,7 +63,7 @@ class WorkflowOrchestrationService:
         *,
         run_id: str,
         objective: str,
-        workflow_type: WorkflowType = "custom",
+        workflow_id: str = CUSTOM_WORKFLOW_ID,
         tasks: list[WorkflowTaskSpecInput] | None = None,
     ) -> dict[str, object]:
         root = self._get_root_task(run_id=run_id)
@@ -86,22 +78,27 @@ class WorkflowOrchestrationService:
                     "or start a new run for a fresh workflow."
                 ),
                 "workflow_id": existing.get("workflow_id"),
-                "workflow_type": existing.get("workflow_type"),
+                "workflow_name": existing.get("workflow_name"),
             }
 
-        parsed_tasks = tasks
-        if workflow_type == "spec_flow":
-            parsed_tasks = _create_spec_flow_template(objective=objective)
-        elif not parsed_tasks:
-            raise ValueError(
-                "tasks is required for custom workflow. "
-                + 'Example: [{"task_name": "code", "objective": "Write hello.py", '
-                + '"role_id": "spec_coder", "depends_on": []}]'
-            )
+        workflow_name = "Custom Workflow"
+        parsed_tasks = list(tasks or [])
+        if workflow_id == CUSTOM_WORKFLOW_ID:
+            if not parsed_tasks:
+                raise ValueError(
+                    "tasks is required for custom workflow. "
+                    + 'Example: [{"task_name": "code", "objective": "Write hello.py", '
+                    + '"role_id": "spec_coder", "depends_on": []}]'
+                )
+        else:
+            definition = self._workflow_registry.get(workflow_id)
+            workflow_name = definition.name
+            parsed_tasks = list(definition.instantiate(objective=objective))
 
-        _validate_role_depends(self._role_registry, parsed_tasks)
+        _validate_roles_exist(self._role_registry, parsed_tasks)
+        _validate_task_dependencies(parsed_tasks)
         _detect_cycle(parsed_tasks)
-        workflow_id = f"workflow_{uuid4().hex[:8]}"
+        workflow_run_id = f"workflow_{uuid4().hex[:8]}"
 
         name_to_task_id: dict[str, str] = {}
         for spec in parsed_tasks:
@@ -120,8 +117,9 @@ class WorkflowOrchestrationService:
             )
 
         graph: dict[str, object] = {
-            "workflow_id": workflow_id,
-            "workflow_type": workflow_type,
+            "workflow_id": workflow_run_id,
+            "workflow_template_id": workflow_id,
+            "workflow_name": workflow_name,
             "objective": objective,
             "trace_id": root.envelope.trace_id,
             "session_id": root.envelope.session_id,
@@ -129,13 +127,13 @@ class WorkflowOrchestrationService:
                 spec.task_name: {
                     "task_id": name_to_task_id[spec.task_name],
                     "role_id": spec.role_id,
-                    "depends_on": spec.depends_on,
+                    "depends_on": list(spec.depends_on),
                 }
                 for spec in parsed_tasks
             },
         }
         self._workflow_graph_repo.upsert(
-            workflow_id=workflow_id,
+            workflow_id=workflow_run_id,
             run_id=run_id,
             session_id=root.envelope.session_id,
             root_task_id=root.envelope.task_id,
@@ -145,14 +143,15 @@ class WorkflowOrchestrationService:
         return {
             "ok": True,
             "created": True,
-            "workflow_id": workflow_id,
-            "workflow_type": workflow_type,
+            "workflow_id": workflow_run_id,
+            "workflow_template_id": workflow_id,
+            "workflow_name": workflow_name,
             "tasks": [
                 {
                     "task_name": spec.task_name,
                     "task_id": name_to_task_id[spec.task_name],
                     "role_id": spec.role_id,
-                    "depends_on": spec.depends_on,
+                    "depends_on": list(spec.depends_on),
                 }
                 for spec in parsed_tasks
             ],
@@ -183,7 +182,8 @@ class WorkflowOrchestrationService:
         return {
             "ok": True,
             "workflow_id": workflow_id,
-            "workflow_type": graph.get("workflow_type"),
+            "workflow_template_id": graph.get("workflow_template_id"),
+            "workflow_name": graph.get("workflow_name"),
             "objective": graph.get("objective"),
             "task_status": task_status,
         }
@@ -485,70 +485,36 @@ def _records_by_task_id(records: tuple[TaskRecord, ...]) -> dict[str, TaskRecord
     return {record.envelope.task_id: record for record in records}
 
 
-def _create_spec_flow_template(objective: str) -> list[WorkflowTaskSpecInput]:
-    return [
-        WorkflowTaskSpecInput(
-            task_name="spec",
-            objective=(
-                f'Input: user requirement "{objective}". '
-                "Output: a structured requirement specification with clear goals, scope, and acceptance criteria."
-            ),
-            role_id="spec_spec",
-            depends_on=[],
-        ),
-        WorkflowTaskSpecInput(
-            task_name="design",
-            objective=(
-                f'Input: spec.md from previous stage for "{objective}". '
-                "Output: an implementation-ready technical design describing architecture, interfaces, and testing."
-            ),
-            role_id="spec_design",
-            depends_on=["spec"],
-        ),
-        WorkflowTaskSpecInput(
-            task_name="code",
-            objective=(
-                f'Input: design.md from previous stage for "{objective}". '
-                "Output: code changes and tests that implement the approved design."
-            ),
-            role_id="spec_coder",
-            depends_on=["design"],
-        ),
-        WorkflowTaskSpecInput(
-            task_name="verify",
-            objective=(
-                f'Input: implementation output and design artifacts for "{objective}". '
-                "Output: a verification verdict (PASS/FAIL) with concrete findings and coverage gaps."
-            ),
-            role_id="spec_verify",
-            depends_on=["code"],
-        ),
-    ]
-
-
-def _validate_role_depends(
+def _validate_roles_exist(
     role_registry: RoleRegistry, tasks: list[WorkflowTaskSpecInput]
 ) -> None:
-    available_roles = {r.role_id for r in role_registry.list_roles()}
-    role_to_tasks: dict[str, list[str]] = {}
-    for task in tasks:
-        role_to_tasks.setdefault(task.role_id, []).append(task.task_name)
-
+    available_roles = {role.role_id for role in role_registry.list_roles()}
     for task in tasks:
         if task.role_id not in available_roles:
             raise ValueError(
                 f"Invalid role_id '{task.role_id}'. Available roles: {sorted(available_roles)}"
             )
-        role_def = role_registry.get(task.role_id)
-        for required_role in list(role_def.depends_on) or []:
-            if required_role not in role_to_tasks:
+
+
+def _validate_task_dependencies(tasks: list[WorkflowTaskSpecInput]) -> None:
+    task_names: set[str] = set()
+    for task in tasks:
+        if task.task_name in task_names:
+            raise ValueError(f"Duplicate task_name detected: {task.task_name}")
+        task_names.add(task.task_name)
+
+    for task in tasks:
+        for dependency in task.depends_on:
+            if dependency not in task_names:
                 raise ValueError(
-                    f"Role '{task.role_id}' depends on '{required_role}', but '{required_role}' is not in the task list."
+                    f"Task '{task.task_name}' depends on missing task '{dependency}'."
                 )
 
 
 def _detect_cycle(tasks: list[WorkflowTaskSpecInput]) -> None:
-    graph: dict[str, list[str]] = {task.task_name: task.depends_on for task in tasks}
+    graph: dict[str, list[str]] = {
+        task.task_name: list(task.depends_on) for task in tasks
+    }
     visited: set[str] = set()
     rec_stack: set[str] = set()
 
@@ -567,25 +533,6 @@ def _detect_cycle(tasks: list[WorkflowTaskSpecInput]) -> None:
     for task in tasks:
         if task.task_name not in visited and dfs(task.task_name):
             raise ValueError("Circular dependency detected in tasks")
-
-
-def _latest_completed_task(
-    *,
-    tasks: dict[str, dict[str, object]],
-    records: dict[str, TaskRecord],
-) -> tuple[str, str] | None:
-    ordered_task_names = list(tasks.keys())
-    for task_name in reversed(ordered_task_names):
-        task_info = tasks.get(task_name, {})
-        task_id = task_info.get("task_id", "")
-        if not isinstance(task_id, str) or not task_id:
-            continue
-        record = records.get(task_id)
-        if record is None:
-            continue
-        if record.status == TaskStatus.COMPLETED:
-            return task_name, task_id
-    return None
 
 
 def _latest_revisable_task(

@@ -32,6 +32,8 @@ from agent_teams.state.token_usage_repo import TokenUsageRepository
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.workspace import WorkspaceManager
 
 
@@ -54,6 +56,8 @@ def create_provider_factory(
     skill_registry: SkillRegistry,
     message_repo: MessageRepository,
     role_registry: RoleRegistry,
+    workflow_registry: WorkflowRegistry,
+    get_workflow_service: Callable[[], WorkflowOrchestrationService],
     run_control_manager: RunControlManager,
     tool_approval_manager: ToolApprovalManager,
     tool_approval_policy: ToolApprovalPolicy,
@@ -90,6 +94,8 @@ def create_provider_factory(
                 message_repo=message_repo,
                 role_registry=role_registry,
                 task_execution_service=get_task_execution_service(),
+                workflow_registry=workflow_registry,
+                workflow_service=get_workflow_service(),
                 run_control_manager=run_control_manager,
                 tool_approval_manager=tool_approval_manager,
                 tool_approval_policy=tool_approval_policy,
@@ -116,6 +122,7 @@ def create_task_execution_service(
     run_runtime_repo: RunRuntimeRepository,
     workspace_manager: WorkspaceManager,
     provider_factory: Callable[[RoleDefinition], LLMProvider],
+    workflow_registry: WorkflowRegistry,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
 ) -> TaskExecutionService:
@@ -133,6 +140,7 @@ def create_task_execution_service(
         workspace_manager=workspace_manager,
         prompt_builder=RuntimePromptBuilder(),
         provider_factory=provider_factory,
+        workflow_registry=workflow_registry,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
     )

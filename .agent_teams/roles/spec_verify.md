@@ -1,10 +1,8 @@
----
+﻿---
 role_id: spec_verify
 name: Spec Verify
 model_profile: default
 version: 1.0.0
-depends_on:
-  - spec_coder
 tools:
   - read_stage_input
   - write_stage_doc
@@ -44,3 +42,4 @@ Write ONE document using `write_stage_doc` with these sections:
 - DO NOT modify code - only verify
 - Write ONE document only - do NOT call write_stage_doc multiple times
 - After writing the document, STOP - do not continue working
+

@@ -70,6 +70,8 @@ from agent_teams.workspace import (
 if TYPE_CHECKING:
     from agent_teams.coordination.task_execution_service import TaskExecutionService
     from agent_teams.roles.registry import RoleRegistry
+    from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+    from agent_teams.workflow.registry import WorkflowRegistry
 
 LOGGER = get_logger(__name__)
 
@@ -135,6 +137,8 @@ class OpenAICompatibleProvider(LLMProvider):
         message_repo: MessageRepository,
         role_registry: "RoleRegistry",
         task_execution_service: "TaskExecutionService",
+        workflow_registry: "WorkflowRegistry",
+        workflow_service: "WorkflowOrchestrationService",
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
@@ -161,6 +165,8 @@ class OpenAICompatibleProvider(LLMProvider):
         self._allowed_skills = allowed_skills
         self._role_registry = role_registry
         self._task_execution_service = task_execution_service
+        self._workflow_registry = workflow_registry
+        self._workflow_service = workflow_service
         self._run_control_manager = run_control_manager
         self._message_repo = message_repo
         self._tool_approval_manager = tool_approval_manager
@@ -270,6 +276,8 @@ class OpenAICompatibleProvider(LLMProvider):
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._role_registry,
+            workflow_registry=self._workflow_registry,
+            workflow_service=self._workflow_service,
             task_execution_service=self._task_execution_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,

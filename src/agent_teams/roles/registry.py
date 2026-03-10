@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -60,11 +61,10 @@ class RoleLoader:
         if not body.strip():
             raise ValueError(f"Empty system prompt in {path}")
 
-        depends_on = parsed.get("depends_on", [])
-        if depends_on is None:
-            depends_on = []
-        if not isinstance(depends_on, list):
-            raise ValueError(f"depends_on must be a list in {path}")
+        if "depends_on" in parsed:
+            raise ValueError(
+                f"depends_on is not allowed in role file {path}; define task dependencies in workflow files instead"
+            )
 
         mcp_servers = parsed.get("mcp_servers", [])
         if mcp_servers is None:
@@ -92,13 +92,13 @@ class RoleLoader:
             tools=tuple(str(item) for item in parsed["tools"]),
             mcp_servers=tuple(str(item) for item in mcp_servers),
             skills=tuple(str(item) for item in skills),
-            depends_on=tuple(str(item) for item in depends_on),
             model_profile=str(parsed.get("model_profile", "default")),
             workspace_profile=workspace_profile,
             system_prompt=body.strip(),
         )
 
     def _split_front_matter(self, content: str) -> tuple[str, str]:
+        content = content.lstrip("\ufeff")
         if not content.startswith("---"):
             raise ValueError("Role markdown must start with YAML front matter")
 

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,7 +15,6 @@ class RoleDefinition(BaseModel):
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
-    depends_on: tuple[str, ...] = ()
     model_profile: str = Field(default="default")
     workspace_profile: WorkspaceProfile = Field(
         default_factory=default_workspace_profile

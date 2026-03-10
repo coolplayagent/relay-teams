@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -34,16 +35,22 @@ from agent_teams.workspace import (
 )
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.workflow.registry import WorkflowRegistry
+from agent_teams.workflow.spec import WorkflowDefinition, WorkflowTaskTemplate
 
 
 class _CapturingProvider:
     def __init__(self) -> None:
         self.prompts: list[str | None] = []
+        self.system_prompts: list[str] = []
 
     async def generate(self, request: object) -> str:
         prompt = getattr(request, "user_prompt", None)
+        system_prompt = getattr(request, "system_prompt", "")
         assert prompt is None or isinstance(prompt, str)
+        assert isinstance(system_prompt, str)
         self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
         return "ok"
 
 
@@ -409,3 +416,103 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
     record = task_repo.get(task.task_id)
     assert record.status == TaskStatus.STOPPED
     assert record.error_message == "Task stopped by user"
+
+
+@pytest.mark.asyncio
+async def test_execute_coordinator_receives_workflow_recommendation(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="coordinator_agent",
+            name="Coordinator Agent",
+            version="1",
+            tools=(),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    workflow_registry = WorkflowRegistry()
+    workflow_registry.register(
+        WorkflowDefinition(
+            workflow_id="sdd",
+            name="Standard Delivery Workflow",
+            version="1",
+            selection_hints=("build", "api", "service"),
+            is_default=True,
+            tasks=(
+                WorkflowTaskTemplate(
+                    task_name="spec",
+                    role_id="coordinator_agent",
+                    objective_template="Plan {objective}",
+                ),
+            ),
+            guidance="Use this workflow for staged software delivery.",
+        )
+    )
+    db_path = tmp_path / "task_execution_service_coordinator.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    instance_pool = InstancePool()
+    shared_store = SharedStateRepository(db_path)
+    workspace_id = build_workspace_id("session-1")
+    conversation_id = build_conversation_id("session-1", "coordinator_agent")
+    instance = instance_pool.create_subagent(
+        "coordinator_agent",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="Build an API service",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="coordinator_agent",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        instance_pool=instance_pool,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        workflow_graph_repo=WorkflowGraphRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(),
+        provider_factory=lambda _: provider,
+        workflow_registry=workflow_registry,
+    )
+
+    result = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="coordinator_agent",
+        task=task,
+    )
+
+    assert result == "ok"
+    assert provider.system_prompts
+    assert "## Workflow Recommendation" in provider.system_prompts[0]
+    assert (
+        "Recommended workflow: sdd (Standard Delivery Workflow)"
+        in provider.system_prompts[0]
+    )
+    assert "Do not derive task order from role metadata." in provider.system_prompts[0]

@@ -54,6 +54,7 @@ from agent_teams.tools.runtime import (
 from agent_teams.triggers import TriggerRepository, TriggerService
 from agent_teams.workspace import WorkspaceManager
 from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+from agent_teams.workflow.registry import WorkflowLoader, WorkflowRegistry
 
 
 class ServerContainer:
@@ -84,6 +85,9 @@ class ServerContainer:
         self.role_registry: RoleRegistry = RoleLoader().load_all(
             runtime.paths.roles_dir
         )
+        self.workflow_registry: WorkflowRegistry = WorkflowLoader().load_all(
+            runtime.paths.workflows_dir
+        )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
@@ -95,6 +99,10 @@ class ServerContainer:
             self.tool_registry.validate_known(role.tools)
             self.mcp_registry.validate_known(role.mcp_servers)
             self.skill_registry.validate_known(role.skills)
+
+        for workflow in self.workflow_registry.list_workflows():
+            for task in workflow.tasks:
+                _ = self.role_registry.get(task.role_id)
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
         self.shared_store: SharedStateRepository = SharedStateRepository(
@@ -248,6 +256,9 @@ class ServerContainer:
         def get_task_execution_service() -> TaskExecutionService:
             return self.task_execution_service
 
+        def get_workflow_service() -> WorkflowOrchestrationService:
+            return self.workflow_service
+
         self._provider_factory = create_provider_factory(
             runtime=self.runtime,
             task_repo=self.task_repo,
@@ -266,6 +277,8 @@ class ServerContainer:
             skill_registry=self.skill_registry,
             message_repo=self.message_repo,
             role_registry=self.role_registry,
+            workflow_registry=self.workflow_registry,
+            get_workflow_service=get_workflow_service,
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
             tool_approval_policy=self.tool_approval_policy,
@@ -286,6 +299,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             workspace_manager=self.workspace_manager,
             provider_factory=self._provider_factory,
+            workflow_registry=self.workflow_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
         )
@@ -294,6 +308,7 @@ class ServerContainer:
             shared_store=self.shared_store,
             workflow_graph_repo=self.workflow_graph_repo,
             role_registry=self.role_registry,
+            workflow_registry=self.workflow_registry,
             instance_pool=self.instance_pool,
             agent_repo=self.agent_repo,
             task_execution_service=self.task_execution_service,

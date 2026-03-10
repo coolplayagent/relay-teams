@@ -87,7 +87,7 @@ def create_custom_workflow(
         f"/api/workflows/runs/{run_id}",
         json={
             "objective": objective,
-            "workflow_type": "custom",
+            "workflow_id": "custom",
             "tasks": [
                 {
                     "task_name": "first_time_query",

@@ -1,10 +1,8 @@
----
+﻿---
 role_id: spec_coder
 name: Spec Coder
 model_profile: default
 version: 1.0.0
-depends_on:
-  - spec_design
 tools:
   - read_stage_input
   - grep
@@ -54,3 +52,4 @@ When done, provide:
 3. Behavioral Impact (brief)
 
 Then STOP - do not continue working unless new requirements come in.
+

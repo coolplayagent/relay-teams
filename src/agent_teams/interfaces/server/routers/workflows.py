@@ -1,39 +1,36 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_workflow_service
-from agent_teams.workflow.orchestration_service import (
-    WorkflowOrchestrationService,
-    WorkflowTaskSpecInput,
-)
+from agent_teams.workflow.constants import CUSTOM_WORKFLOW_ID
+from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+from agent_teams.workflow.spec import WorkflowTaskSpec
 
-router = APIRouter(prefix='/workflows', tags=['Workflows'])
+router = APIRouter(prefix="/workflows", tags=["Workflows"])
 
-WorkflowType = Literal['spec_flow', 'custom']
-DispatchAction = Literal['next', 'revise']
+DispatchAction = str
 
 
 class CreateWorkflowRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
 
     objective: str = Field(min_length=1)
-    workflow_type: WorkflowType = 'custom'
-    tasks: list[WorkflowTaskSpecInput] | None = None
+    workflow_id: str = CUSTOM_WORKFLOW_ID
+    tasks: list[WorkflowTaskSpec] | None = None
 
 
 class DispatchTasksRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
 
     action: DispatchAction
-    feedback: str = ''
+    feedback: str = ""
     max_dispatch: int = 1
 
 
-@router.post('/runs/{run_id}')
+@router.post("/runs/{run_id}")
 def create_workflow_for_run(
     run_id: str,
     req: CreateWorkflowRequest,
@@ -43,7 +40,7 @@ def create_workflow_for_run(
         return service.create_workflow_graph(
             run_id=run_id,
             objective=req.objective,
-            workflow_type=req.workflow_type,
+            workflow_id=req.workflow_id,
             tasks=req.tasks,
         )
     except KeyError as exc:
@@ -52,7 +49,7 @@ def create_workflow_for_run(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get('/runs/{run_id}/{workflow_id}')
+@router.get("/runs/{run_id}/{workflow_id}")
 def get_workflow_status_for_run(
     run_id: str,
     workflow_id: str,
@@ -66,7 +63,7 @@ def get_workflow_status_for_run(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post('/runs/{run_id}/{workflow_id}/dispatch')
+@router.post("/runs/{run_id}/{workflow_id}/dispatch")
 async def dispatch_tasks_for_run(
     run_id: str,
     workflow_id: str,

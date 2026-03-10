@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, ConfigDict, SkipValidation
 from pydantic_ai import RunContext
 
@@ -22,6 +24,10 @@ from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.runtime.approval_state import ToolApprovalManager
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceHandle
+
+if TYPE_CHECKING:
+    from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+    from agent_teams.workflow.registry import WorkflowRegistry
 
 
 class ToolDeps(BaseModel):
@@ -52,6 +58,8 @@ class ToolDeps(BaseModel):
     instance_id: str
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
+    workflow_registry: SkipValidation["WorkflowRegistry"]
+    workflow_service: SkipValidation["WorkflowOrchestrationService"]
     task_execution_service: SkipValidation[TaskExecutionService]
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
@@ -60,3 +68,10 @@ class ToolDeps(BaseModel):
 
 
 ToolContext = RunContext[ToolDeps]
+
+ToolDeps.model_rebuild(
+    _types_namespace={
+        "WorkflowRegistry": object,
+        "WorkflowOrchestrationService": object,
+    }
+)

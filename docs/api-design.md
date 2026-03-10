@@ -1,4 +1,4 @@
-﻿# Agent Teams API Design
+# Agent Teams API Design
 
 ## 1. General
 
@@ -22,8 +22,8 @@ Common status codes:
 - `ai`
 - `manual`
 
-### workflow_type
-- `spec_flow`
+### workflow_id
+- `sdd`
 - `custom`
 
 ### workflow dispatch action
@@ -389,7 +389,7 @@ Request:
 ```json
 {
   "objective": "Build API service",
-  "workflow_type": "custom",
+  "workflow_id": "custom",
   "tasks": [
     {
       "task_name": "spec",
@@ -407,7 +407,7 @@ Request:
 }
 ```
 
-`workflow_type=spec_flow` ignores custom `tasks` and uses built-in stage template.
+`workflow_id="sdd"` loads the registered Standard Delivery Workflow. `workflow_id="custom"` requires explicit `tasks`.
 
 ### `GET /workflows/runs/{run_id}/{workflow_id}`
 Gets workflow status.
@@ -730,3 +730,19 @@ Response:
 
 
 
+
+---
+
+## 13. Workflow and Role Boundary
+
+Design rules:
+- `RoleDefinition` only defines persona, capability surface, tool/skill access, and runtime requirements.
+- `WorkflowDefinition` or custom workflow task payloads define process order, stage decomposition, and `depends_on` relationships.
+- `role_id` means who executes a task; it must not be used to imply institutionalized order.
+- In AI mode, coordination should choose the workflow dynamically from current intent and registered workflow hints, then create the workflow graph.
+- When no registered workflow fits a domain-specific intent, clients should use `workflow_id="custom"` with explicit `tasks`.
+
+Validation rules:
+- `depends_on` is valid in workflow definitions and custom workflow task payloads.
+- `depends_on` is invalid in role markdown front matter and should be rejected by role validation/loading.
+- The persisted workflow graph is the only source of truth for dependency execution.

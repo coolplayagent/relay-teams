@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pydantic_ai import Agent
@@ -17,7 +18,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     {
                         "role_id": r.role_id,
                         "name": r.name,
-                        "depends_on": list(r.depends_on),
                         "tools": list(r.tools),
                     }
                     for r in roles

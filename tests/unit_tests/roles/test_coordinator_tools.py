@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
 from pathlib import Path
 
 from agent_teams.roles.registry import RoleLoader
@@ -8,6 +11,7 @@ def test_coordinator_uses_workflow_tools_and_not_emit_event() -> None:
     coordinator = registry.get("coordinator_agent")
     tools = set(coordinator.tools)
 
+    assert "list_available_workflows" in tools
     assert "create_workflow_graph" in tools
     assert "dispatch_tasks" in tools
     assert "get_workflow_status" not in tools

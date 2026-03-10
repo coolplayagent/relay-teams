@@ -20,6 +20,7 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "glob",
         "grep",
         "list_available_roles",
+        "list_available_workflows",
         "read",
         "read_stage_input",
         "shell",

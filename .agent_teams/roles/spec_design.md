@@ -1,10 +1,8 @@
----
+﻿---
 role_id: spec_design
 name: Spec Design
 model_profile: default
 version: 1.0.0
-depends_on:
-  - spec_spec
 tools:
   - read_stage_input
   - write_stage_doc
@@ -37,3 +35,4 @@ Write ONE document using `write_stage_doc` with these sections:
 - If something is unclear, note it as an open question
 - Write ONE document only - do NOT call write_stage_doc multiple times
 - After writing the document, STOP - do not continue working
+

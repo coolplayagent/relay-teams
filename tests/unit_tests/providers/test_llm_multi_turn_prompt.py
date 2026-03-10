@@ -20,6 +20,8 @@ from pydantic_ai.messages import (
 import agent_teams.providers.llm as llm_module
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.prompting.provider_augment import PromptSkillInstruction
 from agent_teams.providers.llm import LLMRequest, OpenAICompatibleProvider
@@ -536,6 +538,8 @@ def _build_provider(
         message_repo=message_repo,
         role_registry=role_registry,
         task_execution_service=cast(TaskExecutionService, object()),
+        workflow_registry=cast(WorkflowRegistry, object()),
+        workflow_service=cast(WorkflowOrchestrationService, object()),
         run_control_manager=cast(
             RunControlManager,
             cast(object, run_control_manager or _FakeRunControlManager()),

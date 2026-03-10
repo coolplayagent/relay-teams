@@ -107,7 +107,7 @@ class AgentTeamsClient:
         self,
         run_id: str,
         objective: str,
-        workflow_type: str = "custom",
+        workflow_id: str = "custom",
         tasks: list[JsonObject] | None = None,
     ) -> JsonObject:
         tasks_payload: list[JsonValue] | None = None
@@ -115,7 +115,7 @@ class AgentTeamsClient:
             tasks_payload = [task for task in tasks]
         payload: JsonObject = {
             "objective": objective,
-            "workflow_type": workflow_type,
+            "workflow_id": workflow_id,
             "tasks": tasks_payload,
         }
         return self._request_json(

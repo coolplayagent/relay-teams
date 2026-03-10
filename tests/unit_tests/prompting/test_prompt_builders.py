@@ -13,6 +13,7 @@ from agent_teams.prompting.runtime import (
 from agent_teams.prompting.user_input import UserPromptBuildInput, build_user_prompt
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.workflow.spec import WorkflowRecommendation
 
 
 def _role(role_id: str) -> RoleDefinition:
@@ -23,7 +24,6 @@ def _role(role_id: str) -> RoleDefinition:
         tools=(),
         mcp_servers=(),
         skills=(),
-        depends_on=(),
         model_profile="default",
         system_prompt="You are a focused agent.",
     )
@@ -98,3 +98,28 @@ def test_user_prompt_builder_returns_raw_objective() -> None:
     )
 
     assert prompt == "Draft the release notes."
+
+
+def test_runtime_system_prompt_for_coordinator_renders_workflow_recommendation() -> (
+    None
+):
+    prompt = build_runtime_system_prompt(
+        RuntimePromptBuildInput(
+            role=_role("coordinator_agent"),
+            task=_task(),
+            shared_state_snapshot=(),
+            workflow_recommendation=WorkflowRecommendation(
+                workflow_id="sdd",
+                workflow_name="Standard Delivery Workflow",
+                reason="Intent matched workflow 'sdd' via selection hints: api, service.",
+                matched_hints=("api", "service"),
+                guidance="Use this workflow for staged software delivery.",
+                is_default=True,
+            ),
+        )
+    )
+
+    assert "## Workflow Recommendation" in prompt
+    assert "Recommended workflow: sdd (Standard Delivery Workflow)" in prompt
+    assert "Matched intent hints: api, service" in prompt
+    assert "Do not derive task order from role metadata." in prompt

@@ -52,7 +52,6 @@ def _build_role_registry() -> RoleRegistry:
             tools=("dispatch_tasks",),
             mcp_servers=(),
             skills=("time",),
-            depends_on=(),
             model_profile="default",
             system_prompt="You are coordinator.",
         )
@@ -101,7 +100,6 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert payload["skill_prompt"].startswith("## Skill Instructions")
 
 
-
 def test_prompts_preview_skill_override_replaces_role_default() -> None:
     client = _create_client()
 
@@ -117,8 +115,11 @@ def test_prompts_preview_skill_override_replaces_role_default() -> None:
     payload = response.json()
     assert payload["skills"] == ["planner"]
     assert "### Skill: planner" in payload["provider_system_prompt"]
-    assert "Break objectives into executable plans." in payload["provider_system_prompt"]
+    assert (
+        "Break objectives into executable plans." in payload["provider_system_prompt"]
+    )
     assert "### Skill: time" not in payload["provider_system_prompt"]
+
 
 def test_prompts_preview_returns_404_for_unknown_role() -> None:
     client = _create_client()

@@ -33,6 +33,8 @@ from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
+from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workspace import WorkspaceManager
@@ -112,6 +114,8 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         message_repo=cast(MessageRepository, object()),
         role_registry=role_registry,
         task_execution_service=cast(TaskExecutionService, object()),
+        workflow_registry=cast(WorkflowRegistry, object()),
+        workflow_service=cast(WorkflowOrchestrationService, object()),
         run_control_manager=cast(
             RunControlManager, cast(object, _FakeRunControlManager())
         ),
@@ -238,7 +242,7 @@ def test_publish_tool_events_sanitizes_stale_task_status_error() -> None:
                                         "role_id": "time",
                                         "instance_id": "inst-1",
                                         "status": "completed",
-                                        "result": "当前时间是 2026-03-07 00:41:29。",
+                                        "result": "Current time is 2026-03-07 00:41:29.",
                                         "error": "Task stopped by user",
                                     }
                                 }
@@ -253,5 +257,5 @@ def test_publish_tool_events_sanitizes_stale_task_status_error() -> None:
     payload = json.loads(hub.events[0].payload_json)
     task_status = payload["result"]["data"]["task_status"]["ask_time"]
     assert task_status["status"] == "completed"
-    assert task_status["result"] == "当前时间是 2026-03-07 00:41:29。"
+    assert task_status["result"] == "Current time is 2026-03-07 00:41:29."
     assert "error" not in task_status

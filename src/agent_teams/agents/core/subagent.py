@@ -12,6 +12,7 @@ from agent_teams.prompting.runtime_prompt_builder import (
 )
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workflow.models import TaskEnvelope
+from agent_teams.workflow.spec import WorkflowRecommendation
 
 
 class SubAgentRequest(BaseModel):
@@ -43,12 +44,14 @@ class SubAgentRunner(BaseModel):
         workspace_id: str,
         conversation_id: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
+        workflow_recommendation: WorkflowRecommendation | None = None,
     ) -> str:
         system_prompt = self.prompt_builder.build(
             PromptBuildInput(
                 role=self.role,
                 task=task,
                 shared_state_snapshot=shared_state_snapshot,
+                workflow_recommendation=workflow_recommendation,
             )
         )
         generate = cast(

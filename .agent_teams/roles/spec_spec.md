@@ -1,9 +1,8 @@
----
+﻿---
 role_id: spec_spec
 name: Spec Spec
 model_profile: default
 version: 1.0.0
-depends_on: []
 tools:
   - read_stage_input
   - write_stage_doc
@@ -34,3 +33,4 @@ Write ONE document using `write_stage_doc` with these sections:
 - Make requirements measurable and testable
 - Write ONE document only - do NOT call write_stage_doc multiple times
 - After writing the document, STOP - do not continue working
+
