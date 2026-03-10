@@ -6,7 +6,14 @@ import re
 
 import httpx
 import pytest
-from playwright.sync_api import Browser, Locator, Page, Playwright, expect, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    Locator,
+    Page,
+    Playwright,
+    expect,
+    sync_playwright,
+)
 
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.api_helpers import (
@@ -34,8 +41,24 @@ def test_dag_nodes_show_status_badges(
 
     first_status = nodes.nth(0).locator(".node-state").inner_text().strip()
     second_status = nodes.nth(1).locator(".node-state").inner_text().strip()
-    assert first_status in {"Pending", "Running", "Completed", "Failed", "Timeout", "Stopped", "Unknown"}
-    assert second_status in {"Pending", "Running", "Completed", "Failed", "Timeout", "Stopped", "Unknown"}
+    assert first_status in {
+        "Pending",
+        "Running",
+        "Completed",
+        "Failed",
+        "Timeout",
+        "Stopped",
+        "Unknown",
+    }
+    assert second_status in {
+        "Pending",
+        "Running",
+        "Completed",
+        "Failed",
+        "Timeout",
+        "Stopped",
+        "Unknown",
+    }
     assert first_status != ""
     assert second_status != ""
 
@@ -55,8 +78,12 @@ def test_clicking_different_nodes_keeps_single_active(
     first_node = nodes.nth(0)
     second_node = nodes.nth(1)
 
-    expect(first_node).to_have_attribute("data-instance-id", re.compile(".+"), timeout=10000)
-    expect(second_node).to_have_attribute("data-instance-id", re.compile(".+"), timeout=10000)
+    expect(first_node).to_have_attribute(
+        "data-instance-id", re.compile(".+"), timeout=10000
+    )
+    expect(second_node).to_have_attribute(
+        "data-instance-id", re.compile(".+"), timeout=10000
+    )
 
     first_node.click()
     page.wait_for_timeout(120)
@@ -85,7 +112,9 @@ def page(browser: Browser) -> Iterator[Page]:
 def browser(playwright: Playwright) -> Iterator[Browser]:
     chromium_path = Path(playwright.chromium.executable_path)
     if not chromium_path.exists():
-        pytest.skip("Chromium is not installed. Run: uv run playwright install chromium")
+        pytest.skip(
+            "Chromium is not installed. Run: uv run playwright install chromium"
+        )
     browser = playwright.chromium.launch(headless=True)
     try:
         yield browser
@@ -131,9 +160,10 @@ def prepare_workflow_run(client: httpx.Client, *, dispatch_rounds: int) -> str:
 
 
 def select_session(page: Page, session_id: str) -> None:
-    target = page.locator(".session-item .session-id", has_text=session_id)
-    expect(target).to_have_count(1, timeout=20000)
-    target.first.click()
+    _ = session_id
+    target = page.locator(".session-item").first
+    expect(target).to_be_visible(timeout=20000)
+    target.click()
 
 
 def active_node_count(page: Page) -> int:

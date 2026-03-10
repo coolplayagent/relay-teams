@@ -92,6 +92,7 @@ console.log(JSON.stringify({
     assert payload["probeStatusDisplay"] == "block"
     assert "Connected in 42ms" in probe_status_text
     assert "9 tokens" in probe_status_text
+    assert probe_payload["timeout_ms"] == 15000
     assert probe_override["model"] == "draft-model"
     assert probe_override["base_url"] == "https://draft.test/v1"
     assert probe_override["api_key"] == "draft-api-key"
@@ -134,6 +135,29 @@ console.log(JSON.stringify({
     assert saved_profile_body["top_p"] == 0.95
 
 
+def test_model_profile_cards_render_inline_probe_region(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const alerts = [];
+
+const elements = createElements();
+installGlobals(elements, alerts);
+await loadModelProfilesPanel();
+
+console.log(JSON.stringify({
+    renderedHtml: document.getElementById("profiles-list").innerHTML,
+}));
+""".strip(),
+    )
+
+    rendered_html = cast(str, payload["renderedHtml"])
+    assert "profile-card-inline-status" in rendered_html
+    assert "profile-card-footer" not in rendered_html
+
+
 def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -156,16 +180,24 @@ def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, 
 export async function fetchModelProfiles() {
     return {
         default: {
+            provider: "openai_compatible",
             model: "fake-chat-model",
             base_url: "http://127.0.0.1:8001/v1",
             has_api_key: true,
             temperature: 0.3,
+            top_p: 0.8,
+            max_tokens: 512,
+            connect_timeout_seconds: 15,
         },
         "ui-regression-profile": {
+            provider: "openai_compatible",
             model: "fake-chat-model",
             base_url: "http://127.0.0.1:8001/v1",
             has_api_key: true,
             temperature: 0.3,
+            top_p: 0.8,
+            max_tokens: 512,
+            connect_timeout_seconds: 15,
         },
     };
 }
@@ -291,6 +323,7 @@ function createElements() {{
         ["profile-temperature", createElement("block")],
         ["profile-top-p", createElement("block")],
         ["profile-max-tokens", createElement("block")],
+        ["profile-connect-timeout", createElement("block")],
     ]);
 }}
 

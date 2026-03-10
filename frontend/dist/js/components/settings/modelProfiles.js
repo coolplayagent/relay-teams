@@ -57,34 +57,19 @@ function renderProfiles() {
     showProfilesList();
 
     if (Object.keys(profiles).length === 0) {
-        listEl.innerHTML = '<p class="empty-message">No profiles configured. Click "Add Profile" to create one.</p>';
+        listEl.innerHTML = `
+            <div class="settings-empty-state">
+                <h4>No profiles configured</h4>
+                <p>Create a profile to define the model endpoint, request limits, and sampling defaults.</p>
+            </div>
+        `;
         return;
     }
 
     let html = '<div class="profile-cards">';
-    for (const [name, profile] of Object.entries(profiles)) {
-        const probeState = profileProbeStates[name] || null;
-        const testButtonLabel = probeState?.status === 'probing' ? 'Testing...' : 'Test';
-        html += `
-            <div class="profile-card">
-                <div class="profile-card-header">
-                    <h4>${escapeHtml(name)}</h4>
-                    <div class="profile-card-actions">
-                        <button class="icon-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test Connection" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
-                        <button class="icon-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
-                        <button class="icon-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
-                    </div>
-                </div>
-                <div class="profile-card-body">
-                    <p><strong>Model:</strong> ${escapeHtml(profile.model || '-')}</p>
-                    <p><strong>Base URL:</strong> ${escapeHtml(profile.base_url || '-')}</p>
-                    <p><strong>API Key:</strong> ${profile.has_api_key ? '********' : 'Not set'}</p>
-                    <p><strong>Temperature:</strong> ${escapeHtml(String(profile.temperature ?? '-'))}</p>
-                </div>
-                ${renderProbeStatusMarkup(probeState)}
-            </div>
-        `;
-    }
+    Object.entries(profiles).forEach(([name, profile], index) => {
+        html += renderProfileCard(name, profile, index);
+    });
     html += '</div>';
     listEl.innerHTML = html;
 
@@ -113,6 +98,7 @@ function handleAddProfile() {
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
     document.getElementById('profile-max-tokens').value = '4096';
+    document.getElementById('profile-connect-timeout').value = '15';
 
     showProfileEditor();
     renderDraftProbeState();
@@ -136,6 +122,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
     document.getElementById('profile-max-tokens').value = profile.max_tokens || 4096;
+    document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
 
     showProfileEditor();
     renderDraftProbeState();
@@ -156,6 +143,7 @@ async function handleSaveProfile() {
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
+    const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
 
     if (!name) {
         alert('Profile name is required');
@@ -173,6 +161,7 @@ async function handleSaveProfile() {
         temperature: temperature,
         top_p: topP,
         max_tokens: maxTokens,
+        connect_timeout_seconds: connectTimeoutSeconds,
     };
 
     if (apiKey) {
@@ -200,7 +189,7 @@ async function handleTestProfile(name) {
         status: 'probing',
         message: 'Testing connection...',
     };
-    renderProfiles();
+    renderProfileProbeState(name);
 
     try {
         const result = await probeModelConnection({ profile_name: name });
@@ -212,7 +201,7 @@ async function handleTestProfile(name) {
         };
     }
 
-    renderProfiles();
+    renderProfileProbeState(name);
 }
 
 async function handleTestDraftProfile() {
@@ -263,6 +252,7 @@ function buildDraftProbePayload() {
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
+    const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
 
     if (!model || !baseUrl || (!apiKey && !editingProfile)) {
         draftProbeState = {
@@ -285,7 +275,10 @@ function buildDraftProbePayload() {
         override.api_key = apiKey;
     }
 
-    const payload = { override };
+    const payload = {
+        override,
+        timeout_ms: Math.round(connectTimeoutSeconds * 1000),
+    };
     if (editingProfile) {
         payload.profile_name = editingProfile;
     }
@@ -334,12 +327,18 @@ function renderDraftProbeState() {
 function showProfilesList() {
     document.getElementById('profile-editor').style.display = 'none';
     document.getElementById('profiles-list').style.display = 'block';
-    document.getElementById('add-profile-btn').style.display = 'block';
+    const addProfileBtn = document.getElementById('add-profile-btn');
+    if (addProfileBtn) {
+        addProfileBtn.style.display = 'block';
+    }
 }
 
 function showProfileEditor() {
     document.getElementById('profiles-list').style.display = 'none';
-    document.getElementById('add-profile-btn').style.display = 'none';
+    const addProfileBtn = document.getElementById('add-profile-btn');
+    if (addProfileBtn) {
+        addProfileBtn.style.display = 'none';
+    }
     document.getElementById('profile-editor').style.display = 'block';
 }
 
@@ -347,7 +346,103 @@ function renderProbeStatusMarkup(state) {
     if (!state) {
         return '';
     }
-    return `<div class="probe-status probe-status-${state.status}">${escapeHtml(state.message)}</div>`;
+    return `<div class="profile-card-probe-status probe-status probe-status-${state.status}">${escapeHtml(state.message)}</div>`;
+}
+
+function renderProfileCard(name, profile, index) {
+    const probeState = profileProbeStates[name] || null;
+    const testButtonLabel = probeState?.status === 'probing' ? 'Testing...' : 'Test';
+    const providerLabel = formatProviderLabel(profile.provider);
+    const defaultChip = name === 'default'
+        ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
+        : '';
+
+    return `
+        <div class="profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
+            <div class="profile-card-header">
+                <div class="profile-card-heading">
+                    <h4>${escapeHtml(name)}</h4>
+                    <div class="profile-card-chips">
+                        <span class="profile-card-chip">${escapeHtml(providerLabel)}</span>
+                        ${defaultChip}
+                    </div>
+                </div>
+                <div class="profile-card-actions">
+                    <div class="profile-card-action-row">
+                        <button class="icon-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test Connection" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
+                        <button class="icon-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
+                        <button class="icon-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
+                    </div>
+                    <div class="profile-card-inline-status" data-profile-probe-container="${escapeHtml(name)}">
+                        ${renderProbeStatusMarkup(probeState)}
+                    </div>
+                </div>
+            </div>
+            <div class="profile-card-body">
+                <div class="profile-card-model">${escapeHtml(profile.model || '-')}</div>
+                <div class="profile-card-meta">
+                    <div class="profile-card-meta-row">
+                        <span>Base URL</span>
+                        <code>${escapeHtml(profile.base_url || '-')}</code>
+                    </div>
+                    <div class="profile-card-meta-row">
+                        <span>API Key</span>
+                        <strong>${profile.has_api_key ? 'Stored' : 'Missing'}</strong>
+                    </div>
+                    <div class="profile-card-meta-row">
+                        <span>Temperature</span>
+                        <strong>${escapeHtml(String(profile.temperature ?? '-'))}</strong>
+                    </div>
+                    <div class="profile-card-meta-row">
+                        <span>Top P</span>
+                        <strong>${escapeHtml(String(profile.top_p ?? '-'))}</strong>
+                    </div>
+                    <div class="profile-card-meta-row">
+                        <span>Max Tokens</span>
+                        <strong>${escapeHtml(String(profile.max_tokens ?? '-'))}</strong>
+                    </div>
+                    <div class="profile-card-meta-row">
+                        <span>Connect Timeout</span>
+                        <strong>${escapeHtml(String(profile.connect_timeout_seconds ?? '-'))}s</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderProfileProbeState(name) {
+    const card = findProfileCard(name);
+    if (!card) {
+        return;
+    }
+
+    const state = profileProbeStates[name] || null;
+    const testButton = card.querySelector('.profile-card-test-btn');
+    const probeContainer = card.querySelector('[data-profile-probe-container]');
+
+    if (testButton) {
+        testButton.disabled = state?.status === 'probing';
+        testButton.textContent = state?.status === 'probing' ? 'Testing...' : 'Test';
+    }
+
+    if (probeContainer) {
+        probeContainer.innerHTML = renderProbeStatusMarkup(state);
+    }
+}
+
+function findProfileCard(name) {
+    return Array.from(document.querySelectorAll('.profile-card')).find(card => card.dataset.profileName === name) || null;
+}
+
+function formatProviderLabel(provider) {
+    if (provider === 'openai_compatible') {
+        return 'OpenAI Compatible';
+    }
+    if (provider === 'echo') {
+        return 'Echo';
+    }
+    return provider || 'Unknown';
 }
 
 function escapeHtml(value) {

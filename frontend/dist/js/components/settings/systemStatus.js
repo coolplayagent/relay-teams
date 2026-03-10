@@ -27,9 +27,9 @@ export async function loadMcpStatusPanel() {
         const mcpStatus = document.getElementById('mcp-status');
         const servers = status.mcp?.servers || [];
         if (servers.length === 0) {
-            mcpStatus.innerHTML = '<p>No MCP servers loaded.</p>';
+            mcpStatus.innerHTML = renderEmptyState('No MCP servers loaded', 'Add or enable a server, then reload to refresh the runtime view.');
         } else {
-            mcpStatus.innerHTML = '<ul>' + servers.map(s => `<li>${s}</li>`).join('') + '</ul>';
+            mcpStatus.innerHTML = renderStatusList(servers, 'Loaded');
         }
     } catch (e) {
         logError(
@@ -46,9 +46,9 @@ export async function loadSkillsStatusPanel() {
         const skillsStatus = document.getElementById('skills-status');
         const skills = status.skills?.skills || [];
         if (skills.length === 0) {
-            skillsStatus.innerHTML = '<p>No skills loaded.</p>';
+            skillsStatus.innerHTML = renderEmptyState('No skills loaded', 'Reload after updating the configured skill directories.');
         } else {
-            skillsStatus.innerHTML = '<ul>' + skills.map(s => `<li>${s}</li>`).join('') + '</ul>';
+            skillsStatus.innerHTML = renderStatusList(skills, 'Ready');
         }
     } catch (e) {
         logError(
@@ -77,4 +77,35 @@ async function handleReloadSkills() {
     } catch (e) {
         alert(`Failed to reload: ${e.message}`);
     }
+}
+
+function renderStatusList(items, stateLabel) {
+    return `
+        <div class="status-list">
+            ${items.map(item => `
+                <div class="status-list-row">
+                    <div class="status-list-name">${escapeHtml(item)}</div>
+                    <div class="status-list-state">${escapeHtml(stateLabel)}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function renderEmptyState(title, description) {
+    return `
+        <div class="settings-empty-state settings-empty-state-compact">
+            <h4>${escapeHtml(title)}</h4>
+            <p>${escapeHtml(description)}</p>
+        </div>
+    `;
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }

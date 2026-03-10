@@ -26,6 +26,33 @@
     --bg-tool-body: rgba(0, 0, 0, 0.4);
     --bg-tool-block: rgba(0, 0, 0, 0.2);
     --code-bg: rgba(255, 255, 255, 0.1);
+
+    --settings-overlay-bg: rgba(9, 11, 15, 0.82);
+    --settings-shell-bg: linear-gradient(180deg, rgba(20, 23, 29, 0.995), rgba(15, 18, 23, 0.995));
+    --settings-shell-border: rgba(102, 109, 124, 0.3);
+    --settings-shell-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+    --settings-sidebar-bg: rgba(13, 16, 21, 0.9);
+    --settings-header-bg: rgba(18, 21, 27, 0.9);
+    --settings-surface-bg: rgba(17, 20, 26, 0.94);
+    --settings-surface-strong-bg: rgba(17, 20, 26, 0.97);
+    --settings-surface-muted-bg: rgba(17, 20, 26, 0.95);
+    --settings-empty-bg: rgba(17, 20, 26, 0.93);
+    --settings-row-bg: rgba(255, 255, 255, 0.02);
+    --settings-row-hover-bg: rgba(255, 255, 255, 0.03);
+    --settings-chip-bg: rgba(255, 255, 255, 0.03);
+    --settings-chip-border: rgba(118, 125, 142, 0.18);
+    --settings-code-bg: rgba(255, 255, 255, 0.04);
+    --settings-input-bg: rgba(255, 255, 255, 0.035);
+    --settings-input-focus-bg: rgba(255, 255, 255, 0.05);
+    --settings-secondary-btn-bg: rgba(255, 255, 255, 0.04);
+    --settings-secondary-btn-hover-bg: rgba(255, 255, 255, 0.06);
+    --settings-border-soft: rgba(118, 125, 142, 0.18);
+    --settings-border-default: rgba(118, 125, 142, 0.2);
+    --settings-border-strong: rgba(118, 125, 142, 0.22);
+    --settings-border-hover: rgba(118, 125, 142, 0.26);
+    --settings-divider: rgba(118, 125, 142, 0.16);
+    --settings-card-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+    --settings-frame-padding: 1.1rem;
 }
 
 * {
@@ -65,6 +92,33 @@ body.light-theme {
     --text-tool-args: #7c3aed;
     --text-node-title: #0f172a;
     --code-bg: rgba(0, 0, 0, 0.1);
+
+    --settings-overlay-bg: rgba(226, 232, 240, 0.72);
+    --settings-shell-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(245, 247, 250, 0.99));
+    --settings-shell-border: rgba(148, 163, 184, 0.26);
+    --settings-shell-shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
+    --settings-sidebar-bg: rgba(248, 250, 252, 0.92);
+    --settings-header-bg: rgba(255, 255, 255, 0.92);
+    --settings-surface-bg: rgba(255, 255, 255, 0.88);
+    --settings-surface-strong-bg: rgba(255, 255, 255, 0.94);
+    --settings-surface-muted-bg: rgba(248, 250, 252, 0.94);
+    --settings-empty-bg: rgba(248, 250, 252, 0.96);
+    --settings-row-bg: rgba(248, 250, 252, 0.9);
+    --settings-row-hover-bg: rgba(241, 245, 249, 0.95);
+    --settings-chip-bg: rgba(248, 250, 252, 0.95);
+    --settings-chip-border: rgba(148, 163, 184, 0.22);
+    --settings-code-bg: rgba(15, 23, 42, 0.06);
+    --settings-input-bg: rgba(255, 255, 255, 0.96);
+    --settings-input-focus-bg: rgba(255, 255, 255, 1);
+    --settings-secondary-btn-bg: rgba(248, 250, 252, 0.96);
+    --settings-secondary-btn-hover-bg: rgba(241, 245, 249, 0.96);
+    --settings-border-soft: rgba(148, 163, 184, 0.18);
+    --settings-border-default: rgba(148, 163, 184, 0.22);
+    --settings-border-strong: rgba(148, 163, 184, 0.26);
+    --settings-border-hover: rgba(148, 163, 184, 0.32);
+    --settings-divider: rgba(148, 163, 184, 0.18);
+    --settings-card-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+    --settings-frame-padding: 1.1rem;
 }
 
 body.light-theme .dag-node {
