@@ -12,7 +12,6 @@ from agent_teams.interfaces.server.routers import (
     system,
     tasks,
     triggers,
-    workflows,
 )
 
 __all__ = [
@@ -26,5 +25,4 @@ __all__ = [
     "system",
     "tasks",
     "triggers",
-    "workflows",
 ]

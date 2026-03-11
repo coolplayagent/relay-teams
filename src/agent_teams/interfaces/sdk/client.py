@@ -103,45 +103,55 @@ class AgentTeamsClient:
             {"action": action, "feedback": feedback},
         )
 
-    def create_workflow(
+    def create_tasks(
         self,
         run_id: str,
-        objective: str,
-        workflow_id: str = "custom",
         tasks: list[JsonObject] | None = None,
+        auto_dispatch: bool = False,
     ) -> JsonObject:
         tasks_payload: list[JsonValue] | None = None
         if tasks is not None:
             tasks_payload = [task for task in tasks]
         payload: JsonObject = {
-            "objective": objective,
-            "workflow_id": workflow_id,
             "tasks": tasks_payload,
+            "auto_dispatch": auto_dispatch,
         }
         return self._request_json(
             "POST",
-            f"/api/workflows/runs/{run_id}",
+            f"/api/tasks/runs/{run_id}",
             payload,
         )
 
-    def get_workflow_status(self, run_id: str, workflow_id: str) -> JsonObject:
+    def list_run_tasks(self, run_id: str, include_root: bool = False) -> JsonObject:
         return self._request_json(
             "GET",
-            f"/api/workflows/runs/{run_id}/{workflow_id}",
+            f"/api/tasks/runs/{run_id}?include_root={'true' if include_root else 'false'}",
         )
 
-    def dispatch_tasks(
+    def update_task(
         self,
-        run_id: str,
-        workflow_id: str,
-        action: str,
-        feedback: str = "",
-        max_dispatch: int = 1,
+        task_id: str,
+        *,
+        role_id: str | None = None,
+        objective: str | None = None,
+        title: str | None = None,
     ) -> JsonObject:
+        payload: JsonObject = {
+            "role_id": role_id,
+            "objective": objective,
+            "title": title,
+        }
+        return self._request_json(
+            "PATCH",
+            f"/api/tasks/{task_id}",
+            payload,
+        )
+
+    def dispatch_task(self, task_id: str, feedback: str = "") -> JsonObject:
         return self._request_json(
             "POST",
-            f"/api/workflows/runs/{run_id}/{workflow_id}/dispatch",
-            {"action": action, "feedback": feedback, "max_dispatch": max_dispatch},
+            f"/api/tasks/{task_id}/dispatch",
+            {"feedback": feedback},
         )
 
     def inject_message(self, run_id: str, content: str) -> JsonObject:

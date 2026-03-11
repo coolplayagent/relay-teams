@@ -77,54 +77,46 @@ def stream_run_until_terminal(
     raise AssertionError(f"Stream ended without terminal event for run_id={run_id}")
 
 
-def create_custom_workflow(
+def create_task_batch(
     client: httpx.Client,
     *,
     run_id: str,
     objective: str,
 ) -> dict[str, object]:
     response = client.post(
-        f"/api/workflows/runs/{run_id}",
+        f"/api/tasks/runs/{run_id}",
         json={
-            "objective": objective,
-            "workflow_id": "custom",
             "tasks": [
                 {
-                    "task_name": "first_time_query",
-                    "objective": "Return the current time for the first task.",
+                    "title": "first_time_query",
+                    "objective": f"{objective}: return the current time for the first task.",
                     "role_id": "coordinator_agent",
-                    "depends_on": [],
                 },
                 {
-                    "task_name": "second_time_query",
-                    "objective": "Return the current time for the second task.",
+                    "title": "second_time_query",
+                    "objective": f"{objective}: return the current time for the second task.",
                     "role_id": "coordinator_agent",
-                    "depends_on": ["first_time_query"],
                 },
             ],
+            "auto_dispatch": False,
         },
     )
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, dict):
-        raise AssertionError(f"Invalid workflow response: {body}")
+        raise AssertionError(f"Invalid task creation response: {body}")
     return body
 
 
-def dispatch_workflow_next(
+def dispatch_task(
     client: httpx.Client,
     *,
-    run_id: str,
-    workflow_id: str,
-    max_dispatch: int = 1,
+    task_id: str,
+    feedback: str = "",
 ) -> dict[str, object]:
     response = client.post(
-        f"/api/workflows/runs/{run_id}/{workflow_id}/dispatch",
-        json={
-            "action": "next",
-            "feedback": "",
-            "max_dispatch": max_dispatch,
-        },
+        f"/api/tasks/{task_id}/dispatch",
+        json={"feedback": feedback},
     )
     response.raise_for_status()
     body = response.json()

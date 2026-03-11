@@ -192,8 +192,8 @@ class CoordinatorGraph(BaseModel):
 
     def _initialize_manual_mode(self, *, trace_id: str, root_task: TaskEnvelope) -> str:
         result = (
-            "Manual orchestration initialized. Use workflow APIs or tools to create a workflow and "
-            'drive dispatch_tasks(action="revise"|"next").'
+            "Manual orchestration initialized. Use task APIs or task tools to create, update, "
+            "list, and dispatch delegated tasks."
         )
         session_id = root_task.session_id
         self.task_repo.update_status(

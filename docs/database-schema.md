@@ -95,11 +95,15 @@ Required fields:
 - `session_id: string`
 - `parent_task_id: string | null`
 - `trace_id: string`
+- `role_id: string`
+- `title: string | null`
 - `objective: string`
 - `verification: { checklist: string[] }`
 
 Notes:
-- `confirmation_gate` is not part of the current schema.
+- `role_id` is the execution target for the task.
+- `title` is a persisted task summary used by session projections and task APIs.
+- The system no longer stores workflow graphs. `tasks` is the only orchestration source of truth.
 
 ---
 

@@ -35,7 +35,6 @@ from agent_teams.state.run_runtime_repo import (
 )
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -43,8 +42,6 @@ from agent_teams.workspace import (
 )
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
-from agent_teams.workflow.registry import WorkflowRegistry
-from agent_teams.workflow.spec import WorkflowDefinition, WorkflowTaskTemplate
 
 
 class _CapturingProvider:
@@ -102,7 +99,6 @@ def _build_service(
         event_bus=EventLog(db_path),
         agent_repo=agent_repo,
         message_repo=message_repo,
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         workspace_manager=WorkspaceManager(
@@ -163,7 +159,6 @@ def _build_service_with_control(
         event_bus=event_log,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=run_runtime_repo,
         workspace_manager=WorkspaceManager(
@@ -427,7 +422,7 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
 
 
 @pytest.mark.asyncio
-async def test_execute_coordinator_receives_workflow_recommendation(
+async def test_execute_coordinator_receives_task_runtime_contract(
     tmp_path: Path,
 ) -> None:
     provider = _CapturingProvider()
@@ -439,24 +434,6 @@ async def test_execute_coordinator_receives_workflow_recommendation(
             version="1",
             tools=(),
             system_prompt="Coordinate tasks.",
-        )
-    )
-    workflow_registry = WorkflowRegistry()
-    workflow_registry.register(
-        WorkflowDefinition(
-            workflow_id="sdd",
-            name="Standard Delivery Workflow",
-            version="1",
-            selection_hints=("build", "api", "service"),
-            is_default=True,
-            tasks=(
-                WorkflowTaskTemplate(
-                    task_name="spec",
-                    role_id="coordinator_agent",
-                    objective_template="Plan {objective}",
-                ),
-            ),
-            guidance="Use this workflow for staged software delivery.",
         )
     )
     db_path = tmp_path / "task_execution_service_coordinator.db"
@@ -499,7 +476,6 @@ async def test_execute_coordinator_receives_workflow_recommendation(
         event_bus=EventLog(db_path),
         agent_repo=agent_repo,
         message_repo=message_repo,
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         workspace_manager=WorkspaceManager(
@@ -507,7 +483,6 @@ async def test_execute_coordinator_receives_workflow_recommendation(
         ),
         prompt_builder=RuntimePromptBuilder(),
         provider_factory=lambda _: provider,
-        workflow_registry=workflow_registry,
     )
 
     result = await service.execute(
@@ -518,12 +493,10 @@ async def test_execute_coordinator_receives_workflow_recommendation(
 
     assert result == "ok"
     assert provider.system_prompts
-    assert "## Workflow Recommendation" in provider.system_prompts[0]
+    assert "Use list_run_tasks and dispatch_task results" in provider.system_prompts[0]
     assert (
-        "Recommended workflow: sdd (Standard Delivery Workflow)"
-        in provider.system_prompts[0]
+        "Create tasks only when delegation is necessary" in provider.system_prompts[0]
     )
-    assert "Do not derive task order from role metadata." in provider.system_prompts[0]
 
 
 class _FakeReflectionService:
@@ -619,7 +592,6 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
         event_bus=EventLog(db_path),
         agent_repo=agent_repo,
         message_repo=message_repo,
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         workspace_manager=WorkspaceManager(

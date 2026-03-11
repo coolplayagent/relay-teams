@@ -19,9 +19,10 @@ from pydantic_ai.messages import (
 
 import agent_teams.providers.llm as llm_module
 from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.task_execution_service import TaskExecutionService
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.prompting.provider_augment import PromptSkillInstruction
 from agent_teams.providers.llm import LLMRequest, OpenAICompatibleProvider
@@ -41,7 +42,6 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 from agent_teams.workspace import (
@@ -523,7 +523,6 @@ def _build_provider(
         ),
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=AgentInstanceRepository(db_path),
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         workspace_manager=WorkspaceManager(
@@ -538,8 +537,7 @@ def _build_provider(
         message_repo=message_repo,
         role_registry=role_registry,
         task_execution_service=cast(TaskExecutionService, object()),
-        workflow_registry=cast(WorkflowRegistry, object()),
-        workflow_service=cast(WorkflowOrchestrationService, object()),
+        task_service=cast(TaskOrchestrationService, object()),
         run_control_manager=cast(
             RunControlManager,
             cast(object, run_control_manager or _FakeRunControlManager()),
@@ -640,7 +638,7 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="create_workflow_graph",
+                        tool_name="create_tasks",
                         args={"objective": "x"},
                         tool_call_id="call-1",
                     )
@@ -731,7 +729,7 @@ async def test_generate_builds_augmented_system_prompt(
     provider, _ = _build_provider(
         tmp_path / "prompt_aug.db",
         fake_hub,
-        allowed_tools=("dispatch_tasks",),
+        allowed_tools=("dispatch_task",),
         allowed_skills=("time",),
         skill_registry=fake_skill_registry,
     )
@@ -759,7 +757,7 @@ async def test_generate_builds_augmented_system_prompt(
     system_prompt_obj = captured_kwargs.get("system_prompt")
     assert isinstance(system_prompt_obj, str)
     assert "## Tool Rules" in system_prompt_obj
-    assert "dispatch_tasks" in system_prompt_obj
+    assert "dispatch_task" in system_prompt_obj
     assert "## Skill Instructions" in system_prompt_obj
     assert "### Skill: time" in system_prompt_obj
     assert "Normalize all times to UTC." in system_prompt_obj

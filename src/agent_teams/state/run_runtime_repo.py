@@ -40,7 +40,6 @@ class RunRuntimeRecord(BaseModel):
     active_instance_id: str | None = None
     active_task_id: str | None = None
     active_role_id: str | None = None
-    active_workflow_id: str | None = None
     active_subagent_instance_id: str | None = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -74,7 +73,6 @@ class RunRuntimeRepository:
                 active_instance_id         TEXT,
                 active_task_id             TEXT,
                 active_role_id             TEXT,
-                active_workflow_id         TEXT,
                 active_subagent_instance_id TEXT,
                 last_error                 TEXT,
                 created_at                 TEXT NOT NULL,
@@ -101,9 +99,9 @@ class RunRuntimeRepository:
         self._conn.execute(
             """
             INSERT INTO run_runtime(run_id, session_id, root_task_id, status, phase, active_instance_id,
-                                    active_task_id, active_role_id, active_workflow_id, active_subagent_instance_id,
+                                    active_task_id, active_role_id, active_subagent_instance_id,
                                     last_error, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
@@ -113,7 +111,6 @@ class RunRuntimeRepository:
                 active_instance_id=excluded.active_instance_id,
                 active_task_id=excluded.active_task_id,
                 active_role_id=excluded.active_role_id,
-                active_workflow_id=excluded.active_workflow_id,
                 active_subagent_instance_id=excluded.active_subagent_instance_id,
                 last_error=excluded.last_error,
                 updated_at=excluded.updated_at
@@ -127,7 +124,6 @@ class RunRuntimeRepository:
                 record.active_instance_id,
                 record.active_task_id,
                 record.active_role_id,
-                record.active_workflow_id,
                 record.active_subagent_instance_id,
                 record.last_error,
                 created_at,
@@ -228,9 +224,6 @@ class RunRuntimeRepository:
             active_role_id=str(row["active_role_id"])
             if row["active_role_id"]
             else None,
-            active_workflow_id=(
-                str(row["active_workflow_id"]) if row["active_workflow_id"] else None
-            ),
             active_subagent_instance_id=(
                 str(row["active_subagent_instance_id"])
                 if row["active_subagent_instance_id"]

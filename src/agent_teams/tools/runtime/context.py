@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from pydantic import BaseModel, ConfigDict, SkipValidation
 from pydantic_ai import RunContext
 
 from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.notifications import NotificationService
 from agent_teams.roles.registry import RoleRegistry
@@ -20,14 +21,9 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.runtime.approval_state import ToolApprovalManager
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceHandle
-
-if TYPE_CHECKING:
-    from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-    from agent_teams.workflow.registry import WorkflowRegistry
 
 
 class ToolDeps(BaseModel):
@@ -42,7 +38,6 @@ class ToolDeps(BaseModel):
     shared_store: SkipValidation[SharedStateRepository]
     event_bus: SkipValidation[EventLog]
     message_repo: SkipValidation[MessageRepository]
-    workflow_graph_repo: SkipValidation[WorkflowGraphRepository]
     approval_ticket_repo: SkipValidation[ApprovalTicketRepository]
     run_runtime_repo: SkipValidation[RunRuntimeRepository]
     injection_manager: SkipValidation[RunInjectionManager]
@@ -58,8 +53,7 @@ class ToolDeps(BaseModel):
     instance_id: str
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
-    workflow_registry: SkipValidation["WorkflowRegistry"]
-    workflow_service: SkipValidation["WorkflowOrchestrationService"]
+    task_service: SkipValidation[TaskOrchestrationService]
     task_execution_service: SkipValidation[TaskExecutionService]
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
@@ -68,10 +62,3 @@ class ToolDeps(BaseModel):
 
 
 ToolContext = RunContext[ToolDeps]
-
-ToolDeps.model_rebuild(
-    _types_namespace={
-        "WorkflowRegistry": object,
-        "WorkflowOrchestrationService": object,
-    }
-)

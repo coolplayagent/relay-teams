@@ -11,7 +11,6 @@ from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 
 
@@ -25,7 +24,6 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
-    workflow_graph_repo = WorkflowGraphRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
 
     _ = task_repo.create(
@@ -80,7 +78,6 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
         session_id=session_id,
         agent_repo=agent_repo,
         task_repo=task_repo,
-        workflow_graph_repo=workflow_graph_repo,
         approval_tickets_by_run={},
         run_runtime_repo=run_runtime_repo,
         get_session_messages=_session_messages,

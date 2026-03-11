@@ -123,8 +123,8 @@ Stop condition:
 Additional boundary rules:
 - Role is the HR layer: it defines stable identity, responsibility boundary, and executable capability.
 - Workflow is the institutional layer: it defines fixed stage order, task decomposition, and dependency topology.
-- Coordination is the decision layer: it interprets intent, selects the most suitable workflow dynamically, and instantiates the executable workflow graph.
-- The same set of roles may be reused by different industries with different workflows, so fixed flow must not be encoded in role markdown.
-- If a dependency such as `depends_on` appears in role metadata, treat it as a design error and move it into workflow definitions or custom workflow task graphs.
+- Coordination is the decision layer: it interprets intent, creates delegated tasks, and decides dispatch order at runtime.
+- The same set of roles may be reused by different industries with different task breakdowns, so fixed flow must not be encoded in role markdown.
+- If a dependency hint such as `depends_on` appears in role metadata, treat it as a design error. Ordering belongs to runtime task orchestration, not role files.
 
 

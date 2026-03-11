@@ -68,6 +68,26 @@ class TaskRepository:
         self._conn.commit()
         return record
 
+    def update_envelope(self, task_id: str, envelope: TaskEnvelope) -> TaskRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            UPDATE tasks
+            SET trace_id=?, session_id=?, parent_task_id=?, envelope_json=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (
+                envelope.trace_id,
+                envelope.session_id,
+                envelope.parent_task_id,
+                envelope.model_dump_json(),
+                now,
+                task_id,
+            ),
+        )
+        self._conn.commit()
+        return self.get(task_id)
+
     def update_status(
         self,
         task_id: str,

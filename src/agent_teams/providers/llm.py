@@ -45,7 +45,9 @@ from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.coordination_agent import build_coordination_agent
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import (
@@ -72,8 +74,6 @@ from agent_teams.workspace import (
 if TYPE_CHECKING:
     from agent_teams.coordination.task_execution_service import TaskExecutionService
     from agent_teams.roles.registry import RoleRegistry
-    from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-    from agent_teams.workflow.registry import WorkflowRegistry
 
 LOGGER = get_logger(__name__)
 
@@ -126,7 +126,6 @@ class OpenAICompatibleProvider(LLMProvider):
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
         agent_repo: AgentInstanceRepository,
-        workflow_graph_repo: WorkflowGraphRepository,
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         workspace_manager: WorkspaceManager,
@@ -139,8 +138,7 @@ class OpenAICompatibleProvider(LLMProvider):
         message_repo: MessageRepository,
         role_registry: "RoleRegistry",
         task_execution_service: "TaskExecutionService",
-        workflow_registry: "WorkflowRegistry",
-        workflow_service: "WorkflowOrchestrationService",
+        task_service: TaskOrchestrationService,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
@@ -155,7 +153,6 @@ class OpenAICompatibleProvider(LLMProvider):
         self._injection_manager = injection_manager
         self._run_event_hub = run_event_hub
         self._agent_repo = agent_repo
-        self._workflow_graph_repo = workflow_graph_repo
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._workspace_manager = workspace_manager
@@ -167,8 +164,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._allowed_skills = allowed_skills
         self._role_registry = role_registry
         self._task_execution_service = task_execution_service
-        self._workflow_registry = workflow_registry
-        self._workflow_service = workflow_service
+        self._task_service = task_service
         self._run_control_manager = run_control_manager
         self._message_repo = message_repo
         self._tool_approval_manager = tool_approval_manager
@@ -267,7 +263,6 @@ class OpenAICompatibleProvider(LLMProvider):
             shared_store=self._shared_store,
             event_bus=self._event_bus,
             message_repo=self._message_repo,
-            workflow_graph_repo=self._workflow_graph_repo,
             approval_ticket_repo=self._approval_ticket_repo,
             run_runtime_repo=self._run_runtime_repo,
             injection_manager=self._injection_manager,
@@ -290,8 +285,7 @@ class OpenAICompatibleProvider(LLMProvider):
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._role_registry,
-            workflow_registry=self._workflow_registry,
-            workflow_service=self._workflow_service,
+            task_service=self._task_service,
             task_execution_service=self._task_execution_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,

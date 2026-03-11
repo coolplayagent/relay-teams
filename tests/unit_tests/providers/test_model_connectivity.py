@@ -190,7 +190,6 @@ def _runtime_config() -> RuntimeConfig:
             env_file=Path("D:/tmp/.agent_teams/.env"),
             db_path=Path("D:/tmp/.agent_teams/agent_teams.db"),
             roles_dir=Path("D:/tmp/.agent_teams/roles"),
-            workflows_dir=Path("D:/tmp/.agent_teams/workflows"),
         ),
         llm_profiles={"default": config},
     )

@@ -89,7 +89,7 @@ def test_build_coordination_agent_passes_proxy_http_client(
         base_url="https://example.test/v1",
         api_key="secret",
         system_prompt="system",
-        allowed_tools=("dispatch_tasks",),
+        allowed_tools=("dispatch_task",),
         connect_timeout_seconds=22.0,
         tool_registry=cast(ToolRegistry, fake_tool_registry),
     )
@@ -100,5 +100,5 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert provider.kwargs["api_key"] == "secret"
     assert provider.kwargs["http_client"] is sentinel_client
     assert captured["connect_timeout_seconds"] == 22.0
-    assert fake_tool_registry.required == ("dispatch_tasks",)
+    assert fake_tool_registry.required == ("dispatch_task",)
     assert agent is captured["agent"]

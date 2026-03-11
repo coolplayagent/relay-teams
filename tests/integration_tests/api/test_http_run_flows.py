@@ -4,10 +4,10 @@ import httpx
 
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.api_helpers import (
-    create_custom_workflow,
+    create_task_batch,
     create_run,
     create_session,
-    dispatch_workflow_next,
+    dispatch_task,
     new_session_id,
     stream_run_until_terminal,
 )
@@ -41,7 +41,9 @@ def test_ai_run_uses_fake_llm(
     api_client: httpx.Client,
     integration_env: IntegrationEnvironment,
 ) -> None:
-    before_response = httpx.get(f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0)
+    before_response = httpx.get(
+        f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0
+    )
     before_response.raise_for_status()
     before_calls = int(before_response.json()["chat_completions_calls"])
 
@@ -58,14 +60,16 @@ def test_ai_run_uses_fake_llm(
     assert event_types[-1] == "run_completed"
     assert "run_failed" not in event_types
 
-    after_response = httpx.get(f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0)
+    after_response = httpx.get(
+        f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0
+    )
     after_response.raise_for_status()
     after_calls = int(after_response.json()["chat_completions_calls"])
     assert after_calls > before_calls
 
 
-def test_workflow_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None:
-    session_id = create_session(api_client, session_id=new_session_id("session-workflow"))
+def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None:
+    session_id = create_session(api_client, session_id=new_session_id("session-task"))
     run_id = create_run(
         api_client,
         session_id=session_id,
@@ -74,26 +78,21 @@ def test_workflow_dispatch_updates_round_task_maps(api_client: httpx.Client) -> 
     )
     _ = stream_run_until_terminal(api_client, run_id=run_id)
 
-    workflow = create_custom_workflow(
+    task_batch = create_task_batch(
         api_client,
         run_id=run_id,
         objective="time query chain",
     )
-    workflow_id = workflow.get("workflow_id")
-    assert isinstance(workflow_id, str) and workflow_id
+    tasks = task_batch.get("tasks")
+    assert isinstance(tasks, list)
+    task_ids = [
+        str(item.get("task_id") or "") for item in tasks if isinstance(item, dict)
+    ]
+    assert len(task_ids) == 2
+    assert all(task_ids)
 
-    first_dispatch = dispatch_workflow_next(
-        api_client,
-        run_id=run_id,
-        workflow_id=workflow_id,
-        max_dispatch=1,
-    )
-    second_dispatch = dispatch_workflow_next(
-        api_client,
-        run_id=run_id,
-        workflow_id=workflow_id,
-        max_dispatch=1,
-    )
+    first_dispatch = dispatch_task(api_client, task_id=task_ids[0])
+    second_dispatch = dispatch_task(api_client, task_id=task_ids[1])
     assert first_dispatch["ok"] is True
     assert second_dispatch["ok"] is True
 

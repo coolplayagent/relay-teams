@@ -17,7 +17,6 @@ from agent_teams.state.run_runtime_repo import (
 from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 
 
@@ -32,7 +31,6 @@ def _build_service(
         task_repo=TaskRepository(db_path),
         agent_repo=AgentInstanceRepository(db_path),
         message_repo=MessageRepository(db_path),
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
@@ -51,6 +49,28 @@ def _seed_root_task(db_path: Path, *, run_id: str, session_id: str) -> None:
             parent_task_id=None,
             trace_id=run_id,
             objective="do work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+
+def _seed_delegated_task(
+    db_path: Path,
+    *,
+    run_id: str,
+    session_id: str,
+    task_id: str,
+) -> None:
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id="task-root-1",
+            trace_id=run_id,
+            role_id="time",
+            title="Ask time",
+            objective="ask the current time",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
     )
@@ -202,8 +222,8 @@ def test_get_recovery_snapshot_prefers_approval_phase(tmp_path: Path) -> None:
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="dispatch_tasks",
-        args_preview='{"action":"revise"}',
+        tool_name="dispatch_task",
+        args_preview='{"task_id":"task-1"}',
     )
 
     snapshot = service.get_recovery_snapshot("session-1")
@@ -247,8 +267,8 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="dispatch_tasks",
-        args_preview='{"action":"next"}',
+        tool_name="dispatch_task",
+        args_preview='{"task_id":"task-1"}',
     )
 
     snapshot = service.get_recovery_snapshot("session-1")
@@ -260,13 +280,19 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
     assert active_run.get("pending_tool_approval_count") == 1
 
 
-def test_get_recovery_snapshot_round_snapshot_keeps_persisted_workflow_graph(
+def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "recovery_graph.db"
     service = _build_service(db_path)
     _ = service.create_session(session_id="session-1")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    _seed_delegated_task(
+        db_path,
+        run_id="run-active",
+        session_id="session-1",
+        task_id="task-sub-1",
+    )
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(
         run_id="run-active",
@@ -275,30 +301,15 @@ def test_get_recovery_snapshot_round_snapshot_keeps_persisted_workflow_graph(
         status=RunRuntimeStatus.RUNNING,
         phase=RunRuntimePhase.COORDINATOR_RUNNING,
     )
-    WorkflowGraphRepository(db_path).upsert(
-        workflow_id="wf-1",
-        run_id="run-active",
-        session_id="session-1",
-        root_task_id="task-root-1",
-        graph={
-            "workflow_id": "wf-1",
-            "tasks": {
-                "ask_time": {
-                    "task_id": "task-sub-1",
-                    "role_id": "time",
-                    "depends_on": [],
-                }
-            },
-        },
-    )
 
     snapshot = service.get_recovery_snapshot("session-1")
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
-    workflows = round_snapshot.get("workflows")
-    assert isinstance(workflows, list)
-    assert len(workflows) == 1
-    assert workflows[0]["workflow_id"] == "wf-1"
+    tasks = round_snapshot.get("tasks")
+    assert isinstance(tasks, list)
+    assert len(tasks) == 1
+    assert tasks[0]["task_id"] == "task-sub-1"
+    assert tasks[0]["role_id"] == "time"
 
 
 def test_failed_terminal_run_is_exposed_through_round_projection_not_recovery(

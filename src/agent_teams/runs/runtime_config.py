@@ -24,7 +24,6 @@ class RuntimePaths(BaseModel):
     env_file: Path
     db_path: Path
     roles_dir: Path
-    workflows_dir: Path
 
 
 class RuntimeConfig(BaseModel):
@@ -53,10 +52,6 @@ def load_runtime_config(
         resolved_config_dir,
         str(roles_dir or merged_env.get("AGENT_TEAMS_ROLES_DIR", "roles")),
     )
-    resolved_workflows_dir = _resolve_path(
-        resolved_config_dir,
-        merged_env.get("AGENT_TEAMS_WORKFLOWS_DIR", "workflows"),
-    )
     resolved_db_path = db_path or _resolve_path(
         resolved_config_dir,
         merged_env.get("AGENT_TEAMS_DB_PATH", "agent_teams.db"),
@@ -69,7 +64,6 @@ def load_runtime_config(
             env_file=env_file,
             db_path=resolved_db_path,
             roles_dir=resolved_roles_dir,
-            workflows_dir=resolved_workflows_dir,
         ),
         llm_profiles=llm_profiles,
     )

@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import Callable
 
 from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
@@ -31,11 +34,8 @@ from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.workspace import WorkspaceManager
 
 
@@ -49,7 +49,6 @@ def create_provider_factory(
     injection_manager: RunInjectionManager,
     run_event_hub: RunEventHub,
     agent_repo: AgentInstanceRepository,
-    workflow_graph_repo: WorkflowGraphRepository,
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
     workspace_manager: WorkspaceManager,
@@ -58,8 +57,7 @@ def create_provider_factory(
     skill_registry: SkillRegistry,
     message_repo: MessageRepository,
     role_registry: RoleRegistry,
-    workflow_registry: WorkflowRegistry,
-    get_workflow_service: Callable[[], WorkflowOrchestrationService],
+    get_task_service: Callable[[], TaskOrchestrationService],
     run_control_manager: RunControlManager,
     tool_approval_manager: ToolApprovalManager,
     tool_approval_policy: ToolApprovalPolicy,
@@ -85,7 +83,6 @@ def create_provider_factory(
                 injection_manager=injection_manager,
                 run_event_hub=run_event_hub,
                 agent_repo=agent_repo,
-                workflow_graph_repo=workflow_graph_repo,
                 approval_ticket_repo=approval_ticket_repo,
                 run_runtime_repo=run_runtime_repo,
                 workspace_manager=workspace_manager,
@@ -98,8 +95,7 @@ def create_provider_factory(
                 message_repo=message_repo,
                 role_registry=role_registry,
                 task_execution_service=get_task_execution_service(),
-                workflow_registry=workflow_registry,
-                workflow_service=get_workflow_service(),
+                task_service=get_task_service(),
                 run_control_manager=run_control_manager,
                 tool_approval_manager=tool_approval_manager,
                 tool_approval_policy=tool_approval_policy,
@@ -131,12 +127,10 @@ def create_task_execution_service(
     event_log: EventLog,
     agent_repo: AgentInstanceRepository,
     message_repo: MessageRepository,
-    workflow_graph_repo: WorkflowGraphRepository,
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
     workspace_manager: WorkspaceManager,
     provider_factory: Callable[[RoleDefinition], LLMProvider],
-    workflow_registry: WorkflowRegistry,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
     reflection_service: ReflectionService | None = None,
@@ -149,13 +143,11 @@ def create_task_execution_service(
         event_bus=event_log,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        workflow_graph_repo=workflow_graph_repo,
         approval_ticket_repo=approval_ticket_repo,
         run_runtime_repo=run_runtime_repo,
         workspace_manager=workspace_manager,
         prompt_builder=RuntimePromptBuilder(),
         provider_factory=provider_factory,
-        workflow_registry=workflow_registry,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         reflection_service=reflection_service,

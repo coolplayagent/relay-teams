@@ -146,12 +146,12 @@ def get_agent_messages(
     return service.get_agent_messages(session_id, instance_id)
 
 
-@router.get("/{session_id}/workflows")
-def get_session_workflows(
+@router.get("/{session_id}/tasks")
+def get_session_tasks(
     session_id: str,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return service.get_session_workflows(session_id)
+    return service.get_session_tasks(session_id)
 
 
 @router.get("/{session_id}/token-usage")

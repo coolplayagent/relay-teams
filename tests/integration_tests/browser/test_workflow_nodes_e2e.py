@@ -17,21 +17,21 @@ from playwright.sync_api import (
 
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.api_helpers import (
-    create_custom_workflow,
+    create_task_batch,
     create_run,
     create_session,
-    dispatch_workflow_next,
+    dispatch_task,
     new_session_id,
     stream_run_until_terminal,
 )
 
 
-def test_dag_nodes_show_status_badges(
+def test_task_nodes_show_status_badges(
     api_client: httpx.Client,
     integration_env: IntegrationEnvironment,
     page: Page,
 ) -> None:
-    session_id = prepare_workflow_run(api_client, dispatch_rounds=1)
+    session_id = prepare_task_run(api_client, dispatch_rounds=1)
 
     page.goto(integration_env.api_base_url, wait_until="networkidle")
     select_session(page, session_id)
@@ -68,7 +68,7 @@ def test_clicking_different_nodes_keeps_single_active(
     integration_env: IntegrationEnvironment,
     page: Page,
 ) -> None:
-    session_id = prepare_workflow_run(api_client, dispatch_rounds=2)
+    session_id = prepare_task_run(api_client, dispatch_rounds=2)
 
     page.goto(integration_env.api_base_url, wait_until="networkidle")
     select_session(page, session_id)
@@ -128,7 +128,7 @@ def playwright() -> Iterator[Playwright]:
         yield p
 
 
-def prepare_workflow_run(client: httpx.Client, *, dispatch_rounds: int) -> str:
+def prepare_task_run(client: httpx.Client, *, dispatch_rounds: int) -> str:
     session_id = create_session(client, session_id=new_session_id("session-ui"))
     run_id = create_run(
         client,
@@ -138,24 +138,24 @@ def prepare_workflow_run(client: httpx.Client, *, dispatch_rounds: int) -> str:
     )
     _ = stream_run_until_terminal(client, run_id=run_id)
 
-    workflow = create_custom_workflow(
+    task_batch = create_task_batch(
         client,
         run_id=run_id,
-        objective="ui e2e workflow",
+        objective="ui e2e tasks",
     )
-    workflow_id = workflow.get("workflow_id")
-    if not isinstance(workflow_id, str) or not workflow_id:
-        raise AssertionError(f"Invalid workflow payload: {workflow}")
+    tasks = task_batch.get("tasks")
+    if not isinstance(tasks, list):
+        raise AssertionError(f"Invalid task payload: {task_batch}")
+    task_ids = [
+        str(item.get("task_id") or "") for item in tasks if isinstance(item, dict)
+    ]
+    if len(task_ids) < dispatch_rounds:
+        raise AssertionError(f"Not enough task ids returned: {task_batch}")
 
-    for _ in range(dispatch_rounds):
-        dispatch = dispatch_workflow_next(
-            client,
-            run_id=run_id,
-            workflow_id=workflow_id,
-            max_dispatch=1,
-        )
+    for task_id in task_ids[:dispatch_rounds]:
+        dispatch = dispatch_task(client, task_id=task_id)
         if dispatch.get("ok") is not True:
-            raise AssertionError(f"Workflow dispatch failed: {dispatch}")
+            raise AssertionError(f"Task dispatch failed: {dispatch}")
     return session_id
 
 

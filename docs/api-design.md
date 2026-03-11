@@ -1,278 +1,151 @@
 # Agent Teams API Design
 
-## 1. General
+## Overview
 
 - Base path: `/api`
 - Content type: `application/json`
-- Streaming endpoint uses `text/event-stream`
-- Time fields use ISO 8601 UTC strings
+- Streaming endpoint: `text/event-stream`
+- Time fields: ISO 8601 UTC strings
+- Orchestration model: task-only. There is no workflow graph API, workflow template registry, or persisted dependency DAG.
 
 Common status codes:
 - `200`: success
-- `404`: resource not found / run-task mismatch
-- `409`: runtime conflict (for example session blocked by paused subagent)
+- `400`: invalid task/run request
+- `404`: resource not found
+- `409`: runtime conflict
 - `422`: request validation error
-- `500`: internal error
 
----
+## Core Concepts
 
-## 2. Core Enums
+- A run starts from one root coordinator task.
+- Every delegated task is a persisted task record under that root task.
+- A delegated task binds to exactly one subagent instance on first dispatch.
+- Re-dispatching the same task reuses its bound instance.
+- Different tasks never share an instance, even when `role_id` is the same.
 
-### execution_mode
-- `ai`
-- `manual`
+Task status values:
+- `created`
+- `assigned`
+- `running`
+- `stopped`
+- `completed`
+- `failed`
+- `timeout`
 
-### workflow_id
-- `sdd`
-- `custom`
-
-### workflow dispatch action
-- `next`
-- `revise`
-
-### injection source
-- `system`
-- `user`
-- `subagent`
-
-### run event_type
-- `run_started`
-- `model_step_started`
-- `model_step_finished`
-- `text_delta`
-- `tool_call`
-- `tool_input_validation_failed`
-- `tool_result`
-- `injection_enqueued`
-- `injection_applied`
-- `tool_approval_requested`
-- `tool_approval_resolved`
-- `subagent_stopped`
-- `subagent_resumed`
-- `run_stopped`
-- `run_completed`
-- `run_failed`
-- `notification_requested`
-- `awaiting_manual_action`
-- `token_usage`
-
----
-
-## 3. System APIs
+## System APIs
 
 ### `GET /system/health`
-Returns service status.
 
-Response:
-```json
-{"status":"ok","version":"0.1.0"}
-```
+Returns service health.
 
 ### `GET /system/configs`
-Returns runtime config load status for model/mcp/skills.
+
+Returns runtime config load status for model, MCP, and skills.
 
 ### `GET /system/configs/model`
-Returns raw model config (`model.json`).
+
+Returns raw `model.json`.
 
 ### `GET /system/configs/model/profiles`
-Returns normalized model profile list.
+
+Returns normalized model profiles.
 
 ### `PUT /system/configs/model/profiles/{name}`
-Upsert a model profile.
 
-Request:
-```json
-{
-  "provider": "openai_compatible",
-  "model": "gpt-4o-mini",
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "***",
-  "temperature": 0.7,
-  "top_p": 1.0,
-  "max_tokens": 4096,
-  "connect_timeout_seconds": 15.0
-}
-```
-
-### `GET /system/configs/model/providers/models`
-Returns queryable provider model metadata generated from runtime profiles.
-
-Optional query parameter:
-- `provider`: provider type filter (`openai_compatible`, `echo`)
-
-Response:
-```json
-[
-  {
-    "profile": "default",
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "base_url": "https://api.openai.com/v1"
-  }
-]
-```
+Upserts a model profile.
 
 ### `DELETE /system/configs/model/profiles/{name}`
+
 Deletes a model profile.
 
 ### `PUT /system/configs/model`
-Replaces full model config object.
 
-Request:
-```json
-{"config": {"default": {"model": "..."}}}
-```
+Replaces the full model config object.
 
 ### `POST /system/configs/model:probe`
-Tests model connectivity for either a saved profile or an unsaved draft override.
 
-Request:
-```json
-{
-  "profile_name": "default",
-  "override": {
-    "model": "gpt-4o-mini",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "***"
-  },
-  "timeout_ms": 5000
-}
-```
-
-Notes:
-- `profile_name` is optional when probing an unsaved draft.
-- `override` is optional when probing an already-saved profile.
-- When both are provided, the saved profile is loaded first and then overridden field-by-field.
-
-Response:
-```json
-{
-  "ok": true,
-  "provider": "openai_compatible",
-  "model": "gpt-4o-mini",
-  "latency_ms": 842,
-  "checked_at": "2026-03-10T00:00:00Z",
-  "diagnostics": {
-    "endpoint_reachable": true,
-    "auth_valid": true,
-    "rate_limited": false
-  },
-  "token_usage": {
-    "prompt_tokens": 8,
-    "completion_tokens": 1,
-    "total_tokens": 9
-  },
-  "error_code": null,
-  "error_message": null,
-  "retryable": false
-}
-```
+Tests model connectivity for a saved profile and/or draft override.
 
 ### `POST /system/configs/model:reload`
+
 Reloads model config into runtime.
 
 ### `POST /system/configs/mcp:reload`
+
 Reloads MCP config into runtime.
 
-MCP config merge order:
-- `~/.agent_teams/mcp.json` (user scope)
-- `.agent_teams/mcp.json` (project scope, overrides user scope by server name)
-
-Behavior notes:
-- All MCP transports inherit merged proxy env values (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`).
-- Every MCP server config receives those values in its merged `env` settings.
-- stdio MCP servers consume them through subprocess `env` injection, while remote transports (`sse`, `http`, `streamable-http`) also read them through the backend process environment.
-- Explicit `env` entries inside an MCP server config override inherited proxy defaults.
-
 ### `POST /system/configs/skills:reload`
+
 Reloads skills config into runtime.
 
 ### `GET /system/configs/notifications`
+
 Returns notification rules by event type.
 
-Response:
-```json
-{
-  "tool_approval_requested": {"enabled": true, "channels": ["browser", "toast"]},
-  "run_completed": {"enabled": false, "channels": ["toast"]},
-  "run_failed": {"enabled": true, "channels": ["browser", "toast"]},
-  "run_stopped": {"enabled": false, "channels": ["toast"]}
-}
-```
-
 ### `PUT /system/configs/notifications`
+
 Replaces notification rules.
 
-Request:
-```json
-{
-  "config": {
-    "tool_approval_requested": {"enabled": true, "channels": ["browser", "toast"]},
-    "run_completed": {"enabled": true, "channels": ["toast"]},
-    "run_failed": {"enabled": true, "channels": ["browser", "toast"]},
-    "run_stopped": {"enabled": false, "channels": ["toast"]}
-  }
-}
-```
-
----
-
-## 4. Session APIs
+## Session APIs
 
 ### `POST /sessions`
-Creates session.
+
+Creates a session.
 
 Request:
+
 ```json
-{"session_id": null, "metadata": {"project":"demo"}}
+{"session_id": null, "metadata": {"project": "demo"}}
 ```
 
-Response: `SessionRecord`
-
 ### `GET /sessions`
+
 Lists sessions.
 
 ### `GET /sessions/{session_id}`
+
 Gets one session.
 
 ### `PATCH /sessions/{session_id}`
-Updates metadata.
 
-Request:
-```json
-{"metadata": {"key":"value"}}
-```
+Updates session metadata.
 
 ### `DELETE /sessions/{session_id}`
-Deletes session and related runtime data.
+
+Deletes a session and all persisted runtime data.
 
 ### `GET /sessions/{session_id}/rounds`
-Returns paged rounds projection.
 
-Query:
-- `limit` (default 8, max controlled by backend)
-- `cursor_run_id` (optional)
+Returns paged round projections.
 
 Response shape:
+
 ```json
 {
   "items": [
     {
-      "run_id": "...",
-      "created_at": "...",
-      "intent": "...",
+      "run_id": "run-1",
+      "created_at": "2026-03-11T12:00:00Z",
+      "intent": "Implement endpoint X",
       "coordinator_messages": [],
+      "tasks": [
+        {
+          "task_id": "task-2",
+          "title": "Write API code",
+          "role_id": "spec_coder",
+          "status": "completed",
+          "instance_id": "inst-2"
+        }
+      ],
+      "instance_role_map": {"inst-2": "spec_coder"},
+      "role_instance_map": {"spec_coder": "inst-2"},
+      "task_instance_map": {"task-2": "inst-2"},
+      "task_status_map": {"task-2": "completed"},
       "pending_tool_approvals": [],
-      "pending_streams": {
-        "coordinator_text": "",
-        "coordinator_instance_id": "",
-        "by_instance": {}
-      },
-      "workflows": [],
-      "instance_role_map": {},
-      "role_instance_map": {},
-      "task_instance_map": {},
-      "task_status_map": {}
+      "pending_tool_approval_count": 0,
+      "run_status": "running",
+      "run_phase": "idle",
+      "is_recoverable": true
     }
   ],
   "has_more": false,
@@ -280,290 +153,235 @@ Response shape:
 }
 ```
 
-Field notes:
-- `instance_role_map`: `instance_id -> role_id`
-- `role_instance_map`: `role_id -> latest instance_id` in this run
-- `task_instance_map`: `task_id -> assigned instance_id` (use this when a workflow has multiple tasks with the same `role_id`)
-- `task_status_map`: `task_id -> task status` (`created|assigned|running|completed|failed|timeout|stopped`)
+Notes:
+- `tasks` contains delegated task summaries only. The root coordinator task is omitted.
+- `task_instance_map` is the authoritative mapping when multiple tasks use the same `role_id`.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
+
 Gets one round projection.
 
+### `GET /sessions/{session_id}/recovery`
+
+Returns active run recovery state, pending tool approvals, paused subagent state, and round snapshot.
+
 ### `GET /sessions/{session_id}/agents`
-Lists agent instances in session.
+
+Lists agent instances in the session.
 
 ### `GET /sessions/{session_id}/events`
-Lists persisted business events in session.
+
+Lists persisted business events in the session.
 
 ### `GET /sessions/{session_id}/messages`
-Lists persisted messages in session.
+
+Lists persisted messages in the session.
 
 ### `GET /sessions/{session_id}/agents/{instance_id}/messages`
+
 Lists messages for one agent instance.
 
-### `GET /sessions/{session_id}/workflows`
-Lists persisted workflow graphs discovered from session tasks.
+### `GET /sessions/{session_id}/tasks`
+
+Lists delegated tasks in the session.
 
 ### `GET /sessions/{session_id}/token-usage`
-Returns aggregated token consumption for the entire session, grouped by `role_id`.
 
-Response:
-```json
-{
-  "session_id": "...",
-  "total_input_tokens": 12345,
-  "total_output_tokens": 3456,
-  "total_tokens": 15801,
-  "total_requests": 10,
-  "total_tool_calls": 7,
-  "by_role": {
-    "coordinator_agent": {
-      "role_id": "coordinator_agent",
-      "input_tokens": 8000,
-      "output_tokens": 2000,
-      "total_tokens": 10000,
-      "requests": 5,
-      "tool_calls": 3
-    }
-  }
-}
-```
+Returns aggregated token usage for the session, grouped by `role_id`.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
-Returns token consumption for a single run, broken down per agent instance.
 
-Response:
-```json
-{
-  "run_id": "...",
-  "total_input_tokens": 5000,
-  "total_output_tokens": 1500,
-  "total_tokens": 6500,
-  "total_requests": 4,
-  "total_tool_calls": 2,
-  "by_agent": [
-    {
-      "instance_id": "...",
-      "role_id": "coordinator_agent",
-      "input_tokens": 3000,
-      "output_tokens": 800,
-      "total_tokens": 3800,
-      "requests": 2,
-      "tool_calls": 1
-    }
-  ]
-}
-```
+Returns token usage for a single run, grouped by agent instance.
 
----
-
-## 5. Run APIs
+## Run APIs
 
 ### `POST /runs`
-Creates run.
+
+Creates a run.
 
 Request:
+
 ```json
 {
   "intent": "Implement endpoint X",
-  "session_id": "session-xxxx",
+  "session_id": "session-1",
   "execution_mode": "ai"
 }
 ```
 
 Response:
+
 ```json
-{"run_id":"...","session_id":"..."}
+{"run_id": "run-1", "session_id": "session-1"}
 ```
 
 ### `GET /runs/{run_id}/events`
-SSE stream for run events.
 
-SSE payload line:
-```text
-data: {"event_type":"text_delta", ...}
-```
+Streams run events via SSE.
 
 ### `POST /runs/{run_id}/inject`
-Broadcasts user/system/subagent message to running agents in run.
 
-Request:
-```json
-{"source":"user","content":"Please include pagination"}
-```
+Injects follow-up content to active agents in a run.
 
 ### `GET /runs/{run_id}/tool-approvals`
-Lists pending tool approval requests.
+
+Lists pending tool approvals.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
-Resolves tool approval.
+
+Approves or denies a pending tool call.
 
 Request:
+
 ```json
-{"action":"approve","feedback":""}
+{"action": "approve", "feedback": ""}
 ```
 
 ### `POST /runs/{run_id}/stop`
-Stops run or one subagent.
 
-Request (main):
-```json
-{"scope":"main"}
-```
+Stops the full run or a specific subagent.
 
-Request (subagent):
-```json
-{"scope":"subagent","instance_id":"inst-xxx"}
-```
+### `POST /runs/{run_id}:resume`
+
+Resumes a recoverable run.
 
 ### `POST /runs/{run_id}/subagents/{instance_id}/inject`
-Injects follow-up content to a subagent.
+
+Injects follow-up content to one paused/running subagent.
+
+## Task APIs
+
+### `POST /tasks/runs/{run_id}`
+
+Creates delegated tasks under the run root task.
 
 Request:
-```json
-{"content":"Revise with this extra constraint"}
-```
 
----
-
-## 6. Workflow APIs
-
-### `POST /workflows/runs/{run_id}`
-Creates workflow for a run.
-
-Request:
 ```json
 {
-  "objective": "Build API service",
-  "workflow_id": "custom",
   "tasks": [
     {
-      "task_name": "spec",
-      "objective": "Define API contract",
-      "role_id": "spec_spec",
-      "depends_on": []
-    },
-    {
-      "task_name": "code",
-      "objective": "Implement API",
       "role_id": "spec_coder",
-      "depends_on": ["spec"]
+      "title": "Write API code",
+      "objective": "Implement the endpoint and tests"
+    }
+  ],
+  "auto_dispatch": false
+}
+```
+
+Behavior:
+- `auto_dispatch=false`: create tasks only.
+- `auto_dispatch=true`: only valid when `tasks` contains exactly one item; creates the task and dispatches it immediately.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "created_count": 1,
+  "tasks": [
+    {
+      "task_id": "task-2",
+      "title": "Write API code",
+      "role_id": "spec_coder",
+      "objective": "Implement the endpoint and tests",
+      "status": "created",
+      "instance_id": "",
+      "parent_task_id": "task-root"
     }
   ]
 }
 ```
 
-`workflow_id="sdd"` loads the registered Standard Delivery Workflow. `workflow_id="custom"` requires explicit `tasks`.
+### `GET /tasks/runs/{run_id}`
 
-### `GET /workflows/runs/{run_id}/{workflow_id}`
-Gets workflow status.
+Lists tasks in a run.
 
-### `POST /workflows/runs/{run_id}/{workflow_id}/dispatch`
-Dispatches workflow action.
+Query:
+- `include_root`: `true|false`
+
+### `GET /tasks`
+
+Lists all persisted tasks.
+
+### `GET /tasks/{task_id}`
+
+Gets one task record.
+
+### `PATCH /tasks/{task_id}`
+
+Updates a delegated task definition.
 
 Request:
+
 ```json
 {
-  "action": "next",
-  "feedback": "optional note",
-  "max_dispatch": 1
+  "role_id": "reviewer",
+  "title": "Review code",
+  "objective": "Review the implementation and report issues"
 }
 ```
 
-Action behavior:
-- `next`: approve current stage and dispatch next ready tasks.
-- `revise`: revise latest completed stage with feedback.
+Rules:
+- Only `created` delegated tasks can be updated.
+- Root coordinator tasks cannot be updated through task APIs.
 
----
+### `POST /tasks/{task_id}/dispatch`
 
-## 7. Task APIs
+Dispatches or re-dispatches a delegated task.
 
-### `GET /tasks`
-Lists all tasks.
+Request:
 
-### `GET /tasks/{task_id}`
-Gets one task.
+```json
+{"feedback": "Address pagination concerns"}
+```
 
----
+Rules:
+- `created`: create a new bound subagent instance, then execute.
+- `assigned` or `stopped`: reuse the bound instance and continue.
+- `completed`: requires non-empty `feedback`, then reuses the same instance.
+- `running`: rejected as a conflict.
+- `failed` or `timeout`: rejected; create a new task instead.
 
-## 8. Role APIs
+## Role APIs
 
 ### `GET /roles`
+
 Lists loaded role definitions.
 
 ### `POST /roles:validate`
-Validates role files against registered tools.
 
----
+Validates role files against registered tools and skills.
 
-## 9. MCP APIs
+Constraint:
+- `depends_on` is invalid in role front matter. Ordering is runtime task orchestration state, not role metadata.
 
-### `GET /mcp/servers`
-Lists effective MCP servers after user/project merge.
-
-Notes:
-- MCP proxy inheritance affects execution behavior for both stdio and remote transports.
-- This inheritance affects runtime connectivity, not the response payload of this endpoint.
-
-Response:
-```json
-[
-  {
-    "name": "filesystem",
-    "source": "project",
-    "transport": "stdio"
-  }
-]
-```
-
-### `GET /mcp/servers/{server_name}/tools`
-Lists tools exposed by one MCP server.
-
-Response:
-```json
-{
-  "server": "filesystem",
-  "source": "project",
-  "transport": "stdio",
-  "tools": [
-    {
-      "name": "read_file",
-      "description": "Read a file"
-    }
-  ]
-}
-```
-
----
-
-## 10. Prompt APIs
+## Prompt APIs
 
 ### `POST /prompts:preview`
+
 Builds prompt preview payload for a specific role.
 
 Request:
+
 ```json
 {
   "role_id": "coordinator_agent",
   "objective": "Draft release note",
   "shared_state": {"lang": "zh-CN", "priority": 1},
-  "tools": ["dispatch_tasks"],
+  "tools": ["dispatch_task"],
   "skills": ["time"]
 }
 ```
 
-Request notes:
-- `role_id` is required.
-- `objective` is optional; server fills a default preview objective when omitted.
-- `shared_state` is optional and defaults to `{}`.
-- `tools` / `skills` are optional overrides. If omitted, role defaults are used.
-
 Response:
+
 ```json
 {
   "role_id": "coordinator_agent",
   "objective": "Draft release note",
-  "tools": ["dispatch_tasks"],
+  "tools": ["dispatch_task"],
   "skills": ["time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",
@@ -573,245 +391,76 @@ Response:
 }
 ```
 
-Error behavior:
-- `404`: unknown role id
-- `400`: unknown tool/skill override
+## MCP APIs
 
----
+### `GET /mcp/servers`
 
-## 11. Frontend Log API
+Lists effective MCP servers after config merge.
 
-### `POST /logs/frontend`
-Ingests frontend structured logs in batch and writes them to `.agent_teams/log/frontend.log`.
+### `GET /mcp/servers/{server_name}/tools`
 
-Request:
-```json
-{
-  "events": [
-    {
-      "level": "error",
-      "event": "sse.disconnect",
-      "message": "event stream disconnected",
-      "trace_id": "trace-xxx",
-      "request_id": "req-xxx",
-      "run_id": "run-xxx",
-      "session_id": "session-xxx",
-      "task_id": null,
-      "instance_id": null,
-      "role_id": null,
-      "page": "agent-teams",
-      "route": "/chat",
-      "browser_session_id": "browser-xxx",
-      "user_agent": "Mozilla/5.0",
-      "payload": {"ready_state": 2},
-      "ts": "2026-03-04T12:00:00Z"
-    }
-  ]
-}
-```
+Lists tools exposed by one MCP server.
 
----
-
-## 12. Trigger APIs
-
-### trigger enums
-
-#### `source_type`
-- `schedule`
-- `webhook`
-- `im`
-- `rss`
-- `custom`
-
-#### `status`
-- `enabled`
-- `disabled`
-
-#### `auth mode`
-- `none`
-- `url_token`
-- `header_token`
-- `hmac_sha256`
-
-#### `trigger event status`
-- `received`
-- `duplicate`
-- `rejected_auth`
+## Trigger APIs
 
 ### `POST /triggers`
-Creates one trigger definition.
 
-Request:
-```json
-{
-  "name": "repo_push_trigger",
-  "display_name": "Repo Push Trigger",
-  "source_type": "webhook",
-  "source_config": {"provider": "github"},
-  "auth_policies": [
-    {"mode": "none"}
-  ],
-  "target_config": null,
-  "enabled": true
-}
-```
-
-Response: `TriggerDefinition`
+Creates a trigger definition.
 
 ### `GET /triggers`
-Lists all trigger definitions.
+
+Lists trigger definitions.
 
 ### `GET /triggers/{trigger_id}`
+
 Gets one trigger definition.
 
 ### `PATCH /triggers/{trigger_id}`
-Updates trigger mutable fields:
-- `name`
-- `display_name`
-- `source_config`
-- `auth_policies`
-- `target_config`
+
+Updates trigger mutable fields.
 
 ### `POST /triggers/{trigger_id}:enable`
-Enables trigger.
+
+Enables a trigger.
 
 ### `POST /triggers/{trigger_id}:disable`
-Disables trigger.
+
+Disables a trigger.
 
 ### `POST /triggers/{trigger_id}:rotate-token`
-Rotates webhook public token.
+
+Rotates the public webhook token.
 
 ### `POST /triggers/ingest`
+
 Internal generic trigger ingest endpoint.
 
-Request:
-```json
-{
-  "trigger_id": "trg_123",
-  "trigger_name": null,
-  "source_type": "webhook",
-  "event_key": "evt_001",
-  "occurred_at": "2026-03-05T12:00:00Z",
-  "payload": {"action": "push"},
-  "metadata": {"source": "internal"}
-}
-```
-
 ### `POST /triggers/webhooks/{public_token}`
-Webhook dedicated endpoint. Requests are routed by `public_token`.
 
-Supported body patterns:
-1. Envelope style:
-```json
-{
-  "event_key": "evt_001",
-  "occurred_at": "2026-03-05T12:00:00Z",
-  "payload": {"action": "push"},
-  "metadata": {"provider": "github"}
-}
-```
-2. Raw JSON object (the whole object is persisted as `payload`).
-
-Response (`/ingest` and `/webhooks/{public_token}`):
-```json
-{
-  "accepted": true,
-  "event_id": "tev_abc123",
-  "duplicate": false,
-  "status": "received",
-  "trigger_id": "trg_123",
-  "trigger_name": "repo_push_trigger"
-}
-```
+Public webhook ingest endpoint.
 
 ### `GET /triggers/{trigger_id}/events`
-Lists persisted trigger events for one trigger.
 
-Query:
-- `limit` (default 50, max 100)
-- `cursor_event_id` (optional)
-
-Response:
-```json
-{
-  "items": [
-    {
-      "sequence_id": 1,
-      "event_id": "tev_abc123",
-      "trigger_id": "trg_123",
-      "trigger_name": "repo_push_trigger",
-      "source_type": "webhook",
-      "event_key": "evt_001",
-      "status": "received",
-      "received_at": "2026-03-05T12:00:00Z",
-      "occurred_at": "2026-03-05T12:00:00Z",
-      "payload": {"action": "push"},
-      "metadata": {"provider": "github"},
-      "headers": {"content-type": "application/json"},
-      "remote_addr": "127.0.0.1",
-      "auth_mode": "none",
-      "auth_result": "accepted",
-      "auth_reason": "no_auth_required"
-    }
-  ],
-  "next_cursor": null
-}
-```
+Lists persisted trigger events.
 
 ### `GET /triggers/events/{event_id}`
+
 Gets one persisted trigger event.
 
-### trigger ingest status/error behavior
-- `403`: authentication rejected (`rejected_auth` event is still persisted for audit)
-- `404`: unknown trigger / token / event id
-- `409`: disabled trigger
-- `422`: payload validation or source mismatch
-
-### idempotency
-- `event_key` is optional.
-- When provided, uniqueness is enforced by `(trigger_id, event_key)`.
-- Duplicate ingest returns `duplicate=true` and existing `event_id`.
-
-Response:
-```json
-{"accepted": 1}
-```
-
-
-
-
-
----
-
-## 13. Workflow and Role Boundary
-
-Design rules:
-- `RoleDefinition` only defines persona, capability surface, tool/skill access, and runtime requirements.
-- `WorkflowDefinition` or custom workflow task payloads define process order, stage decomposition, and `depends_on` relationships.
-- `role_id` means who executes a task; it must not be used to imply institutionalized order.
-- In AI mode, coordination should choose the workflow dynamically from current intent and registered workflow hints, then create the workflow graph.
-- When no registered workflow fits a domain-specific intent, clients should use `workflow_id="custom"` with explicit `tasks`.
-
-Validation rules:
-- `depends_on` is valid in workflow definitions and custom workflow task payloads.
-- `depends_on` is invalid in role markdown front matter and should be rejected by role validation/loading.
-- The persisted workflow graph is the only source of truth for dependency execution.
-
----
-
-## 14. Reflection APIs
+## Reflection APIs
 
 ### `GET /reflection/jobs`
+
 Lists reflection jobs.
 
 ### `POST /reflection/jobs/{job_id}/retry`
+
 Retries a failed or queued reflection job.
 
 ### `GET /reflection/memory/session-roles/{session_id}/{role_id}`
+
 Reads role-level long-term memory content.
 
 ### `GET /reflection/memory/instances/{instance_id}/daily/{date}`
-Reads instance daily memory file.
 
-Query:
-- `kind`: `raw|digest` (default `digest`)
+Reads one instance daily memory file.

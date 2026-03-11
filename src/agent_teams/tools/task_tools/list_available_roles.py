@@ -16,11 +16,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "ok": True,
                 "roles": [
                     {
-                        "role_id": r.role_id,
-                        "name": r.name,
-                        "tools": list(r.tools),
+                        "role_id": role.role_id,
+                        "name": role.name,
+                        "tools": list(role.tools),
                     }
-                    for r in roles
+                    for role in roles
                 ],
             }
 

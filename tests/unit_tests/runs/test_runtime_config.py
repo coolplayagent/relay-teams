@@ -36,7 +36,6 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.config_dir == config_dir.resolve()
     assert resolved.paths.env_file == (config_dir / ".env").resolve()
     assert resolved.paths.roles_dir == (config_dir / "roles")
-    assert resolved.paths.workflows_dir == (config_dir / "workflows")
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
 
 
@@ -61,16 +60,12 @@ def test_load_runtime_config_resolves_relative_roles_dir_from_env(
     monkeypatch.setattr(
         runtime_config,
         "load_merged_env_vars",
-        lambda **kwargs: {
-            "AGENT_TEAMS_ROLES_DIR": "roles",
-            "AGENT_TEAMS_WORKFLOWS_DIR": "workflows",
-        },
+        lambda **kwargs: {"AGENT_TEAMS_ROLES_DIR": "roles"},
     )
 
     resolved = runtime_config.load_runtime_config(config_dir=config_dir)
 
     assert resolved.paths.roles_dir == (config_dir / "roles")
-    assert resolved.paths.workflows_dir == (config_dir / "workflows")
 
 
 def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None:

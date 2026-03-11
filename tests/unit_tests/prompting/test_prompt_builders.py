@@ -13,7 +13,6 @@ from agent_teams.prompting.runtime import (
 from agent_teams.prompting.user_input import UserPromptBuildInput, build_user_prompt
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
-from agent_teams.workflow.spec import WorkflowRecommendation
 
 
 def _role(role_id: str) -> RoleDefinition:
@@ -51,7 +50,7 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
 
     assert "## Role" in prompt
     assert "## Runtime Contract" in prompt
-    assert "dispatch_tasks return payloads" in prompt
+    assert "list_run_tasks and dispatch_task results" in prompt
     assert "- TaskRef: task-1" in prompt
     assert "- status: ready" in prompt
     assert "Deliver weekly summary" not in prompt
@@ -75,7 +74,7 @@ def test_provider_augmented_system_prompt_renders_tools_and_skills() -> None:
     prompt = build_provider_augmented_system_prompt(
         ProviderPromptAugmentInput(
             system_prompt="## Role\nYou are a planner.",
-            allowed_tools=("dispatch_tasks",),
+            allowed_tools=("dispatch_task",),
             skill_instructions=(
                 PromptSkillInstruction(
                     name="time",
@@ -86,7 +85,7 @@ def test_provider_augmented_system_prompt_renders_tools_and_skills() -> None:
     )
 
     assert "## Tool Rules" in prompt
-    assert "dispatch_tasks" in prompt
+    assert "dispatch_task" in prompt
     assert "## Skill Instructions" in prompt
     assert "### Skill: time" in prompt
     assert "Always normalize to UTC." in prompt
@@ -100,26 +99,18 @@ def test_user_prompt_builder_returns_raw_objective() -> None:
     assert prompt == "Draft the release notes."
 
 
-def test_runtime_system_prompt_for_coordinator_renders_workflow_recommendation() -> (
-    None
-):
+def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> None:
     prompt = build_runtime_system_prompt(
         RuntimePromptBuildInput(
             role=_role("coordinator_agent"),
             task=_task(),
             shared_state_snapshot=(),
-            workflow_recommendation=WorkflowRecommendation(
-                workflow_id="sdd",
-                workflow_name="Standard Delivery Workflow",
-                reason="Intent matched workflow 'sdd' via selection hints: api, service.",
-                matched_hints=("api", "service"),
-                guidance="Use this workflow for staged software delivery.",
-                is_default=True,
-            ),
         )
     )
 
-    assert "## Workflow Recommendation" in prompt
-    assert "Recommended workflow: sdd (Standard Delivery Workflow)" in prompt
-    assert "Matched intent hints: api, service" in prompt
-    assert "Do not derive task order from role metadata." in prompt
+    assert (
+        "Create tasks only when delegation is necessary; otherwise answer directly."
+        in prompt
+    )
+    assert "list_run_tasks" in prompt
+    assert "dispatch_task" in prompt

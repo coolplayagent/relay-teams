@@ -15,15 +15,16 @@ def test_registry_rejects_unknown_tools() -> None:
 def test_registry_contains_only_role_mounted_tools() -> None:
     registry = build_default_registry()
     assert registry.list_names() == (
-        "create_workflow_graph",
-        "dispatch_tasks",
+        "create_tasks",
+        "dispatch_task",
         "glob",
         "grep",
         "list_available_roles",
-        "list_available_workflows",
+        "list_run_tasks",
         "read",
         "read_stage_input",
         "shell",
+        "update_task",
         "write",
         "write_stage_doc",
     )

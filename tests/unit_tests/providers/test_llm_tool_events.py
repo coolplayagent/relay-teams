@@ -14,6 +14,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.runs.enums import RunEventType
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.llm import LLMRequest, OpenAICompatibleProvider
@@ -28,15 +31,12 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.runtime import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.coordination.task_execution_service import TaskExecutionService
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workspace import WorkspaceManager
@@ -100,7 +100,6 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         injection_manager=cast(RunInjectionManager, object()),
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=cast(AgentInstanceRepository, object()),
-        workflow_graph_repo=cast(WorkflowGraphRepository, object()),
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         workspace_manager=WorkspaceManager(
@@ -116,8 +115,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         message_repo=cast(MessageRepository, object()),
         role_registry=role_registry,
         task_execution_service=cast(TaskExecutionService, object()),
-        workflow_registry=cast(WorkflowRegistry, object()),
-        workflow_service=cast(WorkflowOrchestrationService, object()),
+        task_service=cast(TaskOrchestrationService, object()),
         run_control_manager=cast(
             RunControlManager, cast(object, _FakeRunControlManager())
         ),
@@ -147,7 +145,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelResponse(
             parts=[
                 ToolCallPart(
-                    tool_name="create_workflow_graph",
+                    tool_name="create_tasks",
                     args={"objective": "x"},
                     tool_call_id="call-1",
                 )
@@ -156,8 +154,8 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelRequest(
             parts=[
                 RetryPromptPart(
-                    content="Invalid arguments for tool create_workflow_graph",
-                    tool_name="create_workflow_graph",
+                    content="Invalid arguments for tool create_tasks",
+                    tool_name="create_tasks",
                     tool_call_id="call-1",
                 )
             ]
@@ -165,7 +163,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart(
-                    tool_name="create_workflow_graph",
+                    tool_name="create_tasks",
                     content={"ok": True},
                     tool_call_id="call-2",
                 )
@@ -190,22 +188,19 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
     ]
 
     tool_call_payload = json.loads(hub.events[0].payload_json)
-    assert tool_call_payload["tool_name"] == "create_workflow_graph"
+    assert tool_call_payload["tool_name"] == "create_tasks"
     assert tool_call_payload["tool_call_id"] == "call-1"
 
     validation_payload = json.loads(hub.events[1].payload_json)
-    assert validation_payload["tool_name"] == "create_workflow_graph"
+    assert validation_payload["tool_name"] == "create_tasks"
     assert validation_payload["tool_call_id"] == "call-1"
     assert (
         validation_payload["reason"] == "Input validation failed before tool execution."
     )
-    assert (
-        validation_payload["details"]
-        == "Invalid arguments for tool create_workflow_graph"
-    )
+    assert validation_payload["details"] == "Invalid arguments for tool create_tasks"
 
     tool_result_payload = json.loads(hub.events[2].payload_json)
-    assert tool_result_payload["tool_name"] == "create_workflow_graph"
+    assert tool_result_payload["tool_name"] == "create_tasks"
     assert tool_result_payload["tool_call_id"] == "call-2"
     assert tool_result_payload["error"] is False
 
@@ -232,8 +227,8 @@ def test_publish_tool_events_sanitizes_stale_task_status_error() -> None:
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_tasks",
-                        tool_call_id="dispatch_tasks:1",
+                        tool_name="dispatch_task",
+                        tool_call_id="dispatch_task:1",
                         content={
                             "ok": True,
                             "data": {

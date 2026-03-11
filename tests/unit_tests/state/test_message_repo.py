@@ -23,8 +23,8 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_tasks",
-                        tool_call_id="dispatch_tasks:1",
+                        tool_name="dispatch_task",
+                        tool_call_id="dispatch_task:1",
                         content={"ok": True},
                     )
                 ]

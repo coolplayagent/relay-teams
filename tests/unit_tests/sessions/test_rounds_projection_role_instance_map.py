@@ -13,7 +13,6 @@ from agent_teams.state.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
 from agent_teams.workspace import build_conversation_id, build_workspace_id
 
@@ -32,11 +31,6 @@ class _FakeTaskRepo:
 
     def list_by_session(self, session_id: str) -> tuple[TaskRecord, ...]:
         return self._tasks
-
-
-class _FakeWorkflowGraphRepo:
-    def list_by_session(self, session_id: str) -> tuple[object, ...]:
-        return ()
 
 
 class _FakeRunRuntimeRepo:
@@ -86,9 +80,6 @@ def test_build_session_rounds_uses_latest_instance_for_same_role() -> None:
             cast(object, _FakeAgentRepo((agent_old, agent_new))),
         ),
         task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo())),
-        workflow_graph_repo=cast(
-            WorkflowGraphRepository, cast(object, _FakeWorkflowGraphRepo())
-        ),
         approval_tickets_by_run={},
         run_runtime_repo=cast(
             RunRuntimeRepository,
@@ -167,9 +158,6 @@ def test_build_session_rounds_includes_task_instance_map() -> None:
                     (root_task, task_first, task_second, task_without_instance)
                 ),
             ),
-        ),
-        workflow_graph_repo=cast(
-            WorkflowGraphRepository, cast(object, _FakeWorkflowGraphRepo())
         ),
         approval_tickets_by_run={},
         run_runtime_repo=cast(

@@ -26,7 +26,6 @@ from agent_teams.interfaces.server.routers import (
     system,
     tasks,
     triggers,
-    workflows,
 )
 from agent_teams.logger import (
     configure_logging,
@@ -81,7 +80,6 @@ app.include_router(system.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
-app.include_router(workflows.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")

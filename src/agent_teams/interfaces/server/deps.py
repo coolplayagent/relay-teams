@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
@@ -18,7 +21,6 @@ from agent_teams.skills.registry import SkillRegistry
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
 
 
 def get_container(request: Request) -> ServerContainer:
@@ -33,8 +35,8 @@ def get_session_service(request: Request) -> SessionService:
     return get_container(request).session_service
 
 
-def get_workflow_service(request: Request) -> WorkflowOrchestrationService:
-    return get_container(request).workflow_service
+def get_task_service(request: Request) -> TaskOrchestrationService:
+    return get_container(request).task_service
 
 
 def get_reflection_service(request: Request) -> ReflectionService:

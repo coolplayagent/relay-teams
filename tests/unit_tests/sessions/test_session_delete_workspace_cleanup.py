@@ -26,7 +26,6 @@ from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import (
     WorkspaceManager,
@@ -46,7 +45,6 @@ def _build_service(db_path: Path, project_root: Path) -> SessionService:
         task_repo=TaskRepository(db_path),
         agent_repo=AgentInstanceRepository(db_path),
         message_repo=MessageRepository(db_path),
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         event_log=EventLog(db_path),
@@ -286,7 +284,6 @@ def test_delete_session_cleans_reflection_artifacts(tmp_path: Path) -> None:
         task_repo=TaskRepository(db_path),
         agent_repo=AgentInstanceRepository(db_path),
         message_repo=MessageRepository(db_path),
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         event_log=EventLog(db_path),

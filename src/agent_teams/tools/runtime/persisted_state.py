@@ -4,21 +4,17 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from enum import Enum
-from collections.abc import Callable, Mapping
-from typing import cast
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.runs.enums import RunEventType
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.dispatch_prompts import build_revise_followup_prompt
 from agent_teams.workflow.enums import TaskStatus
-from agent_teams.workflow.models import TaskRecord
-from agent_teams.workflow.runtime_graph import load_graph
 
 
 class ToolApprovalStatus(str, Enum):
@@ -373,140 +369,34 @@ def _recover_call_state(
     shared_store: SharedStateRepository,
     task_repo: TaskRepository | None,
 ) -> JsonObject:
-    if tool_name != "dispatch_tasks" or task_repo is None:
+    if tool_name != "dispatch_task" or task_repo is None:
         return {}
-    graph = load_graph(shared_store, task_id=task_id)
-    if graph is None:
-        return {}
-    return _recover_dispatch_tasks_call_state(
+    return _recover_dispatch_task_call_state(
         trace_id=trace_id,
         tool_args=tool_args,
-        graph=cast(JsonObject, graph),
         task_repo=task_repo,
     )
 
 
-def _recover_dispatch_tasks_call_state(
+def _recover_dispatch_task_call_state(
     *,
     trace_id: str,
     tool_args: JsonObject,
-    graph: JsonObject,
     task_repo: TaskRepository,
 ) -> JsonObject:
-    workflow_id = str(tool_args.get("workflow_id") or graph.get("workflow_id") or "")
-    if not workflow_id:
+    dispatched_task_id = str(tool_args.get("task_id") or "").strip()
+    if not dispatched_task_id:
         return {}
-    action = str(tool_args.get("action") or "").strip().lower()
-    if action not in {"next", "revise"}:
+    record = task_repo.get(dispatched_task_id)
+    if record.envelope.trace_id != trace_id:
         return {}
     feedback = str(tool_args.get("feedback") or "")
-    max_dispatch = _bounded_max_dispatch(tool_args.get("max_dispatch"))
-    records = {
-        record.envelope.task_id: record for record in task_repo.list_by_trace(trace_id)
-    }
-    tasks = graph.get("tasks")
-    if not isinstance(tasks, dict):
-        return {}
-
-    if action == "revise":
-        latest = _latest_completed_task(tasks=tasks, records=records)
-        if latest is None:
-            return {}
-        task_name, task_id = latest
-        task_info = tasks.get(task_name, {})
-        if not isinstance(task_info, dict):
-            return {}
-        record = records.get(task_id)
-        if record is None:
-            return {}
-        instance_id = str(record.assigned_instance_id or "")
-        if not instance_id:
-            return {}
-        return {
-            "kind": "dispatch_tasks",
-            "action": "revise",
-            "workflow_id": workflow_id,
-            "feedback": feedback,
-            "followup_prompt": build_revise_followup_prompt(feedback),
-            "task_name": task_name,
-            "task_id": task_id,
-            "instance_id": instance_id,
-            "role_id": str(task_info.get("role_id") or ""),
-            "execution_started": record.status
-            not in {TaskStatus.CREATED, TaskStatus.ASSIGNED},
-        }
-
-    selected_tasks: list[JsonValue] = []
-    for task_name, task_info_raw in tasks.items():
-        if len(selected_tasks) >= max_dispatch:
-            break
-        if not isinstance(task_info_raw, dict):
-            continue
-        task_id = str(task_info_raw.get("task_id") or "")
-        role_id = str(task_info_raw.get("role_id") or "")
-        if not task_id or not role_id:
-            continue
-        record = records.get(task_id)
-        if record is None:
-            continue
-        if (
-            record.status == TaskStatus.CREATED
-            and not str(record.assigned_instance_id or "").strip()
-        ):
-            continue
-        selected_tasks.append(
-            {
-                "task_id": task_id,
-                "task_name": str(task_name),
-                "role_id": role_id,
-                "instance_id": str(record.assigned_instance_id or ""),
-                "feedback_recorded": bool(feedback.strip()),
-            }
-        )
-    if not selected_tasks:
-        return {}
     return {
-        "kind": "dispatch_tasks",
-        "action": "next",
-        "workflow_id": workflow_id,
+        "kind": "dispatch_task",
+        "task_id": dispatched_task_id,
         "feedback": feedback,
-        "max_dispatch": max_dispatch,
-        "selected_tasks": selected_tasks,
+        "role_id": record.envelope.role_id,
+        "instance_id": str(record.assigned_instance_id or ""),
+        "execution_started": record.status
+        not in {TaskStatus.CREATED, TaskStatus.ASSIGNED},
     }
-
-
-def _latest_completed_task(
-    *,
-    tasks: Mapping[str, object],
-    records: dict[str, TaskRecord],
-) -> tuple[str, str] | None:
-    for task_name in reversed(list(tasks.keys())):
-        task_info = tasks.get(task_name)
-        if not isinstance(task_info, dict):
-            continue
-        task_id = str(task_info.get("task_id") or "")
-        if not task_id:
-            continue
-        record = records.get(task_id)
-        if record is None:
-            continue
-        if record.status == TaskStatus.COMPLETED:
-            return str(task_name), task_id
-    return None
-
-
-def _bounded_max_dispatch(raw_value: object) -> int:
-    if isinstance(raw_value, bool):
-        return 1
-    if isinstance(raw_value, int):
-        value = raw_value
-    elif isinstance(raw_value, float):
-        value = int(raw_value)
-    elif isinstance(raw_value, str) and raw_value.strip():
-        try:
-            value = int(raw_value.strip())
-        except ValueError:
-            value = 1
-    else:
-        value = 1
-    return max(1, min(value, 8))

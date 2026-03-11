@@ -8,7 +8,6 @@ from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRecord
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 
 
 def build_session_rounds(
@@ -16,14 +15,12 @@ def build_session_rounds(
     session_id: str,
     agent_repo: AgentInstanceRepository,
     task_repo: TaskRepository,
-    workflow_graph_repo: WorkflowGraphRepository,
     approval_tickets_by_run: dict[str, list[dict[str, object]]],
     run_runtime_repo: RunRuntimeRepository,
     get_session_messages: Callable[[str], list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     session_tasks = task_repo.list_by_session(session_id)
     session_agents = agent_repo.list_by_session(session_id)
-    session_workflows = workflow_graph_repo.list_by_session(session_id)
     session_messages = get_session_messages(session_id)
     run_runtime = {
         record.run_id: record for record in run_runtime_repo.list_by_session(session_id)
@@ -41,6 +38,7 @@ def build_session_rounds(
 
     tasks_by_run: dict[str, list[object]] = defaultdict(list)
     root_task_by_run: dict[str, object] = {}
+    delegated_tasks_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     task_instance_map_by_run: dict[str, dict[str, str]] = defaultdict(dict)
     task_status_map_by_run: dict[str, dict[str, str]] = defaultdict(dict)
     for task in session_tasks:
@@ -53,10 +51,16 @@ def build_session_rounds(
             )
         if task.envelope.parent_task_id is None:
             root_task_by_run[run_id] = task
-
-    workflows_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
-    for workflow in session_workflows:
-        workflows_by_run[workflow.run_id].append(workflow.graph)
+            continue
+        delegated_tasks_by_run[run_id].append(
+            {
+                "task_id": task.envelope.task_id,
+                "title": task.envelope.title or task.envelope.objective[:80],
+                "role_id": task.envelope.role_id,
+                "status": task.status.value,
+                "instance_id": task.assigned_instance_id or "",
+            }
+        )
 
     messages_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     for message in session_messages:
@@ -74,7 +78,7 @@ def build_session_rounds(
 
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
-    run_ids.update(workflows_by_run.keys())
+    run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
 
     rounds: list[dict[str, object]] = []
@@ -99,7 +103,7 @@ def build_session_rounds(
             "intent": _round_intent(root_task, run_messages),
             "coordinator_messages": coordinator_messages,
             "has_user_messages": has_user_messages,
-            "workflows": workflows_by_run.get(run_id, []),
+            "tasks": delegated_tasks_by_run.get(run_id, []),
             "instance_role_map": instance_role_by_run.get(run_id, {}),
             "role_instance_map": role_instance_by_run.get(run_id, {}),
             "task_instance_map": task_instance_map_by_run.get(run_id, {}),

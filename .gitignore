@@ -17,6 +17,7 @@ coverage.json
 .agent_teams/notifications.json
 .agent_teams/log
 .agent_teams/logs
+.agent_teams/workspaces/
 .agent_teams/skills
 .agent_teams/mcp.json
 

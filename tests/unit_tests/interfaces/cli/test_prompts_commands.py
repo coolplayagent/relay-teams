@@ -29,7 +29,7 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
         return {
             "role_id": "coordinator_agent",
             "objective": "Draft release note",
-            "tools": ["dispatch_tasks"],
+            "tools": ["dispatch_task"],
             "skills": ["time"],
             "runtime_system_prompt": "runtime",
             "provider_system_prompt": "provider",
@@ -51,7 +51,7 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
             "--objective",
             "Draft release note",
             "--tool",
-            "dispatch_tasks",
+            "dispatch_task",
             "--skill",
             "time",
             "--shared-state-json",
@@ -71,7 +71,7 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
             "role_id": "coordinator_agent",
             "objective": "Draft release note",
             "shared_state": {"lang": "zh-CN"},
-            "tools": ["dispatch_tasks"],
+            "tools": ["dispatch_task"],
             "skills": ["time"],
         },
     }
@@ -125,7 +125,7 @@ def test_prompts_get_default_output_prints_raw_prompt_sections(monkeypatch) -> N
         return {
             "role_id": "coordinator_agent",
             "objective": "Draft release note",
-            "tools": ["dispatch_tasks"],
+            "tools": ["dispatch_task"],
             "skills": ["time"],
             "runtime_system_prompt": "## Role\nruntime line",
             "provider_system_prompt": "## Tool Rules\nprovider line",

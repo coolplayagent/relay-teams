@@ -6,8 +6,9 @@ from pydantic import BaseModel, ConfigDict
 
 DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
     {
-        "create_workflow_graph",
-        "dispatch_tasks",
+        "create_tasks",
+        "dispatch_task",
+        "update_task",
         "shell",
         "write",
         "write_stage_doc",

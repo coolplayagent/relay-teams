@@ -32,7 +32,6 @@ from agent_teams.state.token_usage_repo import (
     SessionTokenUsage,
     TokenUsageRepository,
 )
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -49,7 +48,6 @@ class SessionService:
         task_repo: TaskRepository,
         agent_repo: AgentInstanceRepository,
         message_repo: MessageRepository,
-        workflow_graph_repo: WorkflowGraphRepository,
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
@@ -64,7 +62,6 @@ class SessionService:
         self._task_repo = task_repo
         self._agent_repo = agent_repo
         self._message_repo = message_repo
-        self._workflow_graph_repo = workflow_graph_repo
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
@@ -152,7 +149,6 @@ class SessionService:
                 session_id=session_id,
                 role_ids=role_ids,
             )
-        self._workflow_graph_repo.delete_by_session(session_id)
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
@@ -219,10 +215,19 @@ class SessionService:
             self._message_repo.get_messages_by_session(session_id),
         )
 
-    def get_session_workflows(self, session_id: str) -> list[dict[str, object]]:
+    def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
+        records = self._task_repo.list_by_session(session_id)
         return [
-            record.graph
-            for record in self._workflow_graph_repo.list_by_session(session_id)
+            {
+                "task_id": record.envelope.task_id,
+                "title": record.envelope.title or record.envelope.objective[:80],
+                "role_id": record.envelope.role_id,
+                "status": record.status.value,
+                "instance_id": record.assigned_instance_id or "",
+                "run_id": record.envelope.trace_id,
+            }
+            for record in records
+            if record.envelope.parent_task_id is not None
         ]
 
     def build_session_rounds(self, session_id: str) -> list[dict[str, object]]:
@@ -230,7 +235,6 @@ class SessionService:
             session_id=session_id,
             agent_repo=self._agent_repo,
             task_repo=self._task_repo,
-            workflow_graph_repo=self._workflow_graph_repo,
             approval_tickets_by_run=approvals_to_projection(
                 self._approval_ticket_repo.list_open_by_session(session_id)
             ),

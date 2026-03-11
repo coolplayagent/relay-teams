@@ -15,7 +15,6 @@ from agent_teams.state.run_runtime_repo import (
 from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 
 
@@ -25,7 +24,6 @@ def _build_service(db_path: Path) -> SessionService:
         task_repo=TaskRepository(db_path),
         agent_repo=AgentInstanceRepository(db_path),
         message_repo=MessageRepository(db_path),
-        workflow_graph_repo=WorkflowGraphRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
@@ -66,14 +64,14 @@ def test_list_sessions_includes_active_run_overlay(tmp_path: Path) -> None:
         phase=RunRuntimePhase.COORDINATOR_RUNNING,
     )
     ApprovalTicketRepository(db_path).upsert_requested(
-        tool_call_id="dispatch_tasks:1",
+        tool_call_id="dispatch_task:1",
         run_id="run-active",
         session_id="session-active",
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="dispatch_tasks",
-        args_preview='{"action":"next"}',
+        tool_name="dispatch_task",
+        args_preview='{"task_id":"task-1"}',
     )
 
     sessions = service.list_sessions()

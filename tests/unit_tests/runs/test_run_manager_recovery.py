@@ -203,7 +203,7 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="create_workflow_graph",
+        tool_name="create_tasks",
         args_preview="{}",
     )
     manager._active_run_by_session["session-1"] = "run-existing"
@@ -253,7 +253,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="create_workflow_graph",
+        tool_name="create_tasks",
         args_preview="{}",
     )
     manager._active_run_by_session["session-1"] = "run-existing"
@@ -262,7 +262,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         tool_call_id="call-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="create_workflow_graph",
+        tool_name="create_tasks",
         args_preview="{}",
     )
 
@@ -298,7 +298,7 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
-        tool_name="create_workflow_graph",
+        tool_name="create_tasks",
         args_preview="{}",
     )
     manager._active_run_by_session["session-1"] = "run-existing"

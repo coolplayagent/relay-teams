@@ -49,7 +49,7 @@ def _build_role_registry() -> RoleRegistry:
             role_id="coordinator_agent",
             name="Coordinator",
             version="1.0",
-            tools=("dispatch_tasks",),
+            tools=("dispatch_task",),
             mcp_servers=(),
             skills=("time",),
             model_profile="default",
@@ -60,7 +60,7 @@ def _build_role_registry() -> RoleRegistry:
 
 
 def _build_tool_registry() -> ToolRegistry:
-    return ToolRegistry(tools={"dispatch_tasks": (lambda _agent: None)})
+    return ToolRegistry(tools={"dispatch_task": (lambda _agent: None)})
 
 
 def _create_client() -> TestClient:
@@ -81,7 +81,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
             "role_id": "coordinator_agent",
             "objective": "Deliver summary",
             "shared_state": {"priority": 1},
-            "tools": ["dispatch_tasks"],
+            "tools": ["dispatch_task"],
             "skills": ["time"],
         },
     )
@@ -89,7 +89,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["role_id"] == "coordinator_agent"
-    assert payload["tools"] == ["dispatch_tasks"]
+    assert payload["tools"] == ["dispatch_task"]
     assert payload["skills"] == ["time"]
     assert "## Runtime Contract" in payload["runtime_system_prompt"]
     assert "- priority: 1" in payload["runtime_system_prompt"]

@@ -1,12 +1,41 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.interfaces.server.deps import get_task_repo
+from agent_teams.coordination.task_orchestration_service import (
+    TaskDraft,
+    TaskOrchestrationService,
+    TaskUpdate,
+)
+from agent_teams.interfaces.server.deps import get_task_repo, get_task_service
+from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.workflow.models import TaskRecord
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
+
+
+class CreateTasksRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tasks: list[TaskDraft] = Field(min_length=1)
+    auto_dispatch: bool = False
+
+
+class UpdateTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: str | None = None
+    objective: str | None = None
+    title: str | None = None
+
+
+class DispatchTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    feedback: str = ""
 
 
 @router.get("", response_model=list[TaskRecord])
@@ -14,9 +43,82 @@ def list_tasks(task_repo: TaskRepository = Depends(get_task_repo)) -> list[TaskR
     return list(task_repo.list_all())
 
 
+@router.post("/runs/{run_id}")
+async def create_tasks_for_run(
+    run_id: str,
+    req: CreateTasksRequest,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> JsonObject:
+    try:
+        return await service.create_tasks(
+            run_id=run_id,
+            tasks=req.tasks,
+            auto_dispatch=req.auto_dispatch,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}")
+def list_tasks_for_run(
+    run_id: str,
+    include_root: bool = False,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> JsonObject:
+    try:
+        return service.list_run_tasks(run_id=run_id, include_root=include_root)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/{task_id}", response_model=TaskRecord)
-def get_task(task_id: str, task_repo: TaskRepository = Depends(get_task_repo)) -> TaskRecord:
+def get_task(
+    task_id: str,
+    task_repo: TaskRepository = Depends(get_task_repo),
+) -> TaskRecord:
     try:
         return task_repo.get(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Task not found") from exc
+
+
+@router.patch("/{task_id}")
+def update_task_by_id(
+    task_id: str,
+    req: UpdateTaskRequest,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> JsonObject:
+    try:
+        return service.update_task(
+            run_id=None,
+            task_id=task_id,
+            update=TaskUpdate(
+                role_id=req.role_id,
+                objective=req.objective,
+                title=req.title,
+            ),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{task_id}/dispatch")
+async def dispatch_task_by_id(
+    task_id: str,
+    req: DispatchTaskRequest,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> JsonObject:
+    try:
+        return await service.dispatch_task(
+            run_id=None,
+            task_id=task_id,
+            feedback=req.feedback,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -8,6 +8,9 @@ from agent_teams.intent.meta_agent import MetaAgent
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.coordinator import CoordinatorGraph
 from agent_teams.coordination.human_gate import GateManager
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_manager import McpConfigManager
@@ -51,7 +54,6 @@ from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.registry import ToolRegistry, build_default_registry
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
@@ -59,8 +61,6 @@ from agent_teams.tools.runtime import (
 )
 from agent_teams.triggers import TriggerRepository, TriggerService
 from agent_teams.workspace import WorkspaceManager
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-from agent_teams.workflow.registry import WorkflowLoader, WorkflowRegistry
 
 
 class ServerContainer:
@@ -94,9 +94,6 @@ class ServerContainer:
         self.role_registry: RoleRegistry = RoleLoader().load_all(
             runtime.paths.roles_dir
         )
-        self.workflow_registry: WorkflowRegistry = WorkflowLoader().load_all(
-            runtime.paths.workflows_dir
-        )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
@@ -108,10 +105,6 @@ class ServerContainer:
             self.tool_registry.validate_known(role.tools)
             self.mcp_registry.validate_known(role.mcp_servers)
             self.skill_registry.validate_known(role.skills)
-
-        for workflow in self.workflow_registry.list_workflows():
-            for task in workflow.tasks:
-                _ = self.role_registry.get(task.role_id)
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
         self.shared_store: SharedStateRepository = SharedStateRepository(
@@ -126,9 +119,6 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.message_repo: MessageRepository = MessageRepository(runtime.paths.db_path)
-        self.workflow_graph_repo: WorkflowGraphRepository = WorkflowGraphRepository(
-            runtime.paths.db_path
-        )
         self.approval_ticket_repo: ApprovalTicketRepository = ApprovalTicketRepository(
             runtime.paths.db_path
         )
@@ -192,7 +182,7 @@ class ServerContainer:
 
         self._provider_factory: Callable[[RoleDefinition], LLMProvider]
         self.task_execution_service: TaskExecutionService
-        self.workflow_service: WorkflowOrchestrationService
+        self.task_service: TaskOrchestrationService
         self._build_runtime_services()
 
         coordinator = CoordinatorGraph(
@@ -233,7 +223,6 @@ class ServerContainer:
             task_repo=self.task_repo,
             agent_repo=self.agent_repo,
             message_repo=self.message_repo,
-            workflow_graph_repo=self.workflow_graph_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
@@ -281,8 +270,8 @@ class ServerContainer:
         def get_task_execution_service() -> TaskExecutionService:
             return self.task_execution_service
 
-        def get_workflow_service() -> WorkflowOrchestrationService:
-            return self.workflow_service
+        def get_task_service() -> TaskOrchestrationService:
+            return self.task_service
 
         self._provider_factory = create_provider_factory(
             runtime=self.runtime,
@@ -293,7 +282,6 @@ class ServerContainer:
             injection_manager=self.injection_manager,
             run_event_hub=self.run_event_hub,
             agent_repo=self.agent_repo,
-            workflow_graph_repo=self.workflow_graph_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             workspace_manager=self.workspace_manager,
@@ -302,8 +290,7 @@ class ServerContainer:
             skill_registry=self.skill_registry,
             message_repo=self.message_repo,
             role_registry=self.role_registry,
-            workflow_registry=self.workflow_registry,
-            get_workflow_service=get_workflow_service,
+            get_task_service=get_task_service,
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
             tool_approval_policy=self.tool_approval_policy,
@@ -319,26 +306,20 @@ class ServerContainer:
             event_log=self.event_log,
             agent_repo=self.agent_repo,
             message_repo=self.message_repo,
-            workflow_graph_repo=self.workflow_graph_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             workspace_manager=self.workspace_manager,
             provider_factory=self._provider_factory,
-            workflow_registry=self.workflow_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             reflection_service=self.reflection_service,
         )
-        self.workflow_service = WorkflowOrchestrationService(
+        self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
-            shared_store=self.shared_store,
-            workflow_graph_repo=self.workflow_graph_repo,
             role_registry=self.role_registry,
-            workflow_registry=self.workflow_registry,
             instance_pool=self.instance_pool,
             agent_repo=self.agent_repo,
             task_execution_service=self.task_execution_service,
-            injection_manager=self.injection_manager,
             message_repo=self.message_repo,
         )
 

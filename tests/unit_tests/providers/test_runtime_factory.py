@@ -8,6 +8,9 @@ import pytest
 
 import agent_teams.providers.runtime_factory as runtime_factory_module
 from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.coordination.task_orchestration_service import (
+    TaskOrchestrationService,
+)
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
@@ -29,11 +32,8 @@ from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
-from agent_teams.workflow.orchestration_service import WorkflowOrchestrationService
-from agent_teams.workflow.registry import WorkflowRegistry
 from agent_teams.workspace import WorkspaceManager
 
 
@@ -53,7 +53,6 @@ def _build_runtime(*, profiles: dict[str, ModelEndpointConfig]) -> RuntimeConfig
             env_file=Path(".agent_teams/.env"),
             db_path=Path(".agent_teams/agent_teams.db"),
             roles_dir=Path(".agent_teams/roles"),
-            workflows_dir=Path(".agent_teams/workflows"),
         ),
         llm_profiles=profiles,
     )
@@ -92,7 +91,6 @@ def _build_factory(
         injection_manager=cast(RunInjectionManager, object()),
         run_event_hub=cast(RunEventHub, object()),
         agent_repo=cast(AgentInstanceRepository, object()),
-        workflow_graph_repo=cast(WorkflowGraphRepository, object()),
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         workspace_manager=cast(WorkspaceManager, object()),
@@ -101,8 +99,7 @@ def _build_factory(
         skill_registry=cast(SkillRegistry, object()),
         message_repo=cast(MessageRepository, object()),
         role_registry=cast(RoleRegistry, object()),
-        workflow_registry=cast(WorkflowRegistry, object()),
-        get_workflow_service=lambda: cast(WorkflowOrchestrationService, object()),
+        get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
         tool_approval_policy=cast(ToolApprovalPolicy, object()),

@@ -63,7 +63,7 @@ class RoleLoader:
 
         if "depends_on" in parsed:
             raise ValueError(
-                f"depends_on is not allowed in role file {path}; define task dependencies in workflow files instead"
+                f"depends_on is not allowed in role file {path}; task ordering belongs to runtime task orchestration, not role metadata"
             )
 
         mcp_servers = parsed.get("mcp_servers", [])

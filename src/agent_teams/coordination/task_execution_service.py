@@ -28,7 +28,6 @@ from agent_teams.state.run_runtime_repo import (
 )
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
 from agent_teams.workspace import (
     WorkspaceManager,
     WorkspaceProfile,
@@ -37,9 +36,6 @@ from agent_teams.workspace import (
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.events import EventEnvelope, EventType
 from agent_teams.workflow.models import TaskEnvelope
-from agent_teams.workflow.recommendation_service import WorkflowRecommendationService
-from agent_teams.workflow.registry import WorkflowRegistry
-from agent_teams.workflow.spec import WorkflowRecommendation
 
 ROLE_COORDINATOR = "coordinator_agent"
 LOGGER = get_logger(__name__)
@@ -55,13 +51,11 @@ class TaskExecutionService(BaseModel):
     event_bus: EventLog
     agent_repo: AgentInstanceRepository
     message_repo: MessageRepository
-    workflow_graph_repo: WorkflowGraphRepository
     approval_ticket_repo: ApprovalTicketRepository
     run_runtime_repo: RunRuntimeRepository
     workspace_manager: WorkspaceManager
     prompt_builder: RuntimePromptBuilder
     provider_factory: Callable[[RoleDefinition], object]
-    workflow_registry: WorkflowRegistry | None = None
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     reflection_service: ReflectionService | None = None
@@ -186,10 +180,6 @@ class TaskExecutionService(BaseModel):
             provider=self.provider_factory(role_for_run),
         )
         snapshot = workspace.memory.prompt_snapshot()
-        workflow_recommendation = self._build_workflow_recommendation(
-            role_id=role_id,
-            objective=task.objective,
-        )
         try:
             self._ensure_committed_task_prompt(
                 role_id=role_id,
@@ -205,7 +195,6 @@ class TaskExecutionService(BaseModel):
                 workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
-                workflow_recommendation=workflow_recommendation,
             )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
@@ -400,18 +389,6 @@ class TaskExecutionService(BaseModel):
                 exc_info=exc,
             )
             raise
-
-    def _build_workflow_recommendation(
-        self,
-        *,
-        role_id: str,
-        objective: str,
-    ) -> WorkflowRecommendation | None:
-        if role_id != ROLE_COORDINATOR or self.workflow_registry is None:
-            return None
-        selector = WorkflowRecommendationService(self.workflow_registry)
-        decision = selector.recommend(objective)
-        return decision.recommendation
 
     def _workspace_profile_for_execution(
         self,
