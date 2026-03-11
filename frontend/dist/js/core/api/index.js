@@ -26,6 +26,14 @@ export {
 } from './runs.js';
 
 export {
+    fetchRoleConfigOptions,
+    fetchRoleConfig,
+    fetchRoleConfigs,
+    saveRoleConfig,
+    validateRoleConfig,
+} from './roles.js';
+
+export {
     fetchNotificationConfig,
     deleteModelProfile,
     fetchConfigStatus,

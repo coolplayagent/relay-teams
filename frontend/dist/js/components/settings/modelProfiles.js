@@ -67,7 +67,7 @@ function renderProfiles() {
         return;
     }
 
-    let html = '<div class="profile-cards">';
+    let html = '<div class="profile-records">';
     Object.entries(profiles).forEach(([name, profile], index) => {
         html += renderProfileCard(name, profile, index);
     });
@@ -327,7 +327,7 @@ function renderDraftProbeState() {
         statusEl.textContent = '';
         statusEl.className = 'profile-probe-status';
         testBtn.disabled = false;
-        testBtn.textContent = 'Test Connection';
+        testBtn.textContent = 'Test';
         return;
     }
 
@@ -335,25 +335,29 @@ function renderDraftProbeState() {
     statusEl.textContent = draftProbeState.message;
     statusEl.className = `profile-probe-status probe-status probe-status-${draftProbeState.status}`;
     testBtn.disabled = draftProbeState.status === 'probing';
-    testBtn.textContent = draftProbeState.status === 'probing' ? 'Testing...' : 'Test Connection';
+    testBtn.textContent = draftProbeState.status === 'probing' ? 'Testing...' : 'Test';
 }
 
 function showProfilesList() {
     document.getElementById('profile-editor').style.display = 'none';
     document.getElementById('profiles-list').style.display = 'block';
-    const addProfileBtn = document.getElementById('add-profile-btn');
-    if (addProfileBtn) {
-        addProfileBtn.style.display = 'block';
-    }
+    toggleModelProfileActions({
+        add: true,
+        test: false,
+        cancel: false,
+        save: false,
+    });
 }
 
 function showProfileEditor() {
     document.getElementById('profiles-list').style.display = 'none';
-    const addProfileBtn = document.getElementById('add-profile-btn');
-    if (addProfileBtn) {
-        addProfileBtn.style.display = 'none';
-    }
     document.getElementById('profile-editor').style.display = 'block';
+    toggleModelProfileActions({
+        add: false,
+        test: true,
+        cancel: true,
+        save: true,
+    });
 }
 
 function renderProbeStatusMarkup(state) {
@@ -370,56 +374,36 @@ function renderProfileCard(name, profile, index) {
     const defaultChip = name === 'default'
         ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
         : '';
+    const modelLabel = profile.model || 'No model';
+    const baseUrlLabel = profile.base_url || 'No endpoint';
 
     return `
-        <div class="profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
-            <div class="profile-card-header">
-                <div class="profile-card-heading">
-                    <h4>${escapeHtml(name)}</h4>
-                    <div class="profile-card-chips">
-                        <span class="profile-card-chip">${escapeHtml(providerLabel)}</span>
-                        ${defaultChip}
+        <div class="profile-record profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
+            <div class="profile-record-main">
+                <div class="profile-record-heading">
+                    <div class="profile-card-heading">
+                        <div class="profile-card-title-row">
+                            <h4>${escapeHtml(name)}</h4>
+                            <div class="profile-card-chips">
+                                <span class="profile-card-chip">${escapeHtml(providerLabel)}</span>
+                                ${defaultChip}
+                            </div>
+                        </div>
+                        <div class="profile-record-summary" title="${escapeHtml(`${modelLabel} ${baseUrlLabel}`)}">
+                            <span class="profile-record-summary-primary">${escapeHtml(modelLabel)}</span>
+                            <span class="profile-record-summary-separator">/</span>
+                            <span class="profile-record-summary-secondary">${escapeHtml(baseUrlLabel)}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="profile-card-actions">
-                    <div class="profile-card-action-row">
-                        <button class="icon-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test Connection" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
-                        <button class="icon-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
-                        <button class="icon-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
-                    </div>
-                    <div class="profile-card-inline-status" data-profile-probe-container="${escapeHtml(name)}">
-                        ${renderProbeStatusMarkup(probeState)}
-                    </div>
+                    <button class="settings-inline-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
+                    <button class="settings-inline-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
+                    <button class="settings-inline-action profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
                 </div>
             </div>
-            <div class="profile-card-body">
-                <div class="profile-card-model">${escapeHtml(profile.model || '-')}</div>
-                <div class="profile-card-meta">
-                    <div class="profile-card-meta-row">
-                        <span>Base URL</span>
-                        <code>${escapeHtml(profile.base_url || '-')}</code>
-                    </div>
-                    <div class="profile-card-meta-row">
-                        <span>API Key</span>
-                        <strong>${profile.has_api_key ? 'Stored' : 'Missing'}</strong>
-                    </div>
-                    <div class="profile-card-meta-row">
-                        <span>Temperature</span>
-                        <strong>${escapeHtml(String(profile.temperature ?? '-'))}</strong>
-                    </div>
-                    <div class="profile-card-meta-row">
-                        <span>Top P</span>
-                        <strong>${escapeHtml(String(profile.top_p ?? '-'))}</strong>
-                    </div>
-                    <div class="profile-card-meta-row">
-                        <span>Max Output Tokens</span>
-                        <strong>${escapeHtml(String(profile.max_tokens ?? '-'))}</strong>
-                    </div>
-                    <div class="profile-card-meta-row">
-                        <span>Connect Timeout</span>
-                        <strong>${escapeHtml(String(profile.connect_timeout_seconds ?? '-'))}s</strong>
-                    </div>
-                </div>
+            <div class="profile-card-inline-status" data-profile-probe-container="${escapeHtml(name)}">
+                ${renderProbeStatusMarkup(probeState)}
             </div>
         </div>
     `;
@@ -466,4 +450,18 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function toggleModelProfileActions(visibility) {
+    setActionDisplay('add-profile-btn', visibility.add);
+    setActionDisplay('test-profile-btn', visibility.test);
+    setActionDisplay('cancel-profile-btn', visibility.cancel);
+    setActionDisplay('save-profile-btn', visibility.save);
+}
+
+function setActionDisplay(id, visible) {
+    const button = document.getElementById(id);
+    if (button) {
+        button.style.display = visible ? 'inline-flex' : 'none';
+    }
 }

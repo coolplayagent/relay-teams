@@ -55,7 +55,7 @@ console.log(JSON.stringify({
     ]
     assert payload["listDisplay"] == "block"
     assert payload["editorDisplay"] == "none"
-    assert payload["addButtonDisplay"] == "block"
+    assert payload["addButtonDisplay"] == "inline-flex"
     assert "ui-regression-profile" in rendered_html
 
 
@@ -95,7 +95,7 @@ console.log(JSON.stringify({
     probe_override = cast(JsonObject, probe_payload["override"])
     probe_status_text = cast(str, payload["probeStatusText"])
     assert payload["notifications"] == []
-    assert payload["testButtonText"] == "Test Connection"
+    assert payload["testButtonText"] == "Test"
     assert payload["probeStatusDisplay"] == "block"
     assert "Connected in 42ms" in probe_status_text
     assert "9 tokens" in probe_status_text
@@ -225,8 +225,14 @@ console.log(JSON.stringify({
     )
 
     rendered_html = cast(str, payload["renderedHtml"])
+    assert "profile-records" in rendered_html
     assert "profile-card-inline-status" in rendered_html
-    assert "profile-card-footer" not in rendered_html
+    assert "profile-cards" not in rendered_html
+    assert "API Key" not in rendered_html
+    assert "Temperature" not in rendered_html
+    assert "Top P" not in rendered_html
+    assert "Max Output Tokens" not in rendered_html
+    assert "Connect Timeout" not in rendered_html
 
 
 def test_deleting_profile_uses_custom_confirm_and_success_notification(

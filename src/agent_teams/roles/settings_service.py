@@ -1,0 +1,220 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+import yaml
+
+from agent_teams.mcp.registry import McpRegistry
+from agent_teams.roles.models import (
+    RoleDefinition,
+    RoleDocumentDraft,
+    RoleDocumentRecord,
+    RoleDocumentSummary,
+    RoleValidationResult,
+)
+from agent_teams.roles.registry import RoleLoader, RoleRegistry
+from agent_teams.skills.registry import SkillRegistry
+from agent_teams.tools.registry import ToolRegistry
+from agent_teams.workspace import default_workspace_profile
+
+
+class RoleSettingsService:
+    def __init__(
+        self,
+        *,
+        roles_dir: Path,
+        get_tool_registry: Callable[[], ToolRegistry],
+        get_mcp_registry: Callable[[], McpRegistry],
+        get_skill_registry: Callable[[], SkillRegistry],
+        on_roles_reloaded: Callable[[RoleRegistry], None],
+    ) -> None:
+        self._roles_dir: Path = roles_dir
+        self._loader: RoleLoader = RoleLoader()
+        self._get_tool_registry: Callable[[], ToolRegistry] = get_tool_registry
+        self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
+        self._get_skill_registry: Callable[[], SkillRegistry] = get_skill_registry
+        self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
+
+    def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
+        documents = [
+            self._summary_from_definition(definition)
+            for definition in self._load_registry().list_roles()
+        ]
+        return tuple(documents)
+
+    def get_role_document(self, role_id: str) -> RoleDocumentRecord:
+        role_path = self._find_role_path(role_id)
+        content = role_path.read_text(encoding="utf-8")
+        role = self._loader.load_from_text(content, source_name=role_path.name)
+        return self._record_from_definition(
+            definition=role,
+            file_name=role_path.name,
+            content=content,
+        )
+
+    def validate_role_document(
+        self,
+        draft: RoleDocumentDraft,
+    ) -> RoleValidationResult:
+        normalized = self._normalize_draft(draft)
+        content = self._serialize_role_document(normalized)
+        role = self._loader.load_from_text(
+            content,
+            source_name=f"{normalized.role_id}.md",
+        )
+        self._validate_definition(role)
+        return RoleValidationResult(
+            valid=True,
+            role=self._record_from_definition(
+                definition=role,
+                file_name=f"{normalized.role_id}.md",
+                content=content,
+                source_role_id=normalized.source_role_id,
+            ),
+        )
+
+    def save_role_document(
+        self,
+        role_id: str,
+        draft: RoleDocumentDraft,
+    ) -> RoleDocumentRecord:
+        normalized = self._normalize_draft(draft)
+        if normalized.role_id != role_id:
+            raise ValueError("Path role_id must match payload role_id")
+
+        source_role_id = normalized.source_role_id or role_id
+        source_path = self._find_role_path_optional(source_role_id)
+        validated = self.validate_role_document(normalized).role
+        target_path = (
+            source_path
+            if source_path is not None and normalized.role_id == source_role_id
+            else self._roles_dir / f"{normalized.role_id}.md"
+        )
+        if source_path is None and normalized.source_role_id:
+            raise ValueError(f"Role not found: {source_role_id}")
+        if (
+            source_path is not None
+            and target_path != source_path
+            and target_path.exists()
+        ):
+            raise ValueError(f"Role file already exists: {target_path.name}")
+        if source_path is None and target_path.exists():
+            raise ValueError(f"Role file already exists: {target_path.name}")
+
+        target_path.write_text(validated.content, encoding="utf-8")
+        if (
+            source_path is not None
+            and target_path != source_path
+            and source_path.exists()
+        ):
+            source_path.unlink()
+
+        registry = self._load_registry()
+        self._on_roles_reloaded(registry)
+        return self.get_role_document(normalized.role_id)
+
+    def validate_all_roles(self) -> dict[str, int | bool]:
+        registry = self._load_registry()
+        return {
+            "valid": True,
+            "loaded_count": len(registry.list_roles()),
+        }
+
+    def _summary_from_definition(
+        self,
+        definition: RoleDefinition,
+    ) -> RoleDocumentSummary:
+        return RoleDocumentSummary(
+            role_id=definition.role_id,
+            name=definition.name,
+            version=definition.version,
+            model_profile=definition.model_profile,
+        )
+
+    def _record_from_definition(
+        self,
+        *,
+        definition: RoleDefinition,
+        file_name: str,
+        content: str,
+        source_role_id: str | None = None,
+    ) -> RoleDocumentRecord:
+        return RoleDocumentRecord(
+            source_role_id=source_role_id,
+            role_id=definition.role_id,
+            name=definition.name,
+            version=definition.version,
+            tools=definition.tools,
+            mcp_servers=definition.mcp_servers,
+            skills=definition.skills,
+            model_profile=definition.model_profile,
+            workspace_profile=definition.workspace_profile,
+            system_prompt=definition.system_prompt,
+            file_name=file_name,
+            content=content,
+        )
+
+    def _normalize_draft(self, draft: RoleDocumentDraft) -> RoleDocumentDraft:
+        return draft.model_copy(
+            update={
+                "role_id": draft.role_id.strip(),
+                "name": draft.name.strip(),
+                "version": draft.version.strip(),
+                "model_profile": draft.model_profile.strip(),
+                "system_prompt": draft.system_prompt.strip(),
+                "tools": tuple(item.strip() for item in draft.tools if item.strip()),
+                "mcp_servers": tuple(
+                    item.strip() for item in draft.mcp_servers if item.strip()
+                ),
+                "skills": tuple(item.strip() for item in draft.skills if item.strip()),
+            }
+        )
+
+    def _serialize_role_document(self, draft: RoleDocumentDraft) -> str:
+        front_matter: dict[str, object] = {
+            "role_id": draft.role_id,
+            "name": draft.name,
+            "model_profile": draft.model_profile,
+            "version": draft.version,
+            "tools": list(draft.tools),
+        }
+        if draft.mcp_servers:
+            front_matter["mcp_servers"] = list(draft.mcp_servers)
+        if draft.skills:
+            front_matter["skills"] = list(draft.skills)
+        if draft.workspace_profile != default_workspace_profile():
+            front_matter["workspace_profile"] = draft.workspace_profile.model_dump(
+                mode="json"
+            )
+        serialized_front_matter = yaml.safe_dump(
+            front_matter,
+            sort_keys=False,
+            allow_unicode=False,
+        ).strip()
+        return f"---\n{serialized_front_matter}\n---\n\n{draft.system_prompt.strip()}\n"
+
+    def _load_registry(self) -> RoleRegistry:
+        registry = self._loader.load_all(self._roles_dir)
+        for definition in registry.list_roles():
+            self._validate_definition(definition)
+        return registry
+
+    def _validate_definition(self, definition: RoleDefinition) -> None:
+        self._get_tool_registry().validate_known(definition.tools)
+        self._get_mcp_registry().validate_known(definition.mcp_servers)
+        self._get_skill_registry().validate_known(definition.skills)
+
+    def _find_role_path(self, role_id: str) -> Path:
+        role_path = self._find_role_path_optional(role_id)
+        if role_path is None:
+            raise ValueError(f"Role not found: {role_id}")
+        return role_path
+
+    def _find_role_path_optional(self, role_id: str) -> Path | None:
+        for role_path in sorted(self._roles_dir.glob("*.md")):
+            definition = self._loader.load_one(role_path)
+            if definition.role_id == role_id:
+                return role_path
+        return None

@@ -34,7 +34,8 @@ from agent_teams.providers.runtime_factory import (
     create_task_execution_service,
 )
 from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleLoader, RoleRegistry
+from agent_teams.roles import RoleLoader, RoleRegistry
+from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.runs.injection_queue import RunInjectionManager
@@ -253,6 +254,13 @@ class ServerContainer:
                 notification_config_manager=self.notification_config_manager
             )
         )
+        self.role_settings_service: RoleSettingsService = RoleSettingsService(
+            roles_dir=self.runtime.paths.roles_dir,
+            get_tool_registry=lambda: self.tool_registry,
+            get_mcp_registry=lambda: self.mcp_registry,
+            get_skill_registry=lambda: self.skill_registry,
+            on_roles_reloaded=self._on_roles_reloaded,
+        )
         self.mcp_config_reload_service: McpConfigReloadService = McpConfigReloadService(
             mcp_config_manager=self.mcp_config_manager,
             role_registry=self.role_registry,
@@ -331,12 +339,27 @@ class ServerContainer:
 
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
+        self.meta_agent.coordinator.role_registry = self.role_registry
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service
 
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
         self.reflection_service.replace_llm_profiles(runtime.llm_profiles)
+        self._refresh_coordinator_runtime()
+
+    def _on_roles_reloaded(self, role_registry: RoleRegistry) -> None:
+        self.role_registry = role_registry
+        self.mcp_config_reload_service = McpConfigReloadService(
+            mcp_config_manager=self.mcp_config_manager,
+            role_registry=self.role_registry,
+            on_mcp_reloaded=self._on_mcp_reloaded,
+        )
+        self.skills_config_reload_service = SkillsConfigReloadService(
+            config_dir=self.config_dir,
+            role_registry=self.role_registry,
+            on_skill_reloaded=self._on_skill_reloaded,
+        )
         self._refresh_coordinator_runtime()
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:

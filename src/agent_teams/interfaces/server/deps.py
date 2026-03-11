@@ -13,7 +13,8 @@ from agent_teams.mcp.service import McpService
 from agent_teams.notifications.settings_service import NotificationSettingsService
 from agent_teams.reflection.service import ReflectionService
 from agent_teams.providers.model_config_service import ModelConfigService
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.roles import RoleRegistry
+from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.runs.manager import RunManager
 from agent_teams.sessions import SessionService
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
@@ -77,6 +78,10 @@ def get_task_repo(request: Request) -> TaskRepository:
 
 def get_role_registry(request: Request) -> RoleRegistry:
     return get_container(request).role_registry
+
+
+def get_role_settings_service(request: Request) -> RoleSettingsService:
+    return get_container(request).role_settings_service
 
 
 def get_tool_registry(request: Request) -> ToolRegistry:

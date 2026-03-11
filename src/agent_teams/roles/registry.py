@@ -49,40 +49,45 @@ class RoleLoader:
 
     def load_one(self, path: Path) -> RoleDefinition:
         raw = path.read_text(encoding="utf-8")
-        front_matter, body = self._split_front_matter(raw)
+        return self.load_from_text(raw, source_name=str(path))
+
+    def load_from_text(self, content: str, *, source_name: str) -> RoleDefinition:
+        front_matter, body = self._split_front_matter(content)
         parsed = yaml.safe_load(front_matter)
         if not isinstance(parsed, dict):
-            raise ValueError(f"Invalid front matter for role file: {path}")
+            raise ValueError(f"Invalid front matter for role file: {source_name}")
 
         missing = [field for field in self.REQUIRED_FIELDS if field not in parsed]
         if missing:
-            raise ValueError(f"Missing fields in {path}: {missing}")
+            raise ValueError(f"Missing fields in {source_name}: {missing}")
 
         if not body.strip():
-            raise ValueError(f"Empty system prompt in {path}")
+            raise ValueError(f"Empty system prompt in {source_name}")
 
         if "depends_on" in parsed:
             raise ValueError(
-                f"depends_on is not allowed in role file {path}; task ordering belongs to runtime task orchestration, not role metadata"
+                f"depends_on is not allowed in role file {source_name}; task ordering belongs to runtime task orchestration, not role metadata"
             )
 
         mcp_servers = parsed.get("mcp_servers", [])
         if mcp_servers is None:
             mcp_servers = []
         if not isinstance(mcp_servers, list):
-            raise ValueError(f"mcp_servers must be a list in {path}")
+            raise ValueError(f"mcp_servers must be a list in {source_name}")
 
         skills = parsed.get("skills", [])
         if skills is None:
             skills = []
         if not isinstance(skills, list):
-            raise ValueError(f"skills must be a list in {path}")
+            raise ValueError(f"skills must be a list in {source_name}")
 
         workspace_profile_raw = parsed.get("workspace_profile")
         workspace_profile = default_workspace_profile()
         if workspace_profile_raw is not None:
             if not isinstance(workspace_profile_raw, dict):
-                raise ValueError(f"workspace_profile must be an object in {path}")
+                raise ValueError(
+                    f"workspace_profile must be an object in {source_name}"
+                )
             workspace_profile = WorkspaceProfile.model_validate(workspace_profile_raw)
 
         return RoleDefinition(

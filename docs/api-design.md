@@ -354,12 +354,85 @@ Rules:
 
 Lists loaded role definitions.
 
+### `GET /roles:options`
+
+Returns editor options for role settings.
+
+Response fields:
+- `tools`
+- `mcp_servers`
+- `skills`
+- `workspace_bindings`
+
+### `GET /roles/configs`
+
+Lists editable role document summaries for the settings UI.
+
+Response fields:
+- `role_id`
+- `name`
+- `version`
+- `model_profile`
+
+### `GET /roles/configs/{role_id}`
+
+Returns one editable role document.
+
+Response fields:
+- `source_role_id`
+- `role_id`
+- `name`
+- `version`
+- `tools`
+- `mcp_servers`
+- `skills`
+- `model_profile`
+- `workspace_profile`
+- `system_prompt`
+- `file_name`
+- `content`
+
+### `PUT /roles/configs/{role_id}`
+
+Validates and saves one role document, then reloads the runtime role registry.
+
+Request:
+
+```json
+{
+  "source_role_id": "spec_coder",
+  "role_id": "spec_coder",
+  "name": "Spec Coder",
+  "version": "1.0.0",
+  "tools": ["read_file", "write_file"],
+  "mcp_servers": [],
+  "skills": [],
+  "model_profile": "default",
+  "workspace_profile": {"binding": "session"},
+  "system_prompt": "Implement the requested change."
+}
+```
+
+Rules:
+- Path `role_id` must match body `role_id`.
+- Unknown tools, MCP servers, or skills are rejected.
+- When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
+- Renaming a role writes a new file and removes the previous file when validation succeeds.
+
 ### `POST /roles:validate`
 
 Validates role files against registered tools and skills.
 
 Constraint:
 - `depends_on` is invalid in role front matter. Ordering is runtime task orchestration state, not role metadata.
+
+### `POST /roles:validate-config`
+
+Validates one in-memory role draft without saving it.
+
+Use cases:
+- settings UI inline validation
+- pre-save editor checks for tools, MCP servers, skills, and role schema
 
 ## Prompt APIs
 

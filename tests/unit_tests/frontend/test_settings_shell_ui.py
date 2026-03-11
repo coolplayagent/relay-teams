@@ -42,11 +42,13 @@ console.log(JSON.stringify({
     assert "settings-content-stack" in modal_html
     assert "settings-model-stack" in modal_html
     assert "status-stack" in modal_html
+    assert "settings-actions-bar" in modal_html
     assert "settings-tab-desc" not in modal_html
     assert (
         "Runtime configuration for models, notifications, and extensions."
         not in modal_html
     )
+    assert "Roles" in modal_html
     assert "Providers, endpoints, sampling" not in modal_html
     assert "Browser and toast delivery rules" not in modal_html
     assert "Loaded servers and reload actions" not in modal_html
@@ -60,6 +62,7 @@ console.log(JSON.stringify({
         "Lists the skills discovered by the runtime and lets you reload the registry."
         not in modal_html
     )
+    assert "notifications-actions" not in modal_html
     assert payload["modalDisplay"] == "flex"
     assert "settings-modal-visible" in str(payload["modalClassName"])
     assert payload["panelTitle"] == "Notifications"
@@ -67,6 +70,7 @@ console.log(JSON.stringify({
     assert payload["notificationsPanelDisplay"] == "block"
     assert load_calls == {
         "model": 1,
+        "roles": 0,
         "notifications": 1,
         "mcp": 0,
         "skills": 0,
@@ -85,32 +89,36 @@ initSettings();
 openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
+const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
+const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
 
-const modelActions = document.getElementById("settings-panel-actions").innerHTML;
+const modelAddDisplay = document.getElementById("add-profile-btn").style.display;
+await rolesTab.onclick();
+const roleAddDisplay = document.getElementById("add-role-btn").style.display;
+await notificationsTab.onclick();
+const notificationsSaveDisplay = document.getElementById("save-notifications-btn").style.display;
 await mcpTab.onclick();
-const mcpActions = document.getElementById("settings-panel-actions").innerHTML;
+const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
 await skillsTab.onclick();
-const skillsActions = document.getElementById("settings-panel-actions").innerHTML;
+const skillsReloadDisplay = document.getElementById("reload-skills-btn").style.display;
 
 console.log(JSON.stringify({
-    modelActions,
-    mcpActions,
-    skillsActions,
+    modelAddDisplay,
+    roleAddDisplay,
+    notificationsSaveDisplay,
+    mcpReloadDisplay,
+    skillsReloadDisplay,
 }));
 """.strip(),
     )
 
-    assert 'class="primary-btn section-action-btn" id="add-profile-btn"' in cast(
-        str, payload["modelActions"]
-    )
-    assert 'class="primary-btn section-action-btn" id="reload-mcp-btn"' in cast(
-        str, payload["mcpActions"]
-    )
-    assert 'class="primary-btn section-action-btn" id="reload-skills-btn"' in cast(
-        str, payload["skillsActions"]
-    )
+    assert payload["modelAddDisplay"] == "inline-flex"
+    assert payload["roleAddDisplay"] == "inline-flex"
+    assert payload["notificationsSaveDisplay"] == "inline-flex"
+    assert payload["mcpReloadDisplay"] == "inline-flex"
+    assert payload["skillsReloadDisplay"] == "inline-flex"
 
 
 def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
@@ -126,7 +134,34 @@ def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
     assert "border-top: 1px solid var(--settings-divider);" not in stack_rule
 
 
-def test_model_profile_editor_labels_max_output_tokens(tmp_path: Path) -> None:
+def test_settings_layout_uses_scrolling_body_with_footer_actions() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".settings-main {" in components_css
+    assert "overflow: hidden;" in components_css
+    assert ".settings-modal-content {" in components_css
+    assert "width: min(1240px, 96vw);" in components_css
+    assert "height: min(90vh, 960px);" in components_css
+    assert "min-height: 760px;" in components_css
+    assert ".settings-body {" in components_css
+    assert "overflow-y: auto;" in components_css
+    assert ".settings-actions-bar {" in components_css
+    assert ".settings-panel {" in components_css
+    assert "height: 100%;" in components_css
+    assert ".settings-action {" in components_css
+    assert ".settings-panel-actions-group {" in components_css
+    assert ".settings-panel-actions-group-end {" in components_css
+    assert ".settings-sidebar::-webkit-scrollbar {" in components_css
+    assert ".settings-body::-webkit-scrollbar {" in components_css
+    assert ".profiles-list::-webkit-scrollbar {" in components_css
+
+
+def test_model_profile_editor_labels_max_output_tokens_and_uses_short_footer_labels(
+    tmp_path: Path,
+) -> None:
     payload = _run_settings_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -144,6 +179,39 @@ console.log(JSON.stringify({
     modal_html = cast(str, payload["modalHtml"])
     assert "Max Output Tokens" in modal_html
     assert "Max Tokens</label>" not in modal_html
+    assert ">Test</button>" in modal_html
+    assert ">Validate</button>" in modal_html
+    assert ">Save Role</button>" not in modal_html
+    assert ">Save Notifications</button>" not in modal_html
+    assert "notification-toggle-check" in modal_html
+    assert "notification-toggle-label" in modal_html
+
+
+def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    actions_html_start = source_text.index('<div class="settings-panel-actions"')
+    actions_html_end = source_text.index(
+        "</div>\n                </div>", actions_html_start
+    )
+    actions_html = source_text[actions_html_start:actions_html_end]
+    assert "settings-panel-actions-group-start" in actions_html
+    assert "settings-panel-actions-group-end" in actions_html
+    assert actions_html.index('id="test-profile-btn"') < actions_html.index(
+        'id="save-profile-btn"'
+    )
+    assert actions_html.index('id="save-profile-btn"') < actions_html.index(
+        'id="cancel-profile-btn"'
+    )
+    assert actions_html.index('id="validate-role-btn"') < actions_html.index(
+        'id="save-role-btn"'
+    )
+    assert actions_html.index('id="save-role-btn"') < actions_html.index(
+        'id="cancel-role-btn"'
+    )
 
 
 def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -154,6 +222,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
+    mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     module_under_test_path = tmp_path / "index.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -182,6 +251,18 @@ export async function loadNotificationSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_roles_settings_path.write_text(
+        """
+export function bindRoleSettingsHandlers() {
+    globalThis.__bindCalls.roles += 1;
+}
+
+export async function loadRoleSettingsPanel() {
+    globalThis.__loadCalls.roles += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_system_status_path.write_text(
         """
 export function bindSystemStatusHandlers() {
@@ -203,6 +284,7 @@ export async function loadSkillsStatusPanel() {
         source_path.read_text(encoding="utf-8")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
+        .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
@@ -262,6 +344,18 @@ function createElement(tagName = "div") {{
         appendChild(child) {{
             child.parentNode = this;
             this.children.push(child);
+        }},
+        querySelectorAll(selector) {{
+            if (selector !== ".settings-action") {{
+                return [];
+            }}
+            const matches = [];
+            for (const match of this.innerHTML.matchAll(/class="[^"]*settings-action[^"]*"[^>]*id="([^"]+)"/g)) {{
+                const child = createElement("button");
+                child.id = match[1];
+                matches.push(child);
+            }}
+            return matches;
         }},
     }};
 
@@ -356,11 +450,13 @@ function createDocument() {{
 
 globalThis.__bindCalls = {{
     model: 0,
+    roles: 0,
     notifications: 0,
     system: 0,
 }};
 globalThis.__loadCalls = {{
     model: 0,
+    roles: 0,
     notifications: 0,
     mcp: 0,
     skills: 0,

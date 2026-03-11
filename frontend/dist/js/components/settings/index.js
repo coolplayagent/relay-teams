@@ -7,6 +7,7 @@ import {
     bindNotificationSettingsHandlers,
     loadNotificationSettingsPanel,
 } from './notifications.js';
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 
 let settingsModal = null;
@@ -17,6 +18,10 @@ const TAB_METADATA = {
     model: {
         title: 'Model Profiles',
         description: 'Manage providers, endpoints, request limits, and sampling defaults.',
+    },
+    roles: {
+        title: 'Roles',
+        description: 'Edit role metadata, allowed tools, workspace profile, and prompt text.',
     },
     notifications: {
         title: 'Notifications',
@@ -53,6 +58,9 @@ function createModal() {
                     <button class="settings-tab active" data-tab="model">
                         <span class="settings-tab-label">Model Profiles</span>
                     </button>
+                    <button class="settings-tab" data-tab="roles">
+                        <span class="settings-tab-label">Roles</span>
+                    </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
                     </button>
@@ -70,7 +78,6 @@ function createModal() {
                         <h2 id="settings-panel-title">Model Profiles</h2>
                         <p id="settings-panel-description">Manage providers, endpoints, request limits, and sampling defaults.</p>
                     </div>
-                    <div class="settings-panel-actions" id="settings-panel-actions"></div>
                     <button class="close-btn" id="settings-close" aria-label="Close Settings">&times;</button>
                 </div>
                 <div class="settings-body">
@@ -122,11 +129,6 @@ function createModal() {
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="form-actions">
-                                        <button class="primary-btn section-action-btn" id="save-profile-btn">Save</button>
-                                        <button class="secondary-btn" id="test-profile-btn" type="button">Test Connection</button>
-                                        <button class="secondary-btn" id="cancel-profile-btn">Cancel</button>
-                                    </div>
                                     <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
                                 </div>
                             </div>
@@ -135,6 +137,85 @@ function createModal() {
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="roles-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack">
+                                <div class="roles-list" id="roles-list"></div>
+                                <div class="role-editor-panel" id="role-editor-panel" style="display:none;">
+                                    <div class="roles-editor-empty settings-empty-state settings-empty-state-compact" id="roles-editor-empty" style="display:none;">
+                                        <h4>No role selected</h4>
+                                        <p>Select a role to edit its metadata and prompt.</p>
+                                    </div>
+                                    <div class="role-editor-form" id="role-editor-form" style="display:none;">
+                                        <div class="role-editor-header">
+                                            <div>
+                                                <h4>Role Editor</h4>
+                                                <p id="role-file-meta"></p>
+                                            </div>
+                                        </div>
+                                        <div class="role-editor-sections">
+                                            <section class="role-editor-section">
+                                                <div class="profile-editor-grid role-editor-grid">
+                                                    <div class="form-group">
+                                                        <label>Role ID</label>
+                                                        <input type="text" id="role-id-input" placeholder="e.g. spec_coder">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label>Name</label>
+                                                        <input type="text" id="role-name-input" placeholder="e.g. Spec Coder">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label>Version</label>
+                                                        <input type="text" id="role-version-input" placeholder="e.g. 1.0.0">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label>Model Profile</label>
+                                                        <input type="text" id="role-model-profile-input" placeholder="default">
+                                                    </div>
+                                                </div>
+                                            </section>
+                                            <section class="role-editor-section">
+                                                <h5>Allowed Tools</h5>
+                                                <div class="role-option-picker role-option-picker-tools" id="role-tools-picker"></div>
+                                            </section>
+                                            <section class="role-editor-section">
+                                                <h5>MCP Servers</h5>
+                                                <div class="role-option-picker role-option-picker-single" id="role-mcp-picker"></div>
+                                            </section>
+                                            <section class="role-editor-section">
+                                                <h5>Skills</h5>
+                                                <div class="role-option-picker role-option-picker-single" id="role-skills-picker"></div>
+                                            </section>
+                                            <section class="role-editor-section">
+                                                <h5>Workspace</h5>
+                                                <div class="role-workspace-row">
+                                                    <div class="form-group">
+                                                        <label>Binding</label>
+                                                        <select id="role-workspace-binding-input"></select>
+                                                    </div>
+                                                    <p class="role-workspace-note" id="role-workspace-note">
+                                                        Advanced workspace profile fields stay preserved. This editor only changes the binding mode.
+                                                    </p>
+                                                </div>
+                                            </section>
+                                            <section class="role-editor-section">
+                                                <div class="role-prompt-header">
+                                                    <h5>System Prompt</h5>
+                                                    <div class="role-prompt-tabs">
+                                                        <button class="role-prompt-tab active" id="role-prompt-edit-tab" type="button">Edit</button>
+                                                        <button class="role-prompt-tab" id="role-prompt-preview-tab" type="button">Preview</button>
+                                                    </div>
+                                                </div>
+                                                <textarea class="config-textarea role-prompt-textarea" id="role-system-prompt-input" placeholder="Write the role prompt here"></textarea>
+                                                <div class="role-prompt-preview msg-text" id="role-system-prompt-preview" style="display:none;"></div>
+                                            </section>
+                                        </div>
+                                        <div class="role-editor-status" id="role-editor-status" style="display:none;"></div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="settings-panel" id="notifications-panel" style="display:none;">
@@ -151,15 +232,18 @@ function createModal() {
                                         </div>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-tool_approval_requested-enabled">
-                                            <span>Enabled</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Enabled</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-tool_approval_requested-browser">
-                                            <span>Browser</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Browser</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-tool_approval_requested-toast">
-                                            <span>Toast</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Toast</span>
                                         </label>
                                     </div>
                                     <div class="notification-row" data-notif-type="run_completed">
@@ -169,15 +253,18 @@ function createModal() {
                                         </div>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_completed-enabled">
-                                            <span>Enabled</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Enabled</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_completed-browser">
-                                            <span>Browser</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Browser</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_completed-toast">
-                                            <span>Toast</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Toast</span>
                                         </label>
                                     </div>
                                     <div class="notification-row" data-notif-type="run_failed">
@@ -187,15 +274,18 @@ function createModal() {
                                         </div>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_failed-enabled">
-                                            <span>Enabled</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Enabled</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_failed-browser">
-                                            <span>Browser</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Browser</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_failed-toast">
-                                            <span>Toast</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Toast</span>
                                         </label>
                                     </div>
                                     <div class="notification-row" data-notif-type="run_stopped">
@@ -205,20 +295,20 @@ function createModal() {
                                         </div>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_stopped-enabled">
-                                            <span>Enabled</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Enabled</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_stopped-browser">
-                                            <span>Browser</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Browser</span>
                                         </label>
                                         <label class="notification-toggle">
                                             <input type="checkbox" id="notif-run_stopped-toast">
-                                            <span>Toast</span>
+                                            <span class="notification-toggle-check" aria-hidden="true"></span>
+                                            <span class="notification-toggle-label">Toast</span>
                                         </label>
                                     </div>
-                                </div>
-                                <div class="notifications-actions">
-                                    <button class="primary-btn section-action-btn" id="save-notifications-btn">Save Notifications</button>
                                 </div>
                             </div>
                         </div>
@@ -226,6 +316,25 @@ function createModal() {
                     <div class="settings-panel" id="skills-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="skills-status"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-actions-bar" id="settings-actions-bar">
+                    <div class="settings-panel-actions" id="settings-panel-actions">
+                        <div class="settings-panel-actions-group settings-panel-actions-group-start">
+                            <button class="primary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <button class="primary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;">Validate</button>
+                        </div>
+                        <div class="settings-panel-actions-group settings-panel-actions-group-end">
+                            <button class="primary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;">Add Profile</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="primary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;">Reload</button>
+                            <button class="primary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;">Reload</button>
                         </div>
                     </div>
                 </div>
@@ -255,6 +364,7 @@ function setupEventListeners() {
     });
 
     bindModelProfileHandlers();
+    bindRoleSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindSystemStatusHandlers();
 }
@@ -275,10 +385,13 @@ async function showPanel(tab) {
     document.getElementById('settings-panel-description').textContent = meta.description;
     renderPanelActions(tab);
     bindModelProfileHandlers();
+    bindRoleSettingsHandlers();
     bindSystemStatusHandlers();
 
     if (tab === 'model') {
         await loadModelProfilesPanel();
+    } else if (tab === 'roles') {
+        await loadRoleSettingsPanel();
     } else if (tab === 'notifications') {
         await loadNotificationSettingsPanel();
     } else if (tab === 'mcp') {
@@ -290,26 +403,35 @@ async function showPanel(tab) {
 
 function renderPanelActions(tab) {
     const actions = document.getElementById('settings-panel-actions');
+    const actionsBar = document.getElementById('settings-actions-bar');
     if (!actions) {
         return;
     }
-
+    actions.querySelectorAll('.settings-action').forEach(button => {
+        button.style.display = 'none';
+    });
+    if (actionsBar) actionsBar.style.display = 'flex';
     if (tab === 'model') {
-        actions.innerHTML = '<button class="primary-btn section-action-btn" id="add-profile-btn" type="button">Add Profile</button>';
+        document.getElementById('add-profile-btn').style.display = 'inline-flex';
         return;
     }
-
+    if (tab === 'roles') {
+        document.getElementById('add-role-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'notifications') {
+        document.getElementById('save-notifications-btn').style.display = 'inline-flex';
+        return;
+    }
     if (tab === 'mcp') {
-        actions.innerHTML = '<button class="primary-btn section-action-btn" id="reload-mcp-btn" type="button">Reload</button>';
+        document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
         return;
     }
-
     if (tab === 'skills') {
-        actions.innerHTML = '<button class="primary-btn section-action-btn" id="reload-skills-btn" type="button">Reload</button>';
+        document.getElementById('reload-skills-btn').style.display = 'inline-flex';
         return;
     }
-
-    actions.innerHTML = '';
+    if (actionsBar) actionsBar.style.display = 'none';
 }
 
 export function openSettings() {
