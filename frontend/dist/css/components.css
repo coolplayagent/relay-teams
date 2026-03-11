@@ -317,6 +317,20 @@
     opacity: 1;
 }
 
+@keyframes roundSectionEmphasis {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 22%, transparent);
+    }
+
+    35% {
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 10%, transparent);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+}
+
 .session-info {
     font-size: 0.875rem;
     font-weight: 500;
@@ -1052,8 +1066,10 @@
 }
 
 .round-detail-header {
-    padding: 1rem;
+    padding: 0.9rem 1.15rem;
     margin-bottom: 1rem;
+    margin-left: -0.35rem;
+    margin-right: -0.35rem;
     background: var(--bg-surface-glass);
     border-radius: var(--radius-md);
     border-left: 3px solid var(--primary);
@@ -1119,6 +1135,13 @@
 .session-round-section {
     margin-bottom: 1.75rem;
     scroll-margin-top: 0.75rem;
+}
+
+.session-round-section.round-section-emphasis .round-detail-header {
+    border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
+    background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+    animation: roundSectionEmphasis 1.2s ease-out;
 }
 
 .live-badge {
@@ -3201,7 +3224,9 @@
 
 .round-detail-header {
     margin-bottom: 1rem;
-    padding: 0.9rem 1rem;
+    padding: 0.9rem 1.15rem;
+    margin-left: -0.35rem;
+    margin-right: -0.35rem;
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-left: 1px solid var(--border-color);
@@ -3362,6 +3387,12 @@ body.light-theme .session-item.active,
 body.light-theme .round-item.active,
 body.light-theme .round-nav-item.active {
     background: #e8dfd1;
+}
+
+body.light-theme .session-round-section.round-section-emphasis .round-detail-header {
+    background: color-mix(in srgb, var(--bg-surface) 84%, #e5d8c5 16%);
+    border-color: color-mix(in srgb, #bda888 44%, var(--border-color) 56%);
+    box-shadow: 0 0 0 1px rgba(189, 168, 136, 0.16);
 }
 
 body.light-theme .subagent-toggle-btn {

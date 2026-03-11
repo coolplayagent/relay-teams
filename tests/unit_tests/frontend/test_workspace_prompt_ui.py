@@ -87,6 +87,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "Intent:" not in timeline_script
     assert "round-detail-token-host" in timeline_script
     assert "round-detail-meta" in timeline_script
+    assert "pendingScrollTargetRunId" in timeline_script
+    assert "syncPendingRoundSelection" in timeline_script
+    assert "clearPendingRoundSelection" in timeline_script
+    assert "emphasizeRoundSection" in timeline_script
     assert "round-nav-toggle" in navigator_script
     assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
     assert "item.title = String(round.intent || 'No intent');" in navigator_script
@@ -109,6 +113,13 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert ".status-indicator.online span {" not in components_css
     assert ".status-indicator.offline > span:first-child" in components_css
     assert ".status-indicator.checking > span:first-child" in components_css
+    assert (
+        ".session-round-section.round-section-emphasis .round-detail-header"
+        in components_css
+    )
+    assert "@keyframes roundSectionEmphasis" in components_css
+    assert "margin-left: -0.35rem;" in components_css
+    assert "margin-right: -0.35rem;" in components_css
     assert "export function parseMarkdown" in markdown_script
     assert "markdown-table-wrap" in markdown_script
     assert "markdown-code-block" in markdown_script

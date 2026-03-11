@@ -143,7 +143,13 @@ export function selectRound(round) {
     if (!round) return;
     const section = document.getElementById(roundSectionId(round.run_id));
     if (!section) return;
+    roundsState.pendingScrollTargetRunId = round.run_id;
+    roundsState.pendingScrollUnlockAt = Date.now() + 1600;
+    roundsState.activeRunId = round.run_id;
+    roundsState.activeVisibility = Number.POSITIVE_INFINITY;
+    setActiveRoundNav(round.run_id);
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    emphasizeRoundSection(section);
 }
 
 export function goBackToSessions() {
@@ -273,6 +279,10 @@ function syncActiveRoundFromScroll() {
     const sections = Array.from(container.querySelectorAll('.session-round-section'));
     if (sections.length === 0) return;
 
+    if (syncPendingRoundSelection(container)) {
+        return;
+    }
+
     const atTop = container.scrollTop <= 2;
     const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
     if (atTop) {
@@ -326,6 +336,51 @@ function activateRoundSection(section, visibleScore) {
     syncExportedState();
 
     setActiveRoundNav(runId);
+}
+
+function syncPendingRoundSelection(container) {
+    const pendingRunId = String(roundsState.pendingScrollTargetRunId || '').trim();
+    if (!pendingRunId) return false;
+
+    const targetSection = container.querySelector(`.session-round-section[data-run-id="${pendingRunId}"]`);
+    if (!targetSection) {
+        clearPendingRoundSelection();
+        return false;
+    }
+
+    if (hasPendingSelectionExpired() || isRoundSectionSettled(targetSection, container)) {
+        activateRoundSection(targetSection, Number.POSITIVE_INFINITY);
+        emphasizeRoundSection(targetSection);
+        clearPendingRoundSelection();
+        return true;
+    }
+
+    return true;
+}
+
+function isRoundSectionSettled(section, container) {
+    const containerRect = container.getBoundingClientRect();
+    const sectionRect = section.getBoundingClientRect();
+    return Math.abs(sectionRect.top - containerRect.top) <= 28;
+}
+
+function hasPendingSelectionExpired() {
+    return Date.now() >= Number(roundsState.pendingScrollUnlockAt || 0);
+}
+
+function clearPendingRoundSelection() {
+    roundsState.pendingScrollTargetRunId = null;
+    roundsState.pendingScrollUnlockAt = 0;
+}
+
+function emphasizeRoundSection(section) {
+    if (!(section instanceof HTMLElement)) return;
+    section.classList.remove('round-section-emphasis');
+    void section.offsetWidth;
+    section.classList.add('round-section-emphasis');
+    window.setTimeout(() => {
+        section.classList.remove('round-section-emphasis');
+    }, 1600);
 }
 
 async function loadOlderRounds() {
