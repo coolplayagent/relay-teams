@@ -7,6 +7,7 @@ import { esc, roundStateLabel, roundStateTone } from './utils.js';
 let navRounds = [];
 let navActiveRunId = null;
 let navOnSelectRound = null;
+const ROUND_NAV_COLLAPSED_KEY = 'agent_teams_round_nav_collapsed';
 
 export function renderRoundNavigator(rounds, onSelectRound) {
     navRounds = Array.isArray(rounds) ? rounds : [];
@@ -45,18 +46,36 @@ export function setActiveRoundNav(runId) {
 }
 
 function renderNavigatorDom(nav) {
+    const isCollapsed = loadCollapsedState();
     nav.style.display = 'flex';
+    nav.classList.toggle('collapsed', isCollapsed);
     nav.innerHTML = `
-        <div class="round-nav-title">Rounds</div>
+        <div class="round-nav-header">
+            <div class="round-nav-title">Rounds</div>
+            <button type="button" class="round-nav-toggle" aria-label="${isCollapsed ? 'Expand rounds' : 'Collapse rounds'}">
+                ${isCollapsed ? 'Show' : 'Hide'}
+            </button>
+        </div>
         <div class="round-nav-list"></div>
     `;
 
+    const toggle = nav.querySelector('.round-nav-toggle');
+    if (toggle) {
+        toggle.onclick = () => {
+            const next = !loadCollapsedState();
+            saveCollapsedState(next);
+            renderNavigatorDom(nav);
+        };
+    }
+
     const list = nav.querySelector('.round-nav-list');
+    if (!list) return;
     navRounds.forEach((round, idx) => {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'round-nav-item';
         item.dataset.runId = round.run_id;
+        item.title = String(round.intent || 'No intent');
         if (navActiveRunId && navActiveRunId === round.run_id) {
             item.classList.add('active');
         }
@@ -79,4 +98,20 @@ function renderNavigatorDom(nav) {
         };
         list.appendChild(item);
     });
+}
+
+function loadCollapsedState() {
+    try {
+        return localStorage.getItem(ROUND_NAV_COLLAPSED_KEY) === '1';
+    } catch {
+        return false;
+    }
+}
+
+function saveCollapsedState(collapsed) {
+    try {
+        localStorage.setItem(ROUND_NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+        return;
+    }
 }

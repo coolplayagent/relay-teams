@@ -1,0 +1,143 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_workspace_shell_hides_execution_mode_selector() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    index_html = (repo_root / "frontend" / "dist" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    prompt_script = (
+        repo_root / "frontend" / "dist" / "js" / "app" / "prompt.js"
+    ).read_text(encoding="utf-8")
+    timeline_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "rounds" / "timeline.js"
+    ).read_text(encoding="utf-8")
+    navigator_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "rounds"
+        / "navigator.js"
+    ).read_text(encoding="utf-8")
+    model_profiles_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "modelProfiles.js"
+    ).read_text(encoding="utf-8")
+    system_status_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "systemStatus.js"
+    ).read_text(encoding="utf-8")
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+    feedback_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+    navbar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "navbar.js"
+    ).read_text(encoding="utf-8")
+    state_script = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "state.js"
+    ).read_text(encoding="utf-8")
+    markdown_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "markdown.js"
+    ).read_text(encoding="utf-8")
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert "execution-mode-select" not in index_html
+    assert "Execution mode" not in index_html
+    assert "AI orchestration" not in index_html
+    assert "Manual" not in index_html
+    assert "execution-mode-select" not in prompt_script
+    assert "No session selected" not in index_html
+    assert "Start a session from the left sidebar" not in index_html
+    assert "No session selected" not in timeline_script
+    assert "Start a session from the left sidebar" not in timeline_script
+    assert "Sessions</p>" not in index_html
+    assert "Coordinator output and run history" not in index_html
+    assert "Intent:" not in timeline_script
+    assert "round-detail-token-host" in timeline_script
+    assert "round-detail-meta" in timeline_script
+    assert "round-nav-toggle" in navigator_script
+    assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
+    assert "item.title = String(round.intent || 'No intent');" in navigator_script
+    assert "alert(" not in model_profiles_script
+    assert "confirm(" not in model_profiles_script
+    assert "alert(" not in system_status_script
+    assert "confirm(" not in sidebar_script
+    assert "showToast" in feedback_script
+    assert "showConfirmDialog" in feedback_script
+    assert "requestAnimationFrame" in navbar_script
+    assert "is-resizing-rails" in navbar_script
+    assert "marked.setOptions" not in state_script
+    assert "export function parseMarkdown" in markdown_script
+    assert "markdown-table-wrap" in markdown_script
+    assert "markdown-code-block" in markdown_script
+    assert "formatCodeLanguage" in markdown_script
+    assert "markdown-code-copy" in markdown_script
+    assert "navigator.clipboard.writeText" in markdown_script
+    assert "Code Copied" in markdown_script
+    assert ".msg-content blockquote," in components_css
+    assert ".markdown-table-wrap {" in components_css
+    assert ".markdown-code-block {" in components_css
+    assert ".markdown-code-header {" in components_css
+    assert ".markdown-code-copy {" in components_css
+    assert ".markdown-code-copy.is-copied {" in components_css
+    assert ".msg-content table," in components_css
+    assert ".msg-content :is(h1, h2, h3, h4)," in components_css
+
+
+def test_button_theme_tokens_are_distinct_between_dark_and_light_modes() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    base_css = (repo_root / "frontend" / "dist" / "css" / "base.css").read_text(
+        encoding="utf-8"
+    )
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert "--button-primary-bg: #494641;" in base_css
+    assert "--button-primary-bg: #d9d0c4;" in base_css
+    assert "--button-secondary-bg: #232629;" in base_css
+    assert "--button-secondary-bg: #f7f1e7;" in base_css
+    assert "background: var(--button-primary-bg);" in components_css
+    assert "background: var(--button-secondary-bg);" in components_css
+
+
+def test_side_rails_use_transition_based_collapse_rules() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".sidebar > * {" in layout_css
+    assert ".sidebar.collapsed > * {" in layout_css
+    assert ".right-rail > * {" in layout_css
+    assert ".right-rail.collapsed > * {" in layout_css
+    assert ".right-rail-resizer.hidden {" in layout_css
+    assert "body.is-resizing-rails .sidebar," in layout_css
+    assert (
+        "display: none;"
+        not in layout_css[
+            layout_css.index(".right-rail-resizer.hidden {") : layout_css.index(
+                "}", layout_css.index(".right-rail-resizer.hidden {")
+            )
+        ]
+    )

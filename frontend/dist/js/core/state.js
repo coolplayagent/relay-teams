@@ -39,17 +39,3 @@ export const els = {
     rightRail: document.getElementById('right-rail'),
     rightRailResizer: document.getElementById('right-rail-resizer'),
 };
-
-// Configure Marked.js for Markdown parsing
-marked.setOptions({
-    highlight: function (code, lang) {
-        if (lang && window.hljs && window.hljs.getLanguage(lang)) {
-            return window.hljs.highlight(code, {
-                language: lang
-            }).value;
-        }
-
-        return window.hljs ? window.hljs.highlightAuto(code).value : code;
-    },
-    breaks: true
-});

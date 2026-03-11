@@ -42,6 +42,15 @@ console.log(JSON.stringify({
     assert "settings-content-stack" in modal_html
     assert "settings-model-stack" in modal_html
     assert "status-stack" in modal_html
+    assert "settings-tab-desc" not in modal_html
+    assert (
+        "Runtime configuration for models, notifications, and extensions."
+        not in modal_html
+    )
+    assert "Providers, endpoints, sampling" not in modal_html
+    assert "Browser and toast delivery rules" not in modal_html
+    assert "Loaded servers and reload actions" not in modal_html
+    assert "Registry state and refresh" not in modal_html
     assert "Each profile is saved server-side" not in modal_html
     assert (
         "Shows the server names currently loaded into the runtime registry."
@@ -62,6 +71,79 @@ console.log(JSON.stringify({
         "mcp": 0,
         "skills": 0,
     }
+
+
+def test_settings_panel_actions_use_primary_buttons_for_add_and_reload(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings();
+
+const tabs = document.querySelectorAll(".settings-tab");
+const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
+const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
+
+const modelActions = document.getElementById("settings-panel-actions").innerHTML;
+await mcpTab.onclick();
+const mcpActions = document.getElementById("settings-panel-actions").innerHTML;
+await skillsTab.onclick();
+const skillsActions = document.getElementById("settings-panel-actions").innerHTML;
+
+console.log(JSON.stringify({
+    modelActions,
+    mcpActions,
+    skillsActions,
+}));
+""".strip(),
+    )
+
+    assert 'class="primary-btn section-action-btn" id="add-profile-btn"' in cast(
+        str, payload["modelActions"]
+    )
+    assert 'class="primary-btn section-action-btn" id="reload-mcp-btn"' in cast(
+        str, payload["mcpActions"]
+    )
+    assert 'class="primary-btn section-action-btn" id="reload-skills-btn"' in cast(
+        str, payload["skillsActions"]
+    )
+
+
+def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+    start = components_css.index(".settings-content-stack {")
+    end = components_css.index(".settings-model-stack {", start)
+    stack_rule = components_css[start:end]
+
+    assert ".settings-content-stack {" in stack_rule
+    assert "border-top: 1px solid var(--settings-divider);" not in stack_rule
+
+
+def test_model_profile_editor_labels_max_output_tokens(tmp_path: Path) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings();
+
+console.log(JSON.stringify({
+    modalHtml: document.getElementById("settings-modal").innerHTML,
+}));
+""".strip(),
+    )
+
+    modal_html = cast(str, payload["modalHtml"])
+    assert "Max Output Tokens" in modal_html
+    assert "Max Tokens</label>" not in modal_html
 
 
 def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:

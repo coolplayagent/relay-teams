@@ -3,6 +3,7 @@
  * Notification settings panel bindings.
  */
 import { fetchNotificationConfig, saveNotificationConfig } from '../../core/api.js';
+import { showToast } from '../../utils/feedback.js';
 import { sysLog } from '../../utils/logger.js';
 
 const NOTIFICATION_TYPES = [
@@ -22,8 +23,18 @@ export function bindNotificationSettingsHandlers() {
             try {
                 const config = collectNotificationConfigFromPanel();
                 await saveNotificationConfig(config);
+                showToast({
+                    title: 'Notifications Saved',
+                    message: 'Notification settings saved.',
+                    tone: 'success',
+                });
                 sysLog('Notification settings saved.');
             } catch (e) {
+                showToast({
+                    title: 'Save Failed',
+                    message: `Failed to save notification settings: ${e.message}`,
+                    tone: 'danger',
+                });
                 sysLog(`Failed to save notification settings: ${e.message}`, 'log-error');
             }
         };

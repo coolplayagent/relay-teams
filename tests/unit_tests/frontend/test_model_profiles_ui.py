@@ -17,10 +17,10 @@ def test_saving_model_profile_restores_profile_list_visibility(
         runner_source="""
 import { bindModelProfileHandlers } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 bindModelProfileHandlers();
 
 document.getElementById("add-profile-btn").onclick();
@@ -35,7 +35,7 @@ document.getElementById("profile-max-tokens").value = "512";
 await document.getElementById("save-profile-btn").onclick();
 
 console.log(JSON.stringify({
-    alerts,
+    notifications,
     listDisplay: document.getElementById("profiles-list").style.display,
     editorDisplay: document.getElementById("profile-editor").style.display,
     addButtonDisplay: document.getElementById("add-profile-btn").style.display,
@@ -45,7 +45,14 @@ console.log(JSON.stringify({
     )
 
     rendered_html = cast(str, payload["renderedHtml"])
-    assert payload["alerts"] == ["Profile saved and reloaded!"]
+    notifications = cast(list[JsonObject], payload["notifications"])
+    assert notifications == [
+        {
+            "title": "Profile Saved",
+            "message": "Profile saved and reloaded.",
+            "tone": "success",
+        }
+    ]
     assert payload["listDisplay"] == "block"
     assert payload["editorDisplay"] == "none"
     assert payload["addButtonDisplay"] == "block"
@@ -58,10 +65,10 @@ def test_draft_probe_updates_inline_status_and_payload(tmp_path: Path) -> None:
         runner_source="""
 import { bindModelProfileHandlers } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 bindModelProfileHandlers();
 
 document.getElementById("add-profile-btn").onclick();
@@ -75,7 +82,7 @@ document.getElementById("profile-max-tokens").value = "256";
 await document.getElementById("test-profile-btn").onclick();
 
 console.log(JSON.stringify({
-    alerts,
+    notifications,
     testButtonText: document.getElementById("test-profile-btn").textContent,
     probeStatusText: document.getElementById("profile-probe-status").textContent,
     probeStatusDisplay: document.getElementById("profile-probe-status").style.display,
@@ -87,7 +94,7 @@ console.log(JSON.stringify({
     probe_payload = cast(JsonObject, payload["probePayload"])
     probe_override = cast(JsonObject, probe_payload["override"])
     probe_status_text = cast(str, payload["probeStatusText"])
-    assert payload["alerts"] == []
+    assert payload["notifications"] == []
     assert payload["testButtonText"] == "Test Connection"
     assert payload["probeStatusDisplay"] == "block"
     assert "Connected in 42ms" in probe_status_text
@@ -106,10 +113,10 @@ def test_edit_profile_preserves_existing_api_key_when_left_blank(
         runner_source="""
 import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 bindModelProfileHandlers();
 await loadModelProfilesPanel();
 
@@ -119,7 +126,7 @@ document.getElementById("profile-top-p").value = "0.95";
 await document.getElementById("save-profile-btn").onclick();
 
 console.log(JSON.stringify({
-    alerts,
+    notifications,
     apiKeyPlaceholder: document.getElementById("profile-api-key").placeholder,
     savedProfile: globalThis.__savedProfile,
 }));
@@ -128,7 +135,14 @@ console.log(JSON.stringify({
 
     saved_profile = cast(JsonObject, payload["savedProfile"])
     saved_profile_body = cast(JsonObject, saved_profile["profile"])
-    assert payload["alerts"] == ["Profile saved and reloaded!"]
+    notifications = cast(list[JsonObject], payload["notifications"])
+    assert notifications == [
+        {
+            "title": "Profile Saved",
+            "message": "Profile saved and reloaded.",
+            "tone": "success",
+        }
+    ]
     assert payload["apiKeyPlaceholder"] == "Leave blank to keep current API key"
     assert saved_profile["name"] == "default"
     assert "api_key" not in saved_profile_body
@@ -141,10 +155,10 @@ def test_edit_profile_allows_renaming_and_sends_source_name(tmp_path: Path) -> N
         runner_source="""
 import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 bindModelProfileHandlers();
 await loadModelProfilesPanel();
 
@@ -173,10 +187,10 @@ def test_saved_profile_probe_uses_profile_connect_timeout(tmp_path: Path) -> Non
         runner_source="""
 import { loadModelProfilesPanel } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 await loadModelProfilesPanel();
 
 await document.getElementById("profiles-list").querySelectorAll(".profile-card-test-btn")[0].onclick();
@@ -198,10 +212,10 @@ def test_model_profile_cards_render_inline_probe_region(tmp_path: Path) -> None:
         runner_source="""
 import { loadModelProfilesPanel } from "./modelProfiles.mjs";
 
-const alerts = [];
+const notifications = [];
 
 const elements = createElements();
-installGlobals(elements, alerts);
+installGlobals(elements, notifications);
 await loadModelProfilesPanel();
 
 console.log(JSON.stringify({
@@ -213,6 +227,52 @@ console.log(JSON.stringify({
     rendered_html = cast(str, payload["renderedHtml"])
     assert "profile-card-inline-status" in rendered_html
     assert "profile-card-footer" not in rendered_html
+
+
+def test_deleting_profile_uses_custom_confirm_and_success_notification(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+await document.getElementById("profiles-list").querySelectorAll(".delete-profile-btn")[0].onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    confirms: globalThis.__feedbackConfirms,
+    deletedProfileName: globalThis.__deletedProfileName,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[JsonObject], payload["notifications"])
+    confirms = cast(list[JsonObject], payload["confirms"])
+    assert payload["deletedProfileName"] == "default"
+    assert confirms == [
+        {
+            "title": "Delete Profile",
+            "message": 'Delete profile "default"?',
+            "tone": "warning",
+            "confirmLabel": "Delete",
+            "cancelLabel": "Cancel",
+        }
+    ]
+    assert notifications == [
+        {
+            "title": "Profile Deleted",
+            "message": "Profile deleted and reloaded.",
+            "tone": "success",
+        }
+    ]
 
 
 def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -229,6 +289,7 @@ def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, 
 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
+    mock_feedback_path = tmp_path / "mockFeedback.mjs"
     module_under_test_path = tmp_path / "modelProfiles.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -278,9 +339,9 @@ export async function reloadModelConfig() {
     globalThis.__reloadCalled = true;
 }
 
-    export async function deleteModelProfile() {
-        throw new Error("deleteModelProfile should not be called in this test");
-    }
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -299,11 +360,25 @@ export function logError() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_feedback_path.write_text(
+        """
+export function showToast(payload) {
+    globalThis.__feedbackNotifications.push(payload);
+}
+
+export async function showConfirmDialog(payload) {
+    globalThis.__feedbackConfirms.push(payload);
+    return true;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
+        .replace("../../utils/feedback.js", "./mockFeedback.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -384,7 +459,7 @@ function createElements() {{
     ]);
 }}
 
-function installGlobals(elements, alerts) {{
+function installGlobals(elements, notifications) {{
     function collectDocumentMatches(selector) {{
         if (selector !== ".profile-card") {{
             return [];
@@ -429,12 +504,8 @@ function installGlobals(elements, alerts) {{
             return collectDocumentMatches(selector);
         }},
     }};
-
-    globalThis.alert = (message) => {{
-        alerts.push(message);
-    }};
-
-    globalThis.confirm = () => true;
+    globalThis.__feedbackNotifications = notifications;
+    globalThis.__feedbackConfirms = [];
 }}
 
 {runner_source}

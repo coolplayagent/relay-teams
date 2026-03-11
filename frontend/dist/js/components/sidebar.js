@@ -3,6 +3,7 @@
  * Handles the session list rendering and sidebar toggle interactions.
  */
 import { els } from '../utils/dom.js';
+import { showConfirmDialog } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 import { fetchSessions, startNewSession, deleteSession } from '../core/api.js';
 import { state } from '../core/state.js';
@@ -60,21 +61,29 @@ export async function loadSessions() {
             const deleteBtn = div.querySelector('.session-delete-btn');
             deleteBtn.onclick = async (e) => {
                 e.stopPropagation();
-                if (confirm(`Delete session ${s.session_id}?`)) {
-                    try {
-                        await deleteSession(s.session_id);
-                        if (s.session_id === state.currentSessionId) {
-                            const remaining = sessions.filter(sess => sess.session_id !== s.session_id);
-                            if (remaining.length > 0) {
-                                await selectSessionById(remaining[0].session_id);
-                            } else {
-                                await handleNewSessionClick(false);
-                            }
+                const shouldDelete = await showConfirmDialog({
+                    title: 'Delete Session',
+                    message: `Delete session ${s.session_id}?`,
+                    tone: 'warning',
+                    confirmLabel: 'Delete',
+                    cancelLabel: 'Cancel',
+                });
+                if (!shouldDelete) {
+                    return;
+                }
+                try {
+                    await deleteSession(s.session_id);
+                    if (s.session_id === state.currentSessionId) {
+                        const remaining = sessions.filter(sess => sess.session_id !== s.session_id);
+                        if (remaining.length > 0) {
+                            await selectSessionById(remaining[0].session_id);
+                        } else {
+                            await handleNewSessionClick(false);
                         }
-                        await loadSessions();
-                    } catch (e) {
-                        sysLog(`Error deleting session: ${e.message}`, 'log-error');
                     }
+                    await loadSessions();
+                } catch (e) {
+                    sysLog(`Error deleting session: ${e.message}`, 'log-error');
                 }
             };
 

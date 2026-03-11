@@ -18,7 +18,7 @@ import { clearRunStreamState } from '../components/messageRenderer.js';
 let pendingStopRequest = false;
 let creatingRun = false;
 
-export async function startIntentStream(promptText, sessionId, executionMode, onCompleted, options = {}) {
+export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
     creatingRun = true;
     state.activeRunId = null;
     state.isGenerating = true;
@@ -36,13 +36,12 @@ export async function startIntentStream(promptText, sessionId, executionMode, on
 
     let runId = null;
     try {
-        const run = await sendUserPrompt(sessionId, promptText, { executionMode });
+        const run = await sendUserPrompt(sessionId, promptText);
         runId = run.run_id;
         state.activeRunId = runId;
         logInfo('frontend.run.created', 'Frontend run created', {
             run_id: runId,
             session_id: sessionId,
-            execution_mode: executionMode,
         });
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
@@ -74,7 +73,7 @@ export async function startIntentStream(promptText, sessionId, executionMode, on
         }
     }
     resumeRunStream(runId, sessionId, onCompleted, {
-        reason: `start mode=${executionMode}`,
+        reason: 'start',
         makeUiBusy: false,
     });
 }

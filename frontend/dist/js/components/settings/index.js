@@ -48,24 +48,19 @@ function createModal() {
             <aside class="settings-sidebar">
                 <div class="settings-sidebar-head">
                     <h2>Settings</h2>
-                    <p>Runtime configuration for models, notifications, and extensions.</p>
                 </div>
                 <div class="settings-tabs" role="tablist" aria-label="Settings Sections">
                     <button class="settings-tab active" data-tab="model">
                         <span class="settings-tab-label">Model Profiles</span>
-                        <span class="settings-tab-desc">Providers, endpoints, sampling</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
-                        <span class="settings-tab-desc">Browser and toast delivery rules</span>
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label">MCP Config</span>
-                        <span class="settings-tab-desc">Loaded servers and reload actions</span>
                     </button>
                     <button class="settings-tab" data-tab="skills">
                         <span class="settings-tab-label">Skills</span>
-                        <span class="settings-tab-desc">Registry state and refresh</span>
                     </button>
                 </div>
             </aside>
@@ -118,7 +113,7 @@ function createModal() {
                                                 <input type="number" id="profile-top-p" value="1.0" step="0.1" min="0" max="1">
                                             </div>
                                             <div class="form-group">
-                                                <label>Max Tokens</label>
+                                                <label>Max Output Tokens</label>
                                                 <input type="number" id="profile-max-tokens" value="4096" min="1">
                                             </div>
                                             <div class="form-group">

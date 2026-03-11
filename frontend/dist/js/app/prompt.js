@@ -33,9 +33,6 @@ export async function handleSend() {
         return;
     }
 
-    const modeEl = document.getElementById('execution-mode-select');
-    const executionMode = modeEl ? modeEl.value : 'ai';
-
     els.promptInput.value = '';
     els.promptInput.style.height = 'auto';
     state.instanceRoleMap = {};
@@ -54,12 +51,11 @@ export async function handleSend() {
     }
     clearAllStreamState();
 
-    sysLog(`Sending (mode=${executionMode})`);
+    sysLog('Sending prompt');
     startSessionContinuity(state.currentSessionId);
     await startIntentStream(
         text,
         state.currentSessionId,
-        executionMode,
         async sid => hydrateSessionView(sid, { includeRounds: true, quiet: true }),
         {
             onRunCreated: (run) => {

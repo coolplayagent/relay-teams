@@ -4,6 +4,8 @@
  */
 import { els } from '../utils/dom.js';
 
+const RAIL_RESIZING_CLASS = 'is-resizing-rails';
+
 export function setupNavbarBindings() {
     _initSidebarResize();
     _initRightRailResize();
@@ -80,24 +82,38 @@ function _initSidebarResize() {
 
     if (!els.sidebarResizer) return;
     let dragging = false;
+    let dragRightRailWidth = 280;
+    let pendingClientX = null;
+    let frameHandle = 0;
+
+    const flushWidth = () => {
+        frameHandle = 0;
+        if (!dragging || pendingClientX === null || !els.sidebar || els.sidebar.classList.contains('collapsed')) {
+            return;
+        }
+        const maxWidth = window.innerWidth - dragRightRailWidth - 100;
+        const next = Math.max(180, Math.min(maxWidth, pendingClientX));
+        applySidebarWidth(next);
+    };
 
     const onMove = (e) => {
         if (!dragging || !els.sidebar || els.sidebar.classList.contains('collapsed')) return;
-        const rightRail = document.getElementById('right-rail');
-        const rightRailWidth = rightRail ? rightRail.offsetWidth : 280;
-        const maxWidth = window.innerWidth - rightRailWidth - 100;
-        const next = Math.max(180, Math.min(maxWidth, e.clientX));
-        els.sidebar.style.width = `${next}px`;
-        els.sidebar.style.setProperty('--sidebar-width', `${next}px`);
-        document.documentElement.style.setProperty('--sidebar-width', `${next}px`);
-        localStorage.setItem('agent_teams_sidebar_width', String(next));
+        pendingClientX = e.clientX;
+        if (!frameHandle) {
+            frameHandle = window.requestAnimationFrame(flushWidth);
+        }
     };
 
     const onUp = () => {
         if (!dragging) return;
         dragging = false;
+        pendingClientX = null;
+        if (frameHandle) {
+            window.cancelAnimationFrame(frameHandle);
+            frameHandle = 0;
+        }
         els.sidebarResizer.classList.remove('dragging');
-        document.body.style.userSelect = '';
+        setRailResizeDragging(false);
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
     };
@@ -105,8 +121,9 @@ function _initSidebarResize() {
     els.sidebarResizer.addEventListener('mousedown', (e) => {
         if (els.sidebar.classList.contains('collapsed')) return;
         dragging = true;
+        dragRightRailWidth = getRailWidth(document.getElementById('right-rail'), 280);
         els.sidebarResizer.classList.add('dragging');
-        document.body.style.userSelect = 'none';
+        setRailResizeDragging(true);
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         e.preventDefault();
@@ -131,36 +148,86 @@ function _initRightRailResize() {
     document.documentElement.style.setProperty('--right-rail-width', `${initialWidth}px`);
 
     let dragging = false;
+    let dragSidebarWidth = 280;
+    let pendingClientX = null;
+    let frameHandle = 0;
+
+    const flushWidth = () => {
+        frameHandle = 0;
+        if (!dragging || pendingClientX === null) {
+            return;
+        }
+        const windowWidth = window.innerWidth;
+        const minWidth = 180;
+        const maxWidth = windowWidth - dragSidebarWidth - 100;
+        const next = Math.max(minWidth, Math.min(maxWidth, windowWidth - pendingClientX));
+        applyRightRailWidth(rightRail, next);
+    };
 
     const onMove = (e) => {
         if (!dragging) return;
-        const sidebar = document.querySelector('.sidebar');
-        const sidebarWidth = parseInt(sidebar?.style?.width) || 280;
-        const windowWidth = window.innerWidth;
-        const minWidth = 180;
-        const maxWidth = windowWidth - sidebarWidth - 100;
-        const next = Math.max(minWidth, Math.min(maxWidth, windowWidth - e.clientX));
-        rightRail.style.width = `${next}px`;
-        rightRail.style.setProperty('--right-rail-width', `${next}px`);
-        document.documentElement.style.setProperty('--right-rail-width', `${next}px`);
-        localStorage.setItem('agent_teams_right_rail_width', String(next));
+        pendingClientX = e.clientX;
+        if (!frameHandle) {
+            frameHandle = window.requestAnimationFrame(flushWidth);
+        }
     };
 
     const onUp = () => {
         if (!dragging) return;
         dragging = false;
+        pendingClientX = null;
+        if (frameHandle) {
+            window.cancelAnimationFrame(frameHandle);
+            frameHandle = 0;
+        }
         rightRailResizer.classList.remove('dragging');
-        document.body.style.userSelect = '';
+        setRailResizeDragging(false);
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
     };
 
     rightRailResizer.addEventListener('mousedown', (e) => {
         dragging = true;
+        dragSidebarWidth = getRailWidth(document.querySelector('.sidebar'), 280);
         rightRailResizer.classList.add('dragging');
-        document.body.style.userSelect = 'none';
+        setRailResizeDragging(true);
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         e.preventDefault();
     });
+}
+
+function applySidebarWidth(width) {
+    if (!els.sidebar) return;
+    const px = `${width}px`;
+    els.sidebar.style.width = px;
+    els.sidebar.style.setProperty('--sidebar-width', px);
+    document.documentElement.style.setProperty('--sidebar-width', px);
+    localStorage.setItem('agent_teams_sidebar_width', String(width));
+}
+
+function applyRightRailWidth(rightRail, width) {
+    const px = `${width}px`;
+    rightRail.style.width = px;
+    rightRail.style.setProperty('--right-rail-width', px);
+    document.documentElement.style.setProperty('--right-rail-width', px);
+    localStorage.setItem('agent_teams_right_rail_width', String(width));
+}
+
+function getRailWidth(element, fallback) {
+    if (!element) return fallback;
+    const inlineWidth = Number.parseInt(String(element.style.width || ''), 10);
+    if (Number.isFinite(inlineWidth) && inlineWidth >= 0) {
+        return inlineWidth;
+    }
+    const cssWidth = Number.parseInt(getComputedStyle(element).width, 10);
+    if (Number.isFinite(cssWidth) && cssWidth >= 0) {
+        return cssWidth;
+    }
+    return fallback;
+}
+
+function setRailResizeDragging(isDragging) {
+    document.body.style.userSelect = isDragging ? 'none' : '';
+    document.body.classList.toggle(RAIL_RESIZING_CLASS, isDragging);
 }

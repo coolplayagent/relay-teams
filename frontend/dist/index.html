@@ -24,7 +24,6 @@
             <header class="sidebar-header">
                 <div class="sidebar-brand">
                     <h2>Agent Teams</h2>
-                    <p>Sessions</p>
                 </div>
                 <div class="sidebar-actions">
                     <button id="new-btn" class="primary-btn">
@@ -65,7 +64,6 @@
                     </button>
                     <div class="workspace-heading">
                         <div class="workspace-title">Workspace</div>
-                        <div class="workspace-subtitle">Coordinator output and run history</div>
                     </div>
                 </div>
                 <div class="topbar-section topbar-section-right">
@@ -91,12 +89,7 @@
             <!-- Chat Area -->
             <div class="chat-container">
                 <!-- Coordinator chat messages -->
-                <div class="chat-scroll" id="chat-messages">
-                    <div class="system-intro">
-                        <div class="system-intro-title">No session selected</div>
-                        <p>Start a session from the left sidebar or open an existing one.</p>
-                    </div>
-                </div>
+                <div class="chat-scroll" id="chat-messages"></div>
 
                 <!-- Input Area -->
                 <div class="input-container">
@@ -120,15 +113,6 @@
                         </div>
                     </form>
                     <div class="input-controls">
-                        <div class="input-controls-left">
-                            <div class="mode-selector-group">
-                                <label for="execution-mode-select" class="mode-label">Execution mode</label>
-                                <select id="execution-mode-select" class="mode-select">
-                                    <option value="ai">AI orchestration</option>
-                                    <option value="manual">Manual</option>
-                                </select>
-                            </div>
-                        </div>
                         <div class="sub-text">Enter to send · Shift+Enter for new line</div>
                     </div>
                 </div>

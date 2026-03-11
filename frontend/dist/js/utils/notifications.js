@@ -1,25 +1,17 @@
 /**
  * utils/notifications.js
- * Browser notification helpers.
+ * Unified in-app notification helpers.
  */
+import { initUiFeedback, showToast } from './feedback.js';
 
 const notifiedApprovalToolCalls = new Set();
 const notifiedKeys = new Set();
-let permissionRequested = false;
-let inAppToastContainer = null;
 let titleFlashTimer = null;
 let baseDocumentTitle = '';
 let titleFlashBound = false;
 
 export function primeNotificationPermission() {
-    if (typeof window === 'undefined' || typeof Notification === 'undefined') return;
-    if (Notification.permission !== 'default') return;
-    if (permissionRequested) return;
-
-    permissionRequested = true;
-    void Notification.requestPermission().catch(() => {
-        // Ignore browser-level notification permission errors.
-    });
+    initUiFeedback();
 }
 
 export function notifyToolApprovalRequested(payload = {}) {
@@ -39,9 +31,9 @@ export function notifyFromRequest(payload = {}) {
     const notificationType = String(payload?.notification_type || '');
     const toolCallId = String(payload?.context?.tool_call_id || payload?.tool_call_id || '');
     if (
-        notificationType === 'tool_approval_requested' &&
-        toolCallId &&
-        notifiedApprovalToolCalls.has(toolCallId)
+        notificationType === 'tool_approval_requested'
+        && toolCallId
+        && notifiedApprovalToolCalls.has(toolCallId)
     ) {
         return false;
     }
@@ -63,16 +55,16 @@ export function notifyFromRequest(payload = {}) {
 
     startTitleFlash(`[${title}]`);
 
-    let shown = false;
-    if (channels.includes('browser') && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        showNotification(title, body, toolCallId || dedupeKey);
-        shown = true;
+    if (channels.includes('browser') || channels.includes('toast')) {
+        showToast({
+            title,
+            message: body,
+            tone: notificationType === 'tool_approval_requested' ? 'warning' : 'info',
+            durationMs: channels.includes('browser') ? 5200 : 4000,
+        });
+        return true;
     }
-    if (channels.includes('toast')) {
-        showInAppToast(body);
-        shown = true;
-    }
-    return shown;
+    return false;
 }
 
 function buildApprovalBody(payload = {}) {
@@ -81,60 +73,6 @@ function buildApprovalBody(payload = {}) {
     return roleId
         ? `${roleId} requests approval for ${toolName}.`
         : `A tool call (${toolName}) is waiting for your approval.`;
-}
-
-function showNotification(title, body, toolCallId) {
-    try {
-        const options = {
-            body,
-            requireInteraction: true,
-            tag: toolCallId || `approval-${Date.now()}`,
-        };
-        const notification = new Notification(title, options);
-        notification.onclick = () => {
-            try {
-                window.focus();
-            } catch (_) {
-                // Ignore focus errors.
-            }
-            notification.close();
-        };
-    } catch (_) {
-        // Ignore browser-level notification errors.
-    }
-}
-
-function showInAppToast(message) {
-    const body = document.body;
-    if (!body) return;
-
-    if (!inAppToastContainer) {
-        inAppToastContainer = document.createElement('div');
-        inAppToastContainer.style.position = 'fixed';
-        inAppToastContainer.style.right = '12px';
-        inAppToastContainer.style.bottom = '12px';
-        inAppToastContainer.style.display = 'flex';
-        inAppToastContainer.style.flexDirection = 'column';
-        inAppToastContainer.style.gap = '8px';
-        inAppToastContainer.style.zIndex = '1200';
-        body.appendChild(inAppToastContainer);
-    }
-
-    const toast = document.createElement('div');
-    toast.textContent = message;
-    toast.style.background = 'rgba(17,24,39,0.92)';
-    toast.style.color = '#fff';
-    toast.style.border = '1px solid rgba(255,255,255,0.15)';
-    toast.style.borderRadius = '8px';
-    toast.style.padding = '10px 12px';
-    toast.style.maxWidth = '320px';
-    toast.style.fontSize = '12px';
-    toast.style.boxShadow = '0 8px 24px rgba(0,0,0,0.35)';
-
-    inAppToastContainer.appendChild(toast);
-    setTimeout(() => {
-        toast.remove();
-    }, 4000);
 }
 
 function startTitleFlash(alertTitle) {

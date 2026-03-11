@@ -171,12 +171,6 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         roundsState.activeRunId = null;
         setRoundPendingApprovals('', [], {});
         renderRoundNavigator([], selectRound);
-        container.innerHTML = `
-            <div class="system-intro">
-                <div class="intro-icon">🛸</div>
-                <div class="system-intro-title">No session selected</div>
-                <p>Start a session from the left sidebar or open an existing one.</p>
-            </div>`;
         return;
     }
 
@@ -194,14 +188,16 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         header.className = 'round-detail-header';
         header.innerHTML = `
             <div class="round-detail-topline">
-                <div class="round-detail-label">Round ${index + 1}${round.run_status === 'running' ? ' <span class="live-badge">LIVE</span>' : ''}</div>
+                <div class="round-detail-mainline">
+                    <div class="round-detail-label">Round ${index + 1}${round.run_status === 'running' ? ' <span class="live-badge">LIVE</span>' : ''}</div>
+                    <div class="round-detail-meta">
+                        <div class="round-detail-time">${time}</div>
+                        <div class="round-detail-token-host"></div>
+                    </div>
+                </div>
                 <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
             </div>
-            <div class="round-detail-time">${time}</div>
-            <div class="round-detail-intent">
-                <span class="intent-label">Intent:</span>
-                <span class="intent-text">${esc(round.intent || 'No intent')}</span>
-            </div>`;
+            <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
         section.appendChild(header);
 
         const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
@@ -244,7 +240,10 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
                     <span class="token-out">Out ${fmt(usage.total_output_tokens)}</span>
                     ${usage.total_tool_calls > 0 ? `<span class="token-tools">Tools ${usage.total_tool_calls}</span>` : ''}
                 `;
-                headerEl.appendChild(pill);
+                const tokenHost = headerEl.querySelector('.round-detail-token-host');
+                if (tokenHost) {
+                    tokenHost.appendChild(pill);
+                }
             });
         }
     });

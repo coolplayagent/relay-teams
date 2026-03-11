@@ -7,6 +7,7 @@ import {
     reloadMcpConfig,
     reloadSkillsConfig,
 } from '../../core/api.js';
+import { showToast } from '../../utils/feedback.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 export function bindSystemStatusHandlers() {
@@ -62,20 +63,20 @@ export async function loadSkillsStatusPanel() {
 async function handleReloadMcp() {
     try {
         await reloadMcpConfig();
-        alert('MCP config reloaded!');
+        showToast({ title: 'MCP Reloaded', message: 'MCP config reloaded.', tone: 'success' });
         await loadMcpStatusPanel();
     } catch (e) {
-        alert(`Failed to reload: ${e.message}`);
+        showToast({ title: 'Reload Failed', message: `Failed to reload: ${e.message}`, tone: 'danger' });
     }
 }
 
 async function handleReloadSkills() {
     try {
         await reloadSkillsConfig();
-        alert('Skills reloaded!');
+        showToast({ title: 'Skills Reloaded', message: 'Skills reloaded.', tone: 'success' });
         await loadSkillsStatusPanel();
     } catch (e) {
-        alert(`Failed to reload: ${e.message}`);
+        showToast({ title: 'Reload Failed', message: `Failed to reload: ${e.message}`, tone: 'danger' });
     }
 }
 

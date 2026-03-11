@@ -9,6 +9,7 @@ import {
     reloadModelConfig,
     saveModelProfile,
 } from '../../core/api.js';
+import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let profiles = {};
@@ -146,12 +147,12 @@ async function handleSaveProfile() {
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
 
     if (!name) {
-        alert('Profile name is required');
+        showToast({ title: 'Profile Required', message: 'Profile name is required.', tone: 'warning' });
         return;
     }
 
     if (!editingProfile && !apiKey) {
-        alert('API key is required for a new profile');
+        showToast({ title: 'API Key Required', message: 'API key is required for a new profile.', tone: 'warning' });
         return;
     }
 
@@ -176,10 +177,10 @@ async function handleSaveProfile() {
         await reloadModelConfig();
         draftProbeState = null;
         renderDraftProbeState();
-        alert('Profile saved and reloaded!');
+        showToast({ title: 'Profile Saved', message: 'Profile saved and reloaded.', tone: 'success' });
         await loadModelProfilesPanel();
     } catch (e) {
-        alert(`Failed to save: ${e.message}`);
+        showToast({ title: 'Save Failed', message: `Failed to save: ${e.message}`, tone: 'danger' });
     }
 }
 
@@ -236,7 +237,14 @@ async function handleTestDraftProfile() {
 }
 
 async function handleDeleteProfile(name) {
-    if (!confirm(`Are you sure you want to delete profile "${name}"?`)) {
+    const shouldDelete = await showConfirmDialog({
+        title: 'Delete Profile',
+        message: `Delete profile "${name}"?`,
+        tone: 'warning',
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+    });
+    if (!shouldDelete) {
         return;
     }
 
@@ -244,10 +252,10 @@ async function handleDeleteProfile(name) {
         await deleteModelProfile(name);
         await reloadModelConfig();
         delete profileProbeStates[name];
-        alert('Profile deleted and reloaded!');
+        showToast({ title: 'Profile Deleted', message: 'Profile deleted and reloaded.', tone: 'success' });
         await loadModelProfilesPanel();
     } catch (e) {
-        alert(`Failed to delete: ${e.message}`);
+        showToast({ title: 'Delete Failed', message: `Failed to delete: ${e.message}`, tone: 'danger' });
     }
 }
 
@@ -404,7 +412,7 @@ function renderProfileCard(name, profile, index) {
                         <strong>${escapeHtml(String(profile.top_p ?? '-'))}</strong>
                     </div>
                     <div class="profile-card-meta-row">
-                        <span>Max Tokens</span>
+                        <span>Max Output Tokens</span>
                         <strong>${escapeHtml(String(profile.max_tokens ?? '-'))}</strong>
                     </div>
                     <div class="profile-card-meta-row">

@@ -149,6 +149,28 @@
     font-size: 0.75rem;
 }
 
+.sessions-list,
+.chat-scroll,
+.logs-scroll,
+.agent-panel-scroll,
+.panel-inject-input,
+.round-nav-list,
+.rail-inspector-card .inspector-canvas {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.sessions-list::-webkit-scrollbar,
+.chat-scroll::-webkit-scrollbar,
+.logs-scroll::-webkit-scrollbar,
+.agent-panel-scroll::-webkit-scrollbar,
+.panel-inject-input::-webkit-scrollbar,
+.round-nav-list::-webkit-scrollbar,
+.rail-inspector-card .inspector-canvas::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
 
 /* 鈹€鈹€鈹€ Agent Drawer (right side subagent panel) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ */
 
@@ -367,8 +389,28 @@
     overflow: hidden;
 }
 
+.sidebar > * {
+    transition: opacity 0.14s ease, transform 0.18s ease;
+}
+
+.sidebar.collapsed > * {
+    opacity: 0;
+    transform: translateX(-6px);
+    pointer-events: none;
+}
+
 .sidebar.collapsed+.sidebar-resizer {
-    display: none !important;
+    opacity: 0;
+    pointer-events: none;
+}
+
+body.is-resizing-rails .sidebar,
+body.is-resizing-rails .right-rail,
+body.is-resizing-rails .sidebar > *,
+body.is-resizing-rails .right-rail > *,
+body.is-resizing-rails .sidebar-resizer,
+body.is-resizing-rails .right-rail-resizer {
+    transition: none !important;
 }
 
 .sidebar-resizer {
@@ -378,6 +420,7 @@
     flex-shrink: 0;
     position: relative;
     z-index: 50;
+    transition: opacity 0.14s ease;
 }
 
 .sidebar-resizer:hover::after,
@@ -399,6 +442,7 @@
     flex-shrink: 0;
     position: relative;
     z-index: 50;
+    transition: opacity 0.14s ease;
 }
 
 .right-rail-resizer:hover::after,
@@ -442,7 +486,8 @@
 }
 
 .right-rail-resizer.hidden {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .right-rail {
@@ -454,6 +499,7 @@
     background: var(--bg-surface);
     flex: 0 0 var(--right-rail-width, 280px);
     overflow: hidden;
+    transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
 }
 
 .right-rail.collapsed {
@@ -461,6 +507,16 @@
     min-width: 0 !important;
     flex-basis: 0 !important;
     border-left: none !important;
+}
+
+.right-rail > * {
+    transition: opacity 0.14s ease, transform 0.18s ease;
+}
+
+.right-rail.collapsed > * {
+    opacity: 0;
+    transform: translateX(6px);
+    pointer-events: none;
 }
 
 .rail-subagent-card {
@@ -707,21 +763,21 @@
     flex: 0 0 var(--sidebar-width, 248px);
     background: var(--bg-surface);
     border-right: 1px solid var(--border-color);
-    transition: width 0.16s ease;
+    transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
 }
 
 .sidebar-header {
-    padding: 1rem;
+    padding: 0.95rem 1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.875rem;
+    gap: 0.7rem;
     background: var(--bg-surface);
 }
 
 .sidebar-brand {
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 0;
 }
 
 .sidebar-brand h2 {
@@ -729,12 +785,6 @@
     font-size: 1rem;
     font-weight: 600;
     letter-spacing: 0;
-}
-
-.sidebar-brand p {
-    margin: 0;
-    font-size: 0.75rem;
-    color: var(--text-secondary);
 }
 
 .sidebar-actions {
@@ -775,20 +825,13 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    gap: 0;
 }
 
 .workspace-title {
     font-size: 0.875rem;
     font-weight: 600;
     color: var(--text-primary);
-}
-
-.workspace-subtitle {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .chat-container {
@@ -830,6 +873,7 @@
     flex: 0 0 var(--right-rail-width, 320px);
     background: var(--bg-surface);
     border-left: 1px solid var(--border-color);
+    transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
 }
 
 .subagent-rail-header,
@@ -890,12 +934,6 @@
     background: rgba(145, 166, 152, 0.75);
 }
 
-@media (max-width: 1100px) {
-    .workspace-subtitle {
-        display: none;
-    }
-}
-
 @media (max-width: 960px) {
     .chat-scroll {
         padding: 1rem;
@@ -941,8 +979,6 @@ body.light-theme #chat-messages {
     background: var(--bg-base);
 }
 
-body.light-theme .sidebar-brand p,
-body.light-theme .workspace-subtitle,
 body.light-theme .subagent-status-summary,
 body.light-theme .subagent-meta-empty,
 body.light-theme .subagent-meta-secondary,

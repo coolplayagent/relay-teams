@@ -6,7 +6,7 @@ import { initSettings, openSettings } from '../components/settings.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
 import { handleNewSessionClick, loadSessions } from '../components/sidebar.js';
 import { setupNavbarBindings } from '../components/navbar.js';
-import { primeNotificationPermission } from '../utils/notifications.js';
+import { initUiFeedback } from '../utils/feedback.js';
 import { resumeRecoverableRun } from './recovery.js';
 import { state } from '../core/state.js';
 import { requestStopCurrentRun } from '../core/stream.js';
@@ -18,12 +18,6 @@ import {
 } from '../utils/logger.js';
 
 export function setupEventBindings(handleSend) {
-    const onFirstGesture = () => {
-        primeNotificationPermission();
-    };
-    document.addEventListener('pointerdown', onFirstGesture, { once: true, passive: true });
-    document.addEventListener('keydown', onFirstGesture, { once: true });
-
     els.promptInput.addEventListener('input', () => {
         els.promptInput.style.height = 'auto';
         els.promptInput.style.height = `${els.promptInput.scrollHeight}px`;
@@ -75,6 +69,7 @@ export async function initApp(selectSession, handleSend) {
     installGlobalErrorLogging();
     logInfo('frontend.bootstrap.started', 'Frontend bootstrap started');
     sysLog('System Initialized');
+    initUiFeedback();
     setupNavbarBindings();
     initializeSubagentRail();
     setupEventBindings(handleSend);
