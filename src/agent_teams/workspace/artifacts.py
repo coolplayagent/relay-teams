@@ -41,6 +41,12 @@ class WorkspaceArtifacts(BaseModel):
             raise ValueError(f"Role does not have previous stage doc: {role_id}")
         return self.stage_docs_dir(run_id) / file_name
 
+    def daily_memory_dir(self, kind: str) -> Path:
+        return self.locations.workspace_dir / "memory" / "daily" / kind
+
+    def daily_memory_path(self, *, memory_date: str, kind: str) -> Path:
+        return self.daily_memory_dir(kind) / f"{memory_date}.md"
+
     def write_stage_doc_once(self, *, path: Path, content: str) -> None:
         if path.exists():
             raise ValueError(f"stage document already written: {path}")

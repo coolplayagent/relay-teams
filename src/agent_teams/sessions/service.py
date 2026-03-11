@@ -6,6 +6,7 @@ from typing import Callable, cast
 
 from agent_teams.agents.models import AgentRuntimeRecord
 from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.reflection.service import ReflectionService
 from agent_teams.sessions.rounds_projection import (
     approvals_to_projection,
     build_session_rounds,
@@ -57,6 +58,7 @@ class SessionService:
         event_log: EventLog | None = None,
         shared_store: SharedStateRepository | None = None,
         workspace_manager: WorkspaceManager | None = None,
+        reflection_service: ReflectionService | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._task_repo = task_repo
@@ -71,6 +73,7 @@ class SessionService:
         self._event_log = event_log
         self._shared_store = shared_store
         self._workspace_manager = workspace_manager
+        self._reflection_service = reflection_service
 
     def create_session(
         self,
@@ -91,6 +94,7 @@ class SessionService:
         agent_records = self._agent_repo.list_by_session(session_id)
         task_ids = [record.envelope.task_id for record in task_records]
         instance_ids = [record.instance_id for record in agent_records]
+        role_ids = sorted({record.role_id for record in agent_records})
         role_scope_ids = sorted(
             {f"{record.session_id}:{record.role_id}" for record in agent_records}
             | {
@@ -143,6 +147,11 @@ class SessionService:
                 workspace_ids=workspace_ids,
             )
         self._approval_ticket_repo.delete_by_session(session_id)
+        if self._reflection_service is not None:
+            self._reflection_service.delete_session_artifacts(
+                session_id=session_id,
+                role_ids=role_ids,
+            )
         self._workflow_graph_repo.delete_by_session(session_id)
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)

@@ -15,6 +15,7 @@ from agent_teams.providers.llm import (
 )
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.registry import create_default_provider_registry
+from agent_teams.reflection.service import ReflectionService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager
@@ -138,6 +139,7 @@ def create_task_execution_service(
     workflow_registry: WorkflowRegistry,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
+    reflection_service: ReflectionService | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -156,4 +158,5 @@ def create_task_execution_service(
         workflow_registry=workflow_registry,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
+        reflection_service=reflection_service,
     )

@@ -11,6 +11,14 @@ from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
+from agent_teams.reflection.config_manager import ReflectionConfigManager
+from agent_teams.reflection.models import DailyReflectionResult, LongTermMemoryDocument
+from agent_teams.reflection.repository import ReflectionJobRepository
+from agent_teams.reflection.service import (
+    ConsolidationPromptInput,
+    ReflectionPromptInput,
+    ReflectionService,
+)
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager
@@ -516,3 +524,129 @@ async def test_execute_coordinator_receives_workflow_recommendation(
         in provider.system_prompts[0]
     )
     assert "Do not derive task order from role metadata." in provider.system_prompts[0]
+
+
+class _FakeReflectionService:
+    def __init__(self, memory_text: str = "") -> None:
+        self.memory_text = memory_text
+        self.enqueued: list[dict[str, str]] = []
+
+    async def generate_daily_reflection(
+        self,
+        prompt_input: ReflectionPromptInput,
+    ) -> DailyReflectionResult:
+        raise AssertionError(f"unexpected daily reflection call: {prompt_input}")
+
+    async def consolidate_long_term_memory(
+        self,
+        prompt_input: ConsolidationPromptInput,
+    ) -> LongTermMemoryDocument:
+        raise AssertionError(f"unexpected long-term consolidation call: {prompt_input}")
+
+    def build_injected_memory(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        workspace_id: str,
+    ) -> str:
+        _ = (session_id, role_id, workspace_id)
+        return self.memory_text
+
+    def enqueue_daily_reflection(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+    ) -> None:
+        self.enqueued.append(
+            {
+                "session_id": session_id,
+                "run_id": run_id,
+                "task_id": task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "workspace_id": workspace_id,
+                "conversation_id": conversation_id,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) -> None:
+    provider = _CapturingProvider()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    config_dir = project_root / ".agent_teams"
+    config_dir.mkdir()
+    role = RoleDefinition(
+        role_id="time",
+        name="time",
+        version="1",
+        tools=(),
+        system_prompt="You are the time role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+    db_path = tmp_path / "task_execution_service_reflection.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    instance_pool = InstancePool()
+    shared_store = SharedStateRepository(db_path)
+    reflection_service = ReflectionService(
+        config_manager=ReflectionConfigManager(config_dir=config_dir),
+        repository=ReflectionJobRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=project_root, shared_store=shared_store
+        ),
+        message_repo=message_repo,
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        model_client=_FakeReflectionService(memory_text="- Prefer concise output."),
+    )
+    reflection_service.build_injected_memory = lambda **_: "- Prefer concise output."
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        instance_pool=instance_pool,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        workflow_graph_repo=WorkflowGraphRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=project_root, shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(),
+        provider_factory=lambda _: provider,
+        reflection_service=reflection_service,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        instance_pool=instance_pool,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result == "ok"
+    assert provider.system_prompts
+    assert "## Workspace Memory" in provider.system_prompts[0]
+    assert "Prefer concise output." in provider.system_prompts[0]
+    jobs = reflection_service.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].role_id == "time"
+    assert jobs[0].instance_id == instance_id

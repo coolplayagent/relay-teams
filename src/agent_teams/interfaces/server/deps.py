@@ -8,6 +8,7 @@ from agent_teams.interfaces.server.config_status_service import ConfigStatusServ
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.service import McpService
 from agent_teams.notifications.settings_service import NotificationSettingsService
+from agent_teams.reflection.service import ReflectionService
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.manager import RunManager
@@ -34,6 +35,10 @@ def get_session_service(request: Request) -> SessionService:
 
 def get_workflow_service(request: Request) -> WorkflowOrchestrationService:
     return get_container(request).workflow_service
+
+
+def get_reflection_service(request: Request) -> ReflectionService:
+    return get_container(request).reflection_service
 
 
 def get_trigger_service(request: Request) -> TriggerService:

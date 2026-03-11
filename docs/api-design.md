@@ -796,3 +796,22 @@ Validation rules:
 - `depends_on` is valid in workflow definitions and custom workflow task payloads.
 - `depends_on` is invalid in role markdown front matter and should be rejected by role validation/loading.
 - The persisted workflow graph is the only source of truth for dependency execution.
+
+---
+
+## 14. Reflection APIs
+
+### `GET /reflection/jobs`
+Lists reflection jobs.
+
+### `POST /reflection/jobs/{job_id}/retry`
+Retries a failed or queued reflection job.
+
+### `GET /reflection/memory/session-roles/{session_id}/{role_id}`
+Reads role-level long-term memory content.
+
+### `GET /reflection/memory/instances/{instance_id}/daily/{date}`
+Reads instance daily memory file.
+
+Query:
+- `kind`: `raw|digest` (default `digest`)

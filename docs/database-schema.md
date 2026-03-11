@@ -291,3 +291,54 @@ Primary query keys used by repositories:
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: trigger-level retrieval across `triggers`, `trigger_events`.
 - `event_id`: trigger-event level retrieval for audit and replay preparation.
+
+---
+
+### 2.10 `reflection_jobs`
+
+```sql
+CREATE TABLE IF NOT EXISTS reflection_jobs (
+    job_id              TEXT PRIMARY KEY,
+    job_type            TEXT NOT NULL,
+    session_id          TEXT NOT NULL,
+    run_id              TEXT NOT NULL,
+    task_id             TEXT NOT NULL,
+    instance_id         TEXT NOT NULL,
+    role_id             TEXT NOT NULL,
+    workspace_id        TEXT NOT NULL,
+    conversation_id     TEXT NOT NULL,
+    memory_owner_scope  TEXT NOT NULL,
+    memory_owner_id     TEXT NOT NULL,
+    trigger_date        TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    attempt_count       INTEGER NOT NULL,
+    last_error          TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+```
+
+Purpose: persistent queue for subagent daily reflection and long-term memory consolidation.
+
+`job_type` values:
+- `daily_reflection`
+- `long_term_consolidation`
+
+`status` values:
+- `queued`
+- `running`
+- `completed`
+- `failed`
+
+---
+
+## 4. File-Based Memory Layout
+
+### 4.1 Instance daily memory
+
+- `.agent_teams/workspaces/{workspace_id}/memory/daily/raw/YYYY-MM-DD.md`
+- `.agent_teams/workspaces/{workspace_id}/memory/daily/digest/YYYY-MM-DD.md`
+
+### 4.2 Session-role long-term memory
+
+- `.agent_teams/memory/session_roles/{session_id}/{role_id}/MEMORY.md`

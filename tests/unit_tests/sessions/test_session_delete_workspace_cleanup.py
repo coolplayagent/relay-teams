@@ -7,6 +7,14 @@ import pytest
 
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.reflection.config_manager import ReflectionConfigManager
+from agent_teams.reflection.repository import ReflectionJobRepository
+from agent_teams.reflection.models import DailyReflectionResult, LongTermMemoryDocument
+from agent_teams.reflection.service import (
+    ConsolidationPromptInput,
+    ReflectionPromptInput,
+    ReflectionService,
+)
 from agent_teams.sessions.service import SessionService
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
@@ -239,3 +247,92 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     assert not subagent_workspace_dir.exists()
     with pytest.raises(KeyError):
         SessionRepository(db_path).get("session-1")
+
+
+class _NoopReflectionModelClient:
+    async def generate_daily_reflection(
+        self,
+        prompt_input: ReflectionPromptInput,
+    ) -> DailyReflectionResult:
+        raise AssertionError(f"unexpected daily reflection call: {prompt_input}")
+
+    async def consolidate_long_term_memory(
+        self,
+        prompt_input: ConsolidationPromptInput,
+    ) -> LongTermMemoryDocument:
+        raise AssertionError(f"unexpected long-term consolidation call: {prompt_input}")
+
+
+def test_delete_session_cleans_reflection_artifacts(tmp_path: Path) -> None:
+    project_root = tmp_path / "project_reflection"
+    project_root.mkdir()
+    config_dir = project_root / ".agent_teams"
+    config_dir.mkdir()
+    db_path = tmp_path / "session_cleanup_reflection.db"
+    shared_store = SharedStateRepository(db_path)
+    reflection_service = ReflectionService(
+        config_manager=ReflectionConfigManager(config_dir=config_dir),
+        repository=ReflectionJobRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=project_root, shared_store=shared_store
+        ),
+        message_repo=MessageRepository(db_path),
+        task_repo=TaskRepository(db_path),
+        agent_repo=AgentInstanceRepository(db_path),
+        model_client=_NoopReflectionModelClient(),
+    )
+    service = SessionService(
+        session_repo=SessionRepository(db_path),
+        task_repo=TaskRepository(db_path),
+        agent_repo=AgentInstanceRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        workflow_graph_repo=WorkflowGraphRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        event_log=EventLog(db_path),
+        token_usage_repo=TokenUsageRepository(db_path),
+        run_event_hub=RunEventHub(),
+        shared_store=shared_store,
+        workspace_manager=WorkspaceManager(
+            project_root=project_root, shared_store=shared_store
+        ),
+        reflection_service=reflection_service,
+    )
+    _ = service.create_session(session_id="session-1")
+    TaskRepository(db_path).create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="root-task",
+            trace_id="run-1",
+            objective="query time",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    AgentInstanceRepository(db_path).upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="time",
+        workspace_id="instance-workspace-1",
+        conversation_id="instance-conversation-1",
+        status=InstanceStatus.IDLE,
+    )
+    _ = reflection_service.enqueue_daily_reflection(
+        session_id="session-1",
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="time",
+        workspace_id="instance-workspace-1",
+        conversation_id="instance-conversation-1",
+    )
+    memory_dir = config_dir / "memory" / "session_roles" / "session-1" / "time"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("# MEMORY", encoding="utf-8")
+
+    service.delete_session("session-1")
+
+    assert reflection_service.list_jobs() == ()
+    assert not (memory_dir / "MEMORY.md").exists()

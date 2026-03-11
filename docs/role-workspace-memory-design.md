@@ -1,4 +1,4 @@
-# Role Workspace and Memory Design
+﻿# Role Workspace and Memory Design
 
 ## 1. Problem Statement
 
@@ -472,7 +472,32 @@ This sequence minimizes disruption and allows gradual migration.
 
 ---
 
-## 13. Summary
+## 13. Current Implementation Status
+
+The current codebase has already implemented these concrete pieces:
+- subagent workspace binding is instance-scoped, so each subagent run resolves its own `workspace_id` and `conversation_id`
+- shared-state memory isolation for subagents now uses instance-specific session/role scopes
+- message history continuity already uses `conversation_id`
+- reflection is implemented as an independent module under `src/agent_teams/reflection/`
+- successful non-coordinator subagent completion now enqueues asynchronous reflection jobs
+- daily memory is stored per instance workspace under `memory/daily/raw` and `memory/daily/digest`
+- long-term memory is stored per `session + role` under `.agent_teams/memory/session_roles/{session_id}/{role_id}/MEMORY.md`
+- next subagent entry injects long-term memory plus today's digest into the system prompt
+- session deletion now also removes reflection jobs and role-level long-term memory files
+
+This means the repository has moved from the earlier conceptual target into a partially realized hybrid design:
+- execution isolation is primarily instance-scoped
+- short-term file memory is instance-scoped
+- stable reusable memory is session-role scoped
+
+The detailed reflection behavior and public contracts are documented in:
+- `docs/reflection/subagent-reflection-memory-design.md`
+- `docs/reflection/reflection-api-design.md`
+- `docs/reflection/reflection-database-schema.md`
+
+---
+
+## 14. Summary
 
 The key architectural rule is:
 

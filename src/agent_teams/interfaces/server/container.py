@@ -17,6 +17,12 @@ from agent_teams.mcp.service import McpService
 from agent_teams.notifications import NotificationConfigManager, NotificationService
 from agent_teams.notifications.settings_service import NotificationSettingsService
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
+from agent_teams.reflection import (
+    PydanticAIReflectionModelClient,
+    ReflectionConfigManager,
+    ReflectionJobRepository,
+    ReflectionService,
+)
 from agent_teams.providers.llm import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
@@ -82,6 +88,9 @@ class ServerContainer:
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             project_config_dir=config_dir
         )
+        self.reflection_config_manager: ReflectionConfigManager = (
+            ReflectionConfigManager(config_dir=config_dir)
+        )
         self.role_registry: RoleRegistry = RoleLoader().load_all(
             runtime.paths.roles_dir
         )
@@ -139,6 +148,21 @@ class ServerContainer:
         self.trigger_repo: TriggerRepository = TriggerRepository(runtime.paths.db_path)
         self.trigger_service: TriggerService = TriggerService(
             trigger_repo=self.trigger_repo
+        )
+        self.reflection_repo: ReflectionJobRepository = ReflectionJobRepository(
+            runtime.paths.db_path
+        )
+        self.reflection_service: ReflectionService = ReflectionService(
+            config_manager=self.reflection_config_manager,
+            repository=self.reflection_repo,
+            workspace_manager=self.workspace_manager,
+            message_repo=self.message_repo,
+            task_repo=self.task_repo,
+            agent_repo=self.agent_repo,
+            model_client=PydanticAIReflectionModelClient(
+                llm_profiles=runtime.llm_profiles,
+                get_config=self.reflection_config_manager.get_reflection_config,
+            ),
         )
 
         self.instance_pool: InstancePool = InstancePool.from_repo(self.agent_repo)
@@ -220,6 +244,7 @@ class ServerContainer:
             event_log=self.event_log,
             shared_store=self.shared_store,
             workspace_manager=self.workspace_manager,
+            reflection_service=self.reflection_service,
         )
         self.config_status_service: ConfigStatusService = ConfigStatusService(
             get_runtime=lambda: self.runtime,
@@ -302,6 +327,7 @@ class ServerContainer:
             workflow_registry=self.workflow_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
+            reflection_service=self.reflection_service,
         )
         self.workflow_service = WorkflowOrchestrationService(
             task_repo=self.task_repo,
@@ -316,6 +342,12 @@ class ServerContainer:
             message_repo=self.message_repo,
         )
 
+    async def start(self) -> None:
+        await self.reflection_service.start()
+
+    async def stop(self) -> None:
+        await self.reflection_service.stop()
+
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
         self.meta_agent.coordinator.provider_factory = self._provider_factory
@@ -323,6 +355,7 @@ class ServerContainer:
 
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
+        self.reflection_service.replace_llm_profiles(runtime.llm_profiles)
         self._refresh_coordinator_runtime()
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:

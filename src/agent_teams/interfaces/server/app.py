@@ -13,12 +13,13 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
-from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
+from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
     logs,
     mcp,
     prompts,
+    reflection,
     roles,
     runs,
     sessions,
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(config_dir=config_dir)
     _register_signal_handlers()
     app.state.container = ServerContainer(config_dir=config_dir)
+    await app.state.container.start()
     log_event(
         logger,
         logging.INFO,
@@ -58,8 +60,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         payload={"config_dir": str(config_dir)},
     )
     yield
+    await app.state.container.stop()
     log_event(
-        logger, logging.INFO, event="app.shutdown", message="Agent Teams server stopped"
+        logger,
+        logging.INFO,
+        event="app.shutdown",
+        message="Agent Teams server stopped",
     )
     shutdown_logging()
 
@@ -79,6 +85,7 @@ app.include_router(workflows.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
+app.include_router(reflection.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(triggers.router, prefix="/api")
 
@@ -136,7 +143,9 @@ def _register_signal_handlers() -> None:
     }
 
     def _forward_to_previous_handler(
-        sig: int, frame: FrameType | None, previous_handler: SignalHandlerRef
+        sig: int,
+        frame: FrameType | None,
+        previous_handler: SignalHandlerRef,
     ) -> None:
         if previous_handler is None or previous_handler == signal.SIG_IGN:
             return
@@ -148,7 +157,7 @@ def _register_signal_handlers() -> None:
                 raise KeyboardInterrupt
             raise SystemExit(128 + sig)
 
-    def _on_signal(sig: int, _frame: FrameType | None) -> None:
+    def _on_signal(sig: int, frame: FrameType | None) -> None:
         signame = signal.Signals(sig).name
         log_event(
             logger,
@@ -158,7 +167,7 @@ def _register_signal_handlers() -> None:
             payload={"signal": signame},
         )
         previous_handler = previous_handlers.get(sig)
-        _forward_to_previous_handler(sig, _frame, previous_handler)
+        _forward_to_previous_handler(sig, frame, previous_handler)
 
     for sig in registered_signals:
         _ = signal.signal(sig, _on_signal)

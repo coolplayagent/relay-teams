@@ -7,15 +7,16 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict
 
+from agent_teams.agents.core.subagent import SubAgentRunner
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.management.instance_pool import InstancePool
-from agent_teams.agents.core.subagent import SubAgentRunner
 from agent_teams.logger import get_logger, log_event
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.reflection.service import ReflectionService
 from agent_teams.roles.models import RoleDefinition
-from agent_teams.runs.injection_queue import RunInjectionManager
+from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager
+from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.state.event_log import EventLog
@@ -63,6 +64,7 @@ class TaskExecutionService(BaseModel):
     workflow_registry: WorkflowRegistry | None = None
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
+    reflection_service: ReflectionService | None = None
 
     async def execute(
         self,
@@ -172,10 +174,16 @@ class TaskExecutionService(BaseModel):
             conversation_id=instance_record.conversation_id,
             profile=workspace_profile,
         )
-        runner = SubAgentRunner(
+        role_for_run = self._role_with_memory(
             role=role,
+            role_id=role_id,
+            session_id=task.session_id,
+            workspace_id=workspace.ref.workspace_id,
+        )
+        runner = SubAgentRunner(
+            role=role_for_run,
             prompt_builder=self.prompt_builder,
-            provider=self.provider_factory(role),
+            provider=self.provider_factory(role_for_run),
         )
         snapshot = workspace.memory.prompt_snapshot()
         workflow_recommendation = self._build_workflow_recommendation(
@@ -223,6 +231,13 @@ class TaskExecutionService(BaseModel):
                     instance_id=instance_id,
                     payload_json="{}",
                 )
+            )
+            self._enqueue_reflection_if_needed(
+                role_id=role_id,
+                task=task,
+                instance_id=instance_id,
+                workspace_id=workspace.ref.workspace_id,
+                conversation_id=workspace.ref.conversation_id,
             )
             log_event(
                 LOGGER,
@@ -407,6 +422,50 @@ class TaskExecutionService(BaseModel):
         if role_id == ROLE_COORDINATOR:
             return profile
         return ensure_instance_workspace_profile(profile)
+
+    def _role_with_memory(
+        self,
+        *,
+        role: RoleDefinition,
+        role_id: str,
+        session_id: str,
+        workspace_id: str,
+    ) -> RoleDefinition:
+        if role_id == ROLE_COORDINATOR or self.reflection_service is None:
+            return role
+        memory_text = self.reflection_service.build_injected_memory(
+            session_id=session_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+        )
+        if not memory_text:
+            return role
+        return role.model_copy(
+            update={
+                "system_prompt": f"{role.system_prompt}\n\n## Workspace Memory\n{memory_text}",
+            }
+        )
+
+    def _enqueue_reflection_if_needed(
+        self,
+        *,
+        role_id: str,
+        task: TaskEnvelope,
+        instance_id: str,
+        workspace_id: str,
+        conversation_id: str,
+    ) -> None:
+        if role_id == ROLE_COORDINATOR or self.reflection_service is None:
+            return
+        _ = self.reflection_service.enqueue_daily_reflection(
+            session_id=task.session_id,
+            run_id=task.trace_id,
+            task_id=task.task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
 
     def _ensure_committed_task_prompt(
         self,
