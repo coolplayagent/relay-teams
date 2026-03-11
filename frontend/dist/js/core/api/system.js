@@ -8,6 +8,10 @@ export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
 }
 
+export async function fetchSystemHealth() {
+    return requestJson('/api/system/health', undefined, 'Failed to fetch system health');
+}
+
 export async function fetchModelConfig() {
     return requestJson('/api/system/configs/model', undefined, 'Failed to fetch model config');
 }

@@ -51,8 +51,17 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     navbar_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "navbar.js"
     ).read_text(encoding="utf-8")
+    bootstrap_script = (
+        repo_root / "frontend" / "dist" / "js" / "app" / "bootstrap.js"
+    ).read_text(encoding="utf-8")
     state_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "state.js"
+    ).read_text(encoding="utf-8")
+    request_script = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    ).read_text(encoding="utf-8")
+    backend_status_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
     ).read_text(encoding="utf-8")
     markdown_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "markdown.js"
@@ -68,6 +77,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "execution-mode-select" not in prompt_script
     assert "No session selected" not in index_html
     assert "Start a session from the left sidebar" not in index_html
+    assert 'id="backend-status"' in index_html
+    assert 'id="backend-status-label"' in index_html
+    assert "Checking backend..." in index_html
     assert "No session selected" not in timeline_script
     assert "Start a session from the left sidebar" not in timeline_script
     assert "Sessions</p>" not in index_html
@@ -85,8 +97,18 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "showToast" in feedback_script
     assert "showConfirmDialog" in feedback_script
     assert "requestAnimationFrame" in navbar_script
+    assert "initBackendStatusMonitor" in bootstrap_script
     assert "is-resizing-rails" in navbar_script
     assert "marked.setOptions" not in state_script
+    assert "fetch('/api/system/health'" in backend_status_script
+    assert "markBackendOnline" in request_script
+    assert "markBackendOffline" in request_script
+    assert ".status-indicator > span:last-child" in components_css
+    assert "flex: 1 1 auto;" in components_css
+    assert "white-space: nowrap;" in components_css
+    assert ".status-indicator.online span {" not in components_css
+    assert ".status-indicator.offline > span:first-child" in components_css
+    assert ".status-indicator.checking > span:first-child" in components_css
     assert "export function parseMarkdown" in markdown_script
     assert "markdown-table-wrap" in markdown_script
     assert "markdown-code-block" in markdown_script

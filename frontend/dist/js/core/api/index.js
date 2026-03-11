@@ -29,6 +29,7 @@ export {
     fetchNotificationConfig,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchSystemHealth,
     fetchModelConfig,
     fetchModelProfiles,
     probeModelConnection,

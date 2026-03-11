@@ -274,14 +274,47 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    font-weight: 500;
+    line-height: 1.2;
 }
 
-.status-indicator.online span {
+.status-indicator > span:first-child {
     width: 8px;
     height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background-color: var(--text-secondary);
+    opacity: 0.65;
+}
+
+.status-indicator > span:last-child {
+    flex: 1 1 auto;
+    display: block;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-indicator.online > span:first-child {
     background-color: var(--success);
     border-radius: 50%;
     box-shadow: 0 0 8px var(--success);
+}
+
+.status-indicator.offline > span:first-child {
+    background-color: var(--danger);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 72%, transparent);
+    opacity: 1;
+}
+
+.status-indicator.checking > span:first-child {
+    background-color: var(--warning);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--warning) 70%, transparent);
+    opacity: 1;
 }
 
 .session-info {
@@ -3019,12 +3052,6 @@
 .subagent-task-chip,
 .subagent-task-empty {
     border-radius: 8px;
-}
-
-.status-indicator.online span {
-    width: 7px;
-    height: 7px;
-    box-shadow: none;
 }
 
 .system-intro {

@@ -20,6 +20,7 @@ export {
     resumeRun,
     deleteSession,
     fetchConfigStatus,
+    fetchSystemHealth,
     fetchModelConfig,
     fetchModelProfiles,
     fetchNotificationConfig,

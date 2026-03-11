@@ -24,6 +24,8 @@ export const els = {
     newSessionBtn: qs('#new-btn'),
     themeToggleBtn: qs('#toggle-theme'),
     toggleSubagentsBtn: qs('#toggle-subagents'),
+    backendStatus: qs('#backend-status'),
+    backendStatusLabel: qs('#backend-status-label'),
     subagentRoleSelect: qs('#subagent-role-select'),
     subagentStatusSummary: qs('#subagent-status-summary'),
     subagentRoleMeta: qs('#subagent-role-meta'),

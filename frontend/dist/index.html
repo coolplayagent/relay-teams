@@ -47,7 +47,10 @@
             <div class="sessions-list" id="sessions-list"></div>
 
             <div class="sidebar-footer">
-                <div class="status-indicator online"><span></span> Backend Connected</div>
+                <div id="backend-status" class="status-indicator checking">
+                    <span></span>
+                    <span id="backend-status-label">Checking backend...</span>
+                </div>
             </div>
         </aside>
         <div class="sidebar-resizer" id="sidebar-resizer" title="Drag to resize sidebar"></div>

@@ -6,6 +6,7 @@ import { initSettings, openSettings } from '../components/settings.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
 import { handleNewSessionClick, loadSessions } from '../components/sidebar.js';
 import { setupNavbarBindings } from '../components/navbar.js';
+import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
 import { resumeRecoverableRun } from './recovery.js';
 import { state } from '../core/state.js';
@@ -70,6 +71,7 @@ export async function initApp(selectSession, handleSend) {
     logInfo('frontend.bootstrap.started', 'Frontend bootstrap started');
     sysLog('System Initialized');
     initUiFeedback();
+    initBackendStatusMonitor();
     setupNavbarBindings();
     initializeSubagentRail();
     setupEventBindings(handleSend);

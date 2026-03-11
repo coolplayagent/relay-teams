@@ -5,6 +5,7 @@
 import { sendUserPrompt, stopRun } from './api.js';
 import { state } from './state.js';
 import { els } from '../utils/dom.js';
+import { markBackendOnline, refreshBackendStatus } from '../utils/backendStatus.js';
 import {
     errorToPayload,
     logError,
@@ -152,6 +153,10 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
         }
     };
 
+    es.onopen = () => {
+        markBackendOnline();
+    };
+
     es.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
@@ -187,6 +192,7 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
 
     es.onerror = () => {
         if (done) return;
+        void refreshBackendStatus({ force: true });
         logWarn('frontend.sse.closed', 'Run event stream closed', {
             run_id: safeRunId,
         });
