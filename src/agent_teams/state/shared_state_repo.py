@@ -107,6 +107,7 @@ class SharedStateRepository:
         task_ids: list[str],
         instance_ids: list[str],
         role_scope_ids: list[str] | None = None,
+        session_scope_ids: list[str] | None = None,
         conversation_ids: list[str] | None = None,
         workspace_ids: list[str] | None = None,
     ) -> None:
@@ -114,10 +115,14 @@ class SharedStateRepository:
             task_ids = ["__dummy_id__"]
         if not instance_ids:
             instance_ids = ["__dummy_id__"]
+        session_scope_values = list(
+            dict.fromkeys([session_id, *(session_scope_ids or [])])
+        )
         role_scope_values = role_scope_ids or ["__dummy_id__"]
         conversation_values = conversation_ids or ["__dummy_id__"]
         workspace_values = workspace_ids or ["__dummy_id__"]
 
+        session_placeholders = ",".join("?" * len(session_scope_values))
         task_placeholders = ",".join("?" * len(task_ids))
         instance_placeholders = ",".join("?" * len(instance_ids))
         role_placeholders = ",".join("?" * len(role_scope_values))
@@ -127,7 +132,7 @@ class SharedStateRepository:
         self._conn.execute(
             f"""
             DELETE FROM shared_state WHERE
-            (scope_type=? AND scope_id=?) OR
+            (scope_type=? AND scope_id IN ({session_placeholders})) OR
             (scope_type=? AND scope_id IN ({task_placeholders})) OR
             (scope_type=? AND scope_id IN ({instance_placeholders})) OR
             (scope_type=? AND scope_id IN ({role_placeholders})) OR
@@ -136,7 +141,7 @@ class SharedStateRepository:
             """,
             (
                 ScopeType.SESSION.value,
-                session_id,
+                *session_scope_values,
                 ScopeType.TASK.value,
                 *task_ids,
                 ScopeType.INSTANCE.value,

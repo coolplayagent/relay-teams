@@ -23,6 +23,10 @@ from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
+    build_instance_conversation_id,
+    build_instance_role_scope_id,
+    build_instance_session_scope_id,
+    build_instance_workspace_id,
     build_workspace_id,
 )
 
@@ -56,12 +60,32 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     session = service.create_session(session_id="session-1")
     conversation_id = build_conversation_id("session-1", "time")
     workspace_id = build_workspace_id("session-1")
+    instance_workspace_id = build_instance_workspace_id(
+        "session-1",
+        "time",
+        "inst-1",
+    )
+    instance_conversation_id = build_instance_conversation_id(
+        "session-1",
+        "time",
+        "inst-1",
+    )
+    instance_session_scope_id = build_instance_session_scope_id(
+        "session-1",
+        "inst-1",
+    )
+    instance_role_scope_id = build_instance_role_scope_id(
+        "session-1",
+        "time",
+        "inst-1",
+    )
 
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     workspace_manager = WorkspaceManager(
-        project_root=project_root, shared_store=shared_store
+        project_root=project_root,
+        shared_store=shared_store,
     )
 
     _ = task_repo.create(
@@ -80,8 +104,8 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         session_id="session-1",
         instance_id="inst-1",
         role_id="time",
-        workspace_id=workspace_id,
-        conversation_id=conversation_id,
+        workspace_id=instance_workspace_id,
+        conversation_id=instance_conversation_id,
         status=InstanceStatus.IDLE,
     )
     shared_store.manage_state(
@@ -105,9 +129,55 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
             value_json='"conversation"',
         )
     )
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(
+                scope_type=ScopeType.SESSION,
+                scope_id=instance_session_scope_id,
+            ),
+            key="subagent_session_note",
+            value_json='"subagent-session"',
+        )
+    )
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(
+                scope_type=ScopeType.ROLE,
+                scope_id=instance_role_scope_id,
+            ),
+            key="subagent_role_note",
+            value_json='"subagent-role"',
+        )
+    )
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(
+                scope_type=ScopeType.CONVERSATION,
+                scope_id=instance_conversation_id,
+            ),
+            key="subagent_conversation_note",
+            value_json='"subagent-conversation"',
+        )
+    )
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(
+                scope_type=ScopeType.WORKSPACE,
+                scope_id=instance_workspace_id,
+            ),
+            key="subagent_workspace_note",
+            value_json='"subagent-workspace"',
+        )
+    )
+
     workspace_dir = workspace_manager.locations_for(session.workspace_id).workspace_dir
     workspace_dir.mkdir(parents=True, exist_ok=True)
     (workspace_dir / "artifact.txt").write_text("artifact", encoding="utf-8")
+    subagent_workspace_dir = workspace_manager.locations_for(
+        instance_workspace_id
+    ).workspace_dir
+    subagent_workspace_dir.mkdir(parents=True, exist_ok=True)
+    (subagent_workspace_dir / "memory.json").write_text("{}", encoding="utf-8")
 
     service.delete_session("session-1")
 
@@ -129,6 +199,43 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         )
         == ()
     )
+    assert (
+        shared_store.snapshot(
+            ScopeRef(
+                scope_type=ScopeType.SESSION,
+                scope_id=instance_session_scope_id,
+            )
+        )
+        == ()
+    )
+    assert (
+        shared_store.snapshot(
+            ScopeRef(
+                scope_type=ScopeType.ROLE,
+                scope_id=instance_role_scope_id,
+            )
+        )
+        == ()
+    )
+    assert (
+        shared_store.snapshot(
+            ScopeRef(
+                scope_type=ScopeType.CONVERSATION,
+                scope_id=instance_conversation_id,
+            )
+        )
+        == ()
+    )
+    assert (
+        shared_store.snapshot(
+            ScopeRef(
+                scope_type=ScopeType.WORKSPACE,
+                scope_id=instance_workspace_id,
+            )
+        )
+        == ()
+    )
     assert not workspace_dir.exists()
+    assert not subagent_workspace_dir.exists()
     with pytest.raises(KeyError):
         SessionRepository(db_path).get("session-1")

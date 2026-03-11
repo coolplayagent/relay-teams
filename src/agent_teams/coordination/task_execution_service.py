@@ -28,7 +28,11 @@ from agent_teams.state.run_runtime_repo import (
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
-from agent_teams.workspace import WorkspaceManager
+from agent_teams.workspace import (
+    WorkspaceManager,
+    WorkspaceProfile,
+    ensure_instance_workspace_profile,
+)
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.events import EventEnvelope, EventType
 from agent_teams.workflow.models import TaskEnvelope
@@ -156,13 +160,17 @@ class TaskExecutionService(BaseModel):
 
         role: RoleDefinition = self.role_registry.get(role_id)
         instance_record = self.agent_repo.get_instance(instance_id)
+        workspace_profile = self._workspace_profile_for_execution(
+            role_id=role_id,
+            profile=role.workspace_profile,
+        )
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,
             role_id=role_id,
             instance_id=instance_id,
             workspace_id=instance_record.workspace_id,
             conversation_id=instance_record.conversation_id,
-            profile=role.workspace_profile,
+            profile=workspace_profile,
         )
         runner = SubAgentRunner(
             role=role,
@@ -389,6 +397,16 @@ class TaskExecutionService(BaseModel):
         selector = WorkflowRecommendationService(self.workflow_registry)
         decision = selector.recommend(objective)
         return decision.recommendation
+
+    def _workspace_profile_for_execution(
+        self,
+        *,
+        role_id: str,
+        profile: WorkspaceProfile,
+    ) -> WorkspaceProfile:
+        if role_id == ROLE_COORDINATOR:
+            return profile
+        return ensure_instance_workspace_profile(profile)
 
     def _ensure_committed_task_prompt(
         self,

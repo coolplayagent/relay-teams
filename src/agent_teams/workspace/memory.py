@@ -5,7 +5,16 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.workspace.models import StateScope, WorkspaceProfile, WorkspaceRef
+from agent_teams.workspace.ids import (
+    build_instance_role_scope_id,
+    build_instance_session_scope_id,
+)
+from agent_teams.workspace.models import (
+    StateScope,
+    WorkspaceBinding,
+    WorkspaceProfile,
+    WorkspaceRef,
+)
 
 
 class WorkspaceMemory(BaseModel):
@@ -19,12 +28,15 @@ class WorkspaceMemory(BaseModel):
         return ScopeRef(scope_type=ScopeType.WORKSPACE, scope_id=self.ref.workspace_id)
 
     def session_scope(self) -> ScopeRef:
-        return ScopeRef(scope_type=ScopeType.SESSION, scope_id=self.ref.session_id)
+        return ScopeRef(
+            scope_type=ScopeType.SESSION,
+            scope_id=self._session_scope_id(),
+        )
 
     def role_scope(self) -> ScopeRef:
         return ScopeRef(
             scope_type=ScopeType.ROLE,
-            scope_id=f"{self.ref.session_id}:{self.ref.role_id}",
+            scope_id=self._role_scope_id(),
         )
 
     def conversation_scope(self) -> ScopeRef:
@@ -73,3 +85,26 @@ class WorkspaceMemory(BaseModel):
         if scope == StateScope.CONVERSATION:
             return self.conversation_scope()
         raise ValueError(f"Unsupported workspace snapshot scope: {scope.value}")
+
+    def _session_scope_id(self) -> str:
+        if (
+            self.profile.binding == WorkspaceBinding.INSTANCE
+            and self.ref.instance_id is not None
+        ):
+            return build_instance_session_scope_id(
+                self.ref.session_id,
+                self.ref.instance_id,
+            )
+        return self.ref.session_id
+
+    def _role_scope_id(self) -> str:
+        if (
+            self.profile.binding == WorkspaceBinding.INSTANCE
+            and self.ref.instance_id is not None
+        ):
+            return build_instance_role_scope_id(
+                self.ref.session_id,
+                self.ref.role_id,
+                self.ref.instance_id,
+            )
+        return f"{self.ref.session_id}:{self.ref.role_id}"

@@ -16,7 +16,6 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
-from agent_teams.workspace import build_conversation_id, build_workspace_id
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
 from agent_teams.workflow.registry import WorkflowRegistry
@@ -255,15 +254,9 @@ class WorkflowOrchestrationService:
             record = records.get(task_id)
             if record is None or record.status != TaskStatus.CREATED:
                 return
-            workspace_id = build_workspace_id(record.envelope.session_id)
-            conversation_id = build_conversation_id(
-                record.envelope.session_id,
-                role_id,
-            )
             instance = self._instance_pool.create_subagent(
                 role_id,
-                workspace_id=workspace_id,
-                conversation_id=conversation_id,
+                session_id=record.envelope.session_id,
             )
             self._agent_repo.upsert_instance(
                 run_id=run_id,

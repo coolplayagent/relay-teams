@@ -9,7 +9,6 @@ from pydantic_ai import Agent
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
-from agent_teams.workspace import build_conversation_id, build_workspace_id
 from agent_teams.workflow.runtime_graph import get_ready_tasks
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskRecord
@@ -122,15 +121,9 @@ async def _dispatch_next(
         instance_id = planned_instance_id or record.assigned_instance_id or ""
         if record.status == TaskStatus.CREATED:
             if not instance_id:
-                workspace_id = build_workspace_id(ctx.deps.session_id)
-                conversation_id = build_conversation_id(
-                    ctx.deps.session_id,
-                    role_id,
-                )
                 instance = ctx.deps.instance_pool.create_subagent(
                     role_id,
-                    workspace_id=workspace_id,
-                    conversation_id=conversation_id,
+                    session_id=ctx.deps.session_id,
                 )
                 instance_id = instance.instance_id
                 ctx.deps.agent_repo.upsert_instance(

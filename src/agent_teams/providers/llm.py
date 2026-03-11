@@ -66,6 +66,7 @@ from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
     build_workspace_id,
+    ensure_instance_workspace_profile,
 )
 
 if TYPE_CHECKING:
@@ -256,6 +257,10 @@ class OpenAICompatibleProvider(LLMProvider):
             mcp_registry=self._mcp_registry,
             skill_registry=self._skill_registry,
         )
+        role_definition = self._role_registry.get(request.role_id)
+        workspace_profile = role_definition.workspace_profile
+        if request.role_id != "coordinator_agent":
+            workspace_profile = ensure_instance_workspace_profile(workspace_profile)
         deps = ToolDeps(
             task_repo=self._task_repo,
             instance_pool=self._instance_pool,
@@ -274,7 +279,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 instance_id=request.instance_id,
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
-                profile=self._role_registry.get(request.role_id).workspace_profile,
+                profile=workspace_profile,
             ),
             run_id=request.run_id,
             trace_id=request.trace_id,

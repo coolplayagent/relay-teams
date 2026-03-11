@@ -91,6 +91,14 @@ def default_workspace_profile() -> WorkspaceProfile:
     )
 
 
+def ensure_instance_workspace_profile(
+    profile: WorkspaceProfile,
+) -> WorkspaceProfile:
+    if profile.binding == WorkspaceBinding.INSTANCE:
+        return profile
+    return profile.model_copy(update={"binding": WorkspaceBinding.INSTANCE})
+
+
 class WorkspaceProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

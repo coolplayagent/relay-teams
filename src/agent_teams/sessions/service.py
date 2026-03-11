@@ -32,7 +32,12 @@ from agent_teams.state.token_usage_repo import (
     TokenUsageRepository,
 )
 from agent_teams.state.workflow_graph_repo import WorkflowGraphRepository
-from agent_teams.workspace import WorkspaceManager
+from agent_teams.workspace import (
+    WorkspaceManager,
+    build_conversation_id,
+    build_instance_role_scope_id,
+    build_instance_session_scope_id,
+)
 
 
 class SessionService:
@@ -88,12 +93,36 @@ class SessionService:
         instance_ids = [record.instance_id for record in agent_records]
         role_scope_ids = sorted(
             {f"{record.session_id}:{record.role_id}" for record in agent_records}
+            | {
+                build_instance_role_scope_id(
+                    record.session_id,
+                    record.role_id,
+                    record.instance_id,
+                )
+                for record in agent_records
+            }
+        )
+        session_scope_ids = sorted(
+            {
+                build_instance_session_scope_id(
+                    record.session_id,
+                    record.instance_id,
+                )
+                for record in agent_records
+            }
         )
         conversation_ids = sorted(
             {
                 record.conversation_id
                 for record in agent_records
                 if record.conversation_id
+            }
+            | {
+                build_conversation_id(
+                    record.session_id,
+                    record.role_id,
+                )
+                for record in agent_records
             }
         )
         workspace_ids = sorted(
@@ -109,6 +138,7 @@ class SessionService:
                 task_ids=task_ids,
                 instance_ids=instance_ids,
                 role_scope_ids=role_scope_ids,
+                session_scope_ids=session_scope_ids,
                 conversation_ids=conversation_ids,
                 workspace_ids=workspace_ids,
             )
@@ -119,8 +149,9 @@ class SessionService:
         self._agent_repo.delete_by_session(session_id)
         self._session_repo.delete(session_id)
         self._token_usage_repo.delete_by_session(session_id)
-        if self._workspace_manager is not None and session.workspace_id:
-            self._workspace_manager.delete_workspace(session.workspace_id)
+        if self._workspace_manager is not None:
+            for workspace_id in workspace_ids:
+                self._workspace_manager.delete_workspace(workspace_id)
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._session_repo.get(session_id)

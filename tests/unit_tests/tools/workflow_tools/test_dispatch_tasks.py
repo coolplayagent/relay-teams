@@ -19,7 +19,12 @@ from agent_teams.tools.workflow_tools.dispatch_tasks import (
     _next_action,
     _progress,
 )
-from agent_teams.workspace import build_conversation_id, build_workspace_id
+from agent_teams.workspace import (
+    build_conversation_id,
+    build_instance_conversation_id,
+    build_instance_workspace_id,
+    build_workspace_id,
+)
 from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
 from agent_teams.workflow.runtime_graph import get_ready_tasks
@@ -541,3 +546,60 @@ async def test_dispatch_revise_requires_feedback(
 
     assert result["ok"] is False
     assert result["message"] == "feedback is required for revise."
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_creates_instance_scoped_workspace_for_subagent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "dispatch_instance_workspace.db"
+    task_repo = TaskRepository(db_path)
+    deps = _FakeDeps(db_path, task_repo)
+    ctx = _FakeCtx(deps)
+
+    task = TaskEnvelope(
+        task_id="task-time",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+
+    graph: dict[str, object] = {
+        "workflow_id": "workflow-1",
+        "tasks": {
+            "query_time": {
+                "task_id": "task-time",
+                "role_id": "time",
+                "depends_on": [],
+            },
+        },
+    }
+
+    result = await _dispatch_next(
+        ctx=cast(ToolContext, cast(object, ctx)),
+        workflow_id="workflow-1",
+        graph=graph,
+        feedback="",
+        max_dispatch=1,
+    )
+
+    dispatched = cast(list[dict[str, object]], result["dispatched"])
+    assert len(dispatched) == 1
+    instance_id = str(dispatched[0]["instance_id"])
+    record = deps.agent_repo.get_instance(instance_id)
+
+    assert record.workspace_id == build_instance_workspace_id(
+        "session-1",
+        "time",
+        instance_id,
+    )
+    assert record.conversation_id == build_instance_conversation_id(
+        "session-1",
+        "time",
+        instance_id,
+    )
+    assert record.workspace_id != build_workspace_id("session-1")
+    assert record.conversation_id != build_conversation_id("session-1", "time")
