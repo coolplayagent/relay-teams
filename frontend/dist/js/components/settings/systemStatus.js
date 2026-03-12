@@ -11,6 +11,9 @@ import {
 import { showToast } from '../../utils/feedback.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const collapsedMcpServers = new Set();
+let lastLoadedMcpServerViews = [];
+
 export function bindSystemStatusHandlers() {
     const reloadMcpBtn = document.getElementById('reload-mcp-btn');
     if (reloadMcpBtn) {
@@ -21,6 +24,9 @@ export function bindSystemStatusHandlers() {
     if (reloadSkillsBtn) {
         reloadSkillsBtn.onclick = handleReloadSkills;
     }
+
+    globalThis.__agentTeamsToggleMcpTools = toggleMcpTools;
+    globalThis.__agentTeamsToggleAllMcpTools = toggleAllMcpTools;
 }
 
 export async function loadMcpStatusPanel() {
@@ -29,6 +35,8 @@ export async function loadMcpStatusPanel() {
         const mcpStatus = document.getElementById('mcp-status');
         const servers = Array.isArray(status.mcp?.servers) ? status.mcp.servers : [];
         if (servers.length === 0) {
+            lastLoadedMcpServerViews = [];
+            collapsedMcpServers.clear();
             mcpStatus.innerHTML = renderEmptyState('No MCP servers loaded', 'Add or enable a server, then reload to refresh the runtime view.');
             return;
         }
@@ -36,7 +44,9 @@ export async function loadMcpStatusPanel() {
         const serverViews = await Promise.all(
             servers.map(serverName => loadMcpServerView(serverName)),
         );
-        mcpStatus.innerHTML = renderMcpServerList(serverViews);
+        lastLoadedMcpServerViews = serverViews;
+        pruneCollapsedServers(serverViews);
+        renderMcpStatusPanel();
     } catch (e) {
         logError(
             'frontend.system_status.mcp_load_failed',
@@ -111,16 +121,77 @@ async function loadMcpServerView(serverName) {
     }
 }
 
+function renderMcpStatusPanel() {
+    const mcpStatus = document.getElementById('mcp-status');
+    if (!mcpStatus) {
+        return;
+    }
+    mcpStatus.innerHTML = renderMcpServerList(lastLoadedMcpServerViews);
+}
+
+function toggleMcpTools(serverName) {
+    if (!serverName || !canToggleServerTools(serverName)) {
+        return;
+    }
+
+    if (collapsedMcpServers.has(serverName)) {
+        collapsedMcpServers.delete(serverName);
+    } else {
+        collapsedMcpServers.add(serverName);
+    }
+    renderMcpStatusPanel();
+}
+
+function toggleAllMcpTools() {
+    const collapsibleNames = getCollapsibleServerNames(lastLoadedMcpServerViews);
+    if (collapsibleNames.length === 0) {
+        return;
+    }
+
+    if (collapsibleNames.every(serverName => collapsedMcpServers.has(serverName))) {
+        collapsibleNames.forEach(serverName => collapsedMcpServers.delete(serverName));
+    } else {
+        collapsibleNames.forEach(serverName => collapsedMcpServers.add(serverName));
+    }
+    renderMcpStatusPanel();
+}
+
 function renderMcpServerList(serverViews) {
+    const collapsibleNames = getCollapsibleServerNames(serverViews);
+    const allCollapsed = collapsibleNames.length > 0
+        && collapsibleNames.every(serverName => collapsedMcpServers.has(serverName));
     return `
-        <div class="mcp-status-list">
-            ${serverViews.map(serverView => renderMcpServerCard(serverView)).join('')}
+        <div class="mcp-status-shell">
+            ${renderMcpStatusToolbar(serverViews.length, collapsibleNames.length, allCollapsed)}
+            <div class="mcp-status-list">
+                ${serverViews.map(serverView => renderMcpServerCard(serverView)).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderMcpStatusToolbar(serverCount, collapsibleCount, allCollapsed) {
+    const summaryLabel = `${serverCount} server${serverCount === 1 ? '' : 's'} loaded`;
+    return `
+        <div class="mcp-status-toolbar">
+            <div class="mcp-status-toolbar-copy">${escapeHtml(summaryLabel)}</div>
+            ${collapsibleCount > 0 ? `
+                <button
+                    class="mcp-status-toolbar-btn"
+                    type="button"
+                    onclick="globalThis.__agentTeamsToggleAllMcpTools()"
+                >
+                    ${allCollapsed ? 'Expand all tools' : 'Collapse all tools'}
+                </button>
+            ` : ''}
         </div>
     `;
 }
 
 function renderMcpServerCard(serverView) {
     const meta = [serverView.transport, serverView.source].filter(Boolean).join(' / ');
+    const collapsed = collapsedMcpServers.has(serverView.name);
+    const canCollapse = canCollapseTools(serverView);
     return `
         <section class="mcp-status-card">
             <div class="mcp-status-card-header">
@@ -128,14 +199,25 @@ function renderMcpServerCard(serverView) {
                     <div class="mcp-status-card-name">${escapeHtml(serverView.name)}</div>
                     ${meta ? `<div class="mcp-status-card-meta">${escapeHtml(meta)}</div>` : ''}
                 </div>
-                <div class="status-list-state">Loaded</div>
+                <div class="mcp-status-card-actions">
+                    ${canCollapse ? `
+                        <button
+                            class="mcp-status-toggle"
+                            type="button"
+                            onclick='globalThis.__agentTeamsToggleMcpTools(${serializeForInlineScript(serverView.name)})'
+                        >
+                            ${collapsed ? 'Expand tools' : 'Collapse tools'}
+                        </button>
+                    ` : ''}
+                    <div class="status-list-state">Loaded</div>
+                </div>
             </div>
-            ${renderMcpServerTools(serverView)}
+            ${renderMcpServerTools(serverView, collapsed)}
         </section>
     `;
 }
 
-function renderMcpServerTools(serverView) {
+function renderMcpServerTools(serverView, collapsed) {
     if (serverView.errorMessage) {
         return `
             <div class="mcp-tools-empty mcp-tools-error">${escapeHtml(serverView.errorMessage)}</div>
@@ -145,6 +227,14 @@ function renderMcpServerTools(serverView) {
     if (serverView.tools.length === 0) {
         return `
             <div class="mcp-tools-empty">No tools exposed by this MCP server.</div>
+        `;
+    }
+
+    if (collapsed) {
+        return `
+            <div class="mcp-tools-collapsed-summary">
+                ${escapeHtml(formatHiddenToolsLabel(serverView.tools.length))}
+            </div>
         `;
     }
 
@@ -185,6 +275,37 @@ function renderEmptyState(title, description) {
             <p>${escapeHtml(description)}</p>
         </div>
     `;
+}
+
+function canCollapseTools(serverView) {
+    return Boolean(serverView && !serverView.errorMessage && serverView.tools.length > 0);
+}
+
+function canToggleServerTools(serverName) {
+    return lastLoadedMcpServerViews.some(
+        serverView => serverView.name === serverName && canCollapseTools(serverView),
+    );
+}
+
+function getCollapsibleServerNames(serverViews) {
+    return serverViews.filter(canCollapseTools).map(serverView => serverView.name);
+}
+
+function pruneCollapsedServers(serverViews) {
+    const validNames = new Set(getCollapsibleServerNames(serverViews));
+    Array.from(collapsedMcpServers).forEach(serverName => {
+        if (!validNames.has(serverName)) {
+            collapsedMcpServers.delete(serverName);
+        }
+    });
+}
+
+function formatHiddenToolsLabel(toolCount) {
+    return `${toolCount} tool${toolCount === 1 ? '' : 's'} hidden.`;
+}
+
+function serializeForInlineScript(value) {
+    return JSON.stringify(String(value));
 }
 
 function escapeHtml(value) {

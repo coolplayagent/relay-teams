@@ -21,8 +21,14 @@ installGlobals(createElements());
 bindSystemStatusHandlers();
 await loadMcpStatusPanel();
 
+globalThis.__agentTeamsToggleMcpTools('time-mcp');
+const collapsedHtml = document.getElementById('mcp-status').innerHTML;
+globalThis.__agentTeamsToggleAllMcpTools();
+const expandedAgainHtml = document.getElementById('mcp-status').innerHTML;
+
 console.log(JSON.stringify({
-    html: document.getElementById('mcp-status').innerHTML,
+    html: expandedAgainHtml,
+    collapsedHtml,
     toolFetchCalls: globalThis.__toolFetchCalls,
     logEntries: globalThis.__logEntries,
 }));
@@ -30,7 +36,10 @@ console.log(JSON.stringify({
     )
 
     html = cast(str, payload["html"])
+    collapsed_html = cast(str, payload["collapsedHtml"])
     log_entries = cast(JsonArray, payload["logEntries"])
+    assert "Collapse all tools" in html
+    assert "Collapse tools" in html
     assert "time-mcp" in html
     assert "stdio / project" in html
     assert "current_time" in html
@@ -41,6 +50,10 @@ console.log(JSON.stringify({
     assert "No tools exposed by this MCP server." in html
     assert "broken-mcp" in html
     assert "Connection closed" in html
+    assert "Expand all tools" in collapsed_html
+    assert "Expand tools" in collapsed_html
+    assert "2 tools hidden." in collapsed_html
+    assert "current_time" not in collapsed_html
     assert payload["toolFetchCalls"] == ["time-mcp", "empty-mcp", "broken-mcp"]
     assert log_entries == [
         {
@@ -67,8 +80,14 @@ bindSystemStatusHandlers();
 await loadMcpStatusPanel();
 await document.getElementById('reload-mcp-btn').onclick();
 
+globalThis.__agentTeamsToggleAllMcpTools();
+const collapsedHtml = document.getElementById('mcp-status').innerHTML;
+globalThis.__agentTeamsToggleAllMcpTools();
+const expandedHtml = document.getElementById('mcp-status').innerHTML;
+
 console.log(JSON.stringify({
-    html: document.getElementById('mcp-status').innerHTML,
+    html: expandedHtml,
+    collapsedHtml,
     fetchConfigStatusCalls: globalThis.__fetchConfigStatusCalls,
     reloadMcpCalls: globalThis.__reloadMcpCalls,
     toolFetchCalls: globalThis.__toolFetchCalls,
@@ -78,6 +97,7 @@ console.log(JSON.stringify({
     )
 
     html = cast(str, payload["html"])
+    collapsed_html = cast(str, payload["collapsedHtml"])
     toasts = cast(JsonArray, payload["toasts"])
     assert payload["fetchConfigStatusCalls"] == 2
     assert payload["reloadMcpCalls"] == 1
@@ -87,8 +107,13 @@ console.log(JSON.stringify({
         "broken-mcp",
         "time-mcp",
     ]
+    assert "Collapse all tools" in html
+    assert "Collapse tools" in html
     assert "current_time" not in html
     assert "format_time_range" in html
+    assert "Expand all tools" in collapsed_html
+    assert "1 tool hidden." in collapsed_html
+    assert "format_time_range" not in collapsed_html
     assert toasts == [
         {
             "title": "MCP Reloaded",
@@ -104,9 +129,15 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
         repo_root / "frontend" / "dist" / "css" / "components.css"
     ).read_text(encoding="utf-8")
 
+    assert ".mcp-status-shell {" in components_css
+    assert ".mcp-status-toolbar {" in components_css
+    assert ".mcp-status-toolbar-btn," in components_css
+    assert ".mcp-status-toggle {" in components_css
     assert ".mcp-status-list {" in components_css
     assert ".mcp-status-card {" in components_css
+    assert ".mcp-status-card-actions {" in components_css
     assert ".mcp-tools-list {" in components_css
+    assert ".mcp-tools-collapsed-summary," in components_css
     assert ".mcp-tool-row {" in components_css
     assert ".mcp-tool-name {" in components_css
     assert ".mcp-tools-error {" in components_css
@@ -273,7 +304,7 @@ function installGlobals(elements) {{
     globalThis.__toolFetchCalls = [];
     globalThis.__toasts = [];
     globalThis.__logEntries = [];
-}}
+}};
 
 {runner_source}
 """.strip(),

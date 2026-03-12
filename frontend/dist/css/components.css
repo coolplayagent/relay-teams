@@ -2763,6 +2763,47 @@
 }
 
 
+.mcp-status-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.mcp-status-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.mcp-status-toolbar-copy {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.mcp-status-toolbar-btn,
+.mcp-status-toggle {
+    border: 1px solid var(--settings-divider);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--settings-row-bg) 92%, transparent);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.45rem 0.72rem;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.mcp-status-toolbar-btn:hover,
+.mcp-status-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--primary);
+    color: var(--text-primary);
+}
+
 .mcp-status-list {
     display: flex;
     flex-direction: column;
@@ -2804,6 +2845,14 @@
     word-break: break-word;
 }
 
+.mcp-status-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+}
+
 .mcp-tools-list {
     border-top: 1px solid var(--settings-divider);
     padding: 0 1rem;
@@ -2839,11 +2888,18 @@
     font-style: italic;
 }
 
+.mcp-tools-collapsed-summary,
 .mcp-tools-empty {
     padding: 0 1rem 1rem;
     color: var(--text-secondary);
     font-size: 0.82rem;
     line-height: 1.55;
+}
+
+.mcp-tools-collapsed-summary {
+    border-top: 1px solid var(--settings-divider);
+    padding-top: 0.9rem;
+    font-weight: 600;
 }
 
 .mcp-tools-error {
