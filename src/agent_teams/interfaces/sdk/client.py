@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -7,6 +8,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict
 
+from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from agent_teams.shared_types.json_types import JsonArray, JsonObject, JsonValue
 
 
@@ -32,6 +34,68 @@ class AgentTeamsClient:
 
     def health(self) -> JsonObject:
         return self._request_json("GET", "/api/system/health")
+
+    def reload_proxy_config(self) -> JsonObject:
+        return self._request_json("POST", "/api/system/configs/proxy:reload")
+
+    def get_proxy_config(self) -> JsonObject:
+        return self._request_json("GET", "/api/system/configs/proxy")
+
+    def save_proxy_config(
+        self,
+        *,
+        http_proxy: str | None = None,
+        https_proxy: str | None = None,
+        all_proxy: str | None = None,
+        no_proxy: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {
+            "http_proxy": http_proxy,
+            "https_proxy": https_proxy,
+            "all_proxy": all_proxy,
+            "no_proxy": no_proxy,
+            "proxy_username": proxy_username,
+            "proxy_password": proxy_password,
+        }
+        return self._request_json("PUT", "/api/system/configs/proxy", payload)
+
+    def probe_web_connectivity(
+        self,
+        *,
+        url: str,
+        timeout_ms: int | None = None,
+        http_proxy: str | None = None,
+        https_proxy: str | None = None,
+        all_proxy: str | None = None,
+        no_proxy: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {"url": url}
+        if timeout_ms is not None:
+            payload["timeout_ms"] = timeout_ms
+        if any(
+            value is not None
+            for value in (
+                http_proxy,
+                https_proxy,
+                all_proxy,
+                no_proxy,
+                proxy_username,
+                proxy_password,
+            )
+        ):
+            payload["proxy_override"] = {
+                "http_proxy": http_proxy,
+                "https_proxy": https_proxy,
+                "all_proxy": all_proxy,
+                "no_proxy": no_proxy,
+                "proxy_username": proxy_username,
+                "proxy_password": proxy_password,
+            }
+        return self._request_json("POST", "/api/system/configs/web:probe", payload)
 
     def create_session(
         self, session_id: str | None = None, metadata: dict[str, str] | None = None
@@ -64,6 +128,7 @@ class AgentTeamsClient:
         )
 
     def stream_run_events(self, run_id: str) -> Generator[JsonObject, None, None]:
+        sync_proxy_env_to_process_env(load_proxy_env_config())
         url = f"{self._base_url}/api/runs/{run_id}/events"
         request = Request(
             url=url, method="GET", headers={"Accept": "text/event-stream"}
@@ -246,6 +311,7 @@ class AgentTeamsClient:
         path: str,
         payload: object | None = None,
     ) -> JsonObject:
+        sync_proxy_env_to_process_env(load_proxy_env_config())
         request_body = None
         headers: dict[str, str] = {"Accept": "application/json"}
         if payload is not None:

@@ -16,10 +16,12 @@ class ConfigStatusService:
         get_runtime: Callable[[], RuntimeConfig],
         get_mcp_registry: Callable[[], McpRegistry],
         get_skill_registry: Callable[[], SkillRegistry],
+        get_proxy_status: Callable[[], JsonObject],
     ) -> None:
         self._get_runtime: Callable[[], RuntimeConfig] = get_runtime
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
         self._get_skill_registry: Callable[[], SkillRegistry] = get_skill_registry
+        self._get_proxy_status: Callable[[], JsonObject] = get_proxy_status
 
     def get_config_status(self) -> JsonObject:
         runtime = self._get_runtime()
@@ -38,4 +40,5 @@ class ConfigStatusService:
                 "loaded": True,
                 "skills": list(skill_registry.list_names()),
             },
+            "proxy": self._get_proxy_status(),
         }

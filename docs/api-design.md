@@ -41,7 +41,7 @@ Returns service health.
 
 ### `GET /system/configs`
 
-Returns runtime config load status for model, MCP, and skills.
+Returns runtime config load status for model, MCP, skills, and effective proxy settings.
 
 ### `GET /system/configs/model`
 
@@ -73,6 +73,29 @@ If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeo
 
 Reloads model config into runtime.
 
+### `GET /system/configs/proxy`
+
+Returns the proxy values currently saved in project `.agent_teams/.env`.
+Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`.
+Saved proxy URLs are returned without embedded credentials when the configured proxy URLs share the same username/password pair.
+If the password was persisted through the system keyring, the API rehydrates it into `proxy_password` for editing.
+If a user manually forces `user:password@host` into `.env`, runtime loading still supports it and the API can read it back, but the save flow will not write that password back to `.env`.
+
+### `PUT /system/configs/proxy`
+
+Saves proxy values into project `.agent_teams/.env` and reloads runtime proxy state immediately.
+Blank values remove the corresponding proxy key.
+`proxy_username` and `proxy_password` are optional shared credentials.
+On save, proxy passwords are persisted only through a usable system keyring backend. The `.env` file stores proxy URLs without the password portion.
+If no usable keyring backend is available, saving a proxy password fails with a user-facing error instead of falling back to plaintext file storage.
+Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
+`no_proxy` accepts both comma-separated and semicolon-separated entries. Wildcard host patterns such as `127.*`, `192.168.*`, and the special token `<local>` are supported.
+
+### `POST /system/configs/proxy:reload`
+
+Reloads effective proxy env into runtime.
+This updates process-level proxy variables for future HTTP requests and shell/MCP subprocesses, clears removed proxy keys, and refreshes MCP runtime state.
+
 ### `POST /system/configs/mcp:reload`
 
 Reloads MCP config into runtime.
@@ -88,6 +111,14 @@ Returns notification rules by event type.
 ### `PUT /system/configs/notifications`
 
 Replaces notification rules.
+
+### `POST /system/configs/web:probe`
+
+Tests whether a target `http` or `https` URL is reachable under the current proxy settings.
+The request may also include `proxy_override` with `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, and `proxy_password` to run a one-shot probe against unsaved form values.
+The backend uses `HEAD` first and falls back to `GET` when the target does not support `HEAD`.
+Any HTTP response (`2xx` through `5xx`) counts as reachable.
+Only transport-level failures such as timeout, DNS, TLS, or proxy handshake errors return `ok=false`.
 
 ## Session APIs
 

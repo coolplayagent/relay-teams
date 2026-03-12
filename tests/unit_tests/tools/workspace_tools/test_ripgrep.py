@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -68,7 +69,7 @@ class TestRipgrepDownload:
         client_cm.__aexit__.return_value = None
 
         with patch(
-            "agent_teams.tools.workspace_tools.ripgrep.httpx.AsyncClient",
+            "agent_teams.tools.workspace_tools.ripgrep.create_proxy_async_http_client",
             return_value=client_cm,
         ) as mock_client_cls:
             with patch(
@@ -99,7 +100,7 @@ class TestRipgrepDownload:
         client_cm.__aexit__.return_value = None
 
         with patch(
-            "agent_teams.tools.workspace_tools.ripgrep.httpx.AsyncClient",
+            "agent_teams.tools.workspace_tools.ripgrep.create_proxy_async_http_client",
             return_value=client_cm,
         ):
             with patch(

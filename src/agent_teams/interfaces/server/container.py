@@ -11,6 +11,8 @@ from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.env.proxy_config_service import ProxyConfigService
+from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_manager import McpConfigManager
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
@@ -28,6 +30,7 @@ from agent_teams.reflection import (
 from agent_teams.providers.llm import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
+from agent_teams.providers.http_client_factory import clear_llm_http_client_cache
 from agent_teams.providers.runtime_factory import (
     create_provider_factory,
     create_task_execution_service,
@@ -84,6 +87,10 @@ class ServerContainer:
         )
         self.notification_config_manager: NotificationConfigManager = (
             NotificationConfigManager(config_dir=config_dir)
+        )
+        self.proxy_config_service: ProxyConfigService = ProxyConfigService(
+            config_dir=config_dir,
+            on_proxy_reloaded=self._on_proxy_reloaded,
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             project_config_dir=config_dir
@@ -237,6 +244,7 @@ class ServerContainer:
             get_runtime=lambda: self.runtime,
             get_mcp_registry=lambda: self.mcp_registry,
             get_skill_registry=lambda: self.skill_registry,
+            get_proxy_status=self.proxy_config_service.get_proxy_status,
         )
         self.model_config_service: ModelConfigService = ModelConfigService(
             config_dir=config_dir,
@@ -364,3 +372,8 @@ class ServerContainer:
     def _on_skill_reloaded(self, skill_registry: SkillRegistry) -> None:
         self.skill_registry = skill_registry
         self._refresh_coordinator_runtime()
+
+    def _on_proxy_reloaded(self, proxy_config: ProxyEnvConfig) -> None:
+        sync_proxy_env_to_process_env(proxy_config)
+        clear_llm_http_client_cache()
+        self._on_mcp_reloaded(self.mcp_config_manager.load_registry())

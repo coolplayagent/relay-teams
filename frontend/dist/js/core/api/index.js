@@ -35,6 +35,7 @@ export {
 
 export {
     fetchNotificationConfig,
+    fetchProxyConfig,
     deleteModelProfile,
     fetchConfigStatus,
     fetchMcpServerTools,
@@ -42,10 +43,13 @@ export {
     fetchModelConfig,
     fetchModelProfiles,
     probeModelConnection,
+    probeWebConnectivity,
     reloadMcpConfig,
     reloadModelConfig,
+    reloadProxyConfig,
     reloadSkillsConfig,
     saveNotificationConfig,
+    saveProxyConfig,
     saveModelConfig,
     saveModelProfile,
 } from './system.js';

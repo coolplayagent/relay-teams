@@ -7,6 +7,7 @@ import {
     bindNotificationSettingsHandlers,
     loadNotificationSettingsPanel,
 } from './notifications.js';
+import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 
@@ -26,6 +27,10 @@ const TAB_METADATA = {
     notifications: {
         title: 'Notifications',
         description: 'Choose which run events notify you and where they are delivered.',
+    },
+    proxy: {
+        title: 'Proxy',
+        description: 'Edit runtime proxy values and test outbound web connectivity.',
     },
     mcp: {
         title: 'MCP Config',
@@ -63,6 +68,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
+                    </button>
+                    <button class="settings-tab" data-tab="proxy">
+                        <span class="settings-tab-label">Proxy</span>
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label">MCP Config</span>
@@ -315,6 +323,62 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="proxy-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack proxy-panel-body">
+                                <div class="proxy-editor-form">
+                                    <section class="proxy-form-section">
+                                        <div class="proxy-form-section-header">
+                                            <h5>Proxy Settings</h5>
+                                        </div>
+                                        <div class="proxy-form-grid">
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-http-proxy">HTTP Proxy</label>
+                                                <input type="text" id="proxy-http-proxy" placeholder="http://127.0.0.1:7890" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-https-proxy">HTTPS Proxy</label>
+                                                <input type="text" id="proxy-https-proxy" placeholder="http://127.0.0.1:7890" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-all-proxy">ALL Proxy</label>
+                                                <input type="text" id="proxy-all-proxy" placeholder="socks5://127.0.0.1:7890" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-username">Username</label>
+                                                <input type="text" id="proxy-username" placeholder="Optional proxy username" autocomplete="username">
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-password">Password</label>
+                                                <input type="password" id="proxy-password" placeholder="Optional proxy password" autocomplete="current-password">
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="proxy-no-proxy">NO_PROXY</label>
+                                                <input type="text" id="proxy-no-proxy" placeholder="localhost;127.*;192.168.*;<local>" autocomplete="off">
+                                            </div>
+                                        </div>
+                                    </section>
+                                    <section class="proxy-form-section proxy-form-section-test">
+                                        <div class="proxy-form-section-header">
+                                            <h5>Connectivity Test</h5>
+                                        </div>
+                                        <div class="proxy-probe-grid">
+                                            <div class="form-group proxy-inline-field proxy-inline-field-test">
+                                                <label for="proxy-probe-url">Target URL</label>
+                                                <input type="text" id="proxy-probe-url" placeholder="https://example.com" autocomplete="url">
+                                                <button class="secondary-btn proxy-inline-test-btn" id="test-proxy-web-btn" type="button">Test URL</button>
+                                            </div>
+                                            <div class="form-group proxy-inline-field proxy-inline-field-compact">
+                                                <label for="proxy-probe-timeout">Timeout (ms)</label>
+                                                <input type="number" id="proxy-probe-timeout" value="5000" min="1000" max="300000" step="500" autocomplete="off">
+                                            </div>
+                                        </div>
+                                        <div class="proxy-probe-status" id="proxy-probe-status" style="display:none;"></div>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="skills-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="skills-status"></div>
@@ -335,6 +399,7 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;">Reload</button>
                             <button class="primary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;">Reload</button>
                         </div>
@@ -368,6 +433,7 @@ function setupEventListeners() {
     bindModelProfileHandlers();
     bindRoleSettingsHandlers();
     bindNotificationSettingsHandlers();
+    bindProxySettingsHandlers();
     bindSystemStatusHandlers();
 }
 
@@ -388,6 +454,7 @@ async function showPanel(tab) {
     renderPanelActions(tab);
     bindModelProfileHandlers();
     bindRoleSettingsHandlers();
+    bindProxySettingsHandlers();
     bindSystemStatusHandlers();
 
     if (tab === 'model') {
@@ -396,6 +463,8 @@ async function showPanel(tab) {
         await loadRoleSettingsPanel();
     } else if (tab === 'notifications') {
         await loadNotificationSettingsPanel();
+    } else if (tab === 'proxy') {
+        await loadProxyStatusPanel();
     } else if (tab === 'mcp') {
         await loadMcpStatusPanel();
     } else if (tab === 'skills') {
@@ -423,6 +492,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'notifications') {
         document.getElementById('save-notifications-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'proxy') {
+        document.getElementById('save-proxy-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'mcp') {

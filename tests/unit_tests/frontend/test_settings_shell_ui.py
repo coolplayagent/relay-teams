@@ -43,12 +43,17 @@ console.log(JSON.stringify({
     assert "settings-model-stack" in modal_html
     assert "status-stack" in modal_html
     assert "settings-actions-bar" in modal_html
+    assert "Proxy Settings" in modal_html
+    assert "Connectivity Test" in modal_html
+    assert 'class="proxy-editor-form"' in modal_html
+    assert 'class="profile-editor proxy-editor-shell"' not in modal_html
     assert "settings-tab-desc" not in modal_html
     assert (
         "Runtime configuration for models, notifications, and extensions."
         not in modal_html
     )
     assert "Roles" in modal_html
+    assert "Proxy" in modal_html
     assert "Providers, endpoints, sampling" not in modal_html
     assert "Browser and toast delivery rules" not in modal_html
     assert "Loaded servers and reload actions" not in modal_html
@@ -72,6 +77,7 @@ console.log(JSON.stringify({
         "model": 1,
         "roles": 0,
         "notifications": 1,
+        "proxy": 0,
         "mcp": 0,
         "skills": 0,
     }
@@ -91,6 +97,7 @@ openSettings();
 const tabs = document.querySelectorAll(".settings-tab");
 const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
+const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
 
@@ -99,6 +106,8 @@ await rolesTab.onclick();
 const roleAddDisplay = document.getElementById("add-role-btn").style.display;
 await notificationsTab.onclick();
 const notificationsSaveDisplay = document.getElementById("save-notifications-btn").style.display;
+await proxyTab.onclick();
+const proxySaveDisplay = document.getElementById("save-proxy-btn").style.display;
 await mcpTab.onclick();
 const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
 await skillsTab.onclick();
@@ -108,6 +117,7 @@ console.log(JSON.stringify({
     modelAddDisplay,
     roleAddDisplay,
     notificationsSaveDisplay,
+    proxySaveDisplay,
     mcpReloadDisplay,
     skillsReloadDisplay,
 }));
@@ -117,6 +127,7 @@ console.log(JSON.stringify({
     assert payload["modelAddDisplay"] == "inline-flex"
     assert payload["roleAddDisplay"] == "inline-flex"
     assert payload["notificationsSaveDisplay"] == "inline-flex"
+    assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
     assert payload["skillsReloadDisplay"] == "inline-flex"
 
@@ -180,6 +191,7 @@ console.log(JSON.stringify({
     assert "Max Output Tokens" in modal_html
     assert "Max Tokens</label>" not in modal_html
     assert ">Test</button>" in modal_html
+    assert ">Test URL</button>" in modal_html
     assert ">Validate</button>" in modal_html
     assert ">Save Role</button>" not in modal_html
     assert ">Save Notifications</button>" not in modal_html
@@ -203,6 +215,7 @@ def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:
     assert actions_html.index('id="test-profile-btn"') < actions_html.index(
         'id="save-profile-btn"'
     )
+    assert 'id="test-proxy-web-btn"' not in actions_html
     assert actions_html.index('id="save-profile-btn"') < actions_html.index(
         'id="cancel-profile-btn"'
     )
@@ -222,6 +235,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
+    mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     module_under_test_path = tmp_path / "index.mjs"
@@ -263,6 +277,18 @@ export async function loadRoleSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_proxy_settings_path.write_text(
+        """
+export function bindProxySettingsHandlers() {
+    globalThis.__bindCalls.proxy += 1;
+}
+
+export async function loadProxyStatusPanel() {
+    globalThis.__loadCalls.proxy += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_system_status_path.write_text(
         """
 export function bindSystemStatusHandlers() {
@@ -284,6 +310,7 @@ export async function loadSkillsStatusPanel() {
         source_path.read_text(encoding="utf-8")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
+        .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
     )
@@ -452,12 +479,14 @@ globalThis.__bindCalls = {{
     model: 0,
     roles: 0,
     notifications: 0,
+    proxy: 0,
     system: 0,
 }};
 globalThis.__loadCalls = {{
     model: 0,
     roles: 0,
     notifications: 0,
+    proxy: 0,
     mcp: 0,
     skills: 0,
 }};

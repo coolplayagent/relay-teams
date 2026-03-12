@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import AsyncGenerator
 
-from agent_teams.env import get_env_var
+from agent_teams.env import build_subprocess_env, get_env_var
 from agent_teams.tools.workspace_tools.shell_policy import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_TIMEOUT_SECONDS,
@@ -113,9 +113,7 @@ async def spawn_shell(
     """Run shell command with streaming stdout/stderr chunks."""
     bash = resolve_bash_path()
 
-    shell_env = os.environ.copy()
-    if env:
-        shell_env.update(env)
+    shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
 
     proc = await asyncio.create_subprocess_exec(
         bash,
@@ -187,6 +185,7 @@ def run_git_bash(
         proc = subprocess.run(
             [bash, "-lc", command],
             cwd=str(workdir),
+            env=build_subprocess_env(base_env=os.environ),
             capture_output=True,
             text=True,
             encoding="utf-8",

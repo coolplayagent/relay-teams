@@ -19,6 +19,12 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     assert 'for="profile-top-p"' in settings_source
     assert 'for="profile-max-tokens"' in settings_source
     assert 'for="profile-connect-timeout"' in settings_source
+    assert 'for="proxy-http-proxy"' in settings_source
+    assert 'for="proxy-https-proxy"' in settings_source
+    assert 'for="proxy-all-proxy"' in settings_source
+    assert 'for="proxy-no-proxy"' in settings_source
+    assert 'for="proxy-probe-url"' in settings_source
+    assert 'for="proxy-probe-timeout"' in settings_source
     assert 'for="role-id-input"' in settings_source
     assert 'for="role-name-input"' in settings_source
     assert 'for="role-version-input"' in settings_source

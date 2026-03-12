@@ -4,11 +4,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
+from agent_teams.env.proxy_config_service import ProxyConfigService
+from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.env.web_connectivity import (
+    WebConnectivityProbeRequest,
+    WebConnectivityProbeResult,
+)
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
+    get_proxy_config_service,
     get_skills_config_reload_service,
 )
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -152,6 +159,27 @@ def get_notification_config(
     return service.get_notification_config()
 
 
+@router.get("/configs/proxy")
+def get_proxy_config(
+    service: ProxyConfigService = Depends(get_proxy_config_service),
+) -> ProxyEnvInput:
+    return service.get_saved_proxy_config()
+
+
+@router.put("/configs/proxy")
+def save_proxy_config(
+    req: ProxyEnvInput,
+    service: ProxyConfigService = Depends(get_proxy_config_service),
+) -> dict[str, str]:
+    try:
+        service.save_proxy_config(req)
+        return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 class NotificationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +207,28 @@ def reload_model_config(
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/configs/proxy:reload")
+def reload_proxy_config(
+    service: ProxyConfigService = Depends(get_proxy_config_service),
+) -> dict[str, str]:
+    try:
+        service.reload_proxy_config()
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/configs/web:probe")
+def probe_web_connectivity(
+    req: WebConnectivityProbeRequest,
+    service: ProxyConfigService = Depends(get_proxy_config_service),
+) -> WebConnectivityProbeResult:
+    try:
+        return service.probe_web_connectivity(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/mcp:reload")

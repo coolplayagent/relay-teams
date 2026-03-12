@@ -8,6 +8,10 @@ export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
 }
 
+export async function fetchProxyConfig() {
+    return requestJson('/api/system/configs/proxy', undefined, 'Failed to fetch proxy config');
+}
+
 export async function fetchSystemHealth() {
     return requestJson('/api/system/health', undefined, 'Failed to fetch system health');
 }
@@ -72,6 +76,26 @@ export async function reloadModelConfig() {
     );
 }
 
+export async function reloadProxyConfig() {
+    return requestJson(
+        '/api/system/configs/proxy:reload',
+        { method: 'POST' },
+        'Failed to reload proxy config',
+    );
+}
+
+export async function saveProxyConfig(config) {
+    return requestJson(
+        '/api/system/configs/proxy',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        },
+        'Failed to save proxy config',
+    );
+}
+
 export async function reloadMcpConfig() {
     return requestJson(
         '/api/system/configs/mcp:reload',
@@ -109,5 +133,17 @@ export async function saveNotificationConfig(config) {
             body: JSON.stringify({ config }),
         },
         'Failed to save notification config',
+    );
+}
+
+export async function probeWebConnectivity(payload) {
+    return requestJson(
+        '/api/system/configs/web:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to probe web connectivity',
     );
 }

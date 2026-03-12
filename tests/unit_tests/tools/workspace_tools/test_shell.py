@@ -1,4 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
+
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -91,3 +95,32 @@ class TestNormalizeTimeout:
 
         with pytest.raises(ValueError):
             normalize_timeout(-1)
+
+
+def test_run_git_bash_uses_current_proxy_env(monkeypatch) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
+    monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        _ = args
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(
+            args=["bash"], returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(shell_executor.subprocess, "run", fake_run)
+
+    exit_code, _, _, timed_out = shell_executor.run_git_bash(
+        command="echo test",
+        workdir=Path("."),
+        timeout_seconds=5,
+    )
+
+    assert exit_code == 0
+    assert timed_out is False
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["HTTP_PROXY"] == "http://proxy.example:8080"

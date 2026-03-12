@@ -4,11 +4,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
+    get_proxy_config_service,
     get_skills_config_reload_service,
 )
 from agent_teams.interfaces.server.routers import system
@@ -22,6 +25,8 @@ class _FakeSystemService:
         self.saved_model_profile: tuple[str, dict[str, object], str | None] | None = (
             None
         )
+        self.saved_proxy_config: dict[str, object] | None = None
+        self.proxy_save_error: RuntimeError | None = None
 
     def get_config_status(self) -> dict[str, object]:
         return {"model": {"loaded": True}}
@@ -49,6 +54,24 @@ class _FakeSystemService:
 
     def reload_model_config(self) -> None:
         return None
+
+    def reload_proxy_config(self) -> None:
+        return None
+
+    def get_saved_proxy_config(self) -> dict[str, object]:
+        return {
+            "http_proxy": "http://proxy.example:8080",
+            "https_proxy": None,
+            "all_proxy": None,
+            "no_proxy": "localhost,127.0.0.1",
+            "proxy_username": "alice",
+            "proxy_password": "secret",
+        }
+
+    def save_proxy_config(self, config: ProxyEnvInput) -> None:
+        if self.proxy_save_error is not None:
+            raise self.proxy_save_error
+        self.saved_proxy_config = config.model_dump(mode="json")
 
     def reload_mcp_config(self) -> None:
         return None
@@ -118,6 +141,28 @@ class _FakeSystemService:
             }
         )
 
+    def probe_web_connectivity(
+        self,
+        _request: object,
+    ) -> WebConnectivityProbeResult:
+        return WebConnectivityProbeResult.model_validate(
+            {
+                "ok": True,
+                "url": "https://example.com",
+                "final_url": "https://example.com",
+                "status_code": 200,
+                "latency_ms": 88,
+                "checked_at": "2026-03-12T00:00:00Z",
+                "used_method": "HEAD",
+                "diagnostics": {
+                    "endpoint_reachable": True,
+                    "used_proxy": True,
+                    "redirected": False,
+                },
+                "retryable": False,
+            }
+        )
+
 
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
@@ -127,6 +172,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_notification_settings_service] = lambda: fake_service
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
+    app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -226,6 +272,115 @@ def test_probe_model_connectivity() -> None:
     assert payload["ok"] is True
     assert payload["latency_ms"] == 123
     assert payload["token_usage"]["total_tokens"] == 9
+
+
+def test_reload_proxy_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post("/api/system/configs/proxy:reload")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_get_proxy_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/proxy")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "http_proxy": "http://proxy.example:8080",
+        "https_proxy": None,
+        "all_proxy": None,
+        "no_proxy": "localhost,127.0.0.1",
+        "proxy_username": "alice",
+        "proxy_password": "secret",
+    }
+
+
+def test_save_proxy_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/proxy",
+        json={
+            "http_proxy": "http://proxy.example:8080",
+            "https_proxy": "http://proxy.example:8443",
+            "all_proxy": "",
+            "no_proxy": "localhost,127.0.0.1",
+            "proxy_username": "alice",
+            "proxy_password": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_proxy_config == {
+        "http_proxy": "http://proxy.example:8080",
+        "https_proxy": "http://proxy.example:8443",
+        "all_proxy": "",
+        "no_proxy": "localhost,127.0.0.1",
+        "proxy_username": "alice",
+        "proxy_password": "secret",
+    }
+
+
+def test_save_proxy_config_returns_user_error_for_missing_keyring() -> None:
+    service = _FakeSystemService()
+    service.proxy_save_error = RuntimeError(
+        "Proxy password persistence requires a usable system keyring backend."
+    )
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/proxy",
+        json={
+            "https_proxy": "http://proxy.example:8443",
+            "proxy_username": "alice",
+            "proxy_password": "secret",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "system keyring backend" in response.json()["detail"]
+
+
+def test_probe_web_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/web:probe",
+        json={"url": "https://example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["used_method"] == "HEAD"
+    assert payload["diagnostics"]["used_proxy"] is True
+
+
+def test_probe_web_connectivity_accepts_proxy_override() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/web:probe",
+        json={
+            "url": "https://example.com",
+            "proxy_override": {
+                "https_proxy": "http://proxy.example:8443",
+                "no_proxy": "",
+                "proxy_username": "alice",
+                "proxy_password": "secret",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
 
 
 def test_save_model_profile_allows_missing_api_key_for_edit() -> None:

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -153,3 +154,60 @@ def test_env_list_supports_json_format(monkeypatch, tmp_path: Path) -> None:
         }
     ]
     assert "Environment Variables (" not in result.output
+
+
+def test_env_proxy_reload_calls_server(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(env_cli, "_auto_start_if_needed", lambda *_args: None)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(env_cli, "_request_json", fake_request_json)
+
+    result = runner.invoke(cli_app.app, ["env", "proxy-reload"])
+
+    assert result.exit_code == 0
+    assert calls == [("POST", "/api/system/configs/proxy:reload", None)]
+    assert json.loads(result.output) == {"status": "ok"}
+
+
+def test_env_probe_web_supports_json_output(monkeypatch) -> None:
+    monkeypatch.setattr(env_cli, "_auto_start_if_needed", lambda *_args: None)
+    monkeypatch.setattr(
+        env_cli,
+        "_request_json",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "url": "https://example.com",
+            "final_url": "https://example.com",
+            "status_code": 200,
+            "latency_ms": 20,
+            "used_method": "HEAD",
+            "diagnostics": {
+                "endpoint_reachable": True,
+                "used_proxy": False,
+                "redirected": False,
+            },
+            "retryable": False,
+        },
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        ["env", "probe-web", "https://example.com", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["used_method"] == "HEAD"

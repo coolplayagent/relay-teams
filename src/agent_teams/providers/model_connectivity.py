@@ -9,6 +9,7 @@ from typing import cast
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_teams.env.proxy_http_client import create_proxy_http_client
 from agent_teams.providers.model_config import (
     ModelEndpointConfig,
     ProviderType,
@@ -239,12 +240,15 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            response = httpx.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout_ms / 1000,
-            )
+            with create_proxy_http_client(
+                timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
+            ) as client:
+                response = client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
         except httpx.TimeoutException as exc:
             return self._build_transport_error_result(
                 config=config,

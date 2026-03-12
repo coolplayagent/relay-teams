@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 import typer
 
+from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from agent_teams.env.env_cli import env_app
 from agent_teams.interfaces.cli.approvals import build_approvals_app
 from agent_teams.interfaces.cli.prompt_cli import (
@@ -40,6 +41,7 @@ def _request_json(
     extra_headers: dict[str, str] | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict[str, object] | list[object]:
+    sync_proxy_env_to_process_env(load_proxy_env_config())
     body = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -85,6 +87,7 @@ def _is_server_healthy(base_url: str) -> bool:
 
 
 def _start_server_daemon(host: str, port: int) -> None:
+    sync_proxy_env_to_process_env(load_proxy_env_config())
     command = [
         sys.executable,
         "-m",
@@ -225,6 +228,7 @@ reflection_app = build_reflection_app(
 
 
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
+    sync_proxy_env_to_process_env(load_proxy_env_config())
     _stream_events_impl(base_url, run_id, debug)
 
 

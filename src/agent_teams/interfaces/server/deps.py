@@ -6,6 +6,7 @@ from fastapi import Request
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
@@ -70,6 +71,10 @@ def get_skills_config_reload_service(request: Request) -> SkillsConfigReloadServ
 
 def get_mcp_service(request: Request) -> McpService:
     return get_container(request).mcp_service
+
+
+def get_proxy_config_service(request: Request) -> ProxyConfigService:
+    return get_container(request).proxy_config_service
 
 
 def get_task_repo(request: Request) -> TaskRepository:

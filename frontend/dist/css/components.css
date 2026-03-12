@@ -3141,6 +3141,92 @@
     gap: 0.9rem;
 }
 
+.proxy-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.proxy-editor-form {
+    min-width: 0;
+}
+
+.proxy-form-section {
+    padding: 1rem 0;
+    border-top: 1px solid var(--settings-divider);
+}
+
+.proxy-form-section:first-child {
+    padding-top: 0;
+    border-top: none;
+}
+
+.proxy-form-section + .proxy-form-section {
+    margin-top: 0;
+}
+
+.proxy-form-section-header {
+    margin-bottom: 0.7rem;
+}
+
+.proxy-form-section-header h5 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.proxy-form-grid,
+.proxy-probe-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.proxy-editor-form .form-group {
+    margin-bottom: 0;
+}
+
+.proxy-inline-field {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    align-items: center;
+    gap: 0.9rem;
+}
+
+.proxy-inline-field label {
+    margin-bottom: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.proxy-inline-field input {
+    border-radius: 6px;
+}
+
+.proxy-inline-field-test {
+    grid-template-columns: 128px minmax(0, 1fr) auto;
+}
+
+.proxy-inline-field-compact {
+    max-width: 320px;
+}
+
+.proxy-inline-test-btn {
+    min-width: 92px;
+    width: auto;
+    padding-inline: 0.8rem;
+    white-space: nowrap;
+    align-self: stretch;
+}
+
+.proxy-probe-status {
+    margin-top: 1rem;
+    grid-column: 1 / -1;
+    border-radius: 6px;
+}
+
 .notifications-help {
     margin: 0;
     color: var(--text-secondary);
@@ -3268,6 +3354,22 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
     .notification-row-main {
         grid-column: 1 / -1;
+    }
+
+    .proxy-inline-field,
+    .proxy-inline-field-test {
+        grid-template-columns: 1fr;
+        gap: 0.4rem;
+    }
+
+    .proxy-inline-field-compact {
+        max-width: none;
+    }
+
+    .proxy-inline-test-btn {
+        width: auto;
+        justify-self: start;
+        align-self: auto;
     }
 }
 
