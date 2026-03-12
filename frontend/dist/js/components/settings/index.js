@@ -182,7 +182,7 @@ function createModal() {
                                                     </div>
                                                     <div class="form-group">
                                                         <label for="role-model-profile-input">Model Profile</label>
-                                                        <input type="text" id="role-model-profile-input" placeholder="default">
+                                                        <select id="role-model-profile-input"></select>
                                                     </div>
                                                 </div>
                                             </section>

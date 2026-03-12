@@ -33,6 +33,8 @@ console.log(JSON.stringify({
     selectedBinding: document.getElementById("role-workspace-binding-input").value,
     listDisplay: document.getElementById("roles-list").style.display,
     editorDisplay: document.getElementById("role-editor-panel").style.display,
+    modelProfileValue: document.getElementById("role-model-profile-input").value,
+    modelProfileHtml: document.getElementById("role-model-profile-input").innerHTML,
     promptPreviewDisplay: document.getElementById("role-system-prompt-preview").style.display,
     promptEditorDisplay: document.getElementById("role-system-prompt-input").style.display,
     promptPreviewHtml: document.getElementById("role-system-prompt-preview").innerHTML,
@@ -49,6 +51,13 @@ console.log(JSON.stringify({
     assert payload["selectedBinding"] == "role"
     assert payload["listDisplay"] == "none"
     assert payload["editorDisplay"] == "block"
+    assert payload["modelProfileValue"] == "default"
+    assert '<option value="default" selected>default</option>' in cast(
+        str, payload["modelProfileHtml"]
+    )
+    assert '<option value="editor">editor</option>' in cast(
+        str, payload["modelProfileHtml"]
+    )
     assert payload["promptPreviewDisplay"] == "block"
     assert payload["promptEditorDisplay"] == "none"
     assert (
@@ -214,6 +223,13 @@ export async function fetchRoleConfigOptions() {
         mcp_servers: ["docs"],
         skills: ["diff", "time"],
         workspace_bindings: ["session", "role", "instance", "task"],
+    };
+}
+
+export async function fetchModelProfiles() {
+    return {
+        default: { model: "gpt-4o-mini" },
+        editor: { model: "gpt-4.1" },
     };
 }
 

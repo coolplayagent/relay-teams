@@ -197,6 +197,7 @@ console.log(JSON.stringify({
     assert ">Save Notifications</button>" not in modal_html
     assert "notification-toggle-check" in modal_html
     assert "notification-toggle-label" in modal_html
+    assert '<select id="role-model-profile-input"></select>' in modal_html
 
 
 def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:

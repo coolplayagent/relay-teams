@@ -3,6 +3,7 @@
  * Role settings panel bindings.
  */
 import {
+    fetchModelProfiles,
     fetchRoleConfig,
     fetchRoleConfigOptions,
     fetchRoleConfigs,
@@ -20,6 +21,7 @@ let roleConfigOptions = {
     skills: [],
     workspace_bindings: [],
 };
+let availableModelProfiles = [];
 let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
@@ -50,12 +52,14 @@ export function bindRoleSettingsHandlers() {
 
 export async function loadRoleSettingsPanel(preferredRoleId = '') {
     try {
-        const [summaries, options] = await Promise.all([
+        const [summaries, options, modelProfiles] = await Promise.all([
             fetchRoleConfigs(),
             fetchRoleConfigOptions(),
+            fetchModelProfiles(),
         ]);
         roleSummaries = Array.isArray(summaries) ? summaries : [];
         roleConfigOptions = normalizeRoleConfigOptions(options);
+        availableModelProfiles = normalizeModelProfileNames(modelProfiles);
         renderRolesList();
         if (roleSummaries.length === 0) {
             showRolesList();
@@ -94,6 +98,21 @@ function normalizeRoleConfigOptions(options) {
             ? options.workspace_bindings
             : ['session', 'role', 'instance', 'task'],
     };
+}
+
+function normalizeModelProfileNames(modelProfiles) {
+    if (!modelProfiles || typeof modelProfiles !== 'object') {
+        return [];
+    }
+    return Object.keys(modelProfiles)
+        .map(name => String(name).trim())
+        .filter(Boolean)
+        .sort((left, right) => {
+            if (left === right) return 0;
+            if (left === 'default') return -1;
+            if (right === 'default') return 1;
+            return left.localeCompare(right);
+        });
 }
 
 function renderRolesList() {
@@ -175,7 +194,7 @@ function applyRoleRecord(record) {
     setInputValue('role-id-input', record.role_id || '');
     setInputValue('role-name-input', record.name || '');
     setInputValue('role-version-input', record.version || '');
-    setInputValue('role-model-profile-input', record.model_profile || 'default');
+    renderModelProfileSelect(record.model_profile || 'default');
     renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, 'No tools loaded.');
     renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, 'No MCP servers loaded.');
     renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, 'No skills loaded.');
@@ -251,6 +270,32 @@ function renderWorkspaceBindingSelect(selectedBinding) {
         : ['session', 'role', 'instance', 'task'];
     selectEl.innerHTML = bindings
         .map(binding => `<option value="${escapeHtml(binding)}"${binding === selectedBinding ? ' selected' : ''}>${escapeHtml(formatBindingLabel(binding))}</option>`)
+        .join('');
+}
+
+function renderModelProfileSelect(selectedProfile) {
+    const selectEl = document.getElementById('role-model-profile-input');
+    if (!selectEl) return;
+
+    const selectedValue = String(selectedProfile || '').trim() || 'default';
+    const availableProfiles = Array.isArray(availableModelProfiles)
+        ? [...availableModelProfiles]
+        : [];
+    const hasSelectedValue = availableProfiles.includes(selectedValue);
+    const optionValues = hasSelectedValue ? availableProfiles : [...availableProfiles, selectedValue];
+
+    if (optionValues.length === 0) {
+        selectEl.innerHTML = '';
+        selectEl.value = '';
+        return;
+    }
+
+    selectEl.innerHTML = optionValues
+        .map(profileName => {
+            const suffix = availableProfiles.includes(profileName) ? '' : ' (Unavailable)';
+            const selected = profileName === selectedValue ? ' selected' : '';
+            return `<option value="${escapeHtml(profileName)}"${selected}>${escapeHtml(profileName + suffix)}</option>`;
+        })
         .join('');
 }
 
@@ -358,13 +403,14 @@ function buildDraftFromForm() {
         ...(currentWorkspaceProfile || {}),
         binding: selectedBinding,
     };
+    const selectedModelProfile = resolveSelectedModelProfile();
 
     return {
         source_role_id: selectedSourceRoleId || null,
         role_id: roleId,
         name: String(getInputValue('role-name-input')).trim(),
         version: String(getInputValue('role-version-input')).trim(),
-        model_profile: String(getInputValue('role-model-profile-input')).trim() || 'default',
+        model_profile: selectedModelProfile,
         tools: [...currentSelections.tools],
         mcp_servers: [...currentSelections.mcp_servers],
         skills: [...currentSelections.skills],
@@ -458,6 +504,17 @@ function setInputValue(id, value) {
     if (element) {
         element.value = value;
     }
+}
+
+function resolveSelectedModelProfile() {
+    const selectedValue = String(getInputValue('role-model-profile-input')).trim();
+    if (selectedValue) {
+        return selectedValue;
+    }
+    if (availableModelProfiles.includes('default')) {
+        return 'default';
+    }
+    return availableModelProfiles[0] || 'default';
 }
 
 function formatBindingLabel(binding) {
