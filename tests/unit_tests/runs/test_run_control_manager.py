@@ -5,7 +5,6 @@ import pytest
 from pydantic_ai.messages import UserPromptPart
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.runs.injection_queue import RunInjectionManager
@@ -172,7 +171,6 @@ def test_session_guard_uses_runtime_fallback_when_process_restarted(
         agent_repo=agent_repo,
         task_repo=TaskRepository(db_path),
         message_repo=MessageRepository(db_path),
-        instance_pool=InstancePool(),
         event_bus=event_log,
         run_runtime_repo=run_runtime_repo,
     )
@@ -229,7 +227,6 @@ def test_resume_subagent_with_message_uses_same_instance_after_restart(
         agent_repo=agent_repo,
         task_repo=task_repo,
         message_repo=message_repo,
-        instance_pool=InstancePool(),
         event_bus=event_log,
         run_runtime_repo=run_runtime_repo,
     )

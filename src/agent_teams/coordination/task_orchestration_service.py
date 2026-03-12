@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.agents.models import create_subagent_instance
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.state.agent_repo import AgentInstanceRepository
@@ -38,14 +38,12 @@ class TaskOrchestrationService:
         *,
         task_repo: TaskRepository,
         role_registry: RoleRegistry,
-        instance_pool: InstancePool,
         agent_repo: AgentInstanceRepository,
         task_execution_service: TaskExecutionService,
         message_repo: MessageRepository,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
-        self._instance_pool = instance_pool
         self._agent_repo = agent_repo
         self._task_execution_service = task_execution_service
         self._message_repo = message_repo
@@ -250,7 +248,6 @@ class TaskOrchestrationService:
     ) -> str:
         existing = self._agent_repo.get_session_role_instance(session_id, role_id)
         if existing is not None:
-            self._instance_pool.ensure_from_record(existing)
             self._agent_repo.upsert_instance(
                 run_id=run_id,
                 trace_id=run_id,
@@ -263,7 +260,7 @@ class TaskOrchestrationService:
             )
             return existing.instance_id
 
-        instance = self._instance_pool.create_subagent(role_id, session_id=session_id)
+        instance = create_subagent_instance(role_id, session_id=session_id)
         self._agent_repo.upsert_instance(
             run_id=run_id,
             trace_id=run_id,

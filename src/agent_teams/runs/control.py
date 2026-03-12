@@ -23,7 +23,6 @@ from agent_teams.workflow.events import EventEnvelope, EventType
 from agent_teams.workflow.models import TaskEnvelope
 
 if TYPE_CHECKING:
-    from agent_teams.agents.management.instance_pool import InstancePool
     from agent_teams.runs.event_stream import RunEventHub
     from agent_teams.runs.injection_queue import RunInjectionManager
     from agent_teams.state.agent_repo import AgentInstanceRepository
@@ -215,7 +214,6 @@ class RunControlManager:
         self._agent_repo: AgentInstanceRepository | None = None
         self._task_repo: TaskRepository | None = None
         self._message_repo: MessageRepository | None = None
-        self._instance_pool: InstancePool | None = None
         self._event_bus: EventLog | None = None
         self._run_runtime_repo: RunRuntimeRepository | None = None
 
@@ -227,7 +225,6 @@ class RunControlManager:
         agent_repo: AgentInstanceRepository,
         task_repo: TaskRepository,
         message_repo: MessageRepository,
-        instance_pool: InstancePool,
         event_bus: EventLog,
         run_runtime_repo: RunRuntimeRepository,
     ) -> None:
@@ -236,7 +233,6 @@ class RunControlManager:
         self._agent_repo = agent_repo
         self._task_repo = task_repo
         self._message_repo = message_repo
-        self._instance_pool = instance_pool
         self._event_bus = event_bus
         self._run_runtime_repo = run_runtime_repo
 
@@ -507,7 +503,6 @@ class RunControlManager:
                 TaskStatus.STOPPED,
                 error_message="Task stopped by user",
             )
-            self._require_instance_pool().mark_stopped(instance_id)
             self._require_agent_repo().mark_status(instance_id, InstanceStatus.STOPPED)
             self._require_event_bus().emit(
                 EventEnvelope(
@@ -535,7 +530,6 @@ class RunControlManager:
                 TaskStatus.FAILED,
                 error_message="Task cancelled",
             )
-            self._require_instance_pool().mark_failed(instance_id)
             self._require_agent_repo().mark_status(instance_id, InstanceStatus.FAILED)
             self._require_event_bus().emit(
                 EventEnvelope(
@@ -748,11 +742,6 @@ class RunControlManager:
         if self._message_repo is None:
             raise RuntimeError("RunControlManager is not bound: message_repo missing")
         return self._message_repo
-
-    def _require_instance_pool(self) -> InstancePool:
-        if self._instance_pool is None:
-            raise RuntimeError("RunControlManager is not bound: instance_pool missing")
-        return self._instance_pool
 
     def _require_event_bus(self) -> EventLog:
         if self._event_bus is None:

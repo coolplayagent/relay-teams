@@ -18,7 +18,6 @@ from pydantic_ai.messages import (
 )
 
 import agent_teams.providers.llm as llm_module
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -515,7 +514,6 @@ def _build_provider(
     provider = OpenAICompatibleProvider(
         config,
         task_repo=TaskRepository(db_path),
-        instance_pool=cast(InstancePool, cast(object, InstancePool())),
         shared_store=shared_store,
         event_bus=EventLog(db_path),
         injection_manager=cast(

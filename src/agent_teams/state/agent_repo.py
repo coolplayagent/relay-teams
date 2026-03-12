@@ -112,6 +112,22 @@ class AgentInstanceRepository:
         )
         self._conn.commit()
 
+    def mark_running_instances_failed(self) -> tuple[str, ...]:
+        rows = self._conn.execute(
+            "SELECT instance_id FROM agent_instances WHERE status=? ORDER BY created_at ASC",
+            (InstanceStatus.RUNNING.value,),
+        ).fetchall()
+        instance_ids = tuple(str(row["instance_id"]) for row in rows)
+        if not instance_ids:
+            return ()
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE agent_instances SET status=?, updated_at=? WHERE status=?",
+            (InstanceStatus.FAILED.value, now, InstanceStatus.RUNNING.value),
+        )
+        self._conn.commit()
+        return instance_ids
+
     def list_all(self) -> tuple[AgentRuntimeRecord, ...]:
         rows = self._conn.execute(
             "SELECT * FROM agent_instances ORDER BY created_at ASC",

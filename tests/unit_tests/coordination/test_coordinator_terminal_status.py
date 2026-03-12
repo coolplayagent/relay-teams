@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.agents.models import create_subagent_instance
 from agent_teams.coordination.coordinator import CoordinatorGraph
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.roles.models import RoleDefinition
@@ -63,7 +63,6 @@ def _build_coordinator(
     TaskRepository,
     AgentInstanceRepository,
     RunRuntimeRepository,
-    InstancePool,
     _RecordingTaskExecutionService,
 ]:
     db_path = tmp_path / "coordinator_resume_recovery.db"
@@ -72,7 +71,6 @@ def _build_coordinator(
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
-    instance_pool = InstancePool()
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
@@ -105,13 +103,11 @@ def _build_coordinator(
         agent_repo=agent_repo,
         task_repo=task_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
         event_bus=event_log,
         run_runtime_repo=run_runtime_repo,
     )
     coordinator = CoordinatorGraph.model_construct(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=SharedStateRepository(db_path),
         event_bus=event_log,
@@ -127,7 +123,6 @@ def _build_coordinator(
         task_repo,
         agent_repo,
         run_runtime_repo,
-        instance_pool,
         task_execution_service,
     )
 
@@ -190,7 +185,6 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         task_repo,
         agent_repo,
         run_runtime_repo,
-        instance_pool,
         task_execution_service,
     ) = _build_coordinator(tmp_path)
     root_task = TaskEnvelope(
@@ -212,9 +206,8 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
     _ = task_repo.create(root_task)
     _ = task_repo.create(child_task)
 
-    coordinator_instance = instance_pool.create_subagent("coordinator_agent")
-    child_instance = instance_pool.create_subagent("time")
-    _ = instance_pool.mark_stopped(child_instance.instance_id)
+    coordinator_instance = create_subagent_instance("coordinator_agent")
+    child_instance = create_subagent_instance("time")
 
     agent_repo.upsert_instance(
         run_id="run-1",
@@ -222,6 +215,8 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         session_id="session-1",
         instance_id=coordinator_instance.instance_id,
         role_id="coordinator_agent",
+        workspace_id=coordinator_instance.workspace_id,
+        conversation_id=coordinator_instance.conversation_id,
         status=InstanceStatus.IDLE,
     )
     agent_repo.upsert_instance(
@@ -230,6 +225,8 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         session_id="session-1",
         instance_id=child_instance.instance_id,
         role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
         status=InstanceStatus.STOPPED,
     )
     task_repo.update_status(
@@ -273,8 +270,8 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
 def test_prepare_recovery_preserves_paused_subagent_followup_state(
     tmp_path: Path,
 ) -> None:
-    coordinator, task_repo, agent_repo, run_runtime_repo, instance_pool, _ = (
-        _build_coordinator(tmp_path)
+    coordinator, task_repo, agent_repo, run_runtime_repo, _ = _build_coordinator(
+        tmp_path
     )
     root_task = TaskEnvelope(
         task_id="task-root-1",
@@ -295,9 +292,8 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
     _ = task_repo.create(root_task)
     _ = task_repo.create(child_task)
 
-    coordinator_instance = instance_pool.create_subagent("coordinator_agent")
-    child_instance = instance_pool.create_subagent("time")
-    _ = instance_pool.mark_stopped(child_instance.instance_id)
+    coordinator_instance = create_subagent_instance("coordinator_agent")
+    child_instance = create_subagent_instance("time")
 
     agent_repo.upsert_instance(
         run_id="run-1",
@@ -305,6 +301,8 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
         session_id="session-1",
         instance_id=coordinator_instance.instance_id,
         role_id="coordinator_agent",
+        workspace_id=coordinator_instance.workspace_id,
+        conversation_id=coordinator_instance.conversation_id,
         status=InstanceStatus.IDLE,
     )
     agent_repo.upsert_instance(
@@ -313,6 +311,8 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
         session_id="session-1",
         instance_id=child_instance.instance_id,
         role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
         status=InstanceStatus.STOPPED,
     )
     task_repo.update_status(
@@ -363,7 +363,7 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
 
 @pytest.mark.asyncio
 async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
-    coordinator, task_repo, agent_repo, _, _, _ = _build_coordinator(
+    coordinator, task_repo, agent_repo, _, _ = _build_coordinator(
         tmp_path,
         coordinator_role_id="Coordinator",
     )

@@ -8,7 +8,6 @@ import pytest
 
 from agent_teams.intent.meta_agent import MetaAgent
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.enums import RunEventType
 from agent_teams.runs.event_stream import RunEventHub
@@ -85,7 +84,6 @@ def _build_manager(db_path: Path) -> RunManager:
         agent_repo=agent_repo,
         task_repo=task_repo,
         message_repo=message_repo,
-        instance_pool=InstancePool(),
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=run_runtime_repo,
     )

@@ -16,7 +16,6 @@ from agent_teams.notifications import (
     NotificationRule,
     NotificationService,
 )
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
@@ -71,14 +70,6 @@ class _MessageRepo:
         return None
 
 
-class _InstancePool:
-    def mark_stopped(self, instance_id: str):
-        return None
-
-    def mark_failed(self, instance_id: str):
-        return None
-
-
 class _EventBus:
     def emit(self, event) -> None:
         return None
@@ -116,7 +107,6 @@ def _make_run_manager(control: RunControlManager) -> RunManager:
         agent_repo=cast(AgentInstanceRepository, cast(object, _AgentRepo())),
         task_repo=cast(TaskRepository, cast(object, _TaskRepo())),
         message_repo=cast(MessageRepository, cast(object, _MessageRepo())),
-        instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
@@ -155,7 +145,6 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         agent_repo=cast(AgentInstanceRepository, cast(object, _AgentRepo())),
         task_repo=cast(TaskRepository, cast(object, _TaskRepo())),
         message_repo=cast(MessageRepository, cast(object, _MessageRepo())),
-        instance_pool=cast(InstancePool, cast(object, _InstancePool())),
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )

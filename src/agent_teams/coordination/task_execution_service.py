@@ -7,9 +7,8 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.agents.core.subagent import SubAgentRunner
+from agent_teams.agents.subagent import SubAgentRunner
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.logger import get_logger, log_event
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.reflection.service import ReflectionService
@@ -44,7 +43,6 @@ class TaskExecutionService(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     role_registry: RoleRegistry
-    instance_pool: InstancePool
     task_repo: TaskRepository
     shared_store: SharedStateRepository
     event_bus: EventLog
@@ -113,7 +111,6 @@ class TaskExecutionService(BaseModel):
                 "role_id": role_id,
             },
         )
-        _ = self.instance_pool.mark_running(instance_id)
         _ = self.agent_repo.mark_status(instance_id, InstanceStatus.RUNNING)
         _ = self.task_repo.update_status(task.task_id, TaskStatus.RUNNING)
         self.run_runtime_repo.ensure(
@@ -197,7 +194,6 @@ class TaskExecutionService(BaseModel):
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
-            _ = self.instance_pool.mark_completed(instance_id)
             _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
             self.run_runtime_repo.update(
                 task.trace_id,
@@ -267,7 +263,6 @@ class TaskExecutionService(BaseModel):
                     TaskStatus.FAILED,
                     error_message="Task cancelled",
                 )
-                _ = self.instance_pool.mark_failed(instance_id)
                 self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
                 self.event_bus.emit(
                     EventEnvelope(
@@ -314,7 +309,6 @@ class TaskExecutionService(BaseModel):
             _ = self.task_repo.update_status(
                 task.task_id, TaskStatus.TIMEOUT, error_message="Task timeout"
             )
-            _ = self.instance_pool.mark_timeout(instance_id)
             _ = self.agent_repo.mark_status(instance_id, InstanceStatus.TIMEOUT)
             self.run_runtime_repo.update(
                 task.trace_id,
@@ -352,7 +346,6 @@ class TaskExecutionService(BaseModel):
             _ = self.task_repo.update_status(
                 task.task_id, TaskStatus.FAILED, error_message=str(exc)
             )
-            _ = self.instance_pool.mark_failed(instance_id)
             _ = self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
             self.run_runtime_repo.update(
                 task.trace_id,

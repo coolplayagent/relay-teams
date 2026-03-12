@@ -7,7 +7,6 @@ from typing import cast
 import pytest
 
 import agent_teams.providers.runtime_factory as runtime_factory_module
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -85,7 +84,6 @@ def _build_factory(
     return create_provider_factory(
         runtime=runtime,
         task_repo=cast(TaskRepository, object()),
-        instance_pool=cast(InstancePool, object()),
         shared_store=cast(SharedStateRepository, object()),
         event_log=cast(EventLog, object()),
         injection_manager=cast(RunInjectionManager, object()),

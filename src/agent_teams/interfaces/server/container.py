@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agent_teams.intent.meta_agent import MetaAgent
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.coordinator import CoordinatorGraph
 from agent_teams.coordination.human_gate import GateManager
 from agent_teams.coordination.task_orchestration_service import (
@@ -156,7 +155,7 @@ class ServerContainer:
             ),
         )
 
-        self.instance_pool: InstancePool = InstancePool.from_repo(self.agent_repo)
+        self.agent_repo.mark_running_instances_failed()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.run_event_hub: RunEventHub = RunEventHub(
@@ -176,7 +175,6 @@ class ServerContainer:
             agent_repo=self.agent_repo,
             task_repo=self.task_repo,
             message_repo=self.message_repo,
-            instance_pool=self.instance_pool,
             event_bus=self.event_log,
             run_runtime_repo=self.run_runtime_repo,
         )
@@ -188,7 +186,6 @@ class ServerContainer:
 
         coordinator = CoordinatorGraph(
             role_registry=self.role_registry,
-            instance_pool=self.instance_pool,
             task_repo=self.task_repo,
             shared_store=self.shared_store,
             event_bus=self.event_log,
@@ -284,7 +281,6 @@ class ServerContainer:
         self._provider_factory = create_provider_factory(
             runtime=self.runtime,
             task_repo=self.task_repo,
-            instance_pool=self.instance_pool,
             shared_store=self.shared_store,
             event_log=self.event_log,
             injection_manager=self.injection_manager,
@@ -308,7 +304,6 @@ class ServerContainer:
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
-            instance_pool=self.instance_pool,
             task_repo=self.task_repo,
             shared_store=self.shared_store,
             event_log=self.event_log,
@@ -325,7 +320,6 @@ class ServerContainer:
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
             role_registry=self.role_registry,
-            instance_pool=self.instance_pool,
             agent_repo=self.agent_repo,
             task_execution_service=self.task_execution_service,
             message_repo=self.message_repo,

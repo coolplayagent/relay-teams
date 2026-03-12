@@ -8,7 +8,7 @@ import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.agents.models import create_subagent_instance
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
 from agent_teams.reflection.config_manager import ReflectionConfigManager
@@ -73,7 +73,6 @@ def _build_service(
     TaskRepository,
     AgentInstanceRepository,
     MessageRepository,
-    InstancePool,
 ]:
     role = RoleDefinition(
         role_id="time",
@@ -88,12 +87,10 @@ def _build_service(
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
-    instance_pool = InstancePool()
     shared_store = SharedStateRepository(db_path)
 
     service = TaskExecutionService(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=shared_store,
         event_bus=EventLog(db_path),
@@ -107,7 +104,7 @@ def _build_service(
         prompt_builder=RuntimePromptBuilder(),
         provider_factory=lambda _: provider,
     )
-    return service, task_repo, agent_repo, message_repo, instance_pool
+    return service, task_repo, agent_repo, message_repo
 
 
 def _build_service_with_control(
@@ -118,7 +115,6 @@ def _build_service_with_control(
     TaskRepository,
     AgentInstanceRepository,
     MessageRepository,
-    InstancePool,
     RunRuntimeRepository,
     RunControlManager,
 ]:
@@ -135,7 +131,6 @@ def _build_service_with_control(
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
-    instance_pool = InstancePool()
     event_log = EventLog(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
     shared_store = SharedStateRepository(db_path)
@@ -146,14 +141,12 @@ def _build_service_with_control(
         agent_repo=agent_repo,
         task_repo=task_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
         event_bus=event_log,
         run_runtime_repo=run_runtime_repo,
     )
 
     service = TaskExecutionService(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=shared_store,
         event_bus=event_log,
@@ -173,7 +166,6 @@ def _build_service_with_control(
         task_repo,
         agent_repo,
         message_repo,
-        instance_pool,
         run_runtime_repo,
         run_control_manager,
     )
@@ -184,11 +176,10 @@ def _seed_task(
     task_repo: TaskRepository,
     agent_repo: AgentInstanceRepository,
     message_repo: MessageRepository,
-    instance_pool: InstancePool,
 ) -> tuple[TaskEnvelope, str]:
     workspace_id = build_workspace_id("session-1")
     conversation_id = build_conversation_id("session-1", "time")
-    instance = instance_pool.create_subagent(
+    instance = create_subagent_instance(
         "time",
         workspace_id=workspace_id,
         conversation_id=conversation_id,
@@ -230,7 +221,7 @@ async def test_execute_omits_objective_when_task_history_exists(
     tmp_path: Path,
 ) -> None:
     provider = _CapturingProvider()
-    service, task_repo, agent_repo, message_repo, instance_pool = _build_service(
+    service, task_repo, agent_repo, message_repo = _build_service(
         tmp_path / "task_execution_service.db",
         provider,
     )
@@ -238,7 +229,6 @@ async def test_execute_omits_objective_when_task_history_exists(
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
     )
 
     result = await service.execute(
@@ -256,13 +246,13 @@ async def test_execute_persists_objective_before_first_turn(
     tmp_path: Path,
 ) -> None:
     provider = _CapturingProvider()
-    service, task_repo, agent_repo, message_repo, instance_pool = _build_service(
+    service, task_repo, agent_repo, message_repo = _build_service(
         tmp_path / "task_execution_service_objective.db",
         provider,
     )
     workspace_id = build_workspace_id("session-1")
     conversation_id = build_conversation_id("session-1", "time")
-    instance = instance_pool.create_subagent(
+    instance = create_subagent_instance(
         "time",
         workspace_id=workspace_id,
         conversation_id=conversation_id,
@@ -306,7 +296,7 @@ async def test_execute_persists_followup_prompt_before_turn(
     tmp_path: Path,
 ) -> None:
     provider = _CapturingProvider()
-    service, task_repo, agent_repo, message_repo, instance_pool = _build_service(
+    service, task_repo, agent_repo, message_repo = _build_service(
         tmp_path / "task_execution_service_followup.db",
         provider,
     )
@@ -314,7 +304,6 @@ async def test_execute_persists_followup_prompt_before_turn(
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
     )
 
     result = await service.execute(
@@ -341,7 +330,6 @@ async def test_execute_marks_run_stop_as_stopped_idle_not_paused_followup(
         task_repo,
         agent_repo,
         message_repo,
-        instance_pool,
         run_runtime_repo,
         run_control_manager,
     ) = _build_service_with_control(
@@ -352,7 +340,6 @@ async def test_execute_marks_run_stop_as_stopped_idle_not_paused_followup(
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
     )
     _ = run_control_manager.request_run_stop("run-1")
 
@@ -384,7 +371,6 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
         task_repo,
         agent_repo,
         message_repo,
-        instance_pool,
         run_runtime_repo,
         run_control_manager,
     ) = _build_service_with_control(
@@ -395,7 +381,6 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
     )
     _ = run_control_manager.request_subagent_stop(
         run_id="run-1",
@@ -440,11 +425,10 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
-    instance_pool = InstancePool()
     shared_store = SharedStateRepository(db_path)
     workspace_id = build_workspace_id("session-1")
     conversation_id = build_conversation_id("session-1", "coordinator_agent")
-    instance = instance_pool.create_subagent(
+    instance = create_subagent_instance(
         "coordinator_agent",
         workspace_id=workspace_id,
         conversation_id=conversation_id,
@@ -470,7 +454,6 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     )
     service = TaskExecutionService(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=shared_store,
         event_bus=EventLog(db_path),
@@ -570,7 +553,6 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
-    instance_pool = InstancePool()
     shared_store = SharedStateRepository(db_path)
     reflection_service = ReflectionService(
         config_manager=ReflectionConfigManager(config_dir=config_dir),
@@ -586,7 +568,6 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
     reflection_service.build_injected_memory = lambda **_: "- Prefer concise output."
     service = TaskExecutionService(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=shared_store,
         event_bus=EventLog(db_path),
@@ -605,7 +586,6 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
-        instance_pool=instance_pool,
     )
 
     result = await service.execute(

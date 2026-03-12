@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.workspace.ids import build_conversation_id, build_workspace_id
+from agent_teams.agents.ids import new_instance_id
+from agent_teams.workspace.ids import (
+    build_conversation_id,
+    build_instance_conversation_id,
+    build_instance_workspace_id,
+    build_workspace_id,
+)
 
 
 class SubAgentInstance(BaseModel):
@@ -84,3 +90,34 @@ class AgentRuntimeRecord(BaseModel):
         ):
             payload["conversation_id"] = build_conversation_id(session_id, role_id)
         return payload
+
+
+def create_subagent_instance(
+    role_id: str,
+    *,
+    session_id: str | None = None,
+    workspace_id: str | None = None,
+    conversation_id: str | None = None,
+) -> SubAgentInstance:
+    instance_id = new_instance_id().value
+    resolved_workspace_id = workspace_id
+    resolved_conversation_id = conversation_id
+    if session_id is not None:
+        if resolved_workspace_id is None:
+            resolved_workspace_id = build_instance_workspace_id(
+                session_id,
+                role_id,
+                instance_id,
+            )
+        if resolved_conversation_id is None:
+            resolved_conversation_id = build_instance_conversation_id(
+                session_id,
+                role_id,
+                instance_id,
+            )
+    return SubAgentInstance(
+        instance_id=instance_id,
+        role_id=role_id,
+        workspace_id=resolved_workspace_id or instance_id,
+        conversation_id=resolved_conversation_id or instance_id,
+    )

@@ -7,7 +7,6 @@ from typing import cast
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_orchestration_service import (
     TaskDraft,
     TaskOrchestrationService,
@@ -113,7 +112,6 @@ def _build_service(
     service = TaskOrchestrationService(
         task_repo=task_repo,
         role_registry=_build_role_registry(),
-        instance_pool=InstancePool(),
         agent_repo=agent_repo,
         task_execution_service=cast(TaskExecutionService, execution_service),
         message_repo=message_repo,

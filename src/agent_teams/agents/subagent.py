@@ -52,7 +52,8 @@ class SubAgentRunner(BaseModel):
             )
         )
         generate = cast(
-            Callable[[object], Awaitable[str]], getattr(self.provider, "generate")
+            Callable[[object], Awaitable[str]],
+            getattr(self.provider, "generate"),
         )
         return await generate(
             SubAgentRequest(

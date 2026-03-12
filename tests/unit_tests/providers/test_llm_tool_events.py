@@ -37,7 +37,6 @@ from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.coordination.task_execution_service import TaskExecutionService
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workspace import WorkspaceManager
 
@@ -59,10 +58,6 @@ class _FakeRunControlManager:
 
 
 class _FakeTaskRepository:
-    pass
-
-
-class _FakeInstancePool:
     pass
 
 
@@ -94,7 +89,6 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
     return OpenAICompatibleProvider(
         config,
         task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),
-        instance_pool=cast(InstancePool, cast(object, _FakeInstancePool())),
         shared_store=shared_store,
         event_bus=cast(EventLog, cast(object, _FakeEventLog())),
         injection_manager=cast(RunInjectionManager, object()),

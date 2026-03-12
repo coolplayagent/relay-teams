@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Callable
 
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -43,7 +42,6 @@ def create_provider_factory(
     *,
     runtime: RuntimeConfig,
     task_repo: TaskRepository,
-    instance_pool: InstancePool,
     shared_store: SharedStateRepository,
     event_log: EventLog,
     injection_manager: RunInjectionManager,
@@ -77,7 +75,6 @@ def create_provider_factory(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(
                 config,
                 task_repo=task_repo,
-                instance_pool=instance_pool,
                 shared_store=shared_store,
                 event_bus=event_log,
                 injection_manager=injection_manager,
@@ -121,7 +118,6 @@ def _resolve_model_profile_config(
 def create_task_execution_service(
     *,
     role_registry: RoleRegistry,
-    instance_pool: InstancePool,
     task_repo: TaskRepository,
     shared_store: SharedStateRepository,
     event_log: EventLog,
@@ -137,7 +133,6 @@ def create_task_execution_service(
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
-        instance_pool=instance_pool,
         task_repo=task_repo,
         shared_store=shared_store,
         event_bus=event_log,

@@ -9,7 +9,7 @@ from typing import Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.management.instance_pool import InstancePool
+from agent_teams.agents.models import create_subagent_instance
 from agent_teams.coordination.verification import verify_task
 from agent_teams.coordination.task_execution_service import TaskExecutionService
 from agent_teams.state.event_log import EventLog
@@ -51,7 +51,6 @@ class CoordinatorGraph(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     role_registry: RoleRegistry
-    instance_pool: InstancePool
     task_repo: TaskRepository
     shared_store: SharedStateRepository
     event_bus: EventLog
@@ -306,7 +305,7 @@ class CoordinatorGraph(BaseModel):
             ):
                 continue
             try:
-                instance = self.instance_pool.get(record.assigned_instance_id)
+                instance = self.agent_repo.get_instance(record.assigned_instance_id)
             except KeyError:
                 msg = f"Assigned instance not found: {record.assigned_instance_id}"
                 self.task_repo.update_status(
@@ -402,10 +401,6 @@ class CoordinatorGraph(BaseModel):
                 should_reset = False
             if not should_reset:
                 continue
-            try:
-                _ = self.instance_pool.mark_idle(instance.instance_id)
-            except KeyError:
-                pass
             self.agent_repo.mark_status(instance.instance_id, InstanceStatus.IDLE)
 
     def _has_resumable_delegated_work(
@@ -474,8 +469,6 @@ class CoordinatorGraph(BaseModel):
         )
         if existing is not None:
             coordinator_instance_id = existing.instance_id
-            _ = self.instance_pool.ensure_from_record(existing)
-            _ = self.instance_pool.mark_idle(coordinator_instance_id)
             _ = self.agent_repo.mark_status(
                 coordinator_instance_id, InstanceStatus.IDLE
             )
@@ -508,7 +501,7 @@ class CoordinatorGraph(BaseModel):
 
         workspace_id = build_workspace_id(session_id)
         conversation_id = build_conversation_id(session_id, coordinator_role_id)
-        instance = self.instance_pool.create_subagent(
+        instance = create_subagent_instance(
             coordinator_role_id,
             workspace_id=workspace_id,
             conversation_id=conversation_id,

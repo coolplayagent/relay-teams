@@ -4,7 +4,6 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, SkipValidation
 from pydantic_ai import RunContext
 
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -34,7 +33,6 @@ class ToolDeps(BaseModel):
     )
 
     task_repo: SkipValidation[TaskRepository]
-    instance_pool: SkipValidation[InstancePool]
     shared_store: SkipValidation[SharedStateRepository]
     event_bus: SkipValidation[EventLog]
     message_repo: SkipValidation[MessageRepository]

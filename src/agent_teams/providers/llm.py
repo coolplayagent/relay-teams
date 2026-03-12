@@ -33,7 +33,6 @@ from agent_teams.logger import (
     log_model_output,
     log_model_stream_chunk,
 )
-from agent_teams.agents.management.instance_pool import InstancePool
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
@@ -120,7 +119,6 @@ class OpenAICompatibleProvider(LLMProvider):
         config: ModelEndpointConfig,
         *,
         task_repo: TaskRepository,
-        instance_pool: InstancePool,
         shared_store: SharedStateRepository,
         event_bus: EventLog,
         injection_manager: RunInjectionManager,
@@ -147,7 +145,6 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> None:
         self._config = config
         self._task_repo = task_repo
-        self._instance_pool = instance_pool
         self._shared_store = shared_store
         self._event_bus = event_bus
         self._injection_manager = injection_manager
@@ -259,7 +256,6 @@ class OpenAICompatibleProvider(LLMProvider):
             workspace_profile = ensure_instance_workspace_profile(workspace_profile)
         deps = ToolDeps(
             task_repo=self._task_repo,
-            instance_pool=self._instance_pool,
             shared_store=self._shared_store,
             event_bus=self._event_bus,
             message_repo=self._message_repo,
