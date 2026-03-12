@@ -41,6 +41,7 @@
 - **Test-driven changes**: Every feature and bug fix must be guarded by unit tests. Unit test directories and files must correspond one-to-one with business code paths (for example, `src/agent_teams/tools/` -> `tests/unit_tests/tools/`).
 - **No emoji policy**: Do not use emoji in code, comments, docs, or commit messages.
 - **Import policy**: Do not place imports inside functions; keep imports at module top level to expose circular dependencies early.
+- **Network access policy**: For any change that introduces or alters outbound network access, explicitly evaluate whether proxy support is required; when it is, integrate with the existing proxy module rather than adding ad hoc proxy handling.
 - **CLI 模块规范**: 每个模块必须提供本模块的 CLI 子命令，且列表/查询类输出必须同时支持表格（默认）与 `--format json`。
 - **Design policy**: Database schema and API changes do not need to maintain backward compatibility. After making such changes, update the corresponding documentation in the `docs/` directory in the same task.
 
