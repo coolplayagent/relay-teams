@@ -104,6 +104,7 @@ Run setup before starting implementation work.
    - `uv run basedpyright`
 3. Run unit tests and ensure all pass:
    - `uv run pytest -q tests/unit_tests`
+   - `uv run pytest -q tests/integration_tests`
 
 ## Security
 - Store secrets only in `.agent_teams/.env`.
