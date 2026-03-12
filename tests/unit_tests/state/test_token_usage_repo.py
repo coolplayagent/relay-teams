@@ -1,0 +1,179 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from threading import Barrier
+
+from agent_teams.state.token_usage_repo import TokenUsageRepository
+
+
+def test_token_usage_repo_migrates_legacy_schema_before_recording(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "token_usage_legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE token_usage (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT NOT NULL,
+                run_id        TEXT NOT NULL,
+                instance_id   TEXT NOT NULL,
+                role_id       TEXT NOT NULL,
+                input_tokens  INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                recorded_at   TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    repo = TokenUsageRepository(db_path)
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        input_tokens=10,
+        output_tokens=4,
+        requests=2,
+        tool_calls=1,
+    )
+
+    columns = {
+        str(row["name"])
+        for row in repo._conn.execute("PRAGMA table_info(token_usage)").fetchall()
+    }
+    row = repo._conn.execute(
+        """
+        SELECT input_tokens, output_tokens, requests, tool_calls
+        FROM token_usage
+        WHERE run_id=?
+        """,
+        ("run-1",),
+    ).fetchone()
+
+    assert "requests" in columns
+    assert "tool_calls" in columns
+    assert row is not None
+    assert int(row["input_tokens"]) == 10
+    assert int(row["output_tokens"]) == 4
+    assert int(row["requests"]) == 2
+    assert int(row["tool_calls"]) == 1
+
+
+def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> None:
+    db_path = tmp_path / "token_usage_nulls.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE token_usage (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT NOT NULL,
+                run_id        TEXT NOT NULL,
+                instance_id   TEXT NOT NULL,
+                role_id       TEXT NOT NULL,
+                input_tokens  INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                requests      INTEGER DEFAULT 0,
+                tool_calls    INTEGER DEFAULT 0,
+                recorded_at   TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO token_usage (
+                session_id,
+                run_id,
+                instance_id,
+                role_id,
+                input_tokens,
+                output_tokens,
+                requests,
+                tool_calls,
+                recorded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "session-1",
+                "run-1",
+                "inst-1",
+                "role-1",
+                None,
+                7,
+                None,
+                None,
+                "2026-03-12T09:16:31+00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    repo = TokenUsageRepository(db_path)
+
+    run_usage = repo.get_by_run("run-1")
+    session_usage = repo.get_by_session("session-1")
+
+    assert run_usage.total_input_tokens == 0
+    assert run_usage.total_output_tokens == 7
+    assert run_usage.total_tokens == 7
+    assert run_usage.total_requests == 0
+    assert run_usage.total_tool_calls == 0
+    assert run_usage.by_agent[0].input_tokens == 0
+    assert run_usage.by_agent[0].output_tokens == 7
+    assert run_usage.by_agent[0].requests == 0
+    assert run_usage.by_agent[0].tool_calls == 0
+
+    assert session_usage.total_input_tokens == 0
+    assert session_usage.total_output_tokens == 7
+    assert session_usage.total_tokens == 7
+    assert session_usage.total_requests == 0
+    assert session_usage.total_tool_calls == 0
+    assert session_usage.by_role["role-1"].input_tokens == 0
+    assert session_usage.by_role["role-1"].output_tokens == 7
+    assert session_usage.by_role["role-1"].requests == 0
+    assert session_usage.by_role["role-1"].tool_calls == 0
+
+
+def test_token_usage_repo_serializes_concurrent_reads(tmp_path: Path) -> None:
+    repo = TokenUsageRepository(tmp_path / "token_usage_concurrent.db")
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        input_tokens=11,
+        output_tokens=5,
+        requests=2,
+        tool_calls=1,
+    )
+
+    errors: list[str] = []
+    totals: list[int] = []
+
+    def worker(barrier: Barrier) -> int:
+        barrier.wait()
+        return repo.get_by_run("run-1").total_tokens
+
+    for _ in range(8):
+        barrier = Barrier(16)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            futures = [pool.submit(worker, barrier) for _ in range(16)]
+            for future in as_completed(futures):
+                try:
+                    totals.append(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(repr(exc))
+
+    assert errors == []
+    assert totals
+    assert all(total == 16 for total in totals)

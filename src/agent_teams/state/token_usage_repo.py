@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 
 from pydantic import BaseModel, ConfigDict
 
@@ -60,35 +62,59 @@ class SessionTokenUsage(BaseModel):
 
 
 class TokenUsageRepository:
+    _NUMERIC_COLUMNS: tuple[str, ...] = (
+        "input_tokens",
+        "output_tokens",
+        "requests",
+        "tool_calls",
+    )
+
     def __init__(self, db_path: Path) -> None:
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS token_usage (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id    TEXT NOT NULL,
-                run_id        TEXT NOT NULL,
-                instance_id   TEXT NOT NULL,
-                role_id       TEXT NOT NULL,
-                input_tokens  INTEGER DEFAULT 0,
-                output_tokens INTEGER DEFAULT 0,
-                requests      INTEGER DEFAULT 0,
-                tool_calls    INTEGER DEFAULT 0,
-                recorded_at   TEXT NOT NULL
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id    TEXT NOT NULL,
+                    run_id        TEXT NOT NULL,
+                    instance_id   TEXT NOT NULL,
+                    role_id       TEXT NOT NULL,
+                    input_tokens  INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    requests      INTEGER DEFAULT 0,
+                    tool_calls    INTEGER DEFAULT 0,
+                    recorded_at   TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id)"
-        )
-        self._conn.commit()
+            columns = [
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(token_usage)"
+                ).fetchall()
+            ]
+            if "requests" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE token_usage ADD COLUMN requests INTEGER NOT NULL DEFAULT 0"
+                )
+            if "tool_calls" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE token_usage ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0"
+                )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id)"
+            )
+            self._sanitize_numeric_columns()
+            self._conn.commit()
 
     def record(
         self,
@@ -103,122 +129,167 @@ class TokenUsageRepository:
         tool_calls: int,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO token_usage
-              (session_id, run_id, instance_id, role_id,
-               input_tokens, output_tokens, requests, tool_calls, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                session_id,
-                run_id,
-                instance_id,
-                role_id,
-                input_tokens,
-                output_tokens,
-                requests,
-                tool_calls,
-                now,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO token_usage
+                  (session_id, run_id, instance_id, role_id,
+                   input_tokens, output_tokens, requests, tool_calls, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    run_id,
+                    instance_id,
+                    role_id,
+                    self._coerce_non_negative_int(input_tokens),
+                    self._coerce_non_negative_int(output_tokens),
+                    self._coerce_non_negative_int(requests),
+                    self._coerce_non_negative_int(tool_calls),
+                    now,
+                ),
+            )
+            self._conn.commit()
 
     def get_by_run(self, run_id: str) -> RunTokenUsage:
-        rows = self._conn.execute(
-            "SELECT * FROM token_usage WHERE run_id=? ORDER BY id ASC",
-            (run_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM token_usage WHERE run_id=? ORDER BY id ASC",
+                (run_id,),
+            ).fetchall()
 
-        # Aggregate per instance (same instance may have multiple rows if it
-        # ran through multiple agent.iter() cycles due to injection restarts)
         by_instance: dict[str, AgentTokenSummary] = {}
         for row in rows:
             iid = str(row["instance_id"])
+            input_tokens = self._row_int(row, "input_tokens")
+            output_tokens = self._row_int(row, "output_tokens")
+            requests = self._row_int(row, "requests")
+            tool_calls = self._row_int(row, "tool_calls")
             if iid in by_instance:
                 existing = by_instance[iid]
                 by_instance[iid] = AgentTokenSummary(
                     instance_id=iid,
                     role_id=existing.role_id,
-                    input_tokens=existing.input_tokens + int(row["input_tokens"]),
-                    output_tokens=existing.output_tokens + int(row["output_tokens"]),
-                    total_tokens=existing.total_tokens
-                    + int(row["input_tokens"])
-                    + int(row["output_tokens"]),
-                    requests=existing.requests + int(row["requests"]),
-                    tool_calls=existing.tool_calls + int(row["tool_calls"]),
+                    input_tokens=existing.input_tokens + input_tokens,
+                    output_tokens=existing.output_tokens + output_tokens,
+                    total_tokens=existing.total_tokens + input_tokens + output_tokens,
+                    requests=existing.requests + requests,
+                    tool_calls=existing.tool_calls + tool_calls,
                 )
             else:
                 by_instance[iid] = AgentTokenSummary(
                     instance_id=iid,
                     role_id=str(row["role_id"]),
-                    input_tokens=int(row["input_tokens"]),
-                    output_tokens=int(row["output_tokens"]),
-                    total_tokens=int(row["input_tokens"]) + int(row["output_tokens"]),
-                    requests=int(row["requests"]),
-                    tool_calls=int(row["tool_calls"]),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    requests=requests,
+                    tool_calls=tool_calls,
                 )
 
         agents = list(by_instance.values())
-        total_input = sum(a.input_tokens for a in agents)
-        total_output = sum(a.output_tokens for a in agents)
+        total_input = sum(agent.input_tokens for agent in agents)
+        total_output = sum(agent.output_tokens for agent in agents)
         return RunTokenUsage(
             run_id=run_id,
             total_input_tokens=total_input,
             total_output_tokens=total_output,
             total_tokens=total_input + total_output,
-            total_requests=sum(a.requests for a in agents),
-            total_tool_calls=sum(a.tool_calls for a in agents),
+            total_requests=sum(agent.requests for agent in agents),
+            total_tool_calls=sum(agent.tool_calls for agent in agents),
             by_agent=agents,
         )
 
     def get_by_session(self, session_id: str) -> SessionTokenUsage:
-        rows = self._conn.execute(
-            "SELECT * FROM token_usage WHERE session_id=? ORDER BY id ASC",
-            (session_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM token_usage WHERE session_id=? ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
 
-        # Aggregate per role_id across all runs in the session
         by_role: dict[str, AgentTokenSummary] = {}
         for row in rows:
-            rid = str(row["role_id"])
-            if rid in by_role:
-                existing = by_role[rid]
-                by_role[rid] = AgentTokenSummary(
-                    instance_id="",  # multiple instances collapsed by role
-                    role_id=rid,
-                    input_tokens=existing.input_tokens + int(row["input_tokens"]),
-                    output_tokens=existing.output_tokens + int(row["output_tokens"]),
-                    total_tokens=existing.total_tokens
-                    + int(row["input_tokens"])
-                    + int(row["output_tokens"]),
-                    requests=existing.requests + int(row["requests"]),
-                    tool_calls=existing.tool_calls + int(row["tool_calls"]),
+            role_id = str(row["role_id"])
+            input_tokens = self._row_int(row, "input_tokens")
+            output_tokens = self._row_int(row, "output_tokens")
+            requests = self._row_int(row, "requests")
+            tool_calls = self._row_int(row, "tool_calls")
+            if role_id in by_role:
+                existing = by_role[role_id]
+                by_role[role_id] = AgentTokenSummary(
+                    instance_id="",
+                    role_id=role_id,
+                    input_tokens=existing.input_tokens + input_tokens,
+                    output_tokens=existing.output_tokens + output_tokens,
+                    total_tokens=existing.total_tokens + input_tokens + output_tokens,
+                    requests=existing.requests + requests,
+                    tool_calls=existing.tool_calls + tool_calls,
                 )
             else:
-                by_role[rid] = AgentTokenSummary(
+                by_role[role_id] = AgentTokenSummary(
                     instance_id="",
-                    role_id=rid,
-                    input_tokens=int(row["input_tokens"]),
-                    output_tokens=int(row["output_tokens"]),
-                    total_tokens=int(row["input_tokens"]) + int(row["output_tokens"]),
-                    requests=int(row["requests"]),
-                    tool_calls=int(row["tool_calls"]),
+                    role_id=role_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    requests=requests,
+                    tool_calls=tool_calls,
                 )
 
         roles = list(by_role.values())
-        total_input = sum(r.input_tokens for r in roles)
-        total_output = sum(r.output_tokens for r in roles)
+        total_input = sum(role.input_tokens for role in roles)
+        total_output = sum(role.output_tokens for role in roles)
         return SessionTokenUsage(
             session_id=session_id,
             total_input_tokens=total_input,
             total_output_tokens=total_output,
             total_tokens=total_input + total_output,
-            total_requests=sum(r.requests for r in roles),
-            total_tool_calls=sum(r.tool_calls for r in roles),
+            total_requests=sum(role.requests for role in roles),
+            total_tool_calls=sum(role.tool_calls for role in roles),
             by_role=by_role,
         )
 
     def delete_by_session(self, session_id: str) -> None:
-        self._conn.execute("DELETE FROM token_usage WHERE session_id=?", (session_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM token_usage WHERE session_id=?", (session_id,)
+            )
+            self._conn.commit()
+
+    def _sanitize_numeric_columns(self) -> None:
+        assignments = ", ".join(
+            f"{column}=COALESCE({column}, 0)" for column in self._NUMERIC_COLUMNS
+        )
+        conditions = " OR ".join(
+            f"{column} IS NULL" for column in self._NUMERIC_COLUMNS
+        )
+        self._conn.execute(f"UPDATE token_usage SET {assignments} WHERE {conditions}")
+
+    def _row_int(self, row: sqlite3.Row, field_name: str) -> int:
+        try:
+            value = row[field_name]
+        except IndexError:
+            return 0
+        return self._coerce_non_negative_int(value)
+
+    def _coerce_non_negative_int(self, value: object) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return 0
+            try:
+                return max(0, int(stripped))
+            except ValueError:
+                try:
+                    return max(0, int(float(stripped)))
+                except ValueError:
+                    return 0
+        return 0

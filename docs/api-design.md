@@ -190,11 +190,11 @@ Lists delegated tasks in the session.
 
 ### `GET /sessions/{session_id}/token-usage`
 
-Returns aggregated token usage for the session, grouped by `role_id`.
+Returns aggregated token usage for the session, grouped by `role_id`. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
 
-Returns token usage for a single run, grouped by agent instance.
+Returns token usage for a single run, grouped by agent instance. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
 ## Run APIs
 
