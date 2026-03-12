@@ -20,6 +20,7 @@ coverage.json
 .agent_teams/workspaces/
 .agent_teams/skills
 .agent_teams/mcp.json
+.agent_teams/server-process.json
 
 tmp.db
 tmp.db-journal
