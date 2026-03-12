@@ -348,7 +348,7 @@ class RunControlManager:
         record = self._require_agent_repo().get_instance(instance_id)
         if record.run_id != run_id:
             raise KeyError(f"Instance {instance_id} does not belong to run {run_id}")
-        if record.role_id == "coordinator_agent":
+        if self._is_coordinator_role_for_run(run_id=run_id, role_id=record.role_id):
             raise ValueError("Stopping coordinator via subagent API is not allowed")
 
         paused = self.request_subagent_stop(run_id=run_id, instance_id=instance_id)
@@ -621,14 +621,34 @@ class RunControlManager:
                 run_id=paused.run_id, instance_id=paused.instance_id
             )
 
-    def get_coordinator_instance_id(self, session_id: str) -> str | None:
-        return self._require_agent_repo().get_coordinator_instance_id(session_id)
+    def get_coordinator_instance_id(
+        self, *, run_id: str, session_id: str
+    ) -> str | None:
+        coordinator_role_id = self._root_role_id_for_run(run_id)
+        if coordinator_role_id is None:
+            return None
+        return self._require_agent_repo().get_session_role_instance_id(
+            session_id,
+            coordinator_role_id,
+        )
 
     def get_paused_subagent(self, session_id: str) -> PausedSubagent | None:
         paused = self._paused.get(session_id)
         if paused is not None:
             return paused
         return self._paused_from_runtime(session_id=session_id)
+
+    def _is_coordinator_role_for_run(self, *, run_id: str, role_id: str) -> bool:
+        coordinator_role_id = self._root_role_id_for_run(run_id)
+        return (
+            coordinator_role_id == role_id if coordinator_role_id is not None else False
+        )
+
+    def _root_role_id_for_run(self, run_id: str) -> str | None:
+        for record in self._require_task_repo().list_by_trace(run_id):
+            if record.envelope.parent_task_id is None:
+                return record.envelope.role_id
+        return None
 
     def _find_task_for_instance(self, *, run_id: str, instance_id: str) -> str | None:
         for record in self._require_task_repo().list_by_trace(run_id):

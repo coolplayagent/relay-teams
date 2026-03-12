@@ -438,13 +438,13 @@ Use cases:
 
 ### `POST /prompts:preview`
 
-Builds prompt preview payload for a specific role.
+Builds prompt preview payload for a specific role. Coordinator role IDs are resolved from the loaded role files and are not hardcoded to `coordinator_agent`.
 
 Request:
 
 ```json
 {
-  "role_id": "coordinator_agent",
+  "role_id": "Coordinator",
   "objective": "Draft release note",
   "shared_state": {"lang": "zh-CN", "priority": 1},
   "tools": ["dispatch_task"],
@@ -456,7 +456,7 @@ Response:
 
 ```json
 {
-  "role_id": "coordinator_agent",
+  "role_id": "Coordinator",
   "objective": "Draft release note",
   "tools": ["dispatch_task"],
   "skills": ["time"],

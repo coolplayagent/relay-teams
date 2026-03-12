@@ -4,9 +4,8 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.registry import is_coordinator_role_definition
 from agent_teams.workflow.models import TaskEnvelope
-
-COORDINATOR_ROLE_ID = "coordinator_agent"
 
 
 class RuntimePromptBuildInput(BaseModel):
@@ -19,7 +18,7 @@ class RuntimePromptBuildInput(BaseModel):
 
 def build_runtime_system_prompt(data: RuntimePromptBuildInput) -> str:
     sections: list[str] = [f"## Role\n{data.role.system_prompt}"]
-    if data.role.role_id == COORDINATOR_ROLE_ID:
+    if is_coordinator_role_definition(data.role):
         sections.append(
             "## Runtime Contract\n"
             "- A coordinator turn can call tools many times, but delegated task execution remains explicit.\n"

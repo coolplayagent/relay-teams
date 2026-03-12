@@ -14,6 +14,7 @@ from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.runs.injection_queue import RunInjectionManager
+from agent_teams.runs.models import IntentInput
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository
@@ -55,6 +56,8 @@ class _RecordingTaskExecutionService:
 
 def _build_coordinator(
     tmp_path: Path,
+    *,
+    coordinator_role_id: str = "coordinator_agent",
 ) -> tuple[
     CoordinatorGraph,
     TaskRepository,
@@ -73,9 +76,16 @@ def _build_coordinator(
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id=coordinator_role_id,
             name="Coordinator Agent",
             version="1",
+            tools=(
+                "list_available_roles",
+                "create_tasks",
+                "update_task",
+                "list_run_tasks",
+                "dispatch_task",
+            ),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -349,3 +359,28 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
+    coordinator, task_repo, agent_repo, _, _, _ = _build_coordinator(
+        tmp_path,
+        coordinator_role_id="Coordinator",
+    )
+
+    trace_id, root_task_id, status, result = await coordinator.run(
+        IntentInput(session_id="session-1", intent="hello"),
+        trace_id="run-dynamic",
+    )
+
+    root_task = task_repo.get(root_task_id)
+    coordinator_instance = agent_repo.get_session_role_instance(
+        "session-1", "Coordinator"
+    )
+
+    assert trace_id == "run-dynamic"
+    assert status == "completed"
+    assert result == f"{root_task_id} done"
+    assert root_task.envelope.role_id == "Coordinator"
+    assert coordinator_instance is not None
+    assert coordinator_instance.role_id == "Coordinator"

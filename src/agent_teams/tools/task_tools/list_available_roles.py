@@ -14,7 +14,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             roles = [
                 role
                 for role in ctx.deps.role_registry.list_roles()
-                if role.role_id != "coordinator_agent"
+                if not ctx.deps.role_registry.is_coordinator_role(role.role_id)
             ]
             return {
                 "ok": True,

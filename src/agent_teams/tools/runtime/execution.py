@@ -90,14 +90,14 @@ async def execute_tool(
             ctx.deps.run_id,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.COORDINATOR_RUNNING
-            if ctx.deps.role_id == "coordinator_agent"
+            if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
             else RunRuntimePhase.SUBAGENT_RUNNING,
             active_instance_id=ctx.deps.instance_id,
             active_task_id=ctx.deps.task_id,
             active_role_id=ctx.deps.role_id,
             active_subagent_instance_id=(
                 None
-                if ctx.deps.role_id == "coordinator_agent"
+                if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
                 else ctx.deps.instance_id
             ),
             last_error=None,

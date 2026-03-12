@@ -43,7 +43,6 @@ from agent_teams.workflow.models import (
     VerificationResult,
 )
 
-ROLE_COORDINATOR = "coordinator_agent"
 MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
 
@@ -93,6 +92,7 @@ class CoordinatorGraph(BaseModel):
             session_id=session_id,
             parent_task_id=None,
             trace_id=trace_id,
+            role_id=self.role_registry.get_coordinator_role_id(),
             objective=intent.intent,
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -233,7 +233,7 @@ class CoordinatorGraph(BaseModel):
         if coordinator_first:
             coordinator_result = await self._task_executor(
                 instance_id=coordinator_instance_id,
-                role_id=ROLE_COORDINATOR,
+                role_id=root_task.role_id,
                 task=root_task,
             )
             log_event(
@@ -271,7 +271,7 @@ class CoordinatorGraph(BaseModel):
                 break
             coordinator_result = await self._task_executor(
                 instance_id=coordinator_instance_id,
-                role_id=ROLE_COORDINATOR,
+                role_id=root_task.role_id,
                 task=root_task,
             )
             log_event(
@@ -467,9 +467,10 @@ class CoordinatorGraph(BaseModel):
         trace_id: str,
         root_task: TaskEnvelope,
     ) -> str:
-        _ = self.role_registry.get(ROLE_COORDINATOR)
+        coordinator_role_id = root_task.role_id
+        _ = self.role_registry.get(coordinator_role_id)
         existing = self.agent_repo.get_session_role_instance(
-            session_id, ROLE_COORDINATOR
+            session_id, coordinator_role_id
         )
         if existing is not None:
             coordinator_instance_id = existing.instance_id
@@ -483,7 +484,7 @@ class CoordinatorGraph(BaseModel):
                 trace_id=trace_id,
                 session_id=session_id,
                 instance_id=coordinator_instance_id,
-                role_id=ROLE_COORDINATOR,
+                role_id=root_task.role_id,
                 workspace_id=existing.workspace_id,
                 conversation_id=existing.conversation_id,
                 status=InstanceStatus.IDLE,
@@ -506,9 +507,9 @@ class CoordinatorGraph(BaseModel):
             return coordinator_instance_id
 
         workspace_id = build_workspace_id(session_id)
-        conversation_id = build_conversation_id(session_id, ROLE_COORDINATOR)
+        conversation_id = build_conversation_id(session_id, coordinator_role_id)
         instance = self.instance_pool.create_subagent(
-            ROLE_COORDINATOR,
+            coordinator_role_id,
             workspace_id=workspace_id,
             conversation_id=conversation_id,
         )
@@ -522,7 +523,7 @@ class CoordinatorGraph(BaseModel):
             trace_id=trace_id,
             session_id=session_id,
             instance_id=instance.instance_id,
-            role_id=ROLE_COORDINATOR,
+            role_id=coordinator_role_id,
             workspace_id=instance.workspace_id,
             conversation_id=instance.conversation_id,
             status=InstanceStatus.IDLE,

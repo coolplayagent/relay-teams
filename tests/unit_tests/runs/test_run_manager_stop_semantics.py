@@ -44,7 +44,11 @@ class _AgentRepo:
     def list_running(self, run_id: str):
         return ()
 
-    def get_coordinator_instance_id(self, session_id: str) -> str | None:
+    def get_coordinator_instance_id(
+        self, *, run_id: str, session_id: str
+    ) -> str | None:
+        _ = run_id
+        _ = session_id
         return None
 
     def get_instance(self, instance_id: str):

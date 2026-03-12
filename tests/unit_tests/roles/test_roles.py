@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.roles.registry import RoleLoader
+from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.registry import RoleLoader, RoleRegistry
 
 
 def test_role_loader_loads_markdown_role() -> None:
@@ -31,3 +32,35 @@ def test_role_loader_rejects_depends_on_in_role_front_matter(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="depends_on is not allowed"):
         RoleLoader().load_one(role_file)
+
+
+def test_role_registry_resolves_dynamic_coordinator_role() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            version="1.0.0",
+            tools=(
+                "list_available_roles",
+                "create_tasks",
+                "update_task",
+                "list_run_tasks",
+                "dispatch_task",
+            ),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Implement tasks.",
+        )
+    )
+
+    assert registry.get_coordinator_role_id() == "Coordinator"
+    assert registry.is_coordinator_role("Coordinator") is True
+    assert registry.is_coordinator_role("Crafter") is False

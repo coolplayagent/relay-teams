@@ -185,9 +185,8 @@ class AgentInstanceRepository:
             return None
         return self._to_record(row)
 
-    def get_coordinator_instance_id(self, session_id: str) -> str | None:
-        """Return the coordinator instance_id for this session, or None."""
-        record = self.get_session_role_instance(session_id, "coordinator_agent")
+    def get_session_role_instance_id(self, session_id: str, role_id: str) -> str | None:
+        record = self.get_session_role_instance(session_id, role_id)
         return record.instance_id if record is not None else None
 
     def delete_by_session(self, session_id: str) -> None:

@@ -8,7 +8,7 @@ from agent_teams.roles.registry import RoleLoader
 
 def test_coordinator_uses_task_tools_and_not_emit_event() -> None:
     registry = RoleLoader().load_all(Path(".agent_teams/roles"))
-    coordinator = registry.get("coordinator_agent")
+    coordinator = registry.get_coordinator()
     tools = set(coordinator.tools)
 
     assert "create_tasks" in tools

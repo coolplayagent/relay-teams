@@ -15,8 +15,6 @@ from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.ids import new_task_id
 from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
 
-ROLE_COORDINATOR = "coordinator_agent"
-
 
 class TaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")

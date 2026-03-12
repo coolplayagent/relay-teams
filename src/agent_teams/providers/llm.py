@@ -255,7 +255,7 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         role_definition = self._role_registry.get(request.role_id)
         workspace_profile = role_definition.workspace_profile
-        if request.role_id != "coordinator_agent":
+        if not self._role_registry.is_coordinator_role(request.role_id):
             workspace_profile = ensure_instance_workspace_profile(workspace_profile)
         deps = ToolDeps(
             task_repo=self._task_repo,

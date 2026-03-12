@@ -37,7 +37,6 @@ from agent_teams.workflow.enums import TaskStatus
 from agent_teams.workflow.events import EventEnvelope, EventType
 from agent_teams.workflow.models import TaskEnvelope
 
-ROLE_COORDINATOR = "coordinator_agent"
 LOGGER = get_logger(__name__)
 
 
@@ -102,6 +101,7 @@ class TaskExecutionService(BaseModel):
         task: TaskEnvelope,
         user_prompt_override: str | None,
     ) -> str:
+        is_coordinator = self.role_registry.is_coordinator_role(role_id)
         log_event(
             LOGGER,
             logging.INFO,
@@ -123,7 +123,7 @@ class TaskExecutionService(BaseModel):
             status=RunRuntimeStatus.RUNNING,
             phase=(
                 RunRuntimePhase.COORDINATOR_RUNNING
-                if role_id == ROLE_COORDINATOR
+                if is_coordinator
                 else RunRuntimePhase.SUBAGENT_RUNNING
             ),
         )
@@ -132,15 +132,13 @@ class TaskExecutionService(BaseModel):
             status=RunRuntimeStatus.RUNNING,
             phase=(
                 RunRuntimePhase.COORDINATOR_RUNNING
-                if role_id == ROLE_COORDINATOR
+                if is_coordinator
                 else RunRuntimePhase.SUBAGENT_RUNNING
             ),
             active_instance_id=instance_id,
             active_task_id=task.task_id,
             active_role_id=role_id,
-            active_subagent_instance_id=(
-                None if role_id == ROLE_COORDINATOR else instance_id
-            ),
+            active_subagent_instance_id=(None if is_coordinator else instance_id),
             last_error=None,
         )
         self.event_bus.emit(
@@ -258,7 +256,7 @@ class TaskExecutionService(BaseModel):
                 )
                 paused_subagent = (
                     stopped
-                    and role_id != ROLE_COORDINATOR
+                    and not is_coordinator
                     and subagent_stop_requested
                     and not run_stop_requested
                 )
@@ -396,7 +394,7 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         profile: WorkspaceProfile,
     ) -> WorkspaceProfile:
-        if role_id == ROLE_COORDINATOR:
+        if self.role_registry.is_coordinator_role(role_id):
             return profile
         return ensure_instance_workspace_profile(profile)
 
@@ -408,7 +406,10 @@ class TaskExecutionService(BaseModel):
         session_id: str,
         workspace_id: str,
     ) -> RoleDefinition:
-        if role_id == ROLE_COORDINATOR or self.reflection_service is None:
+        if (
+            self.role_registry.is_coordinator_role(role_id)
+            or self.reflection_service is None
+        ):
             return role
         memory_text = self.reflection_service.build_injected_memory(
             session_id=session_id,
@@ -432,7 +433,10 @@ class TaskExecutionService(BaseModel):
         workspace_id: str,
         conversation_id: str,
     ) -> None:
-        if role_id == ROLE_COORDINATOR or self.reflection_service is None:
+        if (
+            self.role_registry.is_coordinator_role(role_id)
+            or self.reflection_service is None
+        ):
             return
         _ = self.reflection_service.enqueue_daily_reflection(
             session_id=task.session_id,

@@ -895,7 +895,8 @@ class RunManager:
             root = self._root_task_for_run(run_id)
             session_id = root.envelope.session_id
             instance_id = self._run_control_manager.get_coordinator_instance_id(
-                session_id
+                run_id=run_id,
+                session_id=session_id,
             )
             if not instance_id:
                 raise KeyError(

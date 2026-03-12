@@ -91,11 +91,18 @@ def build_session_rounds(
         has_user_messages = any(
             str(message.get("role") or "") == "user" for message in run_messages
         )
+        coordinator_role_id = None
+        if root_task is not None:
+            envelope = getattr(root_task, "envelope", None)
+            candidate_role_id = getattr(envelope, "role_id", None)
+            if isinstance(candidate_role_id, str) and candidate_role_id:
+                coordinator_role_id = candidate_role_id
         coordinator_messages = [
             message
             for message in run_messages
-            if str(message.get("role_id") or "") == "coordinator_agent"
-            and str(message.get("role") or "") != "user"
+            if str(message.get("role") or "") != "user"
+            and coordinator_role_id is not None
+            and str(message.get("role_id") or "") == coordinator_role_id
         ]
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)

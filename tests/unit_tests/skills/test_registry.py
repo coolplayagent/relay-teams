@@ -7,6 +7,8 @@ from typing import cast
 
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.models import SkillScope
+from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext
@@ -299,6 +301,16 @@ class _FakeDeps:
         self.session_id = "session-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
+        self.role_registry = RoleRegistry()
+        self.role_registry.register(
+            RoleDefinition(
+                role_id="spec_coder",
+                name="Spec Coder",
+                version="1",
+                tools=(),
+                system_prompt="Implement tasks.",
+            )
+        )
         self.run_event_hub = _FakeRunEventHub()
         self.run_control_manager = _FakeRunControlManager()
         self.tool_approval_manager = _FakeApprovalManager()

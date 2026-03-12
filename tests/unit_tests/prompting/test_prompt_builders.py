@@ -16,11 +16,20 @@ from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
 
 
 def _role(role_id: str) -> RoleDefinition:
+    tools = ()
+    if role_id.casefold() in {"coordinator_agent", "coordinator"}:
+        tools = (
+            "list_available_roles",
+            "create_tasks",
+            "update_task",
+            "list_run_tasks",
+            "dispatch_task",
+        )
     return RoleDefinition(
         role_id=role_id,
         name="role",
         version="1",
-        tools=(),
+        tools=tools,
         mcp_servers=(),
         skills=(),
         model_profile="default",
