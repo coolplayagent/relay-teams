@@ -80,6 +80,14 @@ export async function reloadMcpConfig() {
     );
 }
 
+export async function fetchMcpServerTools(serverName) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools`,
+        undefined,
+        `Failed to fetch MCP tools for ${serverName}`,
+    );
+}
+
 export async function reloadSkillsConfig() {
     return requestJson(
         '/api/system/configs/skills:reload',

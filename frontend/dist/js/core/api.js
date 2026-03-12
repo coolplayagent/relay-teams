@@ -23,6 +23,7 @@ export {
     fetchRoleConfig,
     fetchRoleConfigs,
     fetchConfigStatus,
+    fetchMcpServerTools,
     fetchSystemHealth,
     fetchModelConfig,
     fetchModelProfiles,

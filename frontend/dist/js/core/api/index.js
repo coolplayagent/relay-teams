@@ -37,6 +37,7 @@ export {
     fetchNotificationConfig,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchMcpServerTools,
     fetchSystemHealth,
     fetchModelConfig,
     fetchModelProfiles,

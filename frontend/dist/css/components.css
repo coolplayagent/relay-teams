@@ -2762,6 +2762,94 @@
     line-height: 1;
 }
 
+
+.mcp-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.mcp-status-card {
+    border: 1px solid var(--settings-divider);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--settings-row-bg) 82%, transparent);
+    overflow: hidden;
+}
+
+.mcp-status-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1rem 0.85rem;
+}
+
+.mcp-status-card-heading {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.mcp-status-card-name {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.mcp-status-card-meta {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    word-break: break-word;
+}
+
+.mcp-tools-list {
+    border-top: 1px solid var(--settings-divider);
+    padding: 0 1rem;
+}
+
+.mcp-tool-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.85rem 0;
+}
+
+.mcp-tool-row + .mcp-tool-row {
+    border-top: 1px solid var(--settings-divider);
+}
+
+.mcp-tool-name {
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    word-break: break-word;
+}
+
+.mcp-tool-description {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.mcp-tool-description-empty {
+    font-style: italic;
+}
+
+.mcp-tools-empty {
+    padding: 0 1rem 1rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.mcp-tools-error {
+    color: var(--danger);
+}
+
 .profiles-list {
     min-height: 320px;
     min-width: 0;

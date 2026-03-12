@@ -4,6 +4,10 @@
             "command": "npx",
             "args": [
                 "-y",
+                "-p",
+                "time-mcp@1.0.6",
+                "-p",
+                "@modelcontextprotocol/sdk@1.25.3",
                 "time-mcp"
             ]
         }

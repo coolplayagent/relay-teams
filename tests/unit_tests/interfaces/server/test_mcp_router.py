@@ -69,3 +69,18 @@ def test_list_mcp_server_tools() -> None:
         "transport": "stdio",
         "tools": [{"name": "read_file", "description": "Read a file"}],
     }
+
+
+def test_list_mcp_server_tools_surfaces_connection_failures() -> None:
+    class _BrokenMcpService(_FakeMcpService):
+        async def list_server_tools(self, name: str) -> McpServerToolsSummary:
+            raise RuntimeError("Connection closed")
+
+    client = _create_test_client(_BrokenMcpService())
+
+    response = client.get("/api/mcp/servers/filesystem/tools")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "Failed to load MCP tools for 'filesystem': Connection closed"
+    }

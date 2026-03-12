@@ -26,3 +26,8 @@ async def list_mcp_server_tools(
         return await service.list_server_tools(server_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to load MCP tools for '{server_name}': {exc}",
+        ) from exc
