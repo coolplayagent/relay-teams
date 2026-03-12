@@ -23,8 +23,10 @@ SERVICE_NAME = "agent_teams"
 BACKEND_LOGGER_NAMESPACE = "agent_teams.backend"
 FRONTEND_LOGGER_NAMESPACE = "agent_teams.frontend"
 DEFAULT_BACKEND_LOG_FILENAME = "backend.log"
+DEFAULT_DEBUG_LOG_FILENAME = "debug.log"
 DEFAULT_FRONTEND_LOG_FILENAME = "frontend.log"
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_DEBUG_LOG_LEVEL = "DEBUG"
 DEFAULT_LOG_CONSOLE = "1"
 DEFAULT_BACKUP_COUNT = 14
 
@@ -98,6 +100,20 @@ class StructuredQueueHandler(QueueHandler):
         prepared.exc_text = None
         prepared.stack_info = None
         return prepared
+
+
+class _BackendLogFilter(logging.Filter):
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _resolve_log_source(record) != "backend":
+            return False
+        return record.name != "uvicorn.access"
+
+
+class _DebugLogFilter(logging.Filter):
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _resolve_log_source(record) == "backend"
 
 
 class HumanReadableFormatter(logging.Formatter):
@@ -176,8 +192,10 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
             env_key="AGENT_TEAMS_LOG_FRONTEND_LEVEL",
             fallback_key="AGENT_TEAMS_LOG_LEVEL",
         )
+        debug_level = _resolve_debug_log_level()
 
         backend_formatter = HumanReadableFormatter()
+        debug_formatter = HumanReadableFormatter()
         frontend_formatter = HumanReadableFormatter()
 
         backend_file_handler = _build_file_handler(
@@ -185,6 +203,13 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
             level=backend_level,
             formatter=backend_formatter,
         )
+        backend_file_handler.addFilter(_BackendLogFilter())
+        debug_file_handler = _build_file_handler(
+            path=log_dir / DEFAULT_DEBUG_LOG_FILENAME,
+            level=debug_level,
+            formatter=debug_formatter,
+        )
+        debug_file_handler.addFilter(_DebugLogFilter())
         frontend_file_handler = _build_file_handler(
             path=log_dir / DEFAULT_FRONTEND_LOG_FILENAME,
             level=frontend_level,
@@ -196,6 +221,7 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(backend_level)
             console_handler.setFormatter(backend_formatter)
+            console_handler.addFilter(_BackendLogFilter())
 
         backend_queue: SimpleQueue[logging.LogRecord] = SimpleQueue()
         frontend_queue: SimpleQueue[logging.LogRecord] = SimpleQueue()
@@ -204,7 +230,10 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
         backend_queue_handler.setLevel(logging.DEBUG)
         frontend_queue_handler.setLevel(logging.DEBUG)
 
-        backend_targets: list[logging.Handler] = [backend_file_handler]
+        backend_targets: list[logging.Handler] = [
+            backend_file_handler,
+            debug_file_handler,
+        ]
         if console_handler is not None:
             backend_targets.append(console_handler)
 
@@ -243,6 +272,7 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
             backend_queue_handler,
             frontend_queue_handler,
             backend_file_handler,
+            debug_file_handler,
             frontend_file_handler,
         ]
         if console_handler is not None:
@@ -302,7 +332,7 @@ def log_model_output(role_id: str, message: str) -> None:
     logger = get_logger(__name__)
     log_event(
         logger,
-        logging.INFO,
+        logging.DEBUG,
         event="model.output",
         message="Model output emitted",
         payload={"role_id": role_id, "output": _safe_json(message)},
@@ -314,7 +344,7 @@ def log_tool_call(role_id: str, tool_name: str, params: JsonObject) -> None:
     short = _safe_json(params)
     log_event(
         logger,
-        logging.INFO,
+        logging.DEBUG,
         event="tool.call.started",
         message="Tool call started",
         payload={"role_id": role_id, "tool_name": tool_name, "params": short},
@@ -405,6 +435,17 @@ def _resolve_log_level(*, env_key: str, fallback_key: str) -> int:
     if isinstance(resolved, int):
         return resolved
     return logging.INFO
+
+
+def _resolve_debug_log_level() -> int:
+    level_name = _get_runtime_env_value(
+        "AGENT_TEAMS_LOG_DEBUG_LEVEL",
+        DEFAULT_DEBUG_LOG_LEVEL,
+    )
+    resolved = getattr(logging, level_name.strip().upper(), logging.DEBUG)
+    if isinstance(resolved, int):
+        return resolved
+    return logging.DEBUG
 
 
 def _build_file_handler(

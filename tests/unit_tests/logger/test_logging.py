@@ -17,7 +17,7 @@ from agent_teams.logger import logger as logger_module
 from agent_teams.trace import bind_trace_context, trace_span
 
 
-def test_configure_logging_creates_backend_and_frontend_logs(
+def test_configure_logging_creates_backend_debug_and_frontend_logs(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".agent_teams"
@@ -27,6 +27,7 @@ def test_configure_logging_creates_backend_and_frontend_logs(
         shutdown_logging()
 
         assert (config_dir / "log" / "backend.log").exists()
+        assert (config_dir / "log" / "debug.log").exists()
         assert (config_dir / "log" / "frontend.log").exists()
     finally:
         snapshot.restore()
@@ -47,6 +48,7 @@ def test_configure_logging_uses_project_log_dir_by_default(
 
         assert log_dir.exists()
         assert (log_dir / "backend.log").exists()
+        assert (log_dir / "debug.log").exists()
         assert (log_dir / "frontend.log").exists()
     finally:
         snapshot.restore()
@@ -78,14 +80,18 @@ def test_log_event_writes_human_readable_backend_log_with_trace_context(
         shutdown_logging()
 
         log_path = config_dir / "log" / "backend.log"
+        debug_path = config_dir / "log" / "debug.log"
         lines = log_path.read_text(encoding="utf-8").splitlines()
         matching_line = next(line for line in lines if "event=unit.test" in line)
+        debug_lines = debug_path.read_text(encoding="utf-8").splitlines()
         assert " | INFO | backend | " in matching_line
         assert "trace_id=trace-1" in matching_line
         assert "request_id=req-1" in matching_line
         assert "trigger_id=trigger-1" in matching_line
         assert '"secret": "***"' in matching_line
         assert '"values": ["a", "b"]' in matching_line
+        assert any("event=trace.span.succeeded" in line for line in debug_lines)
+        assert not any("event=trace.span.succeeded" in line for line in lines)
     finally:
         snapshot.restore()
 
@@ -113,6 +119,47 @@ def test_frontend_logger_writes_only_frontend_file(tmp_path: Path) -> None:
         assert "event=frontend.test" not in backend_lines
         assert "event=frontend.test" in frontend_lines
         assert " | frontend | " in frontend_lines
+    finally:
+        snapshot.restore()
+
+
+def test_debug_events_write_only_to_debug_log(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent_teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.debug")
+        log_event(
+            logger,
+            logging.DEBUG,
+            event="unit.debug",
+            message="debug only",
+        )
+
+        shutdown_logging()
+
+        backend_lines = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        debug_lines = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert "event=unit.debug" not in backend_lines
+        assert "event=unit.debug" in debug_lines
+    finally:
+        snapshot.restore()
+
+
+def test_uvicorn_access_logs_are_excluded_from_backend_log(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent_teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        access_logger = logging.getLogger("uvicorn.access")
+        access_logger.info('127.0.0.1 - "GET /api/system/health HTTP/1.1" 200')
+
+        shutdown_logging()
+
+        backend_lines = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        debug_lines = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert "uvicorn.access" not in backend_lines
+        assert "uvicorn.access" in debug_lines
     finally:
         snapshot.restore()
 

@@ -5,7 +5,7 @@
 - Engine: SQLite
 - Database file: `.agent_teams/agent_teams.db`
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
-- Runtime logs are file-based and stored under `.agent_teams/log/backend.log` and `.agent_teams/log/frontend.log`
+- Runtime logs are file-based and stored under `.agent_teams/log/backend.log`, `.agent_teams/log/debug.log`, and `.agent_teams/log/frontend.log`
 
 ---
 

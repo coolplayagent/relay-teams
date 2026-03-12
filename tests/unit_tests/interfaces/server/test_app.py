@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import signal
 from types import FrameType
 
@@ -22,7 +23,9 @@ def test_register_signal_handlers_logs_and_chains_previous_handler(
     def fake_getsignal(_sig: int) -> server_app.SignalHandler:
         return previous_handler
 
-    def fake_signal(sig: int, handler: server_app.SignalHandler) -> server_app.SignalHandler:
+    def fake_signal(
+        sig: int, handler: server_app.SignalHandler
+    ) -> server_app.SignalHandler:
         assigned_handlers[sig] = handler
         return previous_handler
 
@@ -68,3 +71,51 @@ def test_register_signal_handlers_raises_keyboard_interrupt_on_default_sigint(
 
     with pytest.raises(KeyboardInterrupt):
         assigned_handlers[signal.SIGINT](signal.SIGINT, None)
+
+
+def test_resolve_request_log_level_suppresses_noisy_success_paths() -> None:
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/system/health",
+            status_code=200,
+        )
+        is None
+    )
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/sessions/session-1/recovery",
+            status_code=200,
+        )
+        is None
+    )
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/sessions/session-1/runs/run-1/token-usage",
+            status_code=200,
+        )
+        is None
+    )
+
+
+def test_resolve_request_log_level_downgrades_success_and_escalates_failures() -> None:
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/runs",
+            status_code=200,
+        )
+        == logging.DEBUG
+    )
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/runs",
+            status_code=404,
+        )
+        == logging.WARNING
+    )
+    assert (
+        server_app._resolve_request_log_level(
+            path="/api/runs",
+            status_code=500,
+        )
+        == logging.ERROR
+    )

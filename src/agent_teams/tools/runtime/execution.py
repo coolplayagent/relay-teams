@@ -50,7 +50,7 @@ async def execute_tool(
         started = time.perf_counter()
         log_event(
             LOGGER,
-            logging.INFO,
+            logging.DEBUG,
             event="tool.call.started",
             message="Tool call started",
             payload={
@@ -116,7 +116,7 @@ async def execute_tool(
 
             log_event(
                 LOGGER,
-                logging.INFO,
+                logging.DEBUG,
                 event="tool.call.completed",
                 message="Tool call completed",
                 duration_ms=elapsed_ms,

@@ -237,7 +237,7 @@ class CoordinatorGraph(BaseModel):
             )
             log_event(
                 LOGGER,
-                logging.INFO,
+                logging.DEBUG,
                 event="coord.cycle.first_pass.completed",
                 message="Coordinator first pass completed",
             )
@@ -247,7 +247,7 @@ class CoordinatorGraph(BaseModel):
             cycle += 1
             log_event(
                 LOGGER,
-                logging.INFO,
+                logging.DEBUG,
                 event="coord.cycle.started",
                 message="Coordinator cycle started",
                 payload={"cycle": cycle},
@@ -259,7 +259,7 @@ class CoordinatorGraph(BaseModel):
             if not ran_any:
                 log_event(
                     LOGGER,
-                    logging.INFO,
+                    logging.DEBUG,
                     event="coord.cycle.stopped",
                     message="Coordinator cycle stopped",
                     payload={
@@ -275,7 +275,7 @@ class CoordinatorGraph(BaseModel):
             )
             log_event(
                 LOGGER,
-                logging.INFO,
+                logging.DEBUG,
                 event="coord.cycle.completed",
                 message="Coordinator cycle completed",
                 payload={"cycle": cycle},

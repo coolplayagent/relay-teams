@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import logging
+import re
 import signal
 import time
 from types import FrameType
@@ -41,6 +42,11 @@ FRONTEND_DIST_DIR = get_frontend_dist_dir()
 RequestHandler = Callable[[Request], Awaitable[Response]]
 SignalHandler = Callable[[int, FrameType | None], None]
 SignalHandlerRef = int | SignalHandler | None
+_SUPPRESSED_SUCCESS_PATHS = (
+    re.compile(r"^/api/system/health$"),
+    re.compile(r"^/api/sessions/[^/]+/recovery$"),
+    re.compile(r"^/api/sessions/[^/]+/runs/[^/]+/token-usage$"),
+)
 
 
 @asynccontextmanager
@@ -93,31 +99,29 @@ async def tracing_middleware(request: Request, call_next: RequestHandler) -> Res
     request_id = request.headers.get("X-Request-Id") or generate_request_id()
     trace_id = request.headers.get("X-Trace-Id") or request_id
     started = time.perf_counter()
+    path = request.url.path
 
     with bind_trace_context(request_id=request_id, trace_id=trace_id):
-        log_event(
-            logger,
-            logging.INFO,
-            event="http.request.received",
-            message="Incoming HTTP request",
-            payload={"method": request.method, "path": request.url.path},
-        )
         response: Response = await call_next(request)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         response.headers["X-Request-Id"] = request_id
         response.headers["X-Trace-Id"] = trace_id
-        log_event(
-            logger,
-            logging.INFO,
-            event="http.request.completed",
-            message="HTTP request completed",
-            duration_ms=elapsed_ms,
-            payload={
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-            },
+        log_level = _resolve_request_log_level(
+            path=path, status_code=response.status_code
         )
+        if log_level is not None:
+            log_event(
+                logger,
+                log_level,
+                event="http.request.completed",
+                message="HTTP request completed",
+                duration_ms=elapsed_ms,
+                payload={
+                    "method": request.method,
+                    "path": path,
+                    "status_code": response.status_code,
+                },
+            )
         return response
 
 
@@ -132,6 +136,20 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         exc_info=exc,
     )
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+def _resolve_request_log_level(*, path: str, status_code: int) -> int | None:
+    if status_code >= 500:
+        return logging.ERROR
+    if status_code >= 400:
+        return logging.WARNING
+    if _is_suppressed_success_path(path):
+        return None
+    return logging.DEBUG
+
+
+def _is_suppressed_success_path(path: str) -> bool:
+    return any(pattern.match(path) is not None for pattern in _SUPPRESSED_SUCCESS_PATHS)
 
 
 def _register_signal_handlers() -> None:

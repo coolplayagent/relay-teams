@@ -62,7 +62,7 @@ def test_trace_span_generates_nested_span_hierarchy(
 ) -> None:
     logger = logging.getLogger("tests.unit.trace")
 
-    with caplog.at_level(logging.INFO, logger="tests.unit.trace"):
+    with caplog.at_level(logging.DEBUG, logger="tests.unit.trace"):
         with trace_span(logger, component="trace.tests", operation="root"):
             root_context = get_trace_context()
             assert root_context.trace_id is not None
@@ -79,8 +79,6 @@ def test_trace_span_generates_nested_span_hierarchy(
     assert get_trace_context().trace_id is None
     events = [getattr(record, "event", None) for record in caplog.records]
     assert events == [
-        "trace.span.started",
-        "trace.span.started",
         "trace.span.succeeded",
         "trace.span.succeeded",
     ]

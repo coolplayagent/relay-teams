@@ -36,7 +36,7 @@ def trace_span(
     component: str,
     operation: str,
     attributes: JsonObject | None = None,
-    level: int = logging.INFO,
+    level: int = logging.DEBUG,
     **context_updates: str | None,
 ) -> Generator[TraceContext, None, None]:
     parent_context = get_trace_context()
@@ -57,15 +57,6 @@ def trace_span(
     started = time.perf_counter()
     with bind_trace_context(**resolved_context_updates):
         current_context = get_trace_context()
-        _emit_trace_log(
-            logger=logger,
-            level=level,
-            event="trace.span.started",
-            message=f"{component}.{operation} started",
-            component=component,
-            operation=operation,
-            attributes=attributes,
-        )
         try:
             yield current_context
         except Exception as exc:

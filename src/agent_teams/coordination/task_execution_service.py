@@ -102,7 +102,7 @@ class TaskExecutionService(BaseModel):
         is_coordinator = self.role_registry.is_coordinator_role(role_id)
         log_event(
             LOGGER,
-            logging.INFO,
+            logging.DEBUG,
             event="task.execution.started",
             message="Task execution started",
             payload={
@@ -224,7 +224,7 @@ class TaskExecutionService(BaseModel):
             )
             log_event(
                 LOGGER,
-                logging.INFO,
+                logging.DEBUG,
                 event="task.execution.completed",
                 message="Task execution completed",
                 payload={
