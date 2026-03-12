@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
 from types import ModuleType
 import sys
 
 from agent_teams.interfaces.server import cli as server_cli
 
 
-def test_serve_runs_uvicorn(monkeypatch) -> None:
+def test_start_runs_uvicorn_and_tracks_managed_process(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     captured: dict[str, object] = {}
+    process_file = tmp_path / "server-process.json"
 
     fake_uvicorn = ModuleType("uvicorn")
 
@@ -16,6 +21,11 @@ def test_serve_runs_uvicorn(monkeypatch) -> None:
         captured["app"] = app
         captured["host"] = host
         captured["port"] = port
+        captured["managed_process"] = (
+            server_cli.ManagedServerProcess.model_validate_json(
+                process_file.read_text(encoding="utf-8")
+            )
+        )
 
     setattr(fake_uvicorn, "run", fake_run)
 
@@ -23,15 +33,30 @@ def test_serve_runs_uvicorn(monkeypatch) -> None:
     sentinel_app = object()
     setattr(fake_server_module, "app", sentinel_app)
 
+    monkeypatch.setattr(
+        server_cli,
+        "get_server_process_file_path",
+        lambda project_root=None: process_file,
+    )
+    monkeypatch.setattr(server_cli.os, "getpid", lambda: 4321)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setitem(
         sys.modules, "agent_teams.interfaces.server.app", fake_server_module
     )
 
-    server_cli.serve(host="127.0.0.1", port=8911)
+    server_cli.start(host="127.0.0.1", port=8911)
 
+    managed_process = captured["managed_process"]
+    assert isinstance(managed_process, server_cli.ManagedServerProcess)
     assert captured == {
         "app": sentinel_app,
         "host": "127.0.0.1",
         "port": 8911,
+        "managed_process": managed_process,
     }
+    assert managed_process.model_dump() == {
+        "pid": 4321,
+        "host": "127.0.0.1",
+        "port": 8911,
+    }
+    assert not process_file.exists()

@@ -58,7 +58,9 @@ Run setup before starting implementation work.
 
 ## Development Commands
 - Install dependencies: `uv sync --extra dev`
-- Start server: `uv run agent-teams server serve`
+- Start server: `uv run agent-teams server start`
+- Force stop server: `uv run agent-teams server stop --force`
+- Restart server: `uv run agent-teams server restart`
 - Run a one-off prompt: `uv run agent-teams -m "hello"`
 - Validate roles: `uv run agent-teams roles validate`
 - List merged environment variables: `uv run agent-teams env list`
@@ -105,3 +107,4 @@ Run setup before starting implementation work.
 ## Security
 - Store secrets only in `.agent_teams/.env`.
 - Never commit keys or tokens.
+

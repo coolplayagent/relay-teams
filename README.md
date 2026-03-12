@@ -40,7 +40,8 @@ Skills are composable capability modules. Agents load skills at runtime based on
 
 ![Agent Teams Web Interface](docs/agent_teams.png)
 
-Start the server with `uv run agent-teams server serve` and open http://127.0.0.1:8000 in your browser.
+Start the server with `uv run agent-teams server start` and open http://127.0.0.1:8000 in your browser.
+Use `uv run agent-teams server restart` to restart the managed server, and `uv run agent-teams server stop --force` to force stop it.
 
 Frontend assets are now decoupled under `frontend/dist` and served by the backend.
 
@@ -130,15 +131,16 @@ uv run agent-teams roles validate
 ### 4) Start web server
 
 ```bash
-uv run agent-teams server serve
+uv run agent-teams server start
 ```
 
 Then open http://127.0.0.1:8000 in your browser to access the web interface.
 
-You can override runtime config directory (for isolated environments such as integration tests):
+The server CLI now manages a local PID record in `.agent_teams/server-process.json` for `restart` and `stop --force`:
 
 ```bash
-uv run agent-teams server serve --config-dir ./.agent_teams
+uv run agent-teams server restart
+uv run agent-teams server stop --force
 ```
 
 ### 5) Run a prompt (CLI via HTTP/SSE)

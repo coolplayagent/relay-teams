@@ -90,7 +90,7 @@ def _start_server_daemon(host: str, port: int) -> None:
         "-m",
         "agent_teams",
         "server",
-        "serve",
+        "start",
         "--host",
         host,
         "--port",
