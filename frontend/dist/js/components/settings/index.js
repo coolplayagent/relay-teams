@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/settings/index.js
  * Settings modal shell and tab routing.
  */
@@ -90,46 +90,48 @@ function createModal() {
                                         <h4 id="profile-editor-title">Add Profile</h4>
                                         <p>Update the endpoint first, then tune runtime sampling and request limits.</p>
                                     </div>
-                                    <div class="profile-editor-grid">
-                                        <div class="form-group">
-                                            <label>Profile Name</label>
-                                            <input type="text" id="profile-name" placeholder="e.g., default, kimi">
-                                        </div>
-                                        <div class="form-group">
-                                            <label>Model</label>
-                                            <input type="text" id="profile-model" placeholder="e.g., gpt-4o, kimi-k2.5">
-                                        </div>
-                                        <div class="form-group form-group-span-2">
-                                            <label>Base URL</label>
-                                            <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1">
-                                        </div>
-                                        <div class="form-group form-group-span-2">
-                                            <label>API Key</label>
-                                            <input type="password" id="profile-api-key" placeholder="sk-...">
-                                        </div>
-                                    </div>
-                                    <div class="profile-editor-subsection">
-                                        <h5>Request Controls</h5>
-                                        <div class="form-row">
+                                    <form class="profile-editor-form" id="profile-editor-form" autocomplete="off">
+                                        <div class="profile-editor-grid">
                                             <div class="form-group">
-                                                <label>Temperature</label>
-                                                <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2">
+                                                <label for="profile-name">Profile Name</label>
+                                                <input type="text" id="profile-name" placeholder="e.g., default, kimi" autocomplete="off">
                                             </div>
                                             <div class="form-group">
-                                                <label>Top P</label>
-                                                <input type="number" id="profile-top-p" value="1.0" step="0.1" min="0" max="1">
+                                                <label for="profile-model">Model</label>
+                                                <input type="text" id="profile-model" placeholder="e.g., gpt-4o, kimi-k2.5" autocomplete="off">
                                             </div>
-                                            <div class="form-group">
-                                                <label>Max Output Tokens</label>
-                                                <input type="number" id="profile-max-tokens" value="4096" min="1">
+                                            <div class="form-group form-group-span-2">
+                                                <label for="profile-base-url">Base URL</label>
+                                                <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" autocomplete="url">
                                             </div>
-                                            <div class="form-group">
-                                                <label>Connect Timeout (s)</label>
-                                                <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300">
+                                            <div class="form-group form-group-span-2">
+                                                <label for="profile-api-key">API Key</label>
+                                                <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
                                             </div>
                                         </div>
-                                    </div>
-                                    <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
+                                        <div class="profile-editor-subsection">
+                                            <h5>Request Controls</h5>
+                                            <div class="form-row">
+                                                <div class="form-group">
+                                                    <label for="profile-temperature">Temperature</label>
+                                                    <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2" autocomplete="off">
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-top-p">Top P</label>
+                                                    <input type="number" id="profile-top-p" value="1.0" step="0.1" min="0" max="1" autocomplete="off">
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-max-tokens">Max Output Tokens</label>
+                                                    <input type="number" id="profile-max-tokens" value="4096" min="1" autocomplete="off">
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-connect-timeout">Connect Timeout (s)</label>
+                                                    <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300" autocomplete="off">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
+                                    </form>
                                 </div>
                             </div>
                         </div>
@@ -159,19 +161,19 @@ function createModal() {
                                             <section class="role-editor-section">
                                                 <div class="profile-editor-grid role-editor-grid">
                                                     <div class="form-group">
-                                                        <label>Role ID</label>
+                                                        <label for="role-id-input">Role ID</label>
                                                         <input type="text" id="role-id-input" placeholder="e.g. spec_coder">
                                                     </div>
                                                     <div class="form-group">
-                                                        <label>Name</label>
+                                                        <label for="role-name-input">Name</label>
                                                         <input type="text" id="role-name-input" placeholder="e.g. Spec Coder">
                                                     </div>
                                                     <div class="form-group">
-                                                        <label>Version</label>
+                                                        <label for="role-version-input">Version</label>
                                                         <input type="text" id="role-version-input" placeholder="e.g. 1.0.0">
                                                     </div>
                                                     <div class="form-group">
-                                                        <label>Model Profile</label>
+                                                        <label for="role-model-profile-input">Model Profile</label>
                                                         <input type="text" id="role-model-profile-input" placeholder="default">
                                                     </div>
                                                 </div>
@@ -192,7 +194,7 @@ function createModal() {
                                                 <h5>Workspace</h5>
                                                 <div class="role-workspace-row">
                                                     <div class="form-group">
-                                                        <label>Binding</label>
+                                                        <label for="role-workspace-binding-input">Binding</label>
                                                         <select id="role-workspace-binding-input"></select>
                                                     </div>
                                                     <p class="role-workspace-note" id="role-workspace-note">
@@ -448,3 +450,4 @@ export function closeSettings() {
 }
 
 window.openSettings = openSettings;
+
