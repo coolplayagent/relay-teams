@@ -195,3 +195,16 @@ body.light-theme {
         opacity: 1;
     }
 }
+
+@keyframes streamingCaretPulse {
+
+    0%,
+    46% {
+        opacity: 1;
+    }
+
+    54%,
+    100% {
+        opacity: 0.18;
+    }
+}

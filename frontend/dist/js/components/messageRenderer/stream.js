@@ -3,7 +3,6 @@
  * Streaming message mutation helpers plus a durable in-browser overlay cache.
  */
 import { isCoordinatorRoleId } from '../../core/state.js';
-import { parseMarkdown } from '../../utils/markdown.js';
 import {
     applyToolReturn,
     findToolBlock,
@@ -11,6 +10,8 @@ import {
     renderMessageBlock,
     scrollBottom,
     setToolValidationFailureState,
+    syncStreamingCursor,
+    updateMessageText,
 } from './helpers.js';
 
 const streamState = new Map();
@@ -58,7 +59,7 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     }
 
     st.raw += text;
-    st.activeTextEl.innerHTML = parseMarkdown(st.raw);
+    updateMessageText(st.activeTextEl, st.raw, { streaming: true });
     updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, st.raw);
     scrollBottom(st.container);
 }
@@ -67,13 +68,17 @@ export function finalizeStream(instanceId, roleId = '') {
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
     if (st && st.activeTextEl) {
-        st.activeTextEl.innerHTML = parseMarkdown(st.raw);
+        updateMessageText(st.activeTextEl, st.raw, { streaming: false });
     }
     streamState.delete(streamKey);
 }
 
 export function clearStreamState(instanceId, roleId = '') {
     const streamKey = resolveStreamKey(instanceId, roleId);
+    const entry = streamState.get(streamKey);
+    if (entry?.activeTextEl) {
+        syncStreamingCursor(entry.activeTextEl, false);
+    }
     streamState.delete(streamKey);
 }
 
@@ -83,12 +88,20 @@ export function clearRunStreamState(runId) {
     overlayState.delete(safeRunId);
     Array.from(streamState.entries()).forEach(([key, entry]) => {
         if (entry.runId === safeRunId) {
+            if (entry.activeTextEl) {
+                syncStreamingCursor(entry.activeTextEl, false);
+            }
             streamState.delete(key);
         }
     });
 }
 
 export function clearAllStreamState() {
+    streamState.forEach(entry => {
+        if (entry?.activeTextEl) {
+            syncStreamingCursor(entry.activeTextEl, false);
+        }
+    });
     streamState.clear();
     overlayState.clear();
 }

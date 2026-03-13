@@ -4,6 +4,7 @@
  */
 import {
     applyToolReturn,
+    appendMessageText,
     buildToolBlock,
     decoratePendingApprovalBlock,
     findToolBlockInContainer,
@@ -16,7 +17,6 @@ import {
     scrollBottom,
     setToolValidationFailureState,
 } from './helpers.js';
-import { parseMarkdown } from '../../utils/markdown.js';
 
 export function renderHistoricalMessageList(container, messages, options = {}) {
     const pendingToolApprovals = Array.isArray(options.pendingToolApprovals)
@@ -106,10 +106,7 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
     const flushText = () => {
         const safeText = String(combinedText || '');
         if (!safeText.trim()) return;
-        const textEl = document.createElement('div');
-        textEl.className = 'msg-text';
-        textEl.innerHTML = parseMarkdown(safeText.trim());
-        contentEl.appendChild(textEl);
+        appendMessageText(contentEl, safeText.trim(), { streaming: true });
         combinedText = '';
     };
 

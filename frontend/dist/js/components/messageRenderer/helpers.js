@@ -7,6 +7,9 @@ export {
     renderParts,
     labelFromRole,
     scrollBottom,
+    appendMessageText,
+    updateMessageText,
+    syncStreamingCursor,
 } from './helpers/block.js';
 
 export {

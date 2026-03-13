@@ -546,6 +546,17 @@
     margin-bottom: 0;
 }
 
+.streaming-cursor {
+    display: inline-block;
+    width: 0.48em;
+    height: 0.48em;
+    margin-left: 0.2em;
+    border-radius: 999px;
+    vertical-align: 0.02em;
+    background: color-mix(in srgb, var(--primary) 72%, var(--text-msg-content) 28%);
+    animation: streamingCaretPulse 1.05s steps(1, end) infinite;
+}
+
 .msg-content blockquote,
 .msg-text blockquote {
     padding: 0.85rem 1rem;

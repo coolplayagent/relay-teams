@@ -12,6 +12,8 @@ import {
     setToolValidationFailureState,
 } from './toolBlocks.js';
 
+const STREAMING_CURSOR_CLASS = 'streaming-cursor';
+
 export function renderMessageBlock(container, role, label, parts = []) {
     const safeLabel = label || 'Agent';
     if (container) {
@@ -47,10 +49,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
 
     const flushText = () => {
         if (combinedText.trim()) {
-            const textEl = document.createElement('div');
-            textEl.className = 'msg-text';
-            textEl.innerHTML = parseMarkdown(combinedText.trim());
-            contentEl.appendChild(textEl);
+            appendMessageText(contentEl, combinedText.trim());
             combinedText = '';
         }
     };
@@ -109,8 +108,56 @@ export function scrollBottom(container) {
     if (container) container.scrollTop = container.scrollHeight;
 }
 
+export function appendMessageText(contentEl, text, options = {}) {
+    const textEl = document.createElement('div');
+    textEl.className = 'msg-text';
+    updateMessageText(textEl, text, options);
+    contentEl.appendChild(textEl);
+    return textEl;
+}
+
+export function updateMessageText(textEl, text, options = {}) {
+    textEl.innerHTML = parseMarkdown(String(text || ''));
+    syncStreamingCursor(textEl, options.streaming === true);
+    return textEl;
+}
+
+export function syncStreamingCursor(textEl, active) {
+    const existingCursor = textEl?.querySelector?.(`.${STREAMING_CURSOR_CLASS}`);
+    if (existingCursor) {
+        existingCursor.remove();
+    }
+    if (!active || !textEl) return textEl;
+
+    const cursor = document.createElement('span');
+    cursor.className = STREAMING_CURSOR_CLASS;
+    cursor.setAttribute('aria-hidden', 'true');
+    resolveStreamingCursorHost(textEl).appendChild(cursor);
+    return textEl;
+}
+
 function roleClassName(role, label) {
     if (label?.toLowerCase().includes('coordinator')) return 'role-coordinator';
     if (role === 'user') return 'role-user';
     return 'role-agent';
+}
+
+function resolveStreamingCursorHost(root) {
+    if (!root || !root.childNodes?.length) return root;
+
+    for (let index = root.childNodes.length - 1; index >= 0; index -= 1) {
+        const child = root.childNodes[index];
+        if (!child) continue;
+        if (child.nodeType === Node.TEXT_NODE) {
+            if (String(child.textContent || '').trim()) {
+                return root;
+            }
+            continue;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        if (child.classList?.contains(STREAMING_CURSOR_CLASS)) continue;
+        return resolveStreamingCursorHost(child);
+    }
+
+    return root;
 }
