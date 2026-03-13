@@ -19,8 +19,8 @@
   - `providers/`: provider contracts, model configuration, registries, and OpenAI-compatible adapters
   - `reflection/`: reflection result modeling and reflection services
   - `roles/`: role definitions and role validation
-  - `runs/`: run-time orchestration, run control, event streaming, and injection flows
-  - `sessions/`: session lifecycle and round projection services
+  - `sessions/`: session lifecycle, round projection services, and run-scoped execution packages
+    - `sessions/runs/`: run-time orchestration, run control, event streaming, injection flows, and active-run coordination
   - `shared_types/`: cross-domain shared type aliases and lightweight contracts
   - `skills/`: skill loading/registry support
   - `state/`: persistence and state repositories
@@ -29,7 +29,7 @@
   - `workspace/`: workspace indexing, materialization, and workspace-facing services
 - Frontend: `frontend/dist` (currently `css/` and `js/` assets)
 - Tests:
-  - `tests/unit_tests/`: unit tests covering `agents/`, `env/`, `frontend/`, `interfaces/`, `logger/`, `mcp/`, `notifications/`, `paths/`, `providers/`, `reflection/`, `roles/`, `runs/`, `sessions/`, `skills/`, `state/`, `tools/`, `trace/`, `triggers/`, and `workspace/`
+  - `tests/unit_tests/`: unit tests covering `agents/`, `env/`, `frontend/`, `interfaces/`, `logger/`, `mcp/`, `notifications/`, `paths/`, `providers/`, `reflection/`, `roles/`, `sessions/`, `sessions/runs/`, `skills/`, `state/`, `tools/`, `trace/`, `triggers/`, and `workspace/`
     - `tests/unit_tests/agents/models/`: tests for agent instance models
     - `tests/unit_tests/agents/execution/`: tests for agent builders, subagent runners, and prompt assembly
     - `tests/unit_tests/agents/orchestration/`: tests for coordinator and task orchestration flows

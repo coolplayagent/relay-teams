@@ -23,8 +23,8 @@ Core code lives under `src/agent_teams/`:
 - `providers/`: provider contracts, model configuration, registries, and OpenAI-compatible adapters
 - `reflection/`: reflection result modeling and reflection services
 - `roles/`: role definitions and role validation
-- `runs/`: run-time orchestration, run control, event streaming, and injection flows
-- `sessions/`: session lifecycle and round projection services
+- `sessions/`: session lifecycle, round projection services, and run-scoped execution packages
+  - `sessions/runs/`: run-time orchestration, run control, event streaming, injection flows, and active-run coordination
 - `shared_types/`: cross-domain shared type aliases and lightweight contracts
 - `skills/`: skill loading/registry support
 - `state/`: persistence and state repositories
@@ -230,6 +230,7 @@ curl -X PUT http://127.0.0.1:8000/api/system/configs/notifications \
 Unit and integration tests are split under `tests/`:
 
 - `tests/unit_tests/` directory structure must mirror `src/agent_teams/` one-to-one.
+- `tests/unit_tests/sessions/runs/`: unit coverage for the run execution package nested under `sessions/`
 - `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
 
 Run unit tests:
