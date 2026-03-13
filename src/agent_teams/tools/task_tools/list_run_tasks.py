@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from pydantic_ai import Agent
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 
@@ -12,8 +13,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def list_run_tasks(
         ctx: ToolContext,
         include_root: bool = False,
-    ) -> JsonObject:
-        def _action() -> JsonObject:
+    ) -> dict[str, JsonValue]:
+        def _action() -> dict[str, JsonValue]:
             return ctx.deps.task_service.list_run_tasks(
                 run_id=ctx.deps.run_id,
                 include_root=include_root,

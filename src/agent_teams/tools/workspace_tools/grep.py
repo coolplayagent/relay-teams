@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from pydantic_ai import Agent
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from agent_teams.tools.workspace_tools import ripgrep
 
@@ -16,7 +17,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         path: str = ".",
         case_sensitive: bool = False,
         include: str | None = None,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         async def _action() -> str:
             root = ctx.deps.workspace.resolve_path(path, write=False)
 

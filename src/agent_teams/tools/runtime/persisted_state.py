@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from collections.abc import Callable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -44,8 +44,8 @@ class PersistedToolCallState(BaseModel):
     approval_status: ToolApprovalStatus = ToolApprovalStatus.PENDING
     approval_feedback: str = ""
     execution_status: ToolExecutionStatus = ToolExecutionStatus.WAITING_APPROVAL
-    result_envelope: JsonObject | None = None
-    call_state: JsonObject = Field(default_factory=dict)
+    result_envelope: dict[str, JsonValue] | None = None
+    call_state: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: str = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat()
     )
@@ -81,8 +81,8 @@ def merge_tool_call_state(
     approval_status: ToolApprovalStatus | None = None,
     approval_feedback: str | None = None,
     execution_status: ToolExecutionStatus | None = None,
-    result_envelope: JsonObject | None = None,
-    call_state: JsonObject | None = None,
+    result_envelope: dict[str, JsonValue] | None = None,
+    call_state: dict[str, JsonValue] | None = None,
 ) -> PersistedToolCallState:
     current = load_tool_call_state(
         shared_store=shared_store,
@@ -162,7 +162,7 @@ def update_tool_call_call_state(
     tool_name: str,
     instance_id: str,
     role_id: str,
-    mutate: Callable[[JsonObject], JsonObject],
+    mutate: Callable[[dict[str, JsonValue]], dict[str, JsonValue]],
 ) -> PersistedToolCallState:
     current = load_tool_call_state(
         shared_store=shared_store,
@@ -200,7 +200,7 @@ def recover_tool_call_state_from_event_log(
         return recovered
 
     state: PersistedToolCallState | None = None
-    tool_args: JsonObject = {}
+    tool_args: dict[str, JsonValue] = {}
     for row in event_log.list_by_trace(trace_id):
         if str(row.get("task_id") or "") != task_id:
             continue
@@ -337,7 +337,7 @@ def _state_key(tool_call_id: str) -> str:
     return f"tool_call_state:{tool_call_id}"
 
 
-def _parse_payload(raw_payload: object) -> JsonObject:
+def _parse_payload(raw_payload: object) -> dict[str, JsonValue]:
     if not isinstance(raw_payload, str) or not raw_payload:
         return {}
     try:
@@ -347,7 +347,7 @@ def _parse_payload(raw_payload: object) -> JsonObject:
     return decoded if isinstance(decoded, dict) else {}
 
 
-def _parse_tool_args(payload: JsonObject) -> JsonObject:
+def _parse_tool_args(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     raw_args = payload.get("args")
     if isinstance(raw_args, dict):
         return raw_args
@@ -365,10 +365,10 @@ def _recover_call_state(
     tool_name: str,
     trace_id: str,
     task_id: str,
-    tool_args: JsonObject,
+    tool_args: dict[str, JsonValue],
     shared_store: SharedStateRepository,
     task_repo: TaskRepository | None,
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     if tool_name != "dispatch_task" or task_repo is None:
         return {}
     return _recover_dispatch_task_call_state(
@@ -381,9 +381,9 @@ def _recover_call_state(
 def _recover_dispatch_task_call_state(
     *,
     trace_id: str,
-    tool_args: JsonObject,
+    tool_args: dict[str, JsonValue],
     task_repo: TaskRepository,
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     dispatched_task_id = str(tool_args.get("task_id") or "").strip()
     if not dispatched_task_id:
         return {}

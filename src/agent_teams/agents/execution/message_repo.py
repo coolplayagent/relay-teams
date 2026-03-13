@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 import sqlite3
 import time
@@ -11,7 +13,6 @@ from threading import RLock
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
 from agent_teams.workspace import build_workspace_id
@@ -135,7 +136,7 @@ class MessageRepository:
             (conversation_id,),
         )
 
-    def get_messages_by_session(self, session_id: str) -> list[JsonObject]:
+    def get_messages_by_session(self, session_id: str) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
@@ -144,7 +145,7 @@ class MessageRepository:
             ).fetchall()
         rows = _truncate_message_rows_to_safe_boundary(rows)
 
-        results: list[JsonObject] = []
+        results: list[dict[str, JsonValue]] = []
         for row in rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
@@ -164,7 +165,7 @@ class MessageRepository:
 
     def get_messages_for_instance(
         self, session_id: str, instance_id: str
-    ) -> list[JsonObject]:
+    ) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
@@ -173,7 +174,7 @@ class MessageRepository:
             ).fetchall()
         rows = _truncate_message_rows_to_safe_boundary(rows)
 
-        results: list[JsonObject] = []
+        results: list[dict[str, JsonValue]] = []
         for row in rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
@@ -358,10 +359,10 @@ def _load_message_list(message_json: str) -> list[object]:
 
 
 def _dedupe_duplicate_objective_messages(
-    messages: list[JsonObject],
-) -> list[JsonObject]:
+    messages: list[dict[str, JsonValue]],
+) -> list[dict[str, JsonValue]]:
     seen_user_prompts: dict[tuple[str, str], set[str]] = {}
-    deduped: list[JsonObject] = []
+    deduped: list[dict[str, JsonValue]] = []
     for message in messages:
         conversation_id = str(message.get("conversation_id") or "")
         task_id = str(message.get("task_id") or "")

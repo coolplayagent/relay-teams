@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 import logging
 from copy import deepcopy
@@ -21,7 +23,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from agent_teams.shared_types.json_types import JsonValue
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog

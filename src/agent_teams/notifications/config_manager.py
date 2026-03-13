@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from json import dumps, loads
 from pathlib import Path
 from typing import cast
@@ -9,7 +11,6 @@ from agent_teams.notifications.models import (
     NotificationConfig,
     default_notification_config,
 )
-from agent_teams.shared_types.json_types import JsonObject
 
 
 class NotificationConfigManager:
@@ -34,8 +35,8 @@ class NotificationConfigManager:
         )
 
 
-def _load_json_object(file_path: Path) -> JsonObject:
+def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     raw = cast(object, loads(file_path.read_text("utf-8")))
     if isinstance(raw, dict):
-        return cast(JsonObject, raw)
+        return cast(dict[str, JsonValue], raw)
     return {}

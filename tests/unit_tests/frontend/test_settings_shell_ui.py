@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_settings_modal_uses_flat_content_stacks_and_switches_tabs(
@@ -37,7 +37,7 @@ console.log(JSON.stringify({
     )
 
     modal_html = cast(str, payload["modalHtml"])
-    load_calls = cast(JsonObject, payload["loadCalls"])
+    load_calls = cast(dict[str, JsonValue], payload["loadCalls"])
     assert "settings-content-frame" not in modal_html
     assert "settings-content-stack" in modal_html
     assert "settings-model-stack" in modal_html
@@ -620,7 +620,7 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    load_calls = cast(JsonObject, payload["loadCalls"])
+    load_calls = cast(dict[str, JsonValue], payload["loadCalls"])
     assert payload["panelTitle"] == "Environment"
     assert payload["envPanelDisplay"] == "block"
     assert payload["envAddDisplay"] == "inline-flex"

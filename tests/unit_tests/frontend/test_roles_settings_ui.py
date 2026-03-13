@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonArray, JsonObject
 
 
 def test_role_settings_panel_switches_roles_and_previews_prompt(
@@ -43,7 +43,7 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    fetch_calls = cast(JsonArray, payload["fetchCalls"])
+    fetch_calls = cast(list[JsonValue], payload["fetchCalls"])
     assert "Writer" in cast(str, payload["initialListHtml"])
     assert "Reviewer" in cast(str, payload["initialListHtml"])
     assert payload["selectedRoleId"] == "reviewer"
@@ -117,10 +117,10 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    validate_payload = cast(JsonObject, payload["validatePayload"])
-    first_saved_payload = cast(JsonObject, payload["firstSavedPayload"])
-    second_saved_payload = cast(JsonObject, payload["secondSavedPayload"])
-    notifications = cast(list[JsonObject], payload["notifications"])
+    validate_payload = cast(dict[str, JsonValue], payload["validatePayload"])
+    first_saved_payload = cast(dict[str, JsonValue], payload["firstSavedPayload"])
+    second_saved_payload = cast(dict[str, JsonValue], payload["secondSavedPayload"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert validate_payload["source_role_id"] == "writer"
     assert validate_payload["role_id"] == "writer"
     assert validate_payload["tools"] == ["read_file", "write_file"]

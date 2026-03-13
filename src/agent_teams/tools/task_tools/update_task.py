@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from pydantic_ai import Agent
 
 from agent_teams.agents.orchestration.task_orchestration_service import TaskUpdate
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 
@@ -16,8 +18,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         role_id: str | None = None,
         objective: str | None = None,
         title: str | None = None,
-    ) -> JsonObject:
-        def _action() -> JsonObject:
+    ) -> dict[str, JsonValue]:
+        def _action() -> dict[str, JsonValue]:
             return ctx.deps.task_service.update_task(
                 run_id=ctx.deps.run_id,
                 task_id=task_id,

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +14,7 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
@@ -152,7 +154,7 @@ def test_execute_tool_returns_standard_envelope() -> None:
             action=lambda: "hello",
         )
     )
-    meta = cast(JsonObject, result["meta"])
+    meta = cast(dict[str, JsonValue], result["meta"])
     runtime = deps.run_runtime_repo.get(deps.run_id)
     assert result["ok"] is True
     assert result["tool"] == "read"
@@ -179,8 +181,8 @@ def test_execute_tool_returns_denied_error_when_approval_rejected() -> None:
             action=lambda: "should_not_run",
         )
     )
-    error = cast(JsonObject, result["error"])
-    meta = cast(JsonObject, result["meta"])
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
     ticket = deps.approval_ticket_repo.get("call-model-deny")
     assert result["ok"] is False
     assert error["type"] == "approval_denied"
@@ -217,8 +219,8 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
             action=lambda: "should_not_run",
         )
     )
-    error = cast(JsonObject, result["error"])
-    meta = cast(JsonObject, result["meta"])
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
     ticket = deps.approval_ticket_repo.get("call-model-123")
     assert result["ok"] is False
     assert error["type"] == "approval_timeout"

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from collections.abc import Mapping
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskRecord
 
@@ -11,7 +12,7 @@ def build_task_status_snapshot(
     *,
     tasks: Mapping[str, Mapping[str, object]],
     records: Mapping[str, TaskRecord],
-) -> dict[str, JsonObject]:
+) -> dict[str, dict[str, JsonValue]]:
     return {
         task_name: build_task_status_row(
             task_name=task_name,
@@ -29,7 +30,7 @@ def build_task_status_row(
     task_id: str,
     role_id: str,
     record: TaskRecord | None,
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     if record is None:
         return {
             "task_name": task_name,
@@ -39,7 +40,7 @@ def build_task_status_row(
             "status": "missing",
         }
 
-    row: JsonObject = {
+    row: dict[str, JsonValue] = {
         "task_name": task_name,
         "task_id": task_id,
         "role_id": role_id,

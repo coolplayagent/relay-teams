@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from pydantic_ai import Agent
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 
@@ -13,7 +14,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         ctx: ToolContext,
         task_id: str,
         feedback: str = "",
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         return await execute_tool(
             ctx,
             tool_name="dispatch_task",

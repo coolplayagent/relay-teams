@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from json import loads
 from pathlib import Path
 from typing import cast
@@ -15,7 +17,7 @@ from agent_teams.logger import get_logger
 from agent_teams.mcp.models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.paths import get_app_config_dir
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+
 from agent_teams.trace import trace_span
 
 logger = get_logger(__name__)
@@ -94,7 +96,7 @@ def _load_specs_from_file(
                 normalized_server_config,
                 proxy_env,
             )
-            wrapped_config: JsonObject = {
+            wrapped_config: dict[str, JsonValue] = {
                 "mcpServers": {name: effective_server_config},
             }
             specs.append(
@@ -108,14 +110,14 @@ def _load_specs_from_file(
         return tuple(specs)
 
 
-def _load_json_object(file_path: Path) -> JsonObject:
+def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     raw = cast(object, loads(file_path.read_text(encoding="utf-8-sig")))
     if isinstance(raw, dict):
-        return cast(JsonObject, raw)
+        return cast(dict[str, JsonValue], raw)
     return {}
 
 
-def _normalize_to_json_object(value: object) -> JsonObject:
+def _normalize_to_json_object(value: object) -> dict[str, JsonValue]:
     normalized = _normalize_json_value(value)
     if isinstance(normalized, dict):
         return normalized
@@ -130,7 +132,7 @@ def _normalize_json_value(value: object) -> JsonValue:
         return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
         entries = cast(dict[object, object], value)
-        normalized: JsonObject = {}
+        normalized: dict[str, JsonValue] = {}
         for key, item in entries.items():
             normalized[str(key)] = _normalize_json_value(item)
         return normalized
@@ -138,20 +140,20 @@ def _normalize_json_value(value: object) -> JsonValue:
 
 
 def _apply_proxy_env_to_mcp_server_config(
-    server_config: JsonObject,
+    server_config: dict[str, JsonValue],
     proxy_env: dict[str, str],
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     if not proxy_env:
         return server_config
 
-    merged_config: JsonObject = dict(server_config)
+    merged_config: dict[str, JsonValue] = dict(server_config)
     existing_env = server_config.get("env")
     normalized_env = dict(existing_env) if isinstance(existing_env, dict) else {}
     normalized_env_strings = {
         key: value for key, value in normalized_env.items() if isinstance(value, str)
     }
     explicit_proxy_env = extract_proxy_env_vars(normalized_env_strings)
-    merged_env: JsonObject = {key: value for key, value in proxy_env.items()}
+    merged_env: dict[str, JsonValue] = {key: value for key, value in proxy_env.items()}
     for key, value in explicit_proxy_env.items():
         merged_env[key] = value
     for key, value in normalized_env.items():

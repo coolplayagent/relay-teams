@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -13,7 +15,6 @@ from agent_teams.providers.model_connectivity import (
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.registry import list_provider_models
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
-from agent_teams.shared_types.json_types import JsonObject
 
 
 class ModelConfigService:
@@ -41,10 +42,10 @@ class ModelConfigService:
     def runtime(self) -> RuntimeConfig:
         return self._get_runtime()
 
-    def get_model_config(self) -> JsonObject:
+    def get_model_config(self) -> dict[str, JsonValue]:
         return self._model_config_manager.get_model_config()
 
-    def get_model_profiles(self) -> dict[str, JsonObject]:
+    def get_model_profiles(self) -> dict[str, dict[str, JsonValue]]:
         return self._model_config_manager.get_model_profiles()
 
     def get_provider_models(
@@ -57,7 +58,7 @@ class ModelConfigService:
     def save_model_profile(
         self,
         name: str,
-        profile: JsonObject,
+        profile: dict[str, JsonValue],
         *,
         source_name: str | None = None,
     ) -> None:
@@ -72,7 +73,7 @@ class ModelConfigService:
         self._model_config_manager.delete_model_profile(name)
         self.reload_model_config()
 
-    def save_model_config(self, config: JsonObject) -> None:
+    def save_model_config(self, config: dict[str, JsonValue]) -> None:
         self._model_config_manager.save_model_config(config)
         self.reload_model_config()
 

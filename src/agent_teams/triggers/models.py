@@ -3,9 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from agent_teams.shared_types.json_types import JsonObject
+from pydantic import BaseModel, ConfigDict, Field, model_validator, JsonValue
 
 
 class TriggerSourceType(str, Enum):
@@ -63,9 +61,9 @@ class TriggerCreateInput(BaseModel):
     name: str = Field(min_length=1)
     display_name: str | None = None
     source_type: TriggerSourceType
-    source_config: JsonObject = Field(default_factory=dict)
+    source_config: dict[str, JsonValue] = Field(default_factory=dict)
     auth_policies: tuple[TriggerAuthPolicy, ...] = ()
-    target_config: JsonObject | None = None
+    target_config: dict[str, JsonValue] | None = None
     public_token: str | None = None
     enabled: bool = True
 
@@ -75,9 +73,9 @@ class TriggerUpdateInput(BaseModel):
 
     name: str | None = Field(default=None, min_length=1)
     display_name: str | None = None
-    source_config: JsonObject | None = None
+    source_config: dict[str, JsonValue] | None = None
     auth_policies: tuple[TriggerAuthPolicy, ...] | None = None
-    target_config: JsonObject | None = None
+    target_config: dict[str, JsonValue] | None = None
 
 
 class TriggerDefinition(BaseModel):
@@ -89,9 +87,9 @@ class TriggerDefinition(BaseModel):
     source_type: TriggerSourceType
     status: TriggerStatus
     public_token: str | None = None
-    source_config: JsonObject = Field(default_factory=dict)
+    source_config: dict[str, JsonValue] = Field(default_factory=dict)
     auth_policies: tuple[TriggerAuthPolicy, ...] = ()
-    target_config: JsonObject | None = None
+    target_config: dict[str, JsonValue] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -104,7 +102,7 @@ class TriggerIngestInput(BaseModel):
     source_type: TriggerSourceType
     event_key: str | None = None
     occurred_at: datetime | None = None
-    payload: JsonObject = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -126,7 +124,7 @@ class TriggerEventRecord(BaseModel):
     status: TriggerEventStatus
     received_at: datetime
     occurred_at: datetime | None = None
-    payload: JsonObject = Field(default_factory=dict)
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
     remote_addr: str | None = None

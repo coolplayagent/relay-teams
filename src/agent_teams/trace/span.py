@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from collections.abc import Generator
 from contextlib import contextmanager
 import logging
@@ -8,7 +10,6 @@ import time
 from types import TracebackType
 from uuid import uuid4
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.trace.context import (
     TraceContext,
     bind_trace_context,
@@ -35,7 +36,7 @@ def trace_span(
     *,
     component: str,
     operation: str,
-    attributes: JsonObject | None = None,
+    attributes: dict[str, JsonValue] | None = None,
     level: int = logging.DEBUG,
     **context_updates: str | None,
 ) -> Generator[TraceContext, None, None]:
@@ -94,7 +95,7 @@ def _emit_trace_log(
     message: str,
     component: str,
     operation: str,
-    attributes: JsonObject | None,
+    attributes: dict[str, JsonValue] | None,
     duration_ms: int | None = None,
     exc_info: TraceExcInfo = None,
 ) -> None:
@@ -119,9 +120,9 @@ def _build_trace_payload(
     *,
     component: str,
     operation: str,
-    attributes: JsonObject | None,
-) -> JsonObject:
-    payload: JsonObject = {
+    attributes: dict[str, JsonValue] | None,
+) -> dict[str, JsonValue]:
+    payload: dict[str, JsonValue] = {
         "component": component,
         "operation": operation,
     }

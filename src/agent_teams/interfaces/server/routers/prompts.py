@@ -5,7 +5,7 @@ import json
 from typing import Annotated, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.interfaces.server.deps import (
     get_role_registry,
@@ -28,7 +28,7 @@ from agent_teams.agents.execution.user_prompts import (
     build_user_prompt,
 )
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -43,7 +43,7 @@ class PromptPreviewRequest(BaseModel):
 
     role_id: str = Field(min_length=1)
     objective: str | None = None
-    shared_state: JsonObject = Field(default_factory=dict)
+    shared_state: dict[str, JsonValue] = Field(default_factory=dict)
     tools: tuple[str, ...] | None = None
     skills: tuple[str, ...] | None = None
 
@@ -137,7 +137,7 @@ def _build_preview_task(*, objective: str) -> TaskEnvelope:
 
 
 def _to_shared_state_snapshot(
-    shared_state: JsonObject,
+    shared_state: dict[str, JsonValue],
 ) -> tuple[tuple[str, str], ...]:
     normalized_items = [
         (str(key), _json_value_to_text(value)) for key, value in shared_state.items()

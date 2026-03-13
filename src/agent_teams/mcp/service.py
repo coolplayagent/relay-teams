@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from agent_teams.logger import get_logger
 from agent_teams.mcp.models import McpServerSummary, McpServerToolsSummary
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
@@ -49,7 +51,7 @@ class McpService:
             )
 
 
-def _detect_transport(server_config: JsonObject) -> str:
+def _detect_transport(server_config: dict[str, JsonValue]) -> str:
     raw_transport = server_config.get("transport")
     if isinstance(raw_transport, str) and raw_transport.strip():
         return raw_transport

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_environment_variables_panel_renders_app_first_and_system_collapsed(
@@ -100,7 +100,7 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    notifications = cast(list[JsonObject], payload["notifications"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     groups_html_with_editor = cast(str, payload["groupsHtmlWithEditor"])
     assert 'class="env-record env-record-editor"' in groups_html_with_editor
     assert 'id="env-key-input"' in groups_html_with_editor

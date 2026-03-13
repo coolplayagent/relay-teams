@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,7 +22,6 @@ from agent_teams.env.web_connectivity import (
     WebConnectivityProbeResult,
     WebConnectivityProbeService,
 )
-from agent_teams.shared_types.json_types import JsonObject
 
 
 class ProxyConfigService:
@@ -55,7 +56,7 @@ class ProxyConfigService:
     def get_proxy_config(self) -> ProxyEnvConfig:
         return self._load_runtime_proxy_config(include_process_env=True)
 
-    def get_proxy_status(self) -> JsonObject:
+    def get_proxy_status(self) -> dict[str, JsonValue]:
         config = self.get_proxy_config()
         return {
             "loaded": True,

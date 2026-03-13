@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import asyncio
 from pathlib import Path
 from typing import cast
@@ -10,7 +12,7 @@ from agent_teams.skills.models import SkillScope
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.tools.runtime import ToolContext
 from agent_teams.trace import get_trace_context
 
@@ -227,7 +229,7 @@ def test_run_skill_script_binds_nested_trace_context(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is True
-    data = cast(JsonObject, result["data"])
+    data = cast(dict[str, JsonValue], result["data"])
     assert data["trace_id"] == "trace-1"
     assert data["run_id"] == "run-1"
     assert data["task_id"] == "task-1"

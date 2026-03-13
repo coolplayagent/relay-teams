@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import asyncio
 import inspect
 import json
@@ -15,7 +17,7 @@ from agent_teams.logger import get_logger, log_event, log_tool_error
 from agent_teams.notifications import NotificationContext, NotificationType
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.models import RunEvent
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
 from agent_teams.trace import trace_span
@@ -29,9 +31,9 @@ async def execute_tool(
     ctx: ToolContext,
     *,
     tool_name: str,
-    args_summary: JsonObject,
+    args_summary: dict[str, JsonValue],
     action: Callable[[], object | Awaitable[object]] | object,
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
     tool_call_id = ctx.tool_call_id or f"toolcall_{uuid4().hex[:12]}"
     with trace_span(
@@ -61,7 +63,7 @@ async def execute_tool(
             },
         )
 
-        meta: JsonObject = {}
+        meta: dict[str, JsonValue] = {}
         _raise_if_stopped(ctx)
         approval_ticket_id, approval_error = await _handle_tool_approval(
             ctx=ctx,
@@ -215,7 +217,7 @@ def _normalize_json_value(value: object) -> JsonValue:
         return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
         entries = cast(dict[object, object], value)
-        normalized: JsonObject = {}
+        normalized: dict[str, JsonValue] = {}
         for key, item in entries.items():
             normalized[str(key)] = _normalize_json_value(item)
         return normalized
@@ -233,8 +235,8 @@ async def _handle_tool_approval(
     *,
     ctx: ToolContext,
     tool_name: str,
-    args_summary: JsonObject,
-    meta: JsonObject,
+    args_summary: dict[str, JsonValue],
+    meta: dict[str, JsonValue],
     tool_call_id: str,
 ) -> tuple[str | None, ToolError | None]:
     approval_required = ctx.deps.tool_approval_policy.requires_approval(tool_name)
@@ -310,7 +312,7 @@ async def _wait_for_ticket_resolution(
     ticket_id: str,
     tool_name: str,
     args_preview: str,
-    meta: JsonObject,
+    meta: dict[str, JsonValue],
     publish_request: bool = False,
 ) -> tuple[str | None, ToolError | None]:
     existing_approval = ctx.deps.tool_approval_manager.get_approval(
@@ -524,7 +526,7 @@ def _publish_tool_approval_event(
     *,
     ctx: ToolContext,
     event_type: RunEventType,
-    payload: JsonObject,
+    payload: dict[str, JsonValue],
 ) -> None:
     ctx.deps.run_event_hub.publish(
         RunEvent(
@@ -546,8 +548,8 @@ def _envelope(
     tool_name: str,
     data: JsonValue = None,
     error: ToolError | None = None,
-    meta: JsonObject | None = None,
-) -> JsonObject:
+    meta: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
     envelope = ToolResultEnvelope(
         ok=ok,
         tool=tool_name,
@@ -555,4 +557,4 @@ def _envelope(
         error=error,
         meta=meta or {},
     )
-    return cast(JsonObject, envelope.model_dump(mode="json"))
+    return cast(dict[str, JsonValue], envelope.model_dump(mode="json"))

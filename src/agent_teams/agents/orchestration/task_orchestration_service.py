@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import (
@@ -60,7 +59,7 @@ class TaskOrchestrationService:
         run_id: str,
         tasks: list[TaskDraft],
         auto_dispatch: bool = False,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         if not tasks:
             raise ValueError("tasks must contain at least one task")
         if auto_dispatch and len(tasks) != 1:
@@ -87,7 +86,7 @@ class TaskOrchestrationService:
                 )
             )
 
-        response: JsonObject = {
+        response: dict[str, JsonValue] = {
             "ok": True,
             "created_count": len(created_records),
             "tasks": [_task_projection(record) for record in created_records],
@@ -106,7 +105,7 @@ class TaskOrchestrationService:
         run_id: str | None,
         task_id: str,
         update: TaskUpdate,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         record = self.get_task(task_id=task_id, run_id=run_id)
         if record.envelope.parent_task_id is None:
             raise ValueError("root coordinator task cannot be updated via task APIs")
@@ -153,7 +152,7 @@ class TaskOrchestrationService:
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         records = [
             record
             for record in self._task_repo.list_by_trace(run_id)
@@ -170,7 +169,7 @@ class TaskOrchestrationService:
         run_id: str | None,
         task_id: str,
         feedback: str = "",
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         record = self.get_task(task_id=task_id, run_id=run_id)
         resolved_run_id = run_id or record.envelope.trace_id
         if record.envelope.parent_task_id is None:
@@ -318,8 +317,8 @@ def _resolved_title(title: str | None, objective: str) -> str:
     return summary[:80]
 
 
-def _task_projection(record: TaskRecord) -> JsonObject:
-    row: JsonObject = {
+def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
+    row: dict[str, JsonValue] = {
         "task_id": record.envelope.task_id,
         "title": record.envelope.title
         or _resolved_title(None, record.envelope.objective),

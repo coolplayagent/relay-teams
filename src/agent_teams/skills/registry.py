@@ -9,11 +9,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import ModuleType
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Tool
 
 from agent_teams.logger import get_logger
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.models import Skill, SkillInstructionEntry
 from agent_teams.trace import trace_span
@@ -162,7 +162,7 @@ class SkillRegistry(BaseModel):
                     )
             return tuple(entries)
 
-    async def list_skills(self, ctx: ToolContext) -> JsonObject:
+    async def list_skills(self, ctx: ToolContext) -> dict[str, JsonValue]:
         return await execute_tool(
             ctx,
             tool_name="list_skills",
@@ -172,7 +172,7 @@ class SkillRegistry(BaseModel):
             ],
         )
 
-    async def load_skill(self, ctx: ToolContext, name: str) -> JsonObject:
+    async def load_skill(self, ctx: ToolContext, name: str) -> dict[str, JsonValue]:
         async def _action() -> JsonValue:
             with trace_span(
                 LOGGER,
@@ -201,7 +201,7 @@ class SkillRegistry(BaseModel):
 
     async def read_skill_resource(
         self, ctx: ToolContext, skill_name: str, resource_path: str
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         async def _action() -> JsonValue:
             with trace_span(
                 LOGGER,
@@ -241,8 +241,8 @@ class SkillRegistry(BaseModel):
         ctx: ToolContext,
         skill_name: str,
         script_name: str,
-        args: JsonObject | None = None,
-    ) -> JsonObject:
+        args: dict[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
         async def _action() -> JsonValue:
             with trace_span(
                 LOGGER,
@@ -336,7 +336,7 @@ def _resolve_script_entrypoint(
     )
 
 
-def _skill_to_json(skill: Skill) -> JsonObject:
+def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
     metadata = skill.metadata
     return {
         "name": metadata.name,
@@ -370,7 +370,7 @@ def _normalize_script_result(value: object) -> JsonValue:
     if isinstance(value, list):
         return [_normalize_script_result(item) for item in value]
     if isinstance(value, dict):
-        normalized: JsonObject = {}
+        normalized: dict[str, JsonValue] = {}
         for key, item in value.items():
             normalized[str(key)] = _normalize_script_result(item)
         return normalized

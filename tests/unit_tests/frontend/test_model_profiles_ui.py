@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_saving_model_profile_restores_profile_list_visibility(
@@ -45,7 +45,7 @@ console.log(JSON.stringify({
     )
 
     rendered_html = cast(str, payload["renderedHtml"])
-    notifications = cast(list[JsonObject], payload["notifications"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert notifications == [
         {
             "title": "Profile Saved",
@@ -92,8 +92,8 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    probe_payload = cast(JsonObject, payload["probePayload"])
-    probe_override = cast(JsonObject, probe_payload["override"])
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    probe_override = cast(dict[str, JsonValue], probe_payload["override"])
     probe_status_text = cast(str, payload["probeStatusText"])
     assert payload["notifications"] == []
     assert payload["testButtonText"] == "Test"
@@ -135,9 +135,9 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    saved_profile = cast(JsonObject, payload["savedProfile"])
-    saved_profile_body = cast(JsonObject, saved_profile["profile"])
-    notifications = cast(list[JsonObject], payload["notifications"])
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert notifications == [
         {
             "title": "Profile Saved",
@@ -176,8 +176,8 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    saved_profile = cast(JsonObject, payload["savedProfile"])
-    saved_profile_body = cast(JsonObject, saved_profile["profile"])
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
     assert payload["nameDisabled"] is False
     assert saved_profile["name"] == "renamed-profile"
     assert saved_profile_body["source_name"] == "default"
@@ -203,7 +203,7 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    probe_payload = cast(JsonObject, payload["probePayload"])
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
     assert probe_payload["profile_name"] == "default"
     assert probe_payload["timeout_ms"] == 15000
 
@@ -262,8 +262,8 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    notifications = cast(list[JsonObject], payload["notifications"])
-    confirms = cast(list[JsonObject], payload["confirms"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    confirms = cast(list[dict[str, JsonValue]], payload["confirms"])
     assert payload["deletedProfileName"] == "default"
     assert confirms == [
         {

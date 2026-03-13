@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
-
-from agent_teams.shared_types.json_types import JsonObject
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 
 class McpConfigScope(str, Enum):
@@ -23,8 +21,8 @@ class McpServerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
-    config: JsonObject
-    server_config: JsonObject
+    config: dict[str, JsonValue]
+    server_config: dict[str, JsonValue]
     source: McpConfigScope
 
 

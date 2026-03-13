@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_proxy_settings_panel_loads_saved_values_into_form(tmp_path: Path) -> None:
@@ -81,8 +81,8 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    notifications = cast(list[JsonObject], payload["notifications"])
-    probe_payload = cast(JsonObject, payload["probePayload"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
     assert probe_payload == {
         "url": "https://example.com",
         "timeout_ms": 2500,

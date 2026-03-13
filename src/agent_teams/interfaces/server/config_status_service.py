@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from collections.abc import Callable
 
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.skills.registry import SkillRegistry
 
 
@@ -16,14 +18,14 @@ class ConfigStatusService:
         get_runtime: Callable[[], RuntimeConfig],
         get_mcp_registry: Callable[[], McpRegistry],
         get_skill_registry: Callable[[], SkillRegistry],
-        get_proxy_status: Callable[[], JsonObject],
+        get_proxy_status: Callable[[], dict[str, JsonValue]],
     ) -> None:
         self._get_runtime: Callable[[], RuntimeConfig] = get_runtime
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
         self._get_skill_registry: Callable[[], SkillRegistry] = get_skill_registry
-        self._get_proxy_status: Callable[[], JsonObject] = get_proxy_status
+        self._get_proxy_status: Callable[[], dict[str, JsonValue]] = get_proxy_status
 
-    def get_config_status(self) -> JsonObject:
+    def get_config_status(self) -> dict[str, JsonValue]:
         runtime = self._get_runtime()
         mcp_registry = self._get_mcp_registry()
         skill_registry = self._get_skill_registry()

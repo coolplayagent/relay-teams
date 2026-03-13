@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from pathlib import Path
 from typing import cast
 
@@ -14,7 +16,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.shared_types.json_types import JsonArray, JsonObject
+
 from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.agents.execution.message_repo import MessageRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
@@ -141,8 +143,8 @@ async def test_create_tasks_auto_dispatch_binds_new_instance(tmp_path: Path) -> 
         auto_dispatch=True,
     )
 
-    tasks_payload = cast(JsonArray, payload["tasks"])
-    created_task = cast(JsonObject, tasks_payload[0])
+    tasks_payload = cast(list[JsonValue], payload["tasks"])
+    created_task = cast(dict[str, JsonValue], tasks_payload[0])
     task_id = str(created_task["task_id"])
     record = task_repo.get(task_id)
 
@@ -225,7 +227,7 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
     )
 
     first_dispatch = await service.dispatch_task(run_id="run-1", task_id="task-1")
-    first_task = cast(JsonObject, first_dispatch["task"])
+    first_task = cast(dict[str, JsonValue], first_dispatch["task"])
     bound_instance_id = str(first_task["instance_id"])
     second_dispatch = await service.dispatch_task(
         run_id=None,
@@ -271,7 +273,7 @@ async def test_dispatch_task_returns_result_only_inside_task_projection(
 
     payload = await service.dispatch_task(run_id="run-1", task_id="task-1")
 
-    task_payload = cast(JsonObject, payload["task"])
+    task_payload = cast(dict[str, JsonValue], payload["task"])
     assert payload["ok"] is True
     assert "result" not in payload
     assert task_payload["result"] == "done:task-1"
@@ -316,8 +318,8 @@ async def test_dispatch_task_reuses_session_role_instance_across_tasks(
     first_dispatch = await service.dispatch_task(run_id="run-1", task_id="task-1")
     second_dispatch = await service.dispatch_task(run_id="run-1", task_id="task-2")
 
-    first_task = cast(JsonObject, first_dispatch["task"])
-    second_task = cast(JsonObject, second_dispatch["task"])
+    first_task = cast(dict[str, JsonValue], first_dispatch["task"])
+    second_task = cast(dict[str, JsonValue], second_dispatch["task"])
     assert first_task["instance_id"] == second_task["instance_id"]
     assert execution_service.calls == [
         (str(first_task["instance_id"]), "spec_coder", first.envelope.task_id),
@@ -365,7 +367,7 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
     )
 
     first_dispatch = await service.dispatch_task(run_id="run-1", task_id="task-1")
-    instance_id = str(cast(JsonObject, first_dispatch["task"])["instance_id"])
+    instance_id = str(cast(dict[str, JsonValue], first_dispatch["task"])["instance_id"])
     task_repo.update_status(
         first.envelope.task_id,
         TaskStatus.RUNNING,

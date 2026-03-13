@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import asyncio
 from pydantic_ai import Agent
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from agent_teams.tools.workspace_tools.shell_executor import (
     normalize_timeout,
@@ -24,8 +25,8 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
         timeout_ms: int | None = None,
         workdir: str | None = None,
         description: str | None = None,
-    ) -> JsonObject:
-        async def _action() -> JsonObject:
+    ) -> dict[str, JsonValue]:
+        async def _action() -> dict[str, JsonValue]:
             validate_shell_command(command)
 
             if workdir:

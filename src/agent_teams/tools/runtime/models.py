@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from agent_teams.shared_types.json_types import JsonObject
-
 
 class ToolError(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,4 +20,4 @@ class ToolResultEnvelope(BaseModel):
     tool: str = Field(min_length=1)
     data: JsonValue | None = None
     error: ToolError | None = None
-    meta: JsonObject = Field(default_factory=dict)
+    meta: dict[str, JsonValue] = Field(default_factory=dict)

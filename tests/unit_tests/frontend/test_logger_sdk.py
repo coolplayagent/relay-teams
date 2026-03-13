@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_frontend_logger_batches_and_posts_structured_events(tmp_path: Path) -> None:
@@ -25,10 +25,10 @@ console.log(JSON.stringify(globalThis.__capturedBatches));
     )
 
     assert len(payload) == 1
-    batch = cast(JsonObject, payload[0])
+    batch = cast(dict[str, JsonValue], payload[0])
     assert "events" in batch
-    events = cast(list[JsonObject], batch["events"])
-    event = cast(JsonObject, events[0])
+    events = cast(list[dict[str, JsonValue]], batch["events"])
+    event = cast(dict[str, JsonValue], events[0])
     assert event["event"] == "frontend.test.failure"
     assert event["message"] == "frontend failed"
     assert event["page"] == "agent-teams"
@@ -37,7 +37,9 @@ console.log(JSON.stringify(globalThis.__capturedBatches));
     assert browser_session_id.startswith("browser_")
 
 
-def _run_frontend_logger_script(tmp_path: Path, runner_source: str) -> list[JsonObject]:
+def _run_frontend_logger_script(
+    tmp_path: Path, runner_source: str
+) -> list[dict[str, JsonValue]]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "utils" / "logger.js"
 

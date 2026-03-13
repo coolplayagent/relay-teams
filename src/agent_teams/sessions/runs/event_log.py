@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import sqlite3
 from pathlib import Path
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.persistence.db import open_sqlite
@@ -85,7 +86,7 @@ class EventLog:
             raise RuntimeError("Failed to persist run event id")
         return int(lastrowid)
 
-    def list_by_trace(self, trace_id: str) -> tuple[JsonObject, ...]:
+    def list_by_trace(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         rows = self._conn.execute(
             "SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
             "FROM events WHERE trace_id=? ORDER BY id ASC",
@@ -93,7 +94,7 @@ class EventLog:
         ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
 
-    def list_by_trace_with_ids(self, trace_id: str) -> tuple[JsonObject, ...]:
+    def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         rows = self._conn.execute(
             "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
             "FROM events WHERE trace_id=? ORDER BY id ASC",
@@ -101,7 +102,7 @@ class EventLog:
         ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
 
-    def list_by_session(self, session_id: str) -> tuple[JsonObject, ...]:
+    def list_by_session(self, session_id: str) -> tuple[dict[str, JsonValue], ...]:
         rows = self._conn.execute(
             "SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
             "FROM events WHERE session_id=? ORDER BY id ASC",
@@ -109,7 +110,9 @@ class EventLog:
         ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
 
-    def list_by_session_with_ids(self, session_id: str) -> tuple[JsonObject, ...]:
+    def list_by_session_with_ids(
+        self, session_id: str
+    ) -> tuple[dict[str, JsonValue], ...]:
         rows = self._conn.execute(
             "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
             "FROM events WHERE session_id=? ORDER BY id ASC",
@@ -192,8 +195,8 @@ class EventLog:
         self._conn.execute("DELETE FROM events WHERE session_id=?", (session_id,))
         self._conn.commit()
 
-    def _row_to_dict(self, row: sqlite3.Row) -> JsonObject:
-        result: JsonObject = {
+    def _row_to_dict(self, row: sqlite3.Row) -> dict[str, JsonValue]:
+        result: dict[str, JsonValue] = {
             "event_type": str(row["event_type"]),
             "trace_id": str(row["trace_id"]),
             "session_id": str(row["session_id"]),

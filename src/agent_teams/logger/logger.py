@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import copy
 import configparser
 import json
@@ -20,7 +22,7 @@ from agent_teams.builtin import (
 )
 from agent_teams.env import load_merged_env_vars
 from agent_teams.paths import get_app_config_dir
-from agent_teams.shared_types.json_types import JsonObject, JsonValue
+
 from agent_teams.trace import get_trace_context
 
 SERVICE_NAME = "agent_teams"
@@ -345,7 +347,7 @@ def log_model_output(role_id: str, message: str) -> None:
     )
 
 
-def log_tool_call(role_id: str, tool_name: str, params: JsonObject) -> None:
+def log_tool_call(role_id: str, tool_name: str, params: dict[str, JsonValue]) -> None:
     logger = get_logger(__name__)
     short = _safe_json(params)
     log_event(
@@ -379,7 +381,7 @@ def log_event(
     *,
     event: str,
     message: str,
-    payload: JsonObject | None = None,
+    payload: dict[str, JsonValue] | None = None,
     duration_ms: int | None = None,
     exc_info: LogExcInfo = None,
 ) -> None:
@@ -529,7 +531,7 @@ def _build_file_handler(
     return handler
 
 
-def _build_error_payload(exc_info: LogExcInfo) -> JsonObject:
+def _build_error_payload(exc_info: LogExcInfo) -> dict[str, JsonValue]:
     exc_type: type[BaseException] | None
     exc_value: BaseException | None
     exc_tb: TracebackType | None

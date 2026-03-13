@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import difflib
 import tempfile
 from pathlib import Path
 
 from pydantic_ai import Agent
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 
@@ -74,7 +75,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         ctx: ToolContext,
         path: str,
         content: str,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         async def _action() -> str:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
 

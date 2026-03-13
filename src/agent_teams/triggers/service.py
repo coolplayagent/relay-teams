@@ -7,9 +7,8 @@ from json import JSONDecodeError, loads
 from secrets import token_urlsafe
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.triggers.models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
@@ -40,7 +39,7 @@ class WebhookIngestEnvelope(BaseModel):
 
     event_key: str | None = None
     occurred_at: datetime | None = None
-    payload: JsonObject | None = None
+    payload: dict[str, JsonValue] | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -230,7 +229,7 @@ class TriggerService:
         trigger: TriggerDefinition,
         event_key: str | None,
         occurred_at: datetime | None,
-        payload: JsonObject,
+        payload: dict[str, JsonValue],
         metadata: dict[str, str],
         headers: dict[str, str],
         remote_addr: str | None,

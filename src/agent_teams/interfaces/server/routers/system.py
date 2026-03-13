@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from agent_teams.env.environment_variable_models import (
     EnvironmentVariableCatalog,
@@ -39,7 +39,6 @@ from agent_teams.providers.model_connectivity import (
     ModelConnectivityProbeResult,
 )
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
-from agent_teams.shared_types.json_types import JsonObject
 
 router = APIRouter(prefix="/system", tags=["System"])
 
@@ -52,21 +51,21 @@ def health_check() -> dict[str, str]:
 @router.get("/configs")
 def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     return service.get_config_status()
 
 
 @router.get("/configs/model")
 def get_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     return service.get_model_config()
 
 
 @router.get("/configs/model/profiles")
 def get_model_profiles(
     service: ModelConfigService = Depends(get_model_config_service),
-) -> dict[str, JsonObject]:
+) -> dict[str, dict[str, JsonValue]]:
     return service.get_model_profiles()
 
 
@@ -92,7 +91,7 @@ def save_model_profile(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        profile: JsonObject = {
+        profile: dict[str, JsonValue] = {
             "model": req.model,
             "provider": req.provider.value,
             "base_url": req.base_url,
@@ -115,7 +114,7 @@ def save_model_profile(
 def get_provider_models(
     provider: ProviderType | None = Query(default=None),
     service: ModelConfigService = Depends(get_model_config_service),
-) -> list[JsonObject]:
+) -> list[dict[str, JsonValue]]:
     return [
         model.model_dump(mode="json")
         for model in service.get_provider_models(provider=provider)
@@ -137,7 +136,7 @@ def delete_model_profile(
 class ModelConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config: JsonObject
+    config: dict[str, JsonValue]
 
 
 @router.put("/configs/model")
@@ -166,7 +165,7 @@ def probe_model_connectivity(
 @router.get("/configs/notifications")
 def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     return service.get_notification_config()
 
 
@@ -238,7 +237,7 @@ def save_proxy_config(
 class NotificationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    config: JsonObject
+    config: dict[str, JsonValue]
 
 
 @router.put("/configs/notifications")

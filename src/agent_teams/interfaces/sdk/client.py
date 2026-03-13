@@ -6,10 +6,9 @@ from collections.abc import Generator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
-from agent_teams.shared_types.json_types import JsonArray, JsonObject, JsonValue
 
 
 class RunHandle(BaseModel):
@@ -32,13 +31,13 @@ class AgentTeamsClient:
         self._timeout_seconds = timeout_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
 
-    def health(self) -> JsonObject:
+    def health(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/health")
 
-    def reload_proxy_config(self) -> JsonObject:
+    def reload_proxy_config(self) -> dict[str, JsonValue]:
         return self._request_json("POST", "/api/system/configs/proxy:reload")
 
-    def get_proxy_config(self) -> JsonObject:
+    def get_proxy_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/proxy")
 
     def save_proxy_config(
@@ -51,8 +50,8 @@ class AgentTeamsClient:
         proxy_username: str | None = None,
         proxy_password: str | None = None,
         ssl_verify: bool | None = None,
-    ) -> JsonObject:
-        payload: JsonObject = {
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
             "http_proxy": http_proxy,
             "https_proxy": https_proxy,
             "all_proxy": all_proxy,
@@ -75,8 +74,8 @@ class AgentTeamsClient:
         proxy_username: str | None = None,
         proxy_password: str | None = None,
         ssl_verify: bool | None = None,
-    ) -> JsonObject:
-        payload: JsonObject = {"url": url}
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"url": url}
         if timeout_ms is not None:
             payload["timeout_ms"] = timeout_ms
         if any(
@@ -104,11 +103,14 @@ class AgentTeamsClient:
 
     def create_session(
         self, session_id: str | None = None, metadata: dict[str, str] | None = None
-    ) -> JsonObject:
-        metadata_payload: JsonObject | None = None
+    ) -> dict[str, JsonValue]:
+        metadata_payload: dict[str, JsonValue] | None = None
         if metadata is not None:
             metadata_payload = {key: value for key, value in metadata.items()}
-        payload: JsonObject = {"session_id": session_id, "metadata": metadata_payload}
+        payload: dict[str, JsonValue] = {
+            "session_id": session_id,
+            "metadata": metadata_payload,
+        }
         return self._request_json(
             "POST",
             "/api/sessions",
@@ -121,7 +123,7 @@ class AgentTeamsClient:
         session_id: str | None = None,
         execution_mode: str = "ai",
     ) -> RunHandle:
-        payload: JsonObject = {
+        payload: dict[str, JsonValue] = {
             "session_id": session_id,
             "intent": intent,
             "execution_mode": execution_mode,
@@ -132,7 +134,9 @@ class AgentTeamsClient:
             session_id=_expect_str(data.get("session_id"), "session_id"),
         )
 
-    def stream_run_events(self, run_id: str) -> Generator[JsonObject, None, None]:
+    def stream_run_events(
+        self, run_id: str
+    ) -> Generator[dict[str, JsonValue], None, None]:
         sync_proxy_env_to_process_env(load_proxy_env_config())
         url = f"{self._base_url}/api/runs/{run_id}/events"
         request = Request(
@@ -157,7 +161,7 @@ class AgentTeamsClient:
         except URLError as exc:
             raise RuntimeError(f"Failed to connect to server: {exc}") from exc
 
-    def list_tool_approvals(self, run_id: str) -> list[JsonObject]:
+    def list_tool_approvals(self, run_id: str) -> list[dict[str, JsonValue]]:
         data = self._request_json("GET", f"/api/runs/{run_id}/tool-approvals")
         items = data.get("data", [])
         if isinstance(items, list):
@@ -166,7 +170,7 @@ class AgentTeamsClient:
 
     def resolve_tool_approval(
         self, run_id: str, tool_call_id: str, action: str, feedback: str = ""
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}/tool-approvals/{tool_call_id}/resolve",
@@ -176,13 +180,13 @@ class AgentTeamsClient:
     def create_tasks(
         self,
         run_id: str,
-        tasks: list[JsonObject] | None = None,
+        tasks: list[dict[str, JsonValue]] | None = None,
         auto_dispatch: bool = False,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         tasks_payload: list[JsonValue] | None = None
         if tasks is not None:
             tasks_payload = [task for task in tasks]
-        payload: JsonObject = {
+        payload: dict[str, JsonValue] = {
             "tasks": tasks_payload,
             "auto_dispatch": auto_dispatch,
         }
@@ -192,7 +196,9 @@ class AgentTeamsClient:
             payload,
         )
 
-    def list_run_tasks(self, run_id: str, include_root: bool = False) -> JsonObject:
+    def list_run_tasks(
+        self, run_id: str, include_root: bool = False
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "GET",
             f"/api/tasks/runs/{run_id}?include_root={'true' if include_root else 'false'}",
@@ -205,8 +211,8 @@ class AgentTeamsClient:
         role_id: str | None = None,
         objective: str | None = None,
         title: str | None = None,
-    ) -> JsonObject:
-        payload: JsonObject = {
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
             "role_id": role_id,
             "objective": objective,
             "title": title,
@@ -217,35 +223,35 @@ class AgentTeamsClient:
             payload,
         )
 
-    def dispatch_task(self, task_id: str, feedback: str = "") -> JsonObject:
+    def dispatch_task(self, task_id: str, feedback: str = "") -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/tasks/{task_id}/dispatch",
             {"feedback": feedback},
         )
 
-    def inject_message(self, run_id: str, content: str) -> JsonObject:
+    def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}/inject",
             {"content": content},
         )
 
-    def stop_run(self, run_id: str) -> JsonObject:
+    def stop_run(self, run_id: str) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}/stop",
             {"scope": "main"},
         )
 
-    def resume_run(self, run_id: str) -> JsonObject:
+    def resume_run(self, run_id: str) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}:resume",
             {},
         )
 
-    def stop_subagent(self, run_id: str, instance_id: str) -> JsonObject:
+    def stop_subagent(self, run_id: str, instance_id: str) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}/stop",
@@ -258,13 +264,13 @@ class AgentTeamsClient:
         name: str,
         source_type: str,
         display_name: str | None = None,
-        source_config: JsonObject | None = None,
-        auth_policies: list[JsonObject] | None = None,
-        target_config: JsonObject | None = None,
+        source_config: dict[str, JsonValue] | None = None,
+        auth_policies: list[dict[str, JsonValue]] | None = None,
+        target_config: dict[str, JsonValue] | None = None,
         public_token: str | None = None,
         enabled: bool = True,
-    ) -> JsonObject:
-        payload: JsonObject = {
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
             "name": name,
             "source_type": source_type,
             "enabled": enabled,
@@ -274,7 +280,7 @@ class AgentTeamsClient:
         if source_config is not None:
             payload["source_config"] = source_config
         if auth_policies is not None:
-            policies_payload: JsonArray = [policy for policy in auth_policies]
+            policies_payload: list[JsonValue] = [policy for policy in auth_policies]
             payload["auth_policies"] = policies_payload
         if target_config is not None:
             payload["target_config"] = target_config
@@ -282,7 +288,7 @@ class AgentTeamsClient:
             payload["public_token"] = public_token
         return self._request_json("POST", "/api/triggers", payload)
 
-    def list_triggers(self) -> list[JsonObject]:
+    def list_triggers(self) -> list[dict[str, JsonValue]]:
         data = self._request_json("GET", "/api/triggers")
         items = data.get("data", data)
         if isinstance(items, list):
@@ -290,8 +296,8 @@ class AgentTeamsClient:
         return []
 
     def ingest_trigger_webhook(
-        self, public_token: str, payload: JsonObject
-    ) -> JsonObject:
+        self, public_token: str, payload: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/triggers/webhooks/{public_token}",
@@ -303,7 +309,7 @@ class AgentTeamsClient:
         run_id: str,
         instance_id: str,
         content: str,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/runs/{run_id}/subagents/{instance_id}/inject",
@@ -315,7 +321,7 @@ class AgentTeamsClient:
         method: str,
         path: str,
         payload: object | None = None,
-    ) -> JsonObject:
+    ) -> dict[str, JsonValue]:
         sync_proxy_env_to_process_env(load_proxy_env_config())
         request_body = None
         headers: dict[str, str] = {"Accept": "application/json"}

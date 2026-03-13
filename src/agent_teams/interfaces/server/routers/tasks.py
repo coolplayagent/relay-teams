@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskDraft,
@@ -10,7 +10,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskUpdate,
 )
 from agent_teams.interfaces.server.deps import get_task_repo, get_task_service
-from agent_teams.shared_types.json_types import JsonObject
+
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.models import TaskRecord
 
@@ -48,7 +48,7 @@ async def create_tasks_for_run(
     run_id: str,
     req: CreateTasksRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     try:
         return await service.create_tasks(
             run_id=run_id,
@@ -66,7 +66,7 @@ def list_tasks_for_run(
     run_id: str,
     include_root: bool = False,
     service: TaskOrchestrationService = Depends(get_task_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     try:
         return service.list_run_tasks(run_id=run_id, include_root=include_root)
     except KeyError as exc:
@@ -89,7 +89,7 @@ def update_task_by_id(
     task_id: str,
     req: UpdateTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     try:
         return service.update_task(
             run_id=None,
@@ -111,7 +111,7 @@ async def dispatch_task_by_id(
     task_id: str,
     req: DispatchTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
-) -> JsonObject:
+) -> dict[str, JsonValue]:
     try:
         return await service.dispatch_task(
             run_id=None,

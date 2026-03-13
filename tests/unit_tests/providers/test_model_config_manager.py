@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 from typing import cast
 
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 from agent_teams.providers.model_config_manager import ModelConfigManager
-from agent_teams.shared_types.json_types import JsonObject
 
 
 def test_get_model_config_returns_empty_when_file_missing(tmp_path: Path) -> None:
@@ -134,7 +135,7 @@ def test_save_model_profile_preserves_existing_api_key_when_blank(
     )
 
     config = manager.get_model_config()
-    saved_profile = cast(JsonObject, config["default"])
+    saved_profile = cast(dict[str, JsonValue], config["default"])
 
     assert saved_profile["model"] == "kimi-k2.5"
     assert saved_profile["top_p"] == 0.95
@@ -177,7 +178,7 @@ def test_save_model_profile_renames_and_preserves_existing_api_key(
     )
 
     config = manager.get_model_config()
-    saved_profile = cast(JsonObject, config["renamed-profile"])
+    saved_profile = cast(dict[str, JsonValue], config["renamed-profile"])
 
     assert "default" not in config
     assert saved_profile["model"] == "kimi-k2.5"

@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
-
-from agent_teams.shared_types.json_types import JsonArray
-
 
 DEFAULT_MOCK_API_SOURCE = """
 const initialStatus = {
@@ -110,7 +109,7 @@ console.log(JSON.stringify({
 
     html = cast(str, payload["html"])
     collapsed_html = cast(str, payload["collapsedHtml"])
-    log_entries = cast(JsonArray, payload["logEntries"])
+    log_entries = cast(list[JsonValue], payload["logEntries"])
     assert "Collapse all tools" in html
     assert "Collapse tools" in html
     assert "time-mcp" in html
@@ -250,7 +249,7 @@ console.log(JSON.stringify({
 
     html = cast(str, payload["html"])
     collapsed_html = cast(str, payload["collapsedHtml"])
-    toasts = cast(JsonArray, payload["toasts"])
+    toasts = cast(list[JsonValue], payload["toasts"])
     assert payload["fetchConfigStatusCalls"] == 2
     assert payload["reloadMcpCalls"] == 1
     assert payload["toolFetchCalls"] == [

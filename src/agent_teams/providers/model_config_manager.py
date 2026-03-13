@@ -1,30 +1,31 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pydantic import JsonValue
+
 from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
-from agent_teams.shared_types.json_types import JsonObject
 
 
 class ModelConfigManager:
     def __init__(self, *, config_dir: Path) -> None:
         self._config_dir: Path = config_dir
 
-    def get_model_config(self) -> JsonObject:
+    def get_model_config(self) -> dict[str, JsonValue]:
         model_file = self._config_dir / "model.json"
         if model_file.exists():
             return _load_json_object(model_file)
         return {}
 
-    def get_model_profiles(self) -> dict[str, JsonObject]:
+    def get_model_profiles(self) -> dict[str, dict[str, JsonValue]]:
         model_file = self._config_dir / "model.json"
         if not model_file.exists():
             return {}
         config = _load_json_object(model_file)
-        result: dict[str, JsonObject] = {}
+        result: dict[str, dict[str, JsonValue]] = {}
         for name, profile in config.items():
             if not isinstance(profile, dict):
                 continue
@@ -47,12 +48,12 @@ class ModelConfigManager:
     def save_model_profile(
         self,
         name: str,
-        profile: JsonObject,
+        profile: dict[str, JsonValue],
         *,
         source_name: str | None = None,
     ) -> None:
         model_file = self._config_dir / "model.json"
-        config: JsonObject = {}
+        config: dict[str, JsonValue] = {}
         if model_file.exists():
             config = _load_json_object(model_file)
         existing_profile = config.get(name)
@@ -75,26 +76,26 @@ class ModelConfigManager:
             del config[name]
             _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
 
-    def save_model_config(self, config: JsonObject) -> None:
+    def save_model_config(self, config: dict[str, JsonValue]) -> None:
         model_file = self._config_dir / "model.json"
         _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
 
 
-def _load_json_object(file_path: Path) -> JsonObject:
+def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     try:
         raw = cast(object, loads(file_path.read_text("utf-8")))
     except Exception:
         return {}
     if isinstance(raw, dict):
-        return cast(JsonObject, raw)
+        return cast(dict[str, JsonValue], raw)
     return {}
 
 
 def _merge_profile_api_key(
     *,
     existing_profile: object,
-    next_profile: JsonObject,
-) -> JsonObject:
+    next_profile: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
     merged_profile = dict(next_profile)
     next_api_key = merged_profile.get("api_key")
     if isinstance(next_api_key, str) and next_api_key.strip():
