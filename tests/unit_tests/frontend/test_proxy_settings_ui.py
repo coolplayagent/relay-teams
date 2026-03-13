@@ -164,8 +164,9 @@ def test_proxy_settings_styles_keep_a_single_editor_surface() -> None:
     assert "border-top: 1px solid var(--settings-divider);" in section_rule
     assert "margin-top: 0;" in split_rule
     assert "border-radius: 6px;" in input_rule
-    assert "grid-template-columns: 128px minmax(0, 1fr) auto;" in test_row_rule
-    assert "min-width: 92px;" in test_btn_rule
+    assert "grid-template-columns: 128px minmax(0, 1fr) 128px;" in test_row_rule
+    assert "min-width: 128px;" in test_btn_rule
+    assert "min-height: 42px;" in test_btn_rule
     assert "grid-column: 1 / -1;" in probe_rule
     assert "border-radius: 6px;" in probe_rule
 

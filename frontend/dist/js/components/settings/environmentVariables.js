@@ -260,8 +260,8 @@ function renderEnvironmentRecord(record) {
                 isEditable
                     ? `
                 <div class="env-record-actions">
-                    <button class="settings-inline-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
-                    <button class="settings-inline-action env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
+                    <button class="settings-inline-action settings-list-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
+                    <button class="settings-inline-action settings-list-action settings-list-action-danger env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
                 </div>
             `
                     : ''

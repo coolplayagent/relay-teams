@@ -140,7 +140,7 @@ function renderRolesList() {
                     </div>
                 </div>
                 <div class="role-record-actions">
-                    <button class="settings-inline-action role-record-edit-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">Edit</button>
+                    <button class="settings-inline-action settings-list-action role-record-edit-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">Edit</button>
                 </div>
             </div>
         `)

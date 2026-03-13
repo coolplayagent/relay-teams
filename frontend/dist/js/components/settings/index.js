@@ -398,7 +398,7 @@ function createModal() {
                                             <div class="form-group proxy-inline-field proxy-inline-field-test">
                                                 <label for="proxy-probe-url">Target URL</label>
                                                 <input type="text" id="proxy-probe-url" placeholder="https://example.com" autocomplete="url">
-                                                <button class="secondary-btn proxy-inline-test-btn" id="test-proxy-web-btn" type="button">Test URL</button>
+                                                <button class="secondary-btn section-action-btn proxy-inline-test-btn" id="test-proxy-web-btn" type="button">Test URL</button>
                                             </div>
                                             <div class="form-group proxy-inline-field proxy-inline-field-compact">
                                                 <label for="proxy-probe-timeout">Timeout (ms)</label>
@@ -420,23 +420,23 @@ function createModal() {
                 <div class="settings-actions-bar" id="settings-actions-bar">
                     <div class="settings-panel-actions" id="settings-panel-actions">
                         <div class="settings-panel-actions-group settings-panel-actions-group-start">
-                            <button class="primary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
-                            <button class="primary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;">Validate</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;">Validate</button>
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
-                            <button class="primary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;">Add Profile</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;">Add Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;">Cancel</button>
-                            <button class="primary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
-                            <button class="primary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;">Add Variable</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;">Reload</button>
-                            <button class="primary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;">Reload</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;">Reload</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;">Reload</button>
                         </div>
                     </div>
                 </div>

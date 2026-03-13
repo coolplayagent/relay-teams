@@ -428,9 +428,9 @@ function renderProfileCard(name, profile, index) {
                     </div>
                 </div>
                 <div class="profile-card-actions">
-                    <button class="settings-inline-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
-                    <button class="settings-inline-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
-                    <button class="settings-inline-action profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
+                    <button class="settings-inline-action settings-list-action settings-list-action-danger profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
                 </div>
             </div>
             <div class="profile-card-inline-status" data-profile-probe-container="${escapeHtml(name)}">

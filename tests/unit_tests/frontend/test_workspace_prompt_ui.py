@@ -147,11 +147,65 @@ def test_button_theme_tokens_are_distinct_between_dark_and_light_modes() -> None
     ).read_text(encoding="utf-8")
 
     assert "--button-primary-bg: #494641;" in base_css
-    assert "--button-primary-bg: #d9d0c4;" in base_css
+    assert "--button-primary-bg: #4d6259;" in base_css
     assert "--button-secondary-bg: #232629;" in base_css
-    assert "--button-secondary-bg: #f7f1e7;" in base_css
+    assert "--button-secondary-bg: #ffffff;" in base_css
+    assert "--settings-shell-bg: #ffffff;" in base_css
     assert "background: var(--button-primary-bg);" in components_css
     assert "background: var(--button-secondary-bg);" in components_css
+
+
+def test_light_theme_workspace_avoids_legacy_beige_overrides() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+    layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "background: #ece4d8;" not in components_css
+    assert "background: #e8dfd1;" not in components_css
+    assert "background: #efe7db;" not in components_css
+    assert "background: #fbf7f0;" not in components_css
+    assert "background: #fbf7f0;" not in layout_css
+    assert "color-mix(in srgb, var(--primary) 8%, transparent)" in components_css
+    assert "background: var(--bg-surface-muted);" in components_css
+    assert "background: var(--bg-surface);" in layout_css
+
+
+def test_light_theme_workspace_uses_shared_surface_hierarchy() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+    layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "body.light-theme .agent-panel-scroll," in layout_css
+    assert "background: var(--bg-surface);" in layout_css
+    assert "body.light-theme .sidebar," in layout_css
+    assert "box-shadow: none;" in layout_css
+    assert (
+        "background: color-mix(in srgb, var(--primary) 6%, transparent);"
+        in components_css
+    )
+    assert (
+        "border-color: color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);"
+        in components_css
+    )
+    assert "body.light-theme .round-state-pill," in components_css
+    assert "background: transparent;" in components_css
+    assert "body.light-theme .tool-block," in components_css
+    assert "background: var(--bg-tool-block);" in components_css
+    assert "background: var(--bg-surface-glass);" in layout_css
+    assert "--bg-surface-glass: #f3f4f4;" in (
+        repo_root / "frontend" / "dist" / "css" / "base.css"
+    ).read_text(encoding="utf-8")
+    assert "body.light-theme .sessions-list," in layout_css
+    assert "body.light-theme .session-item {" in components_css
+    assert "background: var(--bg-surface-muted);" in components_css
 
 
 def test_side_rails_use_transition_based_collapse_rules() -> None:

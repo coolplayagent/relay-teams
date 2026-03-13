@@ -356,7 +356,7 @@ function createElement(initialDisplay = "block") {{
 
     function buildRoleEditButtons(source) {{
         const matches = [];
-        const pattern = /class="settings-inline-action role-record-edit-btn" data-role-id="([^"]+)"/g;
+        const pattern = /class="[^"]*role-record-edit-btn[^"]*" data-role-id="([^"]+)"/g;
         let match = pattern.exec(source);
         while (match) {{
             matches.push({{
