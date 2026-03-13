@@ -17,7 +17,7 @@ from agent_teams.providers.model_connectivity import (
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeService,
 )
-from agent_teams.runs.runtime_config import RuntimeConfig, RuntimePaths
+from agent_teams.sessions.runs.runtime_config import RuntimeConfig, RuntimePaths
 
 
 class _FakeHttpClient:

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.runs.enums import ExecutionMode, InjectionSource, RunEventType
+from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource, RunEventType
 
 
 class IntentInput(BaseModel):

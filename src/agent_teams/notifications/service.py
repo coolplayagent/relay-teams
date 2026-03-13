@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -10,9 +10,9 @@ from agent_teams.notifications.models import (
     NotificationRequest,
     NotificationType,
 )
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.models import RunEvent
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.models import RunEvent
 
 
 class NotificationService:
@@ -69,4 +69,3 @@ class NotificationService:
         if context.tool_call_id:
             return f"{notification_type.value}:{context.run_id}:{context.tool_call_id}"
         return f"{notification_type.value}:{context.run_id}"
-

@@ -10,7 +10,8 @@ from pydantic_ai.messages import (
 )
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.service import SessionService
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
@@ -31,7 +32,7 @@ def _build_service(
     db_path: Path,
     *,
     run_event_hub: RunEventHub | None = None,
-    resolve_active_run_id=None,
+    active_run_registry: ActiveSessionRunRegistry | None = None,
 ) -> SessionService:
     return SessionService(
         session_repo=SessionRepository(db_path),
@@ -42,7 +43,7 @@ def _build_service(
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_event_hub=run_event_hub,
-        resolve_active_run_id=resolve_active_run_id,
+        active_run_registry=active_run_registry,
         event_log=EventLog(db_path),
     )
 
@@ -174,11 +175,14 @@ def test_get_recovery_snapshot_uses_runtime_active_run_when_events_not_written(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "recovery_runtime_active.db"
+    active_run_registry = ActiveSessionRunRegistry()
+    active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-runtime-active",
+    )
     service = _build_service(
         db_path,
-        resolve_active_run_id=lambda session_id: (
-            "run-runtime-active" if session_id == "session-1" else None
-        ),
+        active_run_registry=active_run_registry,
     )
     _ = service.create_session(session_id="session-1")
     _seed_root_task(db_path, run_id="run-runtime-active", session_id="session-1")

@@ -10,8 +10,8 @@ from typing import cast
 from agent_teams.notifications import NotificationService, default_notification_config
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.state.approval_ticket_repo import (
     ApprovalTicketRepository,

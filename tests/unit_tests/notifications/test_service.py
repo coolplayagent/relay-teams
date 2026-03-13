@@ -1,11 +1,11 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
 from typing import cast
 
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.models import RunEvent
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.notifications import (
     NotificationConfig,
     NotificationChannel,
@@ -15,7 +15,7 @@ from agent_teams.notifications import (
     NotificationType,
     default_notification_config,
 )
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.event_stream import RunEventHub
 
 
 class _FakeRunEventHub:
@@ -79,5 +79,3 @@ def test_emit_returns_false_when_type_is_disabled() -> None:
 
     assert emitted is False
     assert hub.events == []
-
-

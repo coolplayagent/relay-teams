@@ -21,9 +21,9 @@ if TYPE_CHECKING:
     from agent_teams.notifications import NotificationService
     from agent_teams.providers.model_config import ModelEndpointConfig
     from agent_teams.roles.registry import RoleRegistry
-    from agent_teams.runs.control import RunControlManager
-    from agent_teams.runs.event_stream import RunEventHub
-    from agent_teams.runs.injection_queue import RunInjectionManager
+    from agent_teams.sessions.runs.control import RunControlManager
+    from agent_teams.sessions.runs.event_stream import RunEventHub
+    from agent_teams.sessions.runs.injection_queue import RunInjectionManager
     from agent_teams.skills.registry import SkillRegistry
     from agent_teams.state.agent_repo import AgentInstanceRepository
     from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository

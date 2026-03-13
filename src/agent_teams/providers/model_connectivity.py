@@ -15,7 +15,7 @@ from agent_teams.providers.model_config import (
     ProviderType,
     SamplingConfig,
 )
-from agent_teams.runs.runtime_config import RuntimeConfig
+from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 
 
 _INVALID_RESPONSE_PAYLOAD = object()

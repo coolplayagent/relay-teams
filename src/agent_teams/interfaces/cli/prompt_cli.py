@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 
 import typer
 
-from agent_teams.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import RunEventType
 
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]

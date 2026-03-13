@@ -21,11 +21,11 @@ from agent_teams.roles.registry import RoleRegistry
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.logger import get_logger, log_event
 from agent_teams.agents.orchestration.human_gate import GateManager
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.enums import ExecutionMode, RunEventType
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.ids import new_trace_id
-from agent_teams.runs.models import IntentInput, RunEvent
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.enums import ExecutionMode, RunEventType
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.ids import new_trace_id
+from agent_teams.sessions.runs.models import IntentInput, RunEvent
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.run_runtime_repo import (
     RunRuntimePhase,

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Callable, cast
+from typing import cast
 
 from agent_teams.agents.models import AgentRuntimeRecord
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.reflection.service import ReflectionService
 from agent_teams.sessions.rounds_projection import (
     approvals_to_projection,
@@ -52,7 +53,7 @@ class SessionService:
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
         run_event_hub: RunEventHub | None = None,
-        resolve_active_run_id: Callable[[str], str | None] | None = None,
+        active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
         shared_store: SharedStateRepository | None = None,
         workspace_manager: WorkspaceManager | None = None,
@@ -66,7 +67,7 @@ class SessionService:
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
         self._run_event_hub = run_event_hub
-        self._resolve_active_run_id = resolve_active_run_id
+        self._active_run_registry = active_run_registry
         self._event_log = event_log
         self._shared_store = shared_store
         self._workspace_manager = workspace_manager
@@ -327,8 +328,8 @@ class SessionService:
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord] | None:
         hinted_run_id = (
-            self._resolve_active_run_id(session_id)
-            if self._resolve_active_run_id is not None
+            self._active_run_registry.get_active_run_id(session_id)
+            if self._active_run_registry is not None
             else None
         )
         if hinted_run_id:

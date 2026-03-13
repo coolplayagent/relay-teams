@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from agent_teams.runs.models import RunEvent
+from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.run_state_repo import RunStateRepository
 

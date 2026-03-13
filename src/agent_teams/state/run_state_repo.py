@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.models import RunEvent
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.state.db import open_sqlite
 from agent_teams.state.run_state_models import (
     RunSnapshotRecord,

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
-from agent_teams.runs import runtime_config
+from agent_teams.sessions.runs import runtime_config
 
 
 def test_load_runtime_config_uses_project_config_dir_by_default(

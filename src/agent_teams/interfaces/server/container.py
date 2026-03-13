@@ -41,11 +41,12 @@ from agent_teams.agents.orchestration.factory import create_task_execution_servi
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles import RoleLoader, RoleRegistry
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.injection_queue import RunInjectionManager
-from agent_teams.runs.manager import RunManager
-from agent_teams.runs.runtime_config import RuntimeConfig, load_runtime_config
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.manager import RunManager
+from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 from agent_teams.sessions import SessionService
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.registry import SkillRegistry
@@ -173,6 +174,9 @@ class ServerContainer:
         self.agent_repo.mark_running_instances_failed()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
+        self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
+            run_runtime_repo=self.run_runtime_repo
+        )
         self.run_event_hub: RunEventHub = RunEventHub(
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
@@ -221,6 +225,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
             session_repo=self.session_repo,
+            active_run_registry=self.active_run_registry,
             event_log=self.event_log,
             task_repo=self.task_repo,
             agent_repo=self.agent_repo,
@@ -240,9 +245,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
             run_event_hub=self.run_event_hub,
-            resolve_active_run_id=lambda session_id: (
-                self.run_service._active_run_by_session.get(session_id)
-            ),
+            active_run_registry=self.active_run_registry,
             event_log=self.event_log,
             shared_store=self.shared_store,
             workspace_manager=self.workspace_manager,

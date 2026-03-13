@@ -17,12 +17,13 @@ from agent_teams.notifications import (
     NotificationService,
     NotificationType,
 )
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.enums import InjectionSource, RunEventType
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.ids import new_trace_id
-from agent_teams.runs.injection_queue import RunInjectionManager
-from agent_teams.runs.models import IntentInput, RunEvent, RunResult
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.ids import new_trace_id
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.models import IntentInput, RunEvent, RunResult
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import (
     ApprovalTicketRepository,
@@ -57,6 +58,7 @@ class RunManager:
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         session_repo: SessionRepository,
+        active_run_registry: ActiveSessionRunRegistry,
         event_log: EventLog | None = None,
         task_repo: TaskRepository | None = None,
         agent_repo: AgentInstanceRepository | None = None,
@@ -73,6 +75,7 @@ class RunManager:
         self._run_control_manager: RunControlManager = run_control_manager
         self._tool_approval_manager: ToolApprovalManager = tool_approval_manager
         self._session_repo: SessionRepository = session_repo
+        self._active_run_registry: ActiveSessionRunRegistry = active_run_registry
         self._event_log: EventLog | None = event_log
         self._task_repo: TaskRepository | None = task_repo
         self._agent_repo: AgentInstanceRepository | None = agent_repo
@@ -87,19 +90,6 @@ class RunManager:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
-        self._active_run_by_session: dict[str, str] = {}
-        self._hydrate_active_runs()
-
-    def _hydrate_active_runs(self) -> None:
-        if self._run_runtime_repo is None:
-            return
-        for runtime in sorted(
-            self._run_runtime_repo.list_recoverable(),
-            key=lambda item: item.updated_at,
-            reverse=True,
-        ):
-            if runtime.session_id not in self._active_run_by_session:
-                self._active_run_by_session[runtime.session_id] = runtime.run_id
 
     def _ensure_session(self, session_id: str | None) -> str:
         if not session_id:
@@ -123,17 +113,22 @@ class RunManager:
     def _active_recoverable_run(
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord | None] | None:
-        run_id = self._active_run_by_session.get(session_id)
+        run_id = self._active_run_registry.get_active_run_id(session_id)
         if not run_id:
             return None
         return run_id, self._runtime_for_run(run_id)
 
     def _remember_active_run(self, session_id: str, run_id: str) -> None:
-        self._active_run_by_session[session_id] = run_id
+        self._active_run_registry.remember_active_run(
+            session_id=session_id,
+            run_id=run_id,
+        )
 
     def _drop_active_run(self, session_id: str, run_id: str) -> None:
-        if self._active_run_by_session.get(session_id) == run_id:
-            self._active_run_by_session.pop(session_id, None)
+        self._active_run_registry.drop_active_run(
+            session_id=session_id,
+            run_id=run_id,
+        )
 
     async def run_intent(self, intent: IntentInput) -> RunResult:
         session_id = self._ensure_session(intent.session_id)

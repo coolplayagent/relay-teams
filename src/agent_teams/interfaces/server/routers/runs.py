@@ -11,9 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
-from agent_teams.runs.manager import RunManager
-from agent_teams.runs.enums import ExecutionMode, InjectionSource
-from agent_teams.runs.models import IntentInput
+from agent_teams.sessions.runs.manager import RunManager
+from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource
+from agent_teams.sessions.runs.models import IntentInput
 from agent_teams.trace import bind_trace_context
 
 logger = get_logger(__name__)

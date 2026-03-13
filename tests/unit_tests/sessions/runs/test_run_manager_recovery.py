@@ -8,12 +8,13 @@ import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.injection_queue import RunInjectionManager
-from agent_teams.runs.manager import RunManager
-from agent_teams.runs.models import IntentInput, RunResult
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.manager import RunManager
+from agent_teams.sessions.runs.models import IntentInput, RunResult
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.state.event_log import EventLog
@@ -78,6 +79,7 @@ def _build_manager(db_path: Path) -> RunManager:
     run_runtime_repo = RunRuntimeRepository(db_path)
     approval_ticket_repo = ApprovalTicketRepository(db_path)
     hub = RunEventHub(event_log=event_log, run_state_repo=run_state_repo)
+    active_run_registry = ActiveSessionRunRegistry(run_runtime_repo=run_runtime_repo)
     control.bind_runtime(
         run_event_hub=hub,
         injection_manager=injection,
@@ -94,6 +96,7 @@ def _build_manager(db_path: Path) -> RunManager:
         run_control_manager=control,
         tool_approval_manager=ToolApprovalManager(),
         session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
+        active_run_registry=active_run_registry,
         event_log=event_log,
         task_repo=task_repo,
         agent_repo=agent_repo,
@@ -143,7 +146,10 @@ def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
         phase=RunRuntimePhase.COORDINATOR_RUNNING,
     )
 
-    manager._active_run_by_session["session-1"] = "run-existing"
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
     manager._running_run_ids.add("run-existing")
     manager._injection_manager.activate("run-existing")
 
@@ -173,7 +179,10 @@ def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:
         status=RunRuntimeStatus.STOPPED,
         phase=RunRuntimePhase.IDLE,
     )
-    manager._active_run_by_session["session-1"] = "run-existing"
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
 
     run_id, session_id = manager.create_run(
         IntentInput(session_id="session-1", intent="continue from checkpoint")
@@ -204,7 +213,10 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         tool_name="create_tasks",
         args_preview="{}",
     )
-    manager._active_run_by_session["session-1"] = "run-existing"
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
 
     with pytest.raises(RuntimeError, match="waiting for tool approval"):
         manager.create_run(IntentInput(session_id="session-1", intent="continue"))
@@ -226,7 +238,7 @@ def test_manager_hydrates_recoverable_run_from_runtime_repo(tmp_path: Path) -> N
 
     manager = _build_manager(db_path)
 
-    assert manager._active_run_by_session["session-1"] == "run-existing"
+    assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
 
 def test_resolve_tool_approval_requires_resume_for_stopped_run(
@@ -254,7 +266,10 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         tool_name="create_tasks",
         args_preview="{}",
     )
-    manager._active_run_by_session["session-1"] = "run-existing"
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
     manager._tool_approval_manager.open_approval(
         run_id="run-existing",
         tool_call_id="call-1",
@@ -299,7 +314,10 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
         tool_name="create_tasks",
         args_preview="{}",
     )
-    manager._active_run_by_session["session-1"] = "run-existing"
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
 
     session_id = manager.resume_run("run-existing")
 

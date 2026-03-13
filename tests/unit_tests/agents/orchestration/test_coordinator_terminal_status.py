@@ -11,10 +11,10 @@ from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
 from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.event_stream import RunEventHub
-from agent_teams.runs.injection_queue import RunInjectionManager
-from agent_teams.runs.models import IntentInput
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.models import IntentInput
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.message_repo import MessageRepository

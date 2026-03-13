@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.state.event_log import EventLog
 from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation

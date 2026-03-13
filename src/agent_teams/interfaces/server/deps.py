@@ -17,7 +17,7 @@ from agent_teams.reflection.service import ReflectionService
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.roles import RoleRegistry
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.runs.manager import RunManager
+from agent_teams.sessions.runs.manager import RunManager
 from agent_teams.sessions import SessionService
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.registry import SkillRegistry

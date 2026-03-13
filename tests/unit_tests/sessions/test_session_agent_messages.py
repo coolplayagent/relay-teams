@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.service import SessionService
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository

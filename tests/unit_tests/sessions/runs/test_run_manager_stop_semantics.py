@@ -7,18 +7,19 @@ from typing import cast
 import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.manager import RunManager
-from agent_teams.runs.models import IntentInput
+from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.manager import RunManager
+from agent_teams.sessions.runs.models import IntentInput
 from agent_teams.notifications import (
     NotificationChannel,
     NotificationConfig,
     NotificationRule,
     NotificationService,
 )
-from agent_teams.runs.injection_queue import RunInjectionManager
-from agent_teams.runs.control import RunControlManager
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.event_log import EventLog
@@ -117,6 +118,7 @@ def _make_run_manager(control: RunControlManager) -> RunManager:
         run_control_manager=control,
         tool_approval_manager=ToolApprovalManager(),
         session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
+        active_run_registry=ActiveSessionRunRegistry(),
     )
 
 
@@ -155,6 +157,7 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         run_control_manager=control,
         tool_approval_manager=ToolApprovalManager(),
         session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
+        active_run_registry=ActiveSessionRunRegistry(),
         notification_service=NotificationService(
             run_event_hub=hub,
             get_config=lambda: NotificationConfig(

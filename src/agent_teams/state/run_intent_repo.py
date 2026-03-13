@@ -4,8 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.runs.enums import ExecutionMode
-from agent_teams.runs.models import IntentInput
+from agent_teams.sessions.runs.enums import ExecutionMode
+from agent_teams.sessions.runs.models import IntentInput
 from agent_teams.state.db import open_sqlite
 
 

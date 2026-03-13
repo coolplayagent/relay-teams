@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from agent_teams.runs.enums import RunEventType
-from agent_teams.runs.models import RunEvent
+from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.state.run_state_models import (
     RunStatePhase,
     RunStateRecord,

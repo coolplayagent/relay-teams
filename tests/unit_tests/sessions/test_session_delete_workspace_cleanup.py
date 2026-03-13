@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_teams.agents.enums import InstanceStatus
-from agent_teams.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.reflection.config_manager import ReflectionConfigManager
 from agent_teams.reflection.repository import ReflectionJobRepository
 from agent_teams.reflection.models import DailyReflectionResult, LongTermMemoryDocument

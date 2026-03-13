@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.runs.runtime_config import RuntimeConfig
+from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.skills.registry import SkillRegistry
 
