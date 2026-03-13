@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from agent_teams.env.runtime_env import (
@@ -16,4 +16,3 @@ __all__ = [
     "load_env_file",
     "load_merged_env_vars",
 ]
-

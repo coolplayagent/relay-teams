@@ -15,10 +15,10 @@ from pydantic_ai.messages import (
 
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.sessions.rounds_projection import build_session_rounds
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
@@ -74,8 +74,10 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
         task_id="task-root-new",
         trace_id=new_run_id,
         messages=[
-            ModelRequest(parts=[UserPromptPart(content="彩虹是什么颜色的")]),
-            ModelResponse(parts=[TextPart(content="彩虹通常有七种颜色。")]),
+            ModelRequest(parts=[UserPromptPart(content="what color is a rainbow")]),
+            ModelResponse(
+                parts=[TextPart(content="Rainbows usually have seven colors.")]
+            ),
         ],
     )
 

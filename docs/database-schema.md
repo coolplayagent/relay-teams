@@ -303,6 +303,21 @@ Primary query keys used by repositories:
 
 ---
 
+## 3.1 Code Ownership
+
+- `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
+- `agent_teams.sessions`: `sessions`.
+- `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
+- `agent_teams.agents`: `agent_instances`.
+- `agent_teams.agents.tasks`: `tasks`.
+- `agent_teams.agents.execution`: `messages`.
+- `agent_teams.tools.runtime`: `approval_tickets`.
+- `agent_teams.providers`: `token_usage`.
+- `agent_teams.triggers`: `triggers`, `trigger_events`.
+- `agent_teams.reflection`: `reflection_jobs`.
+
+---
+
 ### 2.10 `reflection_jobs`
 
 ```sql

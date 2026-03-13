@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.state.db import SQLITE_BUSY_TIMEOUT_MS, open_sqlite
+from agent_teams.persistence.db import SQLITE_BUSY_TIMEOUT_MS, open_sqlite
 
 
 def test_open_sqlite_enables_busy_timeout_and_wal_for_file_db(tmp_path: Path) -> None:

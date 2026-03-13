@@ -24,23 +24,23 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.models import IntentInput, RunEvent, RunResult
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import (
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
 )
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_intent_repo import RunIntentRepository
-from agent_teams.state.run_runtime_repo import (
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.state.run_state_repo import RunStateRepository
-from agent_teams.state.session_repo import SessionRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.sessions.runs.run_state_repo import RunStateRepository
+from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
 from agent_teams.trace import bind_trace_context
 from agent_teams.agents.tasks.models import TaskRecord

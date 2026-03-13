@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.paths import get_project_config_dir
-from agent_teams.state.shared_state_repo import SharedStateRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.workspace.artifacts import WorkspaceArtifacts
 from agent_teams.workspace.handle import WorkspaceHandle
 from agent_teams.workspace.ids import build_conversation_id, build_workspace_id

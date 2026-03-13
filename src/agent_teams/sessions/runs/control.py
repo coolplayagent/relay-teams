@@ -13,7 +13,7 @@ from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import AgentRuntimeRecord
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.models import InjectionMessage, RunEvent
-from agent_teams.state.run_runtime_repo import (
+from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
@@ -25,10 +25,10 @@ from agent_teams.agents.tasks.models import TaskEnvelope
 if TYPE_CHECKING:
     from agent_teams.sessions.runs.event_stream import RunEventHub
     from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-    from agent_teams.state.agent_repo import AgentInstanceRepository
-    from agent_teams.state.event_log import EventLog
-    from agent_teams.state.message_repo import MessageRepository
-    from agent_teams.state.task_repo import TaskRepository
+    from agent_teams.agents.agent_repo import AgentInstanceRepository
+    from agent_teams.sessions.runs.event_log import EventLog
+    from agent_teams.agents.execution.message_repo import MessageRepository
+    from agent_teams.agents.tasks.task_repo import TaskRepository
 
 
 class RunControlContext(BaseModel):

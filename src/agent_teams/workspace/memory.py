@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
-from agent_teams.state.shared_state_repo import SharedStateRepository
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.workspace.ids import (
     build_instance_role_scope_id,
     build_instance_session_scope_id,

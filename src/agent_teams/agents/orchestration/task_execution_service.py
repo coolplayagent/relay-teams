@@ -16,17 +16,17 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_runtime_repo import (
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import (
     WorkspaceManager,
     WorkspaceProfile,

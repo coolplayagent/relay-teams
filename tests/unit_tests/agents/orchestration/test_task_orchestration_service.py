@@ -15,9 +15,9 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.shared_types.json_types import JsonArray, JsonObject
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan

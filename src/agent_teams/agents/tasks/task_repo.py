@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 

@@ -20,10 +20,10 @@ from agent_teams.reflection.service import (
     ReflectionPromptInput,
     ReflectionService,
 )
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import WorkspaceManager
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan

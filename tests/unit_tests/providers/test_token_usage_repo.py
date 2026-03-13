@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Barrier
 
-from agent_teams.state.token_usage_repo import TokenUsageRepository
+from agent_teams.providers.token_usage_repo import TokenUsageRepository
 
 
 def test_token_usage_repo_migrates_legacy_schema_before_recording(

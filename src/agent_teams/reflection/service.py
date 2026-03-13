@@ -33,9 +33,9 @@ from agent_teams.reflection.models import (
     ReflectionJobType,
 )
 from agent_teams.reflection.repository import ReflectionJobRepository
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import WorkspaceManager
 
 LOGGER = get_logger(__name__)

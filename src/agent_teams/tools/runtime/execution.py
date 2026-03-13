@@ -16,8 +16,8 @@ from agent_teams.notifications import NotificationContext, NotificationType
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.models import RunEvent
 from agent_teams.shared_types.json_types import JsonObject, JsonValue
-from agent_teams.state.approval_ticket_repo import ApprovalTicketStatus
-from agent_teams.state.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime.context import ToolContext
 from agent_teams.tools.runtime.models import ToolError, ToolResultEnvelope

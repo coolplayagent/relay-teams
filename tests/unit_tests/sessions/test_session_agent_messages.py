@@ -7,14 +7,14 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.service import SessionService
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.session_repo import SessionRepository
-from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.token_usage_repo import TokenUsageRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.providers.token_usage_repo import TokenUsageRepository
 
 
 def _build_service(db_path: Path) -> SessionService:

@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_teams.state.db import open_sqlite
-from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
+from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 
 
 class SharedStateRepository:

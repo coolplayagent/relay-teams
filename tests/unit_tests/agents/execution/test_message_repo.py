@@ -7,7 +7,7 @@ from typing import cast
 
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
-from agent_teams.state.message_repo import MessageRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
 from agent_teams.workspace import build_conversation_id, build_workspace_id
 
 

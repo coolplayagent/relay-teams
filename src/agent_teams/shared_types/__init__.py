@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from agent_teams.shared_types.json_types import (
     JsonArray,
@@ -17,4 +17,3 @@ __all__ = [
     "ReadonlyJsonArray",
     "ReadonlyJsonObject",
 ]
-

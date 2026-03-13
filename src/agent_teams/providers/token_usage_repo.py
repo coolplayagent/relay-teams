@@ -8,7 +8,7 @@ from threading import RLock
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 
 
 class TokenUsageRecord(BaseModel):

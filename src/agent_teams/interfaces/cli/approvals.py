@@ -27,7 +27,9 @@ def build_approvals_app(
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
     ) -> None:
         auto_start_if_needed(base_url, autostart)
-        result = request_json(base_url, "GET", f"/api/runs/{run_id}/tool-approvals", None)
+        result = request_json(
+            base_url, "GET", f"/api/runs/{run_id}/tool-approvals", None
+        )
         approvals = result if isinstance(result, list) else result.get("data", [])
         typer.echo(json.dumps(approvals, ensure_ascii=False))
 

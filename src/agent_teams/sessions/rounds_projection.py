@@ -4,10 +4,10 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import cast
 
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import ApprovalTicketRecord
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 
 
 def build_session_rounds(

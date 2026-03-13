@@ -89,7 +89,7 @@
 3. **Coordinator 调度**：任务出队、分发、重试、超时、等待人工。
 4. **Tool 调用**：入参摘要、审批结果、执行耗时、失败原因（含可重试标记）。
 5. **SSE 流**：建立连接、事件发送计数、客户端断开、服务端异常关闭。
-6. **持久化事件日志**（`state/event_log` 相关）：写入成功/失败与重试。
+6. **持久化事件日志**（`sessions/runs/event_log` 相关）：写入成功/失败与重试。
 
 ### 4.4 异常与中断增强
 
@@ -183,7 +183,7 @@
    - 补工具调用结果、重试、超时等关键字段。
 5. `src/agent_teams/providers/llm.py`
    - 增加模型请求/响应统计（token、latency、provider error code）。
-6. `src/agent_teams/state/event_log.py`
+6. `src/agent_teams/sessions/runs/event_log.py`
    - 对事件写入失败进行明确告警与重试日志。
 
 ---

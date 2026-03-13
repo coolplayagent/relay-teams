@@ -46,7 +46,10 @@ def create_trigger(
                 logging.INFO,
                 event="trigger.created",
                 message="Trigger created",
-                payload={"name": created.name, "source_type": created.source_type.value},
+                payload={
+                    "name": created.name,
+                    "source_type": created.source_type.value,
+                },
             )
         return created
     except TriggerNameConflictError as exc:

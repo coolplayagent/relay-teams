@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
@@ -144,5 +144,3 @@ class TriggerIngestResult(BaseModel):
     status: TriggerEventStatus
     trigger_id: str = Field(min_length=1)
     trigger_name: str = Field(min_length=1)
-
-

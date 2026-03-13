@@ -5,14 +5,14 @@ from typing import cast
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import AgentRuntimeRecord
 from agent_teams.sessions.rounds_projection import build_session_rounds
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.run_runtime_repo import (
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.models import TaskEnvelope, TaskRecord, VerificationPlan
 from agent_teams.workspace import build_conversation_id, build_workspace_id
 

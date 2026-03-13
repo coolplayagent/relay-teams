@@ -14,7 +14,7 @@ from agent_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
 from agent_teams.agents.orchestration.verification import verify_task
-from agent_teams.state.event_log import EventLog
+from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
 from agent_teams.providers.contracts import LLMProvider
 from agent_teams.roles.registry import RoleRegistry
@@ -26,14 +26,14 @@ from agent_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.models import IntentInput, RunEvent
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.run_runtime_repo import (
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
 )
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import build_conversation_id, build_workspace_id
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType

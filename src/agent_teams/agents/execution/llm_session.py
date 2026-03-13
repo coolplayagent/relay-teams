@@ -24,7 +24,7 @@ from pydantic_ai.messages import (
 from agent_teams.shared_types.json_types import JsonValue
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.state.event_log import EventLog
+from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.logger import (
     close_model_stream,
     get_logger,
@@ -36,13 +36,13 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.models import RunEvent
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.token_usage_repo import TokenUsageRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )

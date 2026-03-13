@@ -16,7 +16,7 @@ from agent_teams.reflection.models import (
     ReflectionJobStatus,
     ReflectionJobType,
 )
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 
 
 class ReflectionJobRepository:

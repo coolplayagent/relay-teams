@@ -1,18 +1,58 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.sessions.rounds_projection import (
-    approvals_to_projection,
-    build_session_rounds,
-    find_round_by_run_id,
-    paginate_rounds,
-)
-from agent_teams.sessions.service import SessionService
+import importlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_teams.sessions.rounds_projection import (
+        approvals_to_projection,
+        build_session_rounds,
+        find_round_by_run_id,
+        paginate_rounds,
+    )
+    from agent_teams.sessions.session_models import SessionRecord
+    from agent_teams.sessions.session_repo import SessionRepository
+    from agent_teams.sessions.service import SessionService
 
 __all__ = [
+    "SessionRecord",
+    "SessionRepository",
     "SessionService",
     "approvals_to_projection",
     "build_session_rounds",
     "find_round_by_run_id",
     "paginate_rounds",
 ]
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "SessionRecord": ("agent_teams.sessions.session_models", "SessionRecord"),
+    "SessionRepository": (
+        "agent_teams.sessions.session_repo",
+        "SessionRepository",
+    ),
+    "SessionService": ("agent_teams.sessions.service", "SessionService"),
+    "approvals_to_projection": (
+        "agent_teams.sessions.rounds_projection",
+        "approvals_to_projection",
+    ),
+    "build_session_rounds": (
+        "agent_teams.sessions.rounds_projection",
+        "build_session_rounds",
+    ),
+    "find_round_by_run_id": (
+        "agent_teams.sessions.rounds_projection",
+        "find_round_by_run_id",
+    ),
+    "paginate_rounds": ("agent_teams.sessions.rounds_projection", "paginate_rounds"),
+}
+
+
+def __getattr__(name: str) -> object:
+    module_info = _LAZY_IMPORTS.get(name)
+    if module_info is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = module_info
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)

@@ -10,6 +10,7 @@ from agent_teams.agents.tasks.models import (
     VerificationPlan,
     VerificationResult,
 )
+from agent_teams.agents.tasks.task_repo import TaskRepository
 
 __all__ = [
     "EventEnvelope",
@@ -17,6 +18,7 @@ __all__ = [
     "TaskEnvelope",
     "TaskId",
     "TaskRecord",
+    "TaskRepository",
     "TaskStatus",
     "VerificationPlan",
     "VerificationResult",

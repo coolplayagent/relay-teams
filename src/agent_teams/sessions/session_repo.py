@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.state.db import open_sqlite
-from agent_teams.state.session_models import SessionRecord
+from agent_teams.persistence.db import open_sqlite
+from agent_teams.sessions.session_models import SessionRecord
 from agent_teams.workspace import build_workspace_id
 
 

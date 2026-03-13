@@ -10,10 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.shared_types.json_types import JsonObject
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.enums import TaskStatus
 
 

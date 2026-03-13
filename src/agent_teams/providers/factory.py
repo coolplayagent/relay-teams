@@ -20,14 +20,14 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 from agent_teams.skills.registry import SkillRegistry
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.shared_state_repo import SharedStateRepository
-from agent_teams.state.task_repo import TaskRepository
-from agent_teams.state.token_usage_repo import TokenUsageRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceManager

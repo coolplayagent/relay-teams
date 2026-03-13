@@ -21,13 +21,13 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.tools.runtime import ToolApprovalManager
-from agent_teams.state.agent_repo import AgentInstanceRepository
-from agent_teams.state.event_log import EventLog
-from agent_teams.state.message_repo import MessageRepository
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
-from agent_teams.state.session_models import SessionRecord
-from agent_teams.state.session_repo import SessionRepository
-from agent_teams.state.task_repo import TaskRepository
+from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import build_workspace_id
 
 

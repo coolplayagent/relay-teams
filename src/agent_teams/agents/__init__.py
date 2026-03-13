@@ -5,6 +5,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.agents.agent_repo import AgentInstanceRepository
     from agent_teams.agents.enums import InstanceStatus
     from agent_teams.agents.execution.subagent_runner import (
         SubAgentRequest,
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     from agent_teams.agents.orchestration.meta_agent import MetaAgent
 
 __all__ = [
+    "AgentInstanceRepository",
     "AgentRuntimeRecord",
     "InstanceId",
     "InstanceStatus",
@@ -31,6 +33,10 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "AgentInstanceRepository": (
+        "agent_teams.agents.agent_repo",
+        "AgentInstanceRepository",
+    ),
     "AgentRuntimeRecord": ("agent_teams.agents.models", "AgentRuntimeRecord"),
     "InstanceId": ("agent_teams.agents.ids", "InstanceId"),
     "InstanceStatus": ("agent_teams.agents.enums", "InstanceStatus"),

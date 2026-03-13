@@ -37,7 +37,9 @@ def _build_trigger() -> TriggerDefinition:
     )
 
 
-def _build_event(status: TriggerEventStatus = TriggerEventStatus.RECEIVED) -> TriggerEventRecord:
+def _build_event(
+    status: TriggerEventStatus = TriggerEventStatus.RECEIVED,
+) -> TriggerEventRecord:
     return TriggerEventRecord(
         sequence_id=1,
         event_id="tev_test",
@@ -77,7 +79,9 @@ class _FakeTriggerService:
     def update_trigger(self, trigger_id: str, _req: object) -> TriggerDefinition:
         return self.get_trigger(trigger_id)
 
-    def set_trigger_status(self, trigger_id: str, status: TriggerStatus) -> TriggerDefinition:
+    def set_trigger_status(
+        self, trigger_id: str, status: TriggerStatus
+    ) -> TriggerDefinition:
         _ = self.get_trigger(trigger_id)
         self.trigger = self.trigger.model_copy(update={"status": status})
         return self.trigger

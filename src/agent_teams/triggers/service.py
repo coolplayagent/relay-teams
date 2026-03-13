@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
@@ -59,7 +59,9 @@ class TriggerService:
     def create_trigger(self, trigger: TriggerCreateInput) -> TriggerDefinition:
         now = datetime.now(tz=UTC)
         display_name = trigger.display_name or trigger.name
-        auth_policies = trigger.auth_policies or (TriggerAuthPolicy(mode=TriggerAuthMode.NONE),)
+        auth_policies = trigger.auth_policies or (
+            TriggerAuthPolicy(mode=TriggerAuthMode.NONE),
+        )
         definition = TriggerDefinition(
             trigger_id=f"trg_{uuid.uuid4().hex[:12]}",
             name=trigger.name,
@@ -195,7 +197,9 @@ class TriggerService:
     ) -> TriggerIngestResult:
         trigger = self._trigger_repo.get_trigger_by_public_token(public_token)
         envelope = self._parse_webhook_body(raw_body)
-        payload = envelope.payload if envelope.payload is not None else envelope.model_dump()
+        payload = (
+            envelope.payload if envelope.payload is not None else envelope.model_dump()
+        )
         return self._ingest_for_trigger(
             trigger=trigger,
             event_key=envelope.event_key,
@@ -270,7 +274,9 @@ class TriggerService:
         try:
             stored = self._trigger_repo.create_event(record)
         except TriggerEventDuplicateError as exc:
-            existing = self._trigger_repo.get_event_by_key(exc.trigger_id, exc.event_key)
+            existing = self._trigger_repo.get_event_by_key(
+                exc.trigger_id, exc.event_key
+            )
             return TriggerIngestResult(
                 accepted=True,
                 event_id=existing.event_id,
@@ -301,7 +307,9 @@ class TriggerService:
         presented_public_token: str | None,
     ) -> _AuthDecision:
         normalized_headers = {name.lower(): value for name, value in headers.items()}
-        policies = trigger.auth_policies or (TriggerAuthPolicy(mode=TriggerAuthMode.NONE),)
+        policies = trigger.auth_policies or (
+            TriggerAuthPolicy(mode=TriggerAuthMode.NONE),
+        )
         reasons: list[str] = []
         for policy in policies:
             if policy.mode == TriggerAuthMode.NONE:
@@ -314,7 +322,9 @@ class TriggerService:
                 if (
                     presented_public_token is not None
                     and trigger.public_token is not None
-                    and hmac.compare_digest(presented_public_token, trigger.public_token)
+                    and hmac.compare_digest(
+                        presented_public_token, trigger.public_token
+                    )
                 ):
                     return _AuthDecision(
                         allowed=True,
@@ -439,5 +449,3 @@ __all__ = [
     "TriggerNameConflictError",
     "TriggerService",
 ]
-
-

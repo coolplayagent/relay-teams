@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import get_session_service
 from agent_teams.sessions import SessionService
-from agent_teams.state.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionRecord
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 

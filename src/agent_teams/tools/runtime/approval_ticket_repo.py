@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 
 
 class ApprovalTicketStatus(str, Enum):

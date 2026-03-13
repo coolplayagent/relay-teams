@@ -12,7 +12,7 @@ from threading import RLock
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from agent_teams.shared_types.json_types import JsonObject
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
 from agent_teams.workspace import build_workspace_id
 

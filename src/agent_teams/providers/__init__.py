@@ -32,8 +32,16 @@ if TYPE_CHECKING:
         create_default_provider_registry,
         list_provider_models,
     )
+    from agent_teams.providers.token_usage_repo import (
+        AgentTokenSummary,
+        RunTokenUsage,
+        SessionTokenUsage,
+        TokenUsageRecord,
+        TokenUsageRepository,
+    )
 
 __all__ = [
+    "AgentTokenSummary",
     "EchoProvider",
     "LLMProvider",
     "ModelEndpointConfig",
@@ -50,13 +58,21 @@ __all__ = [
     "ProviderRegistry",
     "ProviderType",
     "ProxyEnvConfig",
+    "RunTokenUsage",
     "SamplingConfig",
+    "SessionTokenUsage",
+    "TokenUsageRecord",
+    "TokenUsageRepository",
     "build_llm_http_client",
     "create_default_provider_registry",
     "list_provider_models",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "AgentTokenSummary": (
+        "agent_teams.providers.token_usage_repo",
+        "AgentTokenSummary",
+    ),
     "EchoProvider": ("agent_teams.providers.contracts", "EchoProvider"),
     "LLMProvider": ("agent_teams.providers.contracts", "LLMProvider"),
     "ModelEndpointConfig": (
@@ -109,7 +125,23 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.providers.http_client_factory",
         "ProxyEnvConfig",
     ),
+    "RunTokenUsage": (
+        "agent_teams.providers.token_usage_repo",
+        "RunTokenUsage",
+    ),
     "SamplingConfig": ("agent_teams.providers.model_config", "SamplingConfig"),
+    "SessionTokenUsage": (
+        "agent_teams.providers.token_usage_repo",
+        "SessionTokenUsage",
+    ),
+    "TokenUsageRecord": (
+        "agent_teams.providers.token_usage_repo",
+        "TokenUsageRecord",
+    ),
+    "TokenUsageRepository": (
+        "agent_teams.providers.token_usage_repo",
+        "TokenUsageRepository",
+    ),
     "build_llm_http_client": (
         "agent_teams.providers.http_client_factory",
         "build_llm_http_client",

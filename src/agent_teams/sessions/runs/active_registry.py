@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.state.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 
 
 class ActiveSessionRunRegistry:

@@ -14,7 +14,7 @@ from agent_teams.triggers.models import (
     TriggerSourceType,
     TriggerStatus,
 )
-from agent_teams.state.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite
 
 
 class TriggerNameConflictError(ValueError):
@@ -123,7 +123,9 @@ class TriggerRepository:
                     trigger.status.value,
                     trigger.public_token,
                     json.dumps(trigger.source_config),
-                    json.dumps([policy.model_dump() for policy in trigger.auth_policies]),
+                    json.dumps(
+                        [policy.model_dump() for policy in trigger.auth_policies]
+                    ),
                     json.dumps(trigger.target_config)
                     if trigger.target_config is not None
                     else None,
@@ -134,8 +136,13 @@ class TriggerRepository:
             self._conn.commit()
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
-            if "triggers.name" in message or "unique constraint failed: triggers.name" in message:
-                raise TriggerNameConflictError(f"Trigger name already exists: {trigger.name}") from exc
+            if (
+                "triggers.name" in message
+                or "unique constraint failed: triggers.name" in message
+            ):
+                raise TriggerNameConflictError(
+                    f"Trigger name already exists: {trigger.name}"
+                ) from exc
             raise
         return trigger
 
@@ -162,7 +169,9 @@ class TriggerRepository:
                     trigger.status.value,
                     trigger.public_token,
                     json.dumps(trigger.source_config),
-                    json.dumps([policy.model_dump() for policy in trigger.auth_policies]),
+                    json.dumps(
+                        [policy.model_dump() for policy in trigger.auth_policies]
+                    ),
                     json.dumps(trigger.target_config)
                     if trigger.target_config is not None
                     else None,
@@ -173,8 +182,13 @@ class TriggerRepository:
             self._conn.commit()
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
-            if "triggers.name" in message or "unique constraint failed: triggers.name" in message:
-                raise TriggerNameConflictError(f"Trigger name already exists: {trigger.name}") from exc
+            if (
+                "triggers.name" in message
+                or "unique constraint failed: triggers.name" in message
+            ):
+                raise TriggerNameConflictError(
+                    f"Trigger name already exists: {trigger.name}"
+                ) from exc
             raise
         return trigger
 
