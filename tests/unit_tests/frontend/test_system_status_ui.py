@@ -9,6 +9,79 @@ from typing import cast
 from agent_teams.shared_types.json_types import JsonArray
 
 
+DEFAULT_MOCK_API_SOURCE = """
+const initialStatus = {
+    mcp: {
+        servers: ['time-mcp', 'empty-mcp', 'broken-mcp'],
+    },
+    skills: {
+        skills: ['diff'],
+    },
+};
+
+const reloadedStatus = {
+    mcp: {
+        servers: ['time-mcp'],
+    },
+    skills: {
+        skills: ['diff'],
+    },
+};
+
+const initialToolSummaries = {
+    'time-mcp': {
+        source: 'project',
+        transport: 'stdio',
+        tools: [
+            { name: 'current_time', description: 'Return the current time.' },
+            { name: 'format_timezone', description: '' },
+        ],
+    },
+    'empty-mcp': {
+        source: 'user',
+        transport: 'http',
+        tools: [],
+    },
+};
+
+const reloadedToolSummaries = {
+    'time-mcp': {
+        source: 'project',
+        transport: 'stdio',
+        tools: [
+            { name: 'format_time_range', description: 'Format a time range.' },
+        ],
+    },
+};
+
+export async function fetchConfigStatus() {
+    globalThis.__fetchConfigStatusCalls += 1;
+    return globalThis.__reloadMcpCalls > 0 ? reloadedStatus : initialStatus;
+}
+
+export async function fetchMcpServerTools(serverName) {
+    globalThis.__toolFetchCalls.push(serverName);
+    const toolSummaries = globalThis.__reloadMcpCalls > 0
+        ? reloadedToolSummaries
+        : initialToolSummaries;
+    if (serverName === 'broken-mcp') {
+        throw new Error('Connection closed');
+    }
+    return toolSummaries[serverName];
+}
+
+export async function reloadMcpConfig() {
+    globalThis.__reloadMcpCalls += 1;
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    return { status: 'ok' };
+}
+""".strip()
+
+
 def test_mcp_status_panel_lists_loaded_tools_and_server_level_fallbacks(
     tmp_path: Path,
 ) -> None:
@@ -65,6 +138,85 @@ console.log(JSON.stringify({
             },
         }
     ]
+
+
+def test_mcp_status_panel_shows_loading_shell_before_tools_finish(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['slow-mcp'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+let resolveSlowTools;
+const slowToolsPromise = new Promise(resolve => {
+    resolveSlowTools = resolve;
+});
+
+export async function fetchConfigStatus() {
+    globalThis.__fetchConfigStatusCalls += 1;
+    return status;
+}
+
+export async function fetchMcpServerTools(serverName) {
+    globalThis.__toolFetchCalls.push(serverName);
+    globalThis.__resolveSlowTools = resolveSlowTools;
+    return slowToolsPromise;
+}
+
+export async function reloadMcpConfig() {
+    globalThis.__reloadMcpCalls += 1;
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+bindSystemStatusHandlers();
+const loadPromise = loadMcpStatusPanel();
+await Promise.resolve();
+const loadingHtml = document.getElementById('mcp-status').innerHTML;
+
+globalThis.__resolveSlowTools({
+    source: 'project',
+    transport: 'stdio',
+    tools: [
+        { name: 'slow_tool', description: 'Eventually available.' },
+    ],
+});
+await loadPromise;
+
+console.log(JSON.stringify({
+    loadingHtml,
+    finalHtml: document.getElementById('mcp-status').innerHTML,
+    toolFetchCalls: globalThis.__toolFetchCalls,
+}));
+""".strip(),
+    )
+
+    loading_html = cast(str, payload["loadingHtml"])
+    final_html = cast(str, payload["finalHtml"])
+    assert "slow-mcp" in loading_html
+    assert "Loading.." in loading_html
+    assert "Loading tools..." in loading_html
+    assert "slow_tool" not in loading_html
+    assert payload["toolFetchCalls"] == ["slow-mcp"]
+    assert "slow_tool" in final_html
+    assert "Eventually available." in final_html
+    assert "Collapse tools" in final_html
 
 
 def test_reload_mcp_button_reloads_config_and_refreshes_tool_list(
@@ -143,7 +295,11 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     assert ".mcp-tools-error {" in components_css
 
 
-def _run_system_status_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def _run_system_status_script(
+    tmp_path: Path,
+    runner_source: str,
+    mock_api_source: str = DEFAULT_MOCK_API_SOURCE,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root
@@ -162,77 +318,7 @@ def _run_system_status_script(tmp_path: Path, runner_source: str) -> dict[str, o
     runner_path = tmp_path / "runner.mjs"
 
     mock_api_path.write_text(
-        """
-const initialStatus = {
-    mcp: {
-        servers: ['time-mcp', 'empty-mcp', 'broken-mcp'],
-    },
-    skills: {
-        skills: ['diff'],
-    },
-};
-
-const reloadedStatus = {
-    mcp: {
-        servers: ['time-mcp'],
-    },
-    skills: {
-        skills: ['diff'],
-    },
-};
-
-const initialToolSummaries = {
-    'time-mcp': {
-        source: 'project',
-        transport: 'stdio',
-        tools: [
-            { name: 'current_time', description: 'Return the current time.' },
-            { name: 'format_timezone', description: '' },
-        ],
-    },
-    'empty-mcp': {
-        source: 'user',
-        transport: 'http',
-        tools: [],
-    },
-};
-
-const reloadedToolSummaries = {
-    'time-mcp': {
-        source: 'project',
-        transport: 'stdio',
-        tools: [
-            { name: 'format_time_range', description: 'Format a time range.' },
-        ],
-    },
-};
-
-export async function fetchConfigStatus() {
-    globalThis.__fetchConfigStatusCalls += 1;
-    return globalThis.__reloadMcpCalls > 0 ? reloadedStatus : initialStatus;
-}
-
-export async function fetchMcpServerTools(serverName) {
-    globalThis.__toolFetchCalls.push(serverName);
-    const toolSummaries = globalThis.__reloadMcpCalls > 0
-        ? reloadedToolSummaries
-        : initialToolSummaries;
-    if (serverName === 'broken-mcp') {
-        throw new Error('Connection closed');
-    }
-    return toolSummaries[serverName];
-}
-
-export async function reloadMcpConfig() {
-    globalThis.__reloadMcpCalls += 1;
-    return { status: 'ok' };
-}
-
-export async function reloadSkillsConfig() {
-    globalThis.__reloadSkillsCalls += 1;
-    return { status: 'ok' };
-}
-""".strip(),
+        mock_api_source,
         encoding="utf-8",
     )
     mock_feedback_path.write_text(

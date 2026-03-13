@@ -13,6 +13,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 
 const collapsedMcpServers = new Set();
 let lastLoadedMcpServerViews = [];
+let activeMcpLoadRequestId = 0;
 
 export function bindSystemStatusHandlers() {
     const reloadMcpBtn = document.getElementById('reload-mcp-btn');
@@ -30,9 +31,19 @@ export function bindSystemStatusHandlers() {
 }
 
 export async function loadMcpStatusPanel() {
+    const requestId = ++activeMcpLoadRequestId;
+
     try {
         const status = await fetchConfigStatus();
+        if (requestId !== activeMcpLoadRequestId) {
+            return;
+        }
+
         const mcpStatus = document.getElementById('mcp-status');
+        if (!mcpStatus) {
+            return;
+        }
+
         const servers = Array.isArray(status.mcp?.servers) ? status.mcp.servers : [];
         if (servers.length === 0) {
             lastLoadedMcpServerViews = [];
@@ -41,12 +52,13 @@ export async function loadMcpStatusPanel() {
             return;
         }
 
-        const serverViews = await Promise.all(
-            servers.map(serverName => loadMcpServerView(serverName)),
-        );
-        lastLoadedMcpServerViews = serverViews;
-        pruneCollapsedServers(serverViews);
+        pruneCollapsedServers(servers);
+        lastLoadedMcpServerViews = servers.map(serverName => createLoadingMcpServerView(serverName));
         renderMcpStatusPanel();
+
+        await Promise.all(
+            servers.map(serverName => hydrateMcpServerView(requestId, serverName)),
+        );
     } catch (e) {
         logError(
             'frontend.system_status.mcp_load_failed',
@@ -95,6 +107,19 @@ async function handleReloadSkills() {
     }
 }
 
+async function hydrateMcpServerView(requestId, serverName) {
+    const serverView = await loadMcpServerView(serverName);
+    if (requestId !== activeMcpLoadRequestId) {
+        return;
+    }
+
+    lastLoadedMcpServerViews = lastLoadedMcpServerViews.map(existingView => (
+        existingView.name === serverName ? serverView : existingView
+    ));
+    pruneCollapsedServers(lastLoadedMcpServerViews.map(existingView => existingView.name));
+    renderMcpStatusPanel();
+}
+
 async function loadMcpServerView(serverName) {
     try {
         const summary = await fetchMcpServerTools(serverName);
@@ -104,6 +129,7 @@ async function loadMcpServerView(serverName) {
             transport: typeof summary?.transport === 'string' ? summary.transport : '',
             tools: Array.isArray(summary?.tools) ? summary.tools : [],
             errorMessage: '',
+            loading: false,
         };
     } catch (e) {
         logError(
@@ -117,8 +143,20 @@ async function loadMcpServerView(serverName) {
             transport: '',
             tools: [],
             errorMessage: e?.message || 'Failed to load tools for this MCP server.',
+            loading: false,
         };
     }
+}
+
+function createLoadingMcpServerView(serverName) {
+    return {
+        name: serverName,
+        source: '',
+        transport: '',
+        tools: [],
+        errorMessage: '',
+        loading: true,
+    };
 }
 
 function renderMcpStatusPanel() {
@@ -160,9 +198,10 @@ function renderMcpServerList(serverViews) {
     const collapsibleNames = getCollapsibleServerNames(serverViews);
     const allCollapsed = collapsibleNames.length > 0
         && collapsibleNames.every(serverName => collapsedMcpServers.has(serverName));
+    const loadingCount = serverViews.filter(serverView => serverView.loading).length;
     return `
         <div class="mcp-status-shell">
-            ${renderMcpStatusToolbar(serverViews.length, collapsibleNames.length, allCollapsed)}
+            ${renderMcpStatusToolbar(serverViews.length, collapsibleNames.length, allCollapsed, loadingCount)}
             <div class="mcp-status-list">
                 ${serverViews.map(serverView => renderMcpServerCard(serverView)).join('')}
             </div>
@@ -170,8 +209,10 @@ function renderMcpServerList(serverViews) {
     `;
 }
 
-function renderMcpStatusToolbar(serverCount, collapsibleCount, allCollapsed) {
-    const summaryLabel = `${serverCount} server${serverCount === 1 ? '' : 's'} loaded`;
+function renderMcpStatusToolbar(serverCount, collapsibleCount, allCollapsed, loadingCount) {
+    const summaryLabel = loadingCount > 0
+        ? `${serverCount} server${serverCount === 1 ? '' : 's'} configured, ${loadingCount} loading..`
+        : `${serverCount} server${serverCount === 1 ? '' : 's'} loaded`;
     return `
         <div class="mcp-status-toolbar">
             <div class="mcp-status-toolbar-copy">${escapeHtml(summaryLabel)}</div>
@@ -209,7 +250,7 @@ function renderMcpServerCard(serverView) {
                             ${collapsed ? 'Expand tools' : 'Collapse tools'}
                         </button>
                     ` : ''}
-                    <div class="status-list-state">Loaded</div>
+                    <div class="status-list-state">${escapeHtml(getMcpServerStateLabel(serverView))}</div>
                 </div>
             </div>
             ${renderMcpServerTools(serverView, collapsed)}
@@ -218,6 +259,12 @@ function renderMcpServerCard(serverView) {
 }
 
 function renderMcpServerTools(serverView, collapsed) {
+    if (serverView.loading) {
+        return `
+            <div class="mcp-tools-empty panel-loading">Loading tools...</div>
+        `;
+    }
+
     if (serverView.errorMessage) {
         return `
             <div class="mcp-tools-empty mcp-tools-error">${escapeHtml(serverView.errorMessage)}</div>
@@ -278,7 +325,7 @@ function renderEmptyState(title, description) {
 }
 
 function canCollapseTools(serverView) {
-    return Boolean(serverView && !serverView.errorMessage && serverView.tools.length > 0);
+    return Boolean(serverView && !serverView.loading && !serverView.errorMessage && serverView.tools.length > 0);
 }
 
 function canToggleServerTools(serverName) {
@@ -291,10 +338,20 @@ function getCollapsibleServerNames(serverViews) {
     return serverViews.filter(canCollapseTools).map(serverView => serverView.name);
 }
 
-function pruneCollapsedServers(serverViews) {
-    const validNames = new Set(getCollapsibleServerNames(serverViews));
+function getMcpServerStateLabel(serverView) {
+    if (serverView.loading) {
+        return 'Loading..';
+    }
+    if (serverView.errorMessage) {
+        return 'Unavailable';
+    }
+    return 'Loaded';
+}
+
+function pruneCollapsedServers(validServerNames) {
+    const validNameSet = new Set(validServerNames);
     Array.from(collapsedMcpServers).forEach(serverName => {
-        if (!validNames.has(serverName)) {
+        if (!validNameSet.has(serverName)) {
             collapsedMcpServers.delete(serverName);
         }
     });
