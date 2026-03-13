@@ -53,16 +53,7 @@ class ProxyConfigService:
         return proxy_input
 
     def get_proxy_config(self) -> ProxyEnvConfig:
-        proxy_config = resolve_proxy_env_config(
-            load_merged_env_vars(extra_env_files=(self._config_dir / ".env",))
-        )
-        if proxy_config_contains_password(proxy_config):
-            return proxy_config
-
-        proxy_password = self._secret_store.get_password(self._config_dir)
-        if proxy_password is None:
-            return proxy_config
-        return apply_proxy_password(proxy_config, password=proxy_password)
+        return self._load_runtime_proxy_config(include_process_env=True)
 
     def get_proxy_status(self) -> JsonObject:
         config = self.get_proxy_config()
@@ -76,7 +67,9 @@ class ProxyConfigService:
         }
 
     def reload_proxy_config(self) -> None:
-        self._on_proxy_reloaded(self.get_proxy_config())
+        self._on_proxy_reloaded(
+            self._load_runtime_proxy_config(include_process_env=False)
+        )
 
     def save_proxy_config(self, payload: ProxyEnvInput) -> None:
         payload_config = payload.to_config()
@@ -107,7 +100,9 @@ class ProxyConfigService:
             self._secret_store.delete_password(self._config_dir)
 
         self._write_proxy_env_file(proxy_config)
-        self._on_proxy_reloaded(self.get_proxy_config())
+        self._on_proxy_reloaded(
+            self._load_runtime_proxy_config(include_process_env=False)
+        )
 
     def probe_web_connectivity(
         self,
@@ -169,6 +164,25 @@ class ProxyConfigService:
         if serialized_text:
             serialized_text = f"{serialized_text}\n"
         env_file_path.write_text(serialized_text, encoding="utf-8")
+
+    def _load_runtime_proxy_config(
+        self,
+        *,
+        include_process_env: bool,
+    ) -> ProxyEnvConfig:
+        proxy_config = resolve_proxy_env_config(
+            load_merged_env_vars(
+                extra_env_files=(self._config_dir / ".env",),
+                include_process_env=include_process_env,
+            )
+        )
+        if proxy_config_contains_password(proxy_config):
+            return proxy_config
+
+        proxy_password = self._secret_store.get_password(self._config_dir)
+        if proxy_password is None:
+            return proxy_config
+        return apply_proxy_password(proxy_config, password=proxy_password)
 
 
 def _serialize_env_value(value: str) -> str:

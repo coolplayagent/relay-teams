@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agent_teams.env.proxy_config_service import ProxyConfigService
-from agent_teams.env.proxy_env import ProxyEnvConfig, ProxyEnvInput
+from agent_teams.env.proxy_env import (
+    ProxyEnvConfig,
+    ProxyEnvInput,
+    sync_proxy_env_to_process_env,
+)
 from agent_teams.env.proxy_secret_store import ProxySecretStore
 
 
@@ -296,3 +301,68 @@ def test_save_proxy_config_rejects_multiple_distinct_proxy_passwords(
         raise AssertionError(
             "Expected save to fail for distinct embedded proxy passwords."
         )
+
+
+def test_save_proxy_config_clears_runtime_proxy_env_when_proxy_removed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent_teams"
+    config_dir.mkdir()
+
+    def _reload_proxy_env(proxy_config: ProxyEnvConfig) -> None:
+        sync_proxy_env_to_process_env(proxy_config)
+
+    service = ProxyConfigService(
+        config_dir=config_dir,
+        on_proxy_reloaded=_reload_proxy_env,
+        secret_store=_FakeProxySecretStore(),
+    )
+
+    service.save_proxy_config(ProxyEnvInput(http_proxy="http://bad-proxy.invalid:8080"))
+
+    assert os.environ["HTTP_PROXY"] == "http://bad-proxy.invalid:8080"
+    assert os.environ["http_proxy"] == "http://bad-proxy.invalid:8080"
+
+    service.save_proxy_config(ProxyEnvInput())
+
+    assert "HTTP_PROXY" not in os.environ
+    assert "http_proxy" not in os.environ
+    assert service.get_proxy_config() == ProxyEnvConfig(
+        http_proxy=None,
+        https_proxy=None,
+        all_proxy=None,
+        no_proxy=None,
+        verify_ssl=True,
+    )
+
+
+def test_reload_proxy_config_ignores_stale_process_proxy_env(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent_teams"
+    config_dir.mkdir()
+    (config_dir / ".env").write_text("", encoding="utf-8")
+    monkeypatch.setenv("HTTP_PROXY", "http://bad-proxy.invalid:8080")
+    monkeypatch.setenv("http_proxy", "http://bad-proxy.invalid:8080")
+    captured: list[ProxyEnvConfig] = []
+    service = ProxyConfigService(
+        config_dir=config_dir,
+        on_proxy_reloaded=captured.append,
+        secret_store=_FakeProxySecretStore(),
+    )
+
+    service.reload_proxy_config()
+
+    assert captured == [
+        ProxyEnvConfig(
+            http_proxy=None,
+            https_proxy=None,
+            all_proxy=None,
+            no_proxy=None,
+            verify_ssl=True,
+        )
+    ]
