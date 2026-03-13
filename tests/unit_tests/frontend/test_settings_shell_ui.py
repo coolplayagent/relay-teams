@@ -133,6 +133,36 @@ console.log(JSON.stringify({
     assert payload["skillsReloadDisplay"] == "inline-flex"
 
 
+def test_settings_tab_order_and_labels_are_simplified() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    tabs_start = source_text.index('<div class="settings-tabs"')
+    tabs_end = source_text.index("</div>\n            </aside>", tabs_start)
+    tabs_html = source_text[tabs_start:tabs_end]
+
+    assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="skills"')
+    assert tabs_html.index('data-tab="skills"') < tabs_html.index('data-tab="mcp"')
+    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="roles"')
+    assert tabs_html.index('data-tab="roles"') < tabs_html.index(
+        'data-tab="notifications"'
+    )
+    assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
+        'data-tab="proxy"'
+    )
+    assert tabs_html.index('data-tab="proxy"') < tabs_html.index(
+        'data-tab="environment"'
+    )
+    assert ">Model</span>" in tabs_html
+    assert ">Skills</span>" in tabs_html
+    assert ">MCP</span>" in tabs_html
+    assert ">Environment</span>" in tabs_html
+    assert ">Model Profiles</span>" not in tabs_html
+    assert ">MCP Config</span>" not in tabs_html
+
+
 def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     components_css = (
@@ -144,6 +174,36 @@ def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
 
     assert ".settings-content-stack {" in stack_rule
     assert "border-top: 1px solid var(--settings-divider);" not in stack_rule
+
+
+def test_settings_active_tab_uses_surface_background_and_primary_accent() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    active_start = components_css.index(".settings-tab.active {")
+    active_end = components_css.index(".settings-tab-label {", active_start)
+    active_rule = components_css[active_start:active_end]
+
+    assert "background: var(--settings-surface-bg);" in active_rule
+    assert "border-left-color: var(--primary);" in active_rule
+    assert "box-shadow: inset 0 0 0 1px var(--settings-border-soft);" in active_rule
+
+
+def test_settings_hover_tab_keeps_visible_feedback() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    hover_start = components_css.index(".settings-tab:hover {")
+    hover_end = components_css.index(".settings-tab.active {", hover_start)
+    hover_rule = components_css[hover_start:hover_end]
+
+    assert "background: var(--settings-row-hover-bg);" in hover_rule
+    assert "border-left-color: var(--settings-border-default);" in hover_rule
+    assert "box-shadow: inset 0 0 0 1px var(--settings-border-soft);" in hover_rule
 
 
 def test_settings_layout_uses_scrolling_body_with_footer_actions() -> None:
@@ -561,7 +621,7 @@ console.log(JSON.stringify({
     )
 
     load_calls = cast(JsonObject, payload["loadCalls"])
-    assert payload["panelTitle"] == "Environment Variables"
+    assert payload["panelTitle"] == "Environment"
     assert payload["envPanelDisplay"] == "block"
     assert payload["envAddDisplay"] == "inline-flex"
     assert load_calls["environment"] == 1

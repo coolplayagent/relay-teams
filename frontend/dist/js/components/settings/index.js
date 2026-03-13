@@ -18,16 +18,20 @@ let initialized = false;
 
 const TAB_METADATA = {
     model: {
-        title: 'Model Profiles',
+        title: 'Model',
         description: 'Manage providers, endpoints, request limits, and sampling defaults.',
+    },
+    skills: {
+        title: 'Skills',
+        description: 'Check installed skills and refresh the server-side registry.',
+    },
+    mcp: {
+        title: 'MCP',
+        description: 'Review the currently loaded MCP servers and reload the runtime view.',
     },
     roles: {
         title: 'Roles',
         description: 'Edit role metadata, allowed tools, workspace profile, and prompt text.',
-    },
-    environment: {
-        title: 'Environment Variables',
-        description: 'Inspect effective runtime environment values and manage Agent Teams app environment variables.',
     },
     notifications: {
         title: 'Notifications',
@@ -37,13 +41,9 @@ const TAB_METADATA = {
         title: 'Proxy',
         description: 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
     },
-    mcp: {
-        title: 'MCP Config',
-        description: 'Review the currently loaded MCP servers and reload the runtime view.',
-    },
-    skills: {
-        title: 'Skills',
-        description: 'Check installed skills and refresh the server-side registry.',
+    environment: {
+        title: 'Environment',
+        description: 'Inspect effective runtime environment values and manage Agent Teams app environment variables.',
     },
 };
 
@@ -66,13 +66,16 @@ function createModal() {
                 </div>
                 <div class="settings-tabs" role="tablist" aria-label="Settings Sections">
                     <button class="settings-tab active" data-tab="model">
-                        <span class="settings-tab-label">Model Profiles</span>
+                        <span class="settings-tab-label">Model</span>
+                    </button>
+                    <button class="settings-tab" data-tab="skills">
+                        <span class="settings-tab-label">Skills</span>
+                    </button>
+                    <button class="settings-tab" data-tab="mcp">
+                        <span class="settings-tab-label">MCP</span>
                     </button>
                     <button class="settings-tab" data-tab="roles">
                         <span class="settings-tab-label">Roles</span>
-                    </button>
-                    <button class="settings-tab" data-tab="environment">
-                        <span class="settings-tab-label">Environment</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
@@ -80,18 +83,15 @@ function createModal() {
                     <button class="settings-tab" data-tab="proxy">
                         <span class="settings-tab-label">Proxy</span>
                     </button>
-                    <button class="settings-tab" data-tab="mcp">
-                        <span class="settings-tab-label">MCP Config</span>
-                    </button>
-                    <button class="settings-tab" data-tab="skills">
-                        <span class="settings-tab-label">Skills</span>
+                    <button class="settings-tab" data-tab="environment">
+                        <span class="settings-tab-label">Environment</span>
                     </button>
                 </div>
             </aside>
             <section class="settings-main">
                 <div class="modal-header settings-modal-header">
                     <div class="settings-modal-heading">
-                        <h2 id="settings-panel-title">Model Profiles</h2>
+                        <h2 id="settings-panel-title">Model</h2>
                         <p id="settings-panel-description">Manage providers, endpoints, request limits, and sampling defaults.</p>
                     </div>
                     <button class="close-btn" id="settings-close" aria-label="Close Settings">&times;</button>

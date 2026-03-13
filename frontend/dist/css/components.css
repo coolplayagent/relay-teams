@@ -2084,24 +2084,27 @@
     width: 100%;
     background: transparent;
     border: none;
-    border-left: 2px solid transparent;
+    border-left: 3px solid transparent;
     border-radius: 0;
-    padding: 0.68rem 0.75rem 0.68rem 0.85rem;
+    padding: 0.72rem 0.75rem 0.72rem 0.9rem;
     cursor: pointer;
     color: var(--text-secondary);
     text-align: left;
-    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .settings-tab:hover {
     background: var(--settings-row-hover-bg);
+    border-left-color: var(--settings-border-default);
     color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px var(--settings-border-soft);
 }
 
 .settings-tab.active {
-    background: var(--settings-row-hover-bg);
-    border-left-color: var(--button-primary-border);
+    background: var(--settings-surface-bg);
+    border-left-color: var(--primary);
     color: var(--text-primary);
+    box-shadow: inset 0 0 0 1px var(--settings-border-soft);
 }
 
 .settings-tab-label {
