@@ -8,6 +8,34 @@ export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
 }
 
+export async function fetchEnvironmentVariables() {
+    return requestJson(
+        '/api/system/configs/environment-variables',
+        undefined,
+        'Failed to fetch environment variables',
+    );
+}
+
+export async function saveEnvironmentVariable(scope, key, payload) {
+    return requestJson(
+        `/api/system/configs/environment-variables/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save environment variable',
+    );
+}
+
+export async function deleteEnvironmentVariable(scope, key) {
+    return requestJson(
+        `/api/system/configs/environment-variables/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`,
+        { method: 'DELETE' },
+        'Failed to delete environment variable',
+    );
+}
+
 export async function fetchProxyConfig() {
     return requestJson('/api/system/configs/proxy', undefined, 'Failed to fetch proxy config');
 }

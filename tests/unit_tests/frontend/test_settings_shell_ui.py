@@ -76,6 +76,7 @@ console.log(JSON.stringify({
     assert load_calls == {
         "model": 1,
         "roles": 0,
+        "environment": 0,
         "notifications": 1,
         "proxy": 0,
         "mcp": 0,
@@ -235,6 +236,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     )
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
+    mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
     mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
@@ -250,6 +252,18 @@ export function bindModelProfileHandlers() {
 
 export async function loadModelProfilesPanel() {
     globalThis.__loadCalls.model += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_environment_path.write_text(
+        """
+export function bindEnvironmentVariableSettingsHandlers() {
+    globalThis.__bindCalls.environment += 1;
+}
+
+export async function loadEnvironmentVariablesPanel() {
+    globalThis.__loadCalls.environment += 1;
 }
 """.strip(),
         encoding="utf-8",
@@ -310,6 +324,7 @@ export async function loadSkillsStatusPanel() {
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
+        .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
@@ -479,6 +494,7 @@ function createDocument() {{
 globalThis.__bindCalls = {{
     model: 0,
     roles: 0,
+    environment: 0,
     notifications: 0,
     proxy: 0,
     system: 0,
@@ -486,6 +502,7 @@ globalThis.__bindCalls = {{
 globalThis.__loadCalls = {{
     model: 0,
     roles: 0,
+    environment: 0,
     notifications: 0,
     proxy: 0,
     mcp: 0,
@@ -517,3 +534,34 @@ globalThis.window = {{}};
         )
 
     return json.loads(completed.stdout)
+
+
+def test_environment_settings_tab_uses_add_variable_action(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings();
+
+const tabs = document.querySelectorAll(".settings-tab");
+const environmentTab = tabs.find(tab => tab.dataset.tab === "environment");
+await environmentTab.onclick();
+
+console.log(JSON.stringify({
+    panelTitle: document.getElementById("settings-panel-title").textContent,
+    envPanelDisplay: document.getElementById("environment-panel").style.display,
+    envAddDisplay: document.getElementById("add-env-btn").style.display,
+    loadCalls: globalThis.__loadCalls,
+}));
+""".strip(),
+    )
+
+    load_calls = cast(JsonObject, payload["loadCalls"])
+    assert payload["panelTitle"] == "Environment Variables"
+    assert payload["envPanelDisplay"] == "block"
+    assert payload["envAddDisplay"] == "inline-flex"
+    assert load_calls["environment"] == 1

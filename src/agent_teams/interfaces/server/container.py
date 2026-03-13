@@ -11,6 +11,7 @@ from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -91,6 +92,9 @@ class ServerContainer:
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
+        )
+        self.environment_variable_service: EnvironmentVariableService = (
+            EnvironmentVariableService()
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             project_config_dir=config_dir

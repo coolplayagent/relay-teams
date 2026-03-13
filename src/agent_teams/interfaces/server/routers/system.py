@@ -4,6 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
+from agent_teams.env.environment_variable_models import (
+    EnvironmentVariableCatalog,
+    EnvironmentVariableRecord,
+    EnvironmentVariableSaveRequest,
+    EnvironmentVariableScope,
+)
+from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvInput
 from agent_teams.env.web_connectivity import (
@@ -12,6 +19,7 @@ from agent_teams.env.web_connectivity import (
 )
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
+    get_environment_variable_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -157,6 +165,50 @@ def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> JsonObject:
     return service.get_notification_config()
+
+
+@router.get("/configs/environment-variables")
+def get_environment_variables(
+    service: EnvironmentVariableService = Depends(get_environment_variable_service),
+) -> EnvironmentVariableCatalog:
+    try:
+        return service.list_environment_variables()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/configs/environment-variables/{scope}/{key}")
+def save_environment_variable(
+    scope: EnvironmentVariableScope,
+    key: str,
+    req: EnvironmentVariableSaveRequest,
+    service: EnvironmentVariableService = Depends(get_environment_variable_service),
+) -> EnvironmentVariableRecord:
+    try:
+        return service.save_environment_variable(scope=scope, key=key, request=req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/configs/environment-variables/{scope}/{key}")
+def delete_environment_variable(
+    scope: EnvironmentVariableScope,
+    key: str,
+    service: EnvironmentVariableService = Depends(get_environment_variable_service),
+) -> dict[str, str]:
+    try:
+        service.delete_environment_variable(scope=scope, key=key)
+        return {"status": "ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/configs/proxy")

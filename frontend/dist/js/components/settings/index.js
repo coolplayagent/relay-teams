@@ -1,4 +1,4 @@
-﻿/**
+/**
  * components/settings/index.js
  * Settings modal shell and tab routing.
  */
@@ -7,6 +7,7 @@ import {
     bindNotificationSettingsHandlers,
     loadNotificationSettingsPanel,
 } from './notifications.js';
+import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from './environmentVariables.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
@@ -23,6 +24,10 @@ const TAB_METADATA = {
     roles: {
         title: 'Roles',
         description: 'Edit role metadata, allowed tools, workspace profile, and prompt text.',
+    },
+    environment: {
+        title: 'Environment Variables',
+        description: 'Manage Windows registry environment variables by system and user scope.',
     },
     notifications: {
         title: 'Notifications',
@@ -65,6 +70,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="roles">
                         <span class="settings-tab-label">Roles</span>
+                    </button>
+                    <button class="settings-tab" data-tab="environment">
+                        <span class="settings-tab-label">Environment</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
@@ -225,6 +233,40 @@ function createModal() {
                                         <div class="role-editor-status" id="role-editor-status" style="display:none;"></div>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="environment-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack env-panel-body">
+                                <p class="env-settings-help" id="env-variables-help"></p>
+                                <div class="env-editor-shell" id="env-editor-shell" style="display:none;">
+                                    <div class="env-editor-header">
+                                        <div>
+                                            <h5 id="env-editor-title">Add Environment Variable</h5>
+                                            <p id="env-editor-meta">Choose a scope, then save the key and value.</p>
+                                        </div>
+                                    </div>
+                                    <input type="hidden" id="env-source-key-input" value="">
+                                    <div class="env-editor-grid">
+                                        <div class="form-group env-inline-field env-inline-field-compact">
+                                            <label for="env-scope-select">Scope</label>
+                                            <select id="env-scope-select">
+                                                <option value="user">User</option>
+                                                <option value="system">System</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group env-inline-field">
+                                            <label for="env-key-input">Key</label>
+                                            <input type="text" id="env-key-input" placeholder="e.g. OPENAI_API_KEY" autocomplete="off">
+                                        </div>
+                                        <div class="form-group env-inline-field env-inline-field-value">
+                                            <label for="env-value-input">Value</label>
+                                            <textarea id="env-value-input" class="config-textarea env-value-textarea" placeholder="Variable value"></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="env-groups" id="environment-variables-groups"></div>
                             </div>
                         </div>
                     </div>
@@ -396,8 +438,11 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
+                            <button class="primary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;">Reload</button>
@@ -432,6 +477,7 @@ function setupEventListeners() {
 
     bindModelProfileHandlers();
     bindRoleSettingsHandlers();
+    bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
@@ -454,6 +500,7 @@ async function showPanel(tab) {
     renderPanelActions(tab);
     bindModelProfileHandlers();
     bindRoleSettingsHandlers();
+    bindEnvironmentVariableSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
 
@@ -461,6 +508,8 @@ async function showPanel(tab) {
         await loadModelProfilesPanel();
     } else if (tab === 'roles') {
         await loadRoleSettingsPanel();
+    } else if (tab === 'environment') {
+        await loadEnvironmentVariablesPanel();
     } else if (tab === 'notifications') {
         await loadNotificationSettingsPanel();
     } else if (tab === 'proxy') {
@@ -488,6 +537,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'roles') {
         document.getElementById('add-role-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'environment') {
+        document.getElementById('add-env-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'notifications') {
@@ -523,4 +576,3 @@ export function closeSettings() {
 }
 
 window.openSettings = openSettings;
-

@@ -112,6 +112,30 @@ Returns notification rules by event type.
 
 Replaces notification rules.
 
+### `GET /system/configs/environment-variables`
+
+Returns Windows environment variables grouped by `system` and `user` scope.
+Only registry-backed string values are included.
+`system` reads from `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`.
+`user` reads from `HKCU\Environment`.
+Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
+
+### `PUT /system/configs/environment-variables/{scope}/{key}`
+
+Upserts one Windows environment variable in the target `scope`.
+Request body fields:
+- `value`: raw variable value
+- optional `source_key`: rename from an existing key before saving the new key
+
+The backend preserves the existing registry value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
+After save, the server broadcasts `WM_SETTINGCHANGE` with `Environment` so new processes can observe the change.
+System-scope writes may return `403` when the process lacks registry write permission.
+
+### `DELETE /system/configs/environment-variables/{scope}/{key}`
+
+Deletes one Windows environment variable from the target scope and broadcasts `WM_SETTINGCHANGE`.
+Deleting a missing key returns a user-facing validation error.
+
 ### `POST /system/configs/web:probe`
 
 Tests whether a target `http` or `https` URL is reachable under the current proxy settings.

@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from agent_teams.env.environment_variable_models import (
+    EnvironmentVariableCatalog,
+    EnvironmentVariableRecord,
+    EnvironmentVariableSaveRequest,
+    EnvironmentVariableScope,
+    EnvironmentVariableValueKind,
+)
+from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_env import (
     ProxyEnvConfig,
     ProxyEnvInput,
@@ -35,6 +43,12 @@ from agent_teams.env.web_connectivity import (
 )
 
 __all__ = [
+    "EnvironmentVariableCatalog",
+    "EnvironmentVariableRecord",
+    "EnvironmentVariableSaveRequest",
+    "EnvironmentVariableScope",
+    "EnvironmentVariableService",
+    "EnvironmentVariableValueKind",
     "ProxyEnvConfig",
     "ProxyEnvInput",
     "ProxyConfigService",

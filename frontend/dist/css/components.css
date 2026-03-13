@@ -3283,6 +3283,209 @@
     border-radius: 6px;
 }
 
+.env-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.env-settings-help {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.env-editor-shell {
+    border: 1px solid var(--settings-border-soft);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--settings-row-bg) 72%, transparent);
+    padding: 1rem;
+}
+
+.env-editor-header {
+    margin-bottom: 0.85rem;
+}
+
+.env-editor-header h5 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.env-editor-header p {
+    margin: 0.3rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.env-editor-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.env-inline-field {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    align-items: start;
+    gap: 0.9rem;
+}
+
+.env-inline-field label {
+    margin-bottom: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding-top: 0.75rem;
+}
+
+.env-inline-field input,
+.env-inline-field select,
+.env-inline-field textarea {
+    border-radius: 6px;
+}
+
+.env-inline-field-compact {
+    max-width: 360px;
+}
+
+.env-inline-field-value {
+    align-items: stretch;
+}
+
+.env-value-textarea {
+    min-height: 116px;
+    resize: vertical;
+}
+
+.env-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.env-scope-card {
+    border: 1px solid var(--settings-divider);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--settings-row-bg) 82%, transparent);
+    overflow: hidden;
+}
+
+.env-scope-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border: none;
+    background: transparent;
+    padding: 0.95rem 1rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.env-scope-toggle:hover {
+    background: color-mix(in srgb, var(--settings-row-hover-bg) 86%, transparent);
+}
+
+.env-scope-toggle-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    min-width: 0;
+}
+
+.env-scope-toggle-title {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.env-scope-toggle-meta {
+    color: var(--text-secondary);
+    font-size: 0.77rem;
+}
+
+.env-scope-toggle-icon {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.env-scope-body {
+    border-top: 1px solid var(--settings-divider);
+    padding: 0 1rem 0.35rem;
+}
+
+.env-scope-empty {
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    padding: 0.95rem 0 0.7rem;
+}
+
+.env-records {
+    display: flex;
+    flex-direction: column;
+}
+
+.env-record {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.9rem;
+    align-items: start;
+    padding: 0.95rem 0;
+    border-bottom: 1px solid var(--settings-divider);
+}
+
+.env-record:last-child {
+    border-bottom: none;
+}
+
+.env-record-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.env-record-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+}
+
+.env-record-key {
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.env-record-kind {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.env-record-value {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    word-break: break-all;
+}
+
+.env-record-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    white-space: nowrap;
+}
 .notifications-help {
     margin: 0;
     color: var(--text-secondary);

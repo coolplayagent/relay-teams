@@ -155,6 +155,14 @@ uv run agent-teams -m "Draft a release note"
 uv run agent-teams env list
 ```
 
+### 5.1.1) Manage Windows environment variables in Settings
+
+After the server starts, open `Settings -> Environment` in the web UI.
+The page manages Windows registry-backed environment variables grouped into `System` and `User` scope, and each group can be expanded or collapsed independently.
+You can add, edit, rename, and delete variables there.
+This settings page edits persisted Windows environment variables, while `uv run agent-teams env list` shows the merged runtime environment seen by Agent Teams.
+System-scope writes may require administrator permission; when the backend process cannot write that registry path, the API returns a user-facing permission error.
+
 ### 5.2) Inspect merged MCP servers
 
 `mcp` config now follows module-local scope merge rules:

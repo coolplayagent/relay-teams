@@ -34,24 +34,27 @@ export {
 } from './roles.js';
 
 export {
-    fetchNotificationConfig,
-    fetchProxyConfig,
+    deleteEnvironmentVariable,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchEnvironmentVariables,
     fetchMcpServerTools,
-    fetchSystemHealth,
     fetchModelConfig,
     fetchModelProfiles,
+    fetchNotificationConfig,
+    fetchProxyConfig,
+    fetchSystemHealth,
     probeModelConnection,
     probeWebConnectivity,
     reloadMcpConfig,
     reloadModelConfig,
     reloadProxyConfig,
     reloadSkillsConfig,
-    saveNotificationConfig,
-    saveProxyConfig,
+    saveEnvironmentVariable,
     saveModelConfig,
     saveModelProfile,
+    saveNotificationConfig,
+    saveProxyConfig,
 } from './system.js';
 
 export {

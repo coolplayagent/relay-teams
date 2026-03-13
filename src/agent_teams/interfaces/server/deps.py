@@ -6,6 +6,7 @@ from fastapi import Request
 from agent_teams.coordination.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -75,6 +76,10 @@ def get_mcp_service(request: Request) -> McpService:
 
 def get_proxy_config_service(request: Request) -> ProxyConfigService:
     return get_container(request).proxy_config_service
+
+
+def get_environment_variable_service(request: Request) -> EnvironmentVariableService:
+    return get_container(request).environment_variable_service
 
 
 def get_task_repo(request: Request) -> TaskRepository:

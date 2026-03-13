@@ -8,6 +8,7 @@ from agent_teams.env.proxy_env import ProxyEnvInput
 from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
+    get_environment_variable_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -433,3 +434,119 @@ def test_save_model_profile_accepts_source_name_for_rename() -> None:
     assert saved_name == "renamed"
     assert saved_profile["model"] == "kimi-k2.5"
     assert source_name == "default"
+
+
+class _FakeEnvironmentVariableService:
+    def __init__(self) -> None:
+        self.saved_payload: dict[str, str] | None = None
+        self.deleted_key: tuple[str, str] | None = None
+        self.permission_error: PermissionError | None = None
+
+    def list_environment_variables(self) -> dict[str, object]:
+        return {
+            "system": [
+                {
+                    "key": "ComSpec",
+                    "value": r"%SystemRoot%\\system32\\cmd.exe",
+                    "scope": "system",
+                    "value_kind": "expandable",
+                }
+            ],
+            "user": [
+                {
+                    "key": "OPENAI_API_KEY",
+                    "value": "secret",
+                    "scope": "user",
+                    "value_kind": "string",
+                }
+            ],
+        }
+
+    def save_environment_variable(
+        self,
+        *,
+        scope: object,
+        key: str,
+        request: object,
+    ) -> dict[str, str]:
+        if self.permission_error is not None:
+            raise self.permission_error
+        source_key = getattr(request, "source_key")
+        value = getattr(request, "value")
+        self.saved_payload = {
+            "scope": str(getattr(scope, "value", scope)),
+            "key": key,
+            "source_key": "" if source_key is None else str(source_key),
+            "value": value,
+        }
+        return {
+            "key": key,
+            "value": value,
+            "scope": str(getattr(scope, "value", scope)),
+            "value_kind": "string",
+        }
+
+    def delete_environment_variable(self, *, scope: object, key: str) -> None:
+        if self.permission_error is not None:
+            raise self.permission_error
+        self.deleted_key = (str(getattr(scope, "value", scope)), key)
+
+
+def _create_env_test_client(fake_service: object) -> TestClient:
+    app = FastAPI()
+    app.include_router(system.router, prefix="/api")
+    app.dependency_overrides[get_environment_variable_service] = lambda: fake_service
+    return TestClient(app)
+
+
+def test_get_environment_variables() -> None:
+    client = _create_env_test_client(_FakeEnvironmentVariableService())
+
+    response = client.get("/api/system/configs/environment-variables")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["system"][0]["key"] == "ComSpec"
+    assert payload["user"][0]["scope"] == "user"
+
+
+def test_save_environment_variable() -> None:
+    service = _FakeEnvironmentVariableService()
+    client = _create_env_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/environment-variables/user/OPENAI_API_KEY",
+        json={
+            "source_key": "OPENAI_KEY",
+            "value": "updated-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "key": "OPENAI_API_KEY",
+        "value": "updated-secret",
+        "scope": "user",
+        "value_kind": "string",
+    }
+    assert service.saved_payload == {
+        "scope": "user",
+        "key": "OPENAI_API_KEY",
+        "source_key": "OPENAI_KEY",
+        "value": "updated-secret",
+    }
+
+
+def test_delete_environment_variable_returns_forbidden_on_permission_error() -> None:
+    service = _FakeEnvironmentVariableService()
+    service.permission_error = PermissionError(
+        "System-level environment access denied."
+    )
+    client = _create_env_test_client(service)
+
+    response = client.delete(
+        "/api/system/configs/environment-variables/system/Path",
+    )
+
+    assert response.status_code == 403
+    assert "access denied" in response.json()["detail"].lower()
