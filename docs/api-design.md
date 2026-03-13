@@ -529,6 +529,40 @@ Rules:
 
 Returns one registered execution workspace.
 
+### `POST /workspaces/pick`
+
+Opens a native directory picker on the local machine, then registers the chosen
+directory as a workspace. If the selected directory is already registered, the
+existing workspace record is returned.
+
+Response:
+
+```json
+{
+  "workspace": {
+    "workspace_id": "agent-teams",
+    "root_path": "D:/workspace/agent_teams",
+    "profile": {
+      "backend": "filesystem",
+      "file_scope": {
+        "backend": "project",
+        "working_directory": ".",
+        "readable_paths": ["."],
+        "writable_paths": ["."],
+        "branch_binding": "shared",
+        "branch_name": null
+      }
+    },
+    "created_at": "2026-03-14T12:00:00Z",
+    "updated_at": "2026-03-14T12:00:00Z"
+  }
+}
+```
+
+Rules:
+- Returns `{ "workspace": null }` when the picker is cancelled.
+- Returns `503` when the runtime cannot open a native directory picker.
+
 ## Prompt APIs
 
 ### `POST /prompts:preview`

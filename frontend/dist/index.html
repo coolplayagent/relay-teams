@@ -17,14 +17,14 @@
         <aside class="sidebar">
             <header class="sidebar-header">
                 <div class="sidebar-brand">
-                    <h2>Agent Teams</h2>
+                    <h2>Projects</h2>
                 </div>
                 <div class="sidebar-actions">
-                    <button id="new-btn" class="primary-btn">
+                    <button id="new-project-btn" class="secondary-btn sidebar-create-project-btn" type="button">
                         <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                             <path d="M12 4V20M4 12H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                         </svg>
-                        <span>New Session</span>
+                        <span>New project</span>
                     </button>
                 </div>
             </header>
@@ -38,7 +38,7 @@
             </button>
 
             <div class="rounds-list" id="rounds-list" style="display: none;"></div>
-            <div class="sessions-list" id="sessions-list"></div>
+            <div class="projects-list sessions-list" id="projects-list"></div>
 
             <div class="sidebar-footer">
                 <div id="backend-status" class="status-indicator checking">

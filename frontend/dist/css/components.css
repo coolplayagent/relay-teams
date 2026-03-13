@@ -69,6 +69,144 @@
     color: var(--primary);
 }
 
+.projects-empty-state {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1rem 0.25rem;
+    color: var(--text-secondary);
+}
+
+.projects-empty-title {
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.projects-empty-copy {
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.project-card {
+    margin: 0 0.75rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+
+.project-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    padding: 0.4rem;
+}
+
+.project-toggle {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.35rem 0.4rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.project-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.project-toggle-icon {
+    flex: 0 0 auto;
+    width: 0.8rem;
+    margin-top: 0.05rem;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
+.project-summary {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+}
+
+.project-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.project-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.project-count {
+    flex: 0 0 auto;
+    padding: 0.08rem 0.38rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+}
+
+.project-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.project-new-session-btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.project-new-session-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.project-body {
+    padding: 0 0.45rem 0.45rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.project-body.is-collapsed {
+    display: none;
+}
+
+.project-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-top: 0.45rem;
+}
+
 .session-item {
     padding: 0.75rem 1rem;
     margin: 0 0.5rem 0.25rem 0.5rem;
@@ -263,6 +401,36 @@
 .session-delete-btn:hover {
     color: var(--danger);
     background-color: var(--bg-hover);
+}
+
+.project-session-toggle-btn {
+    margin-top: 0.15rem;
+    padding: 0.35rem 0.45rem 0.15rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.project-session-toggle-btn:hover {
+    color: var(--text-primary);
+}
+
+.project-empty-sessions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.project-new-session-inline {
+    width: auto;
+    padding: 0 0.7rem;
 }
 
 .icon-sm {
@@ -4126,17 +4294,34 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     color: var(--text-secondary);
 }
 
+.projects-empty-state {
+    padding: 0.8rem 0.2rem;
+}
+
+.project-card {
+    margin: 0 0 0.7rem;
+}
+
 .session-item,
 .round-item {
-    margin: 0 0.75rem 0.35rem;
-    padding: 0.7rem 0.8rem;
+    margin: 0;
+    padding: 0.7rem 2.45rem 0.7rem 0.8rem;
     border: 1px solid transparent;
     border-radius: 8px;
+}
+
+.session-item {
+    width: 100%;
 }
 
 .session-item:hover,
 .round-item:hover {
     background: var(--bg-hover);
+}
+
+.session-item:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    outline-offset: 0;
 }
 
 .session-item.active,
@@ -4443,6 +4628,7 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
 body.light-theme .session-item,
 body.light-theme .round-item,
+body.light-theme .project-card,
 body.light-theme .round-detail-header,
 body.light-theme .system-intro,
 body.light-theme .human-dispatch-panel,
@@ -4486,6 +4672,14 @@ body.light-theme .round-nav-item.active {
 
 body.light-theme .session-item.active {
     background: color-mix(in srgb, var(--primary) 7%, var(--bg-surface-muted) 93%);
+}
+
+body.light-theme .project-path,
+body.light-theme .project-count,
+body.light-theme .projects-empty-copy,
+body.light-theme .project-empty-sessions,
+body.light-theme .project-session-toggle-btn {
+    color: var(--text-secondary);
 }
 
 body.light-theme .session-round-section.round-section-emphasis .round-detail-header {

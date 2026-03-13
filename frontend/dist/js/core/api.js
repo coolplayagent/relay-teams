@@ -48,4 +48,6 @@ export {
     validateRoleConfig,
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
+    fetchWorkspaces,
+    pickWorkspace,
 } from './api/index.js';

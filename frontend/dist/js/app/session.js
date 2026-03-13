@@ -18,6 +18,15 @@ import { sysLog } from '../utils/logger.js';
 export async function selectSession(sessionId) {
     const isSameSession = state.currentSessionId === sessionId;
     const previousSessionId = state.currentSessionId;
+    const selectedSessionEl = document.querySelector(
+        `.session-item[data-session-id="${sessionId}"]`,
+    );
+    const selectedWorkspaceId = String(
+        selectedSessionEl?.getAttribute('data-workspace-id') || '',
+    ).trim();
+    if (selectedWorkspaceId) {
+        state.currentWorkspaceId = selectedWorkspaceId;
+    }
     if (isSameSession && (state.isGenerating || state.activeEventSource)) {
         await hydrateSessionView(sessionId, { includeRounds: false, quiet: true });
         sysLog(`Synced live session: ${sessionId}`);
@@ -44,7 +53,7 @@ export async function selectSession(sessionId) {
     clearSessionRecovery();
 
     document.querySelectorAll('.session-item').forEach(el => {
-        const isActive = el.querySelector('.session-id')?.textContent === sessionId;
+        const isActive = el.getAttribute('data-session-id') === sessionId;
         el.classList.toggle('active', isActive);
     });
 

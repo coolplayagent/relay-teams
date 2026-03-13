@@ -77,6 +77,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "execution-mode-select" not in prompt_script
     assert "No session selected" not in index_html
     assert "Start a session from the left sidebar" not in index_html
+    assert 'id="new-project-btn"' in index_html
+    assert 'id="projects-list"' in index_html
+    assert "New project" in index_html
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
     assert "Checking backend..." in index_html

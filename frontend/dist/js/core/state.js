@@ -2,6 +2,7 @@
 
 export const state = {
     currentSessionId: null,
+    currentWorkspaceId: null,
     isGenerating: false,
     activeEventSource: null,
     agentViews: {},
@@ -59,8 +60,8 @@ function normalizeRoleId(roleId) {
 }
 
 export const els = {
-    newBtn: document.getElementById('new-btn'),
-    sessionsList: document.getElementById('sessions-list'),
+    newProjectBtn: document.getElementById('new-project-btn'),
+    projectsList: document.getElementById('projects-list'),
     chatMessages: document.getElementById('chat-messages'),
     chatForm: document.getElementById('chat-form'),
     promptInput: document.getElementById('prompt-input'),

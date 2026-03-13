@@ -34,10 +34,11 @@
     letter-spacing: -0.025em;
 }
 
-.sessions-list {
+.sessions-list,
+.projects-list {
     flex: 1;
     overflow-y: auto;
-    padding: 1rem 0;
+    padding: 0.75rem 0.8rem 1rem;
 }
 
 .sidebar-footer {
@@ -150,6 +151,7 @@
 }
 
 .sessions-list,
+.projects-list,
 .chat-scroll,
 .logs-scroll,
 .agent-panel-scroll,
@@ -161,6 +163,7 @@
 }
 
 .sessions-list::-webkit-scrollbar,
+.projects-list::-webkit-scrollbar,
 .chat-scroll::-webkit-scrollbar,
 .logs-scroll::-webkit-scrollbar,
 .agent-panel-scroll::-webkit-scrollbar,
@@ -792,6 +795,11 @@ body.is-resizing-rails .right-rail-resizer {
     display: flex;
 }
 
+.sidebar-create-project-btn {
+    width: 100%;
+    justify-content: center;
+}
+
 .sidebar-footer {
     padding: 0.875rem 1rem;
     background: var(--bg-surface);
@@ -947,6 +955,7 @@ body.is-resizing-rails .right-rail-resizer {
 
 body.light-theme .sidebar,
 body.light-theme .sidebar-header,
+body.light-theme .projects-list,
 body.light-theme .sessions-list,
 body.light-theme .topbar,
 body.light-theme .right-rail,

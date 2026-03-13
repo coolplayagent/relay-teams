@@ -4,7 +4,7 @@
  */
 import { initSettings, openSettings } from '../components/settings.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
-import { handleNewSessionClick, loadSessions } from '../components/sidebar.js';
+import { handleNewProjectClick, loadProjects } from '../components/sidebar.js';
 import { fetchRoleConfigOptions } from '../core/api.js';
 import { setCoordinatorRoleId, state } from '../core/state.js';
 import { setupNavbarBindings } from '../components/navbar.js';
@@ -50,7 +50,11 @@ export function setupEventBindings(handleSend) {
             }
         };
     }
-    if (els.newSessionBtn) els.newSessionBtn.onclick = () => handleNewSessionClick(true);
+    if (els.newProjectBtn) {
+        els.newProjectBtn.onclick = () => {
+            void handleNewProjectClick();
+        };
+    }
     document.addEventListener('run-approval-resolved', (event) => {
         const runId = event?.detail?.runId;
         if (!runId || typeof runId !== 'string') return;
@@ -95,12 +99,13 @@ export async function initApp(selectSession, handleSend) {
     setupEventBindings(handleSend);
     initSettings();
     setupSettingsButton();
-    await loadSessions();
+    await loadProjects();
 
-    const firstSessionEl = document.querySelector('.session-item .session-id');
+    const firstSessionEl = document.querySelector('.session-item');
     if (firstSessionEl) {
-        await selectSession(firstSessionEl.textContent);
-    } else {
-        await handleNewSessionClick(false);
+        const sessionId = String(firstSessionEl.getAttribute('data-session-id') || '').trim();
+        if (sessionId) {
+            await selectSession(sessionId);
+        }
     }
 }

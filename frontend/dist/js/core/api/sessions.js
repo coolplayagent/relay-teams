@@ -8,13 +8,13 @@ export async function fetchSessions() {
     return requestJson('/api/sessions', undefined, 'Failed to fetch sessions');
 }
 
-export async function startNewSession() {
+export async function startNewSession(workspaceId) {
     return requestJson(
         '/api/sessions',
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ workspace_id: workspaceId }),
         },
         'Failed to create session',
     );

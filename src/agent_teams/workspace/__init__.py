@@ -8,6 +8,7 @@ from agent_teams.workspace.ids import (
     build_instance_role_scope_id,
     build_instance_session_scope_id,
 )
+from agent_teams.workspace.directory_picker import pick_workspace_directory
 from agent_teams.workspace.manager import (
     WorkspaceManager,
 )
@@ -43,4 +44,5 @@ __all__ = [
     "build_instance_role_scope_id",
     "build_instance_session_scope_id",
     "default_workspace_profile",
+    "pick_workspace_directory",
 ]

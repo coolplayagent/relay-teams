@@ -61,3 +61,8 @@ export {
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
 } from './token_usage.js';
+
+export {
+    fetchWorkspaces,
+    pickWorkspace,
+} from './workspaces.js';

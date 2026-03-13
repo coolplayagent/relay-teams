@@ -4,10 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_workspace_service
-from agent_teams.workspace import WorkspaceRecord, WorkspaceService
+from agent_teams.workspace import (
+    WorkspaceRecord,
+    WorkspaceService,
+    pick_workspace_directory,
+)
 
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 
@@ -15,8 +19,14 @@ router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 class CreateWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str
-    root_path: str
+    workspace_id: str = Field(min_length=1)
+    root_path: str = Field(min_length=1)
+
+
+class PickWorkspaceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: WorkspaceRecord | None = None
 
 
 @router.post("", response_model=WorkspaceRecord)
@@ -31,6 +41,25 @@ def create_workspace(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/pick", response_model=PickWorkspaceResponse)
+def pick_workspace(
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> PickWorkspaceResponse:
+    try:
+        selected_root = pick_workspace_directory()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if selected_root is None:
+        return PickWorkspaceResponse(workspace=None)
+
+    try:
+        workspace = service.create_workspace_for_root(root_path=selected_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PickWorkspaceResponse(workspace=workspace)
 
 
 @router.get("", response_model=list[WorkspaceRecord])

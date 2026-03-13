@@ -36,3 +36,38 @@ def test_workspace_service_rejects_missing_root(tmp_path: Path) -> None:
             workspace_id="missing",
             root_path=tmp_path / "missing-root",
         )
+
+
+def test_workspace_service_create_for_root_reuses_existing_workspace(
+    tmp_path: Path,
+) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    root_path = tmp_path / "Project Root"
+    root_path.mkdir()
+
+    created = service.create_workspace_for_root(root_path=root_path)
+    reused = service.create_workspace_for_root(root_path=root_path)
+
+    assert created.workspace_id == "project-root"
+    assert reused.workspace_id == "project-root"
+    assert len(service.list_workspaces()) == 1
+
+
+def test_workspace_service_create_for_root_generates_unique_workspace_id(
+    tmp_path: Path,
+) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    first_root = tmp_path / "Demo Project"
+    second_root = tmp_path / "demo-project"
+    first_root.mkdir()
+    second_root.mkdir()
+
+    first = service.create_workspace_for_root(root_path=first_root)
+    second = service.create_workspace_for_root(root_path=second_root)
+
+    assert first.workspace_id == "demo-project"
+    assert second.workspace_id == "demo-project-2"

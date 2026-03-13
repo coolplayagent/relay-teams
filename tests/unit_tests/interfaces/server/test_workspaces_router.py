@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from agent_teams.interfaces.server.deps import get_workspace_service
 from agent_teams.interfaces.server.routers import workspaces
@@ -71,3 +72,43 @@ def test_create_workspace_rejects_missing_root(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "does not exist" in response.json()["detail"]
+
+
+def test_pick_workspace_creates_workspace_for_selected_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+    root_path = tmp_path / "picked-root"
+    root_path.mkdir()
+
+    monkeypatch.setattr(
+        workspaces,
+        "pick_workspace_directory",
+        lambda: root_path,
+    )
+
+    response = client.post("/api/workspaces/pick")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace"]["workspace_id"] == "picked-root"
+    assert payload["workspace"]["root_path"] == str(root_path.resolve())
+
+
+def test_pick_workspace_returns_null_when_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+
+    monkeypatch.setattr(
+        workspaces,
+        "pick_workspace_directory",
+        lambda: None,
+    )
+
+    response = client.post("/api/workspaces/pick")
+
+    assert response.status_code == 200
+    assert response.json() == {"workspace": None}

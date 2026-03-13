@@ -8,7 +8,7 @@ export const qsa = (selector, parent = document) => parent.querySelectorAll(sele
 
 // Cached references to persistent UI elements
 export const els = {
-    sessionsList: qs('#sessions-list'),
+    projectsList: qs('#projects-list'),
     roundsList: qs('#rounds-list'),
     backBtn: qs('#back-btn'),
     recoveryBannerHost: qs('#recovery-banner-host'),
@@ -21,7 +21,7 @@ export const els = {
     inspectorToggleBtn: qs('#toggle-inspector'),
     rightRail: qs('#right-rail'),
     rightRailResizer: qs('#right-rail-resizer'),
-    newSessionBtn: qs('#new-btn'),
+    newProjectBtn: qs('#new-project-btn'),
     themeToggleBtn: qs('#toggle-theme'),
     toggleSubagentsBtn: qs('#toggle-subagents'),
     backendStatus: qs('#backend-status'),

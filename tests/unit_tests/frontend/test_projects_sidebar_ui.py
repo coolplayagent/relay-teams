@@ -1,0 +1,394 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from pathlib import Path
+
+import json
+import subprocess
+
+
+def test_projects_sidebar_groups_sessions_and_supports_project_actions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    handleNewProjectClick,
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children[0];
+const secondProject = projectsList.children[1];
+
+const initialSessionCount = firstProject.querySelectorAll(".session-item").length;
+const initialShowMoreLabel = firstProject.querySelector(".project-session-toggle-btn").textContent;
+const initialFirstProjectTitle = firstProject.querySelector(".project-title").textContent;
+const initialSecondProjectTitle = secondProject.querySelector(".project-title").textContent;
+
+firstProject.querySelector(".project-session-toggle-btn").onclick();
+await flushTasks();
+const expandedProject = projectsList.children[0];
+const expandedSessionCount = expandedProject.querySelectorAll(".session-item").length;
+const expandedToggleLabel = expandedProject.querySelector(".project-session-toggle-btn").textContent;
+
+expandedProject.querySelectorAll(".project-new-session-btn")[0].onclick();
+await flushTasks();
+
+await handleNewProjectClick();
+await flushTasks();
+
+console.log(JSON.stringify({
+    initialProjectCount: 2,
+    initialSessionCount,
+    initialShowMoreLabel,
+    expandedSessionCount,
+    expandedToggleLabel,
+    createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    finalProjectCount: projectsList.children.length,
+    initialFirstProjectTitle,
+    initialSecondProjectTitle,
+    finalFirstProjectTitle: projectsList.children[0].querySelector(".project-title").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["initialProjectCount"] == 2
+    assert payload["initialSessionCount"] == 6
+    assert payload["initialShowMoreLabel"] == "Show 1 more session"
+    assert payload["expandedSessionCount"] == 7
+    assert payload["expandedToggleLabel"] == "Show less"
+    assert payload["createdSessionWorkspaceIds"] == ["alpha-project"]
+    assert payload["selectedSessionIds"] == ["session-new"]
+    assert payload["finalProjectCount"] == 3
+    assert payload["initialFirstProjectTitle"] == "Alpha Project"
+    assert payload["initialSecondProjectTitle"] == "Beta Project"
+    assert payload["finalFirstProjectTitle"] == "Gamma Project"
+
+
+def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+
+    module_under_test_path = tmp_path / "sidebar.mjs"
+    mock_dom_path = tmp_path / "mockDom.mjs"
+    mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_logger_path = tmp_path / "mockLogger.mjs"
+    mock_api_path = tmp_path / "mockApi.mjs"
+    mock_state_path = tmp_path / "mockState.mjs"
+    runner_path = tmp_path / "runner.mjs"
+
+    mock_dom_path.write_text(
+        """
+export const els = {};
+
+function parseElements(source, selector) {
+    const results = [];
+    const patterns = {
+        ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+        ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
+        ".project-session-toggle-btn": /class="project-session-toggle-btn"[^>]*>([\\s\\S]*?)<\\/button>/g,
+        ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
+        ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
+        ".project-title": /class="project-title"[^>]*>([\\s\\S]*?)<\\/span>/g,
+    };
+    const pattern = patterns[selector];
+    if (!pattern) {
+        return results;
+    }
+    let match = pattern.exec(source);
+    while (match) {
+        if (selector === ".project-toggle") {
+            results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
+        } else if (selector === ".project-new-session-btn") {
+            results.push(createNode({ className: match[1] }));
+        } else if (selector === ".project-session-toggle-btn") {
+            results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
+        } else if (selector === ".session-delete-btn") {
+            results.push(createNode({ attributes: { "data-session-id": match[1] } }));
+        } else if (selector === ".session-item") {
+            results.push(createNode({
+                className: match[1],
+                attributes: {
+                    "data-session-id": match[2],
+                    "data-workspace-id": match[3],
+                },
+            }));
+        } else if (selector === ".project-title") {
+            results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
+        }
+        match = pattern.exec(source);
+    }
+    return results;
+}
+
+function createNode({ className = "", textContent = "", attributes = {} } = {}) {
+    const attributeStore = new Map(Object.entries(attributes));
+    return {
+        className,
+        textContent,
+        onclick: null,
+        onkeydown: null,
+        style: {},
+        setAttribute(name, value) {
+            attributeStore.set(name, String(value));
+        },
+        getAttribute(name) {
+            return attributeStore.get(name) || null;
+        },
+    };
+}
+
+function createCardElement() {
+    let html = "";
+    const cache = new Map();
+    return {
+        className: "",
+        style: {},
+        children: [],
+        setAttribute() {
+            return undefined;
+        },
+        get innerHTML() {
+            return html;
+        },
+        set innerHTML(value) {
+            html = String(value);
+            cache.clear();
+        },
+        querySelector(selector) {
+            return this.querySelectorAll(selector)[0] || null;
+        },
+        querySelectorAll(selector) {
+            if (!cache.has(selector)) {
+                cache.set(selector, parseElements(html, selector));
+            }
+            return cache.get(selector);
+        },
+    };
+}
+
+function createContainerElement() {
+    let html = "";
+    return {
+        className: "",
+        style: {},
+        children: [],
+        get innerHTML() {
+            return html;
+        },
+        set innerHTML(value) {
+            html = String(value);
+            if (!html) {
+                this.children = [];
+            }
+        },
+        appendChild(child) {
+            this.children.push(child);
+            return child;
+        },
+    };
+}
+
+function createBasicElement() {
+    return {
+        style: {},
+        innerHTML: "",
+        textContent: "",
+        children: [],
+    };
+}
+
+export function createDomEnvironment() {
+    const elements = new Map([
+        ["projects-list", createContainerElement()],
+        ["rounds-list", createBasicElement()],
+        ["back-btn", createBasicElement()],
+        ["chat-messages", createBasicElement()],
+    ]);
+
+    return {
+        getElementById(id) {
+            const element = elements.get(id);
+            if (!element) {
+                throw new Error(`Missing element: ${id}`);
+            }
+            return element;
+        },
+        createElement() {
+            return createCardElement();
+        },
+        querySelector(selector) {
+            if (selector === ".session-item") {
+                const projectsList = elements.get("projects-list");
+                for (const child of projectsList.children) {
+                    const item = child.querySelector(".session-item");
+                    if (item) {
+                        return item;
+                    }
+                }
+                return null;
+            }
+            return null;
+        },
+    };
+}
+
+export function installGlobals(documentEnv) {
+    globalThis.document = documentEnv;
+    els.projectsList = documentEnv.getElementById("projects-list");
+    els.roundsList = documentEnv.getElementById("rounds-list");
+    els.backBtn = documentEnv.getElementById("back-btn");
+    els.chatMessages = documentEnv.getElementById("chat-messages");
+}
+
+export async function flushTasks() {
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_feedback_path.write_text(
+        """
+export async function showConfirmDialog() {
+    return true;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_logger_path.write_text(
+        """
+export function sysLog(message) {
+    globalThis.__logs.push(String(message));
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_api_path.write_text(
+        """
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+    },
+    {
+        workspace_id: "beta-project",
+        root_path: "/work/Beta Project",
+        updated_at: "2026-03-13T10:00:00Z",
+    },
+];
+
+const sessions = [
+    { session_id: "session-7", workspace_id: "alpha-project", updated_at: "2026-03-14T10:07:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-6", workspace_id: "alpha-project", updated_at: "2026-03-14T10:06:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-5", workspace_id: "alpha-project", updated_at: "2026-03-14T10:05:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-4", workspace_id: "alpha-project", updated_at: "2026-03-14T10:04:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-3", workspace_id: "alpha-project", updated_at: "2026-03-14T10:03:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-2", workspace_id: "alpha-project", updated_at: "2026-03-14T10:02:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-1", workspace_id: "alpha-project", updated_at: "2026-03-14T10:01:00Z", pending_tool_approval_count: 0 },
+    { session_id: "beta-1", workspace_id: "beta-project", updated_at: "2026-03-13T10:01:00Z", pending_tool_approval_count: 0 },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function startNewSession(workspaceId) {
+    globalThis.__createdSessionWorkspaceIds.push(workspaceId);
+    const session = {
+        session_id: "session-new",
+        workspace_id: workspaceId,
+        updated_at: "2026-03-14T11:00:00Z",
+        pending_tool_approval_count: 0,
+    };
+    sessions.unshift(session);
+    return session;
+}
+
+export async function pickWorkspace() {
+    workspaces.push({
+        workspace_id: "gamma-project",
+        root_path: "/work/Gamma Project",
+        updated_at: "2026-03-14T12:00:00Z",
+    });
+    return {
+        workspace: workspaces[2],
+    };
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_state_path.write_text(
+        """
+export const state = {
+    currentSessionId: "session-7",
+    currentWorkspaceId: "alpha-project",
+};
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    runner_path.write_text(
+        f"""
+import {{ createDomEnvironment, flushTasks, installGlobals }} from "./mockDom.mjs";
+
+globalThis.__logs = [];
+globalThis.__createdSessionWorkspaceIds = [];
+globalThis.__selectedSessionIds = [];
+installGlobals(createDomEnvironment());
+
+{runner_source}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\\n"
+            f"STDOUT:\\n{completed.stdout}\\n"
+            f"STDERR:\\n{completed.stderr}"
+        )
+
+    return json.loads(completed.stdout)
