@@ -83,6 +83,7 @@ def create_task_batch(
     run_id: str,
     objective: str,
 ) -> dict[str, object]:
+    coordinator_role_id = _get_coordinator_role_id(client)
     response = client.post(
         f"/api/tasks/runs/{run_id}",
         json={
@@ -90,12 +91,12 @@ def create_task_batch(
                 {
                     "title": "first_time_query",
                     "objective": f"{objective}: return the current time for the first task.",
-                    "role_id": "coordinator_agent",
+                    "role_id": coordinator_role_id,
                 },
                 {
                     "title": "second_time_query",
                     "objective": f"{objective}: return the current time for the second task.",
-                    "role_id": "coordinator_agent",
+                    "role_id": coordinator_role_id,
                 },
             ],
             "auto_dispatch": False,
@@ -106,6 +107,18 @@ def create_task_batch(
     if not isinstance(body, dict):
         raise AssertionError(f"Invalid task creation response: {body}")
     return body
+
+
+def _get_coordinator_role_id(client: httpx.Client) -> str:
+    response = client.get("/api/roles:options")
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise AssertionError(f"Invalid role options response: {body}")
+    role_id = body.get("coordinator_role_id")
+    if not isinstance(role_id, str) or not role_id:
+        raise AssertionError(f"Missing coordinator_role_id in response: {body}")
+    return role_id
 
 
 def dispatch_task(

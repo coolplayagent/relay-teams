@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pathlib import Path
-
+from agent_teams.builtin import get_builtin_roles_dir
 from agent_teams.roles.registry import RoleLoader
 
 
 def test_coordinator_uses_task_tools_and_not_emit_event() -> None:
-    registry = RoleLoader().load_all(Path(".agent_teams/roles"))
+    registry = RoleLoader().load_all(get_builtin_roles_dir())
     coordinator = registry.get_coordinator()
     tools = set(coordinator.tools)
 

@@ -25,7 +25,7 @@ def integration_env(
 ) -> Iterator[IntegrationEnvironment]:
     repo_root = Path(__file__).resolve().parent.parent.parent
     runtime_root = tmp_path_factory.mktemp("agent-teams-integration")
-    config_dir = runtime_root / ".agent_teams"
+    config_dir = runtime_root / ".config" / "agent-teams"
 
     fake_llm_port = find_free_port()
     backend_port = find_free_port()
@@ -45,6 +45,12 @@ def integration_env(
     if existing_pythonpath:
         python_paths.append(existing_pythonpath)
     shared_env["PYTHONPATH"] = os.pathsep.join(python_paths)
+    shared_env["HOME"] = str(runtime_root)
+    shared_env["USERPROFILE"] = str(runtime_root)
+    drive, tail = os.path.splitdrive(str(runtime_root))
+    if drive:
+        shared_env["HOMEDRIVE"] = drive
+        shared_env["HOMEPATH"] = tail or "\\"
 
     fake_llm_log_file = runtime_root / "fake-llm.log"
     backend_log_file = runtime_root / "backend.log"

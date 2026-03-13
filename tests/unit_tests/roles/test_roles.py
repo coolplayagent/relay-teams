@@ -5,12 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.builtin import get_builtin_roles_dir
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleLoader, RoleRegistry
 
 
 def test_role_loader_loads_markdown_role() -> None:
-    registry = RoleLoader().load_all(Path(".agent_teams/roles"))
+    registry = RoleLoader().load_all(get_builtin_roles_dir())
     roles = registry.list_roles()
     assert len(roles) >= 1
     assert roles[0].role_id

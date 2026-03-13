@@ -6,8 +6,6 @@ import json
 
 def write_test_runtime_config(*, config_dir: Path, fake_llm_v1_base_url: str) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
-    roles_dir = config_dir / "roles"
-    roles_dir.mkdir(parents=True, exist_ok=True)
 
     model_config = {
         "default": {
@@ -21,20 +19,5 @@ def write_test_runtime_config(*, config_dir: Path, fake_llm_v1_base_url: str) ->
     }
     (config_dir / "model.json").write_text(
         json.dumps(model_config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    coordinator_role = """---
-role_id: coordinator_agent
-name: Coordinator Agent
-version: 1.0.0
-model_profile: default
-tools: []
----
-You are a deterministic coordinator used for integration testing.
-Always return concise output.
-"""
-    (roles_dir / "coordinator_agent.md").write_text(
-        coordinator_role,
         encoding="utf-8",
     )
