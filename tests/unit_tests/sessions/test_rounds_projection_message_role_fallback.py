@@ -19,7 +19,7 @@ from agent_teams.state.agent_repo import AgentInstanceRepository
 from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.run_runtime_repo import RunRuntimeRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) -> None:

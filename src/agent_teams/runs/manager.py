@@ -9,7 +9,7 @@ from typing import Awaitable, Callable, cast
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from agent_teams.intent.meta_agent import MetaAgent
+from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.models import AgentRuntimeRecord
 from agent_teams.logger import get_logger, log_event
 from agent_teams.notifications import (
@@ -42,7 +42,7 @@ from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
 from agent_teams.trace import bind_trace_context
-from agent_teams.workflow.models import TaskRecord
+from agent_teams.agents.tasks.models import TaskRecord
 
 logger = get_logger(__name__)
 

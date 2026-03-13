@@ -12,23 +12,26 @@ from agent_teams.interfaces.server.deps import (
     get_skill_registry,
     get_tool_registry,
 )
-from agent_teams.prompting.provider_augment import (
+from agent_teams.agents.execution.provider_prompts import (
     PromptSkillInstruction,
     ProviderPromptAugmentInput,
     build_provider_augmented_system_prompt,
     build_skill_instructions_prompt,
     build_tool_rules_prompt,
 )
-from agent_teams.prompting.runtime import (
+from agent_teams.agents.execution.runtime_prompts import (
     RuntimePromptBuildInput,
     build_runtime_system_prompt,
 )
-from agent_teams.prompting.user_input import UserPromptBuildInput, build_user_prompt
+from agent_teams.agents.execution.user_prompts import (
+    UserPromptBuildInput,
+    build_user_prompt,
+)
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.shared_types.json_types import JsonObject, JsonValue
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 

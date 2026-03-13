@@ -25,8 +25,8 @@ from agent_teams.state.message_repo import MessageRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.workspace import WorkspaceManager
-from agent_teams.workflow.enums import TaskStatus
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 class _FakeReflectionModelClient:
@@ -77,6 +77,7 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
     config_dir = tmp_path / ".config" / "agent-teams"
     config_dir.mkdir(parents=True)
     db_path = tmp_path / "reflection_service.db"
+    workspace_id = f"workspace-{tmp_path.name}"
 
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
@@ -103,7 +104,7 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
         session_id="session-1",
         instance_id="inst-1",
         role_id="writer_agent",
-        workspace_id="workspace-1",
+        workspace_id=workspace_id,
         conversation_id="conversation-1",
         status=InstanceStatus.COMPLETED,
     )
@@ -136,7 +137,7 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer_agent",
-        workspace_id="workspace-1",
+        workspace_id=workspace_id,
         conversation_id="conversation-1",
     )
 
@@ -144,13 +145,13 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
     assert await service.process_next_job() is True
 
     daily_raw = (
-        workspace_manager.locations_for("workspace-1").workspace_dir
+        workspace_manager.locations_for(workspace_id).workspace_dir
         / "memory"
         / "daily"
         / "raw"
     )
     daily_digest = (
-        workspace_manager.locations_for("workspace-1").workspace_dir
+        workspace_manager.locations_for(workspace_id).workspace_dir
         / "memory"
         / "daily"
         / "digest"
@@ -176,7 +177,7 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
     injected = service.build_injected_memory(
         session_id="session-1",
         role_id="writer_agent",
-        workspace_id="workspace-1",
+        workspace_id=workspace_id,
     )
     assert "## Long-Term Memory" in injected
     assert "## Today's Memory Digest" in injected

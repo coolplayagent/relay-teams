@@ -14,7 +14,7 @@ from agent_teams.state.event_log import EventLog
 from agent_teams.state.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.enums import TaskStatus
+from agent_teams.agents.tasks.enums import TaskStatus
 
 
 class ToolApprovalStatus(str, Enum):

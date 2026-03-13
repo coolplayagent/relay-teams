@@ -8,7 +8,7 @@ from agent_teams.runs.enums import RunEventType
 from agent_teams.runs.models import RunEvent
 from agent_teams.state.db import open_sqlite
 from agent_teams.state.run_state_models import RunStateRecord, apply_run_event_to_state
-from agent_teams.workflow.events import EventEnvelope
+from agent_teams.agents.tasks.events import EventEnvelope
 
 
 class EventLog:

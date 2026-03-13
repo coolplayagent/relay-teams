@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.providers.llm import EchoProvider
+from agent_teams.providers.contracts import EchoProvider
 from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from agent_teams.providers.registry import (
     ProviderRegistry,

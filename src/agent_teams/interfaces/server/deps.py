@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from agent_teams.coordination.task_orchestration_service import (
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.env.environment_variable_service import EnvironmentVariableService

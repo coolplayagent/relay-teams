@@ -22,7 +22,7 @@ from agent_teams.interfaces.cli.prompt_cli import (
 )
 from agent_teams.interfaces.server.cli import build_server_app
 from agent_teams.mcp.mcp_cli import mcp_app
-from agent_teams.prompting.cli import build_prompts_app
+from agent_teams.interfaces.cli.prompts_cli import build_prompts_app
 from agent_teams.reflection import build_reflection_app
 from agent_teams.roles.cli import build_roles_app
 from agent_teams.skills.cli import skills_app

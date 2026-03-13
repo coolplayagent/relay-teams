@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from agent_teams.intent.meta_agent import MetaAgent
+from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.runs.enums import RunEventType
 from agent_teams.runs.manager import RunManager
 from agent_teams.runs.models import IntentInput

@@ -14,12 +14,13 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from agent_teams.coordination.task_orchestration_service import (
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.runs.enums import RunEventType
 from agent_teams.providers.model_config import ModelEndpointConfig
-from agent_teams.providers.llm import LLMRequest, OpenAICompatibleProvider
+from agent_teams.providers.contracts import LLMRequest
+from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.runs.injection_queue import RunInjectionManager
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.event_stream import RunEventHub
@@ -36,7 +37,7 @@ from agent_teams.tools.registry import ToolRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
-from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workspace import WorkspaceManager
 

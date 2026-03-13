@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from agent_teams.providers.llm import EchoProvider, LLMProvider
-from agent_teams.providers.model_config import ModelEndpointConfig, ProviderModelInfo, ProviderType
+from agent_teams.providers.contracts import EchoProvider, LLMProvider
+from agent_teams.providers.model_config import (
+    ModelEndpointConfig,
+    ProviderModelInfo,
+    ProviderType,
+)
 
 ProviderBuilder = Callable[[ModelEndpointConfig], LLMProvider]
 

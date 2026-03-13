@@ -9,17 +9,14 @@ if TYPE_CHECKING:
         ProxyEnvConfig,
         build_llm_http_client,
     )
-    from agent_teams.providers.llm import (
-        EchoProvider,
-        LLMProvider,
-        OpenAICompatibleProvider,
-    )
+    from agent_teams.providers.contracts import EchoProvider, LLMProvider
     from agent_teams.providers.model_config import (
         ModelEndpointConfig,
         ProviderModelInfo,
         ProviderType,
         SamplingConfig,
     )
+    from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
     from agent_teams.providers.model_config_manager import ModelConfigManager
     from agent_teams.providers.model_config_service import ModelConfigService
     from agent_teams.providers.model_connectivity import (
@@ -60,8 +57,8 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
-    "EchoProvider": ("agent_teams.providers.llm", "EchoProvider"),
-    "LLMProvider": ("agent_teams.providers.llm", "LLMProvider"),
+    "EchoProvider": ("agent_teams.providers.contracts", "EchoProvider"),
+    "LLMProvider": ("agent_teams.providers.contracts", "LLMProvider"),
     "ModelEndpointConfig": (
         "agent_teams.providers.model_config",
         "ModelEndpointConfig",
@@ -99,7 +96,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "ModelConnectivityTokenUsage",
     ),
     "OpenAICompatibleProvider": (
-        "agent_teams.providers.llm",
+        "agent_teams.providers.openai_compatible",
         "OpenAICompatibleProvider",
     ),
     "ProviderModelInfo": (

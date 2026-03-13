@@ -4,10 +4,10 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, SkipValidation
 from pydantic_ai import RunContext
 
-from agent_teams.coordination.task_orchestration_service import (
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.notifications import NotificationService
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.runs.control import RunControlManager

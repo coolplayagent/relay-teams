@@ -17,14 +17,15 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-import agent_teams.providers.llm as llm_module
-from agent_teams.coordination.task_orchestration_service import (
+import agent_teams.agents.execution.llm_session as llm_module
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.prompting.provider_augment import PromptSkillInstruction
-from agent_teams.providers.llm import LLMRequest, OpenAICompatibleProvider
+from agent_teams.agents.execution.provider_prompts import PromptSkillInstruction
+from agent_teams.providers.contracts import LLMRequest
+from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry

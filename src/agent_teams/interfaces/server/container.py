@@ -8,13 +8,13 @@ from agent_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
 )
-from agent_teams.intent.meta_agent import MetaAgent
-from agent_teams.coordination.coordinator import CoordinatorGraph
-from agent_teams.coordination.human_gate import GateManager
-from agent_teams.coordination.task_orchestration_service import (
+from agent_teams.agents.orchestration.meta_agent import MetaAgent
+from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
+from agent_teams.agents.orchestration.human_gate import GateManager
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.coordination.task_execution_service import TaskExecutionService
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
@@ -25,21 +25,19 @@ from agent_teams.mcp.registry import McpRegistry
 from agent_teams.mcp.service import McpService
 from agent_teams.notifications import NotificationConfigManager, NotificationService
 from agent_teams.notifications.settings_service import NotificationSettingsService
-from agent_teams.prompting.runtime_prompt_builder import RuntimePromptBuilder
+from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
 from agent_teams.reflection import (
     PydanticAIReflectionModelClient,
     ReflectionConfigManager,
     ReflectionJobRepository,
     ReflectionService,
 )
-from agent_teams.providers.llm import LLMProvider
+from agent_teams.providers.contracts import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.providers.http_client_factory import clear_llm_http_client_cache
-from agent_teams.providers.runtime_factory import (
-    create_provider_factory,
-    create_task_execution_service,
-)
+from agent_teams.providers.factory import create_provider_factory
+from agent_teams.agents.orchestration.factory import create_task_execution_service
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles import RoleLoader, RoleRegistry
 from agent_teams.roles.settings_service import RoleSettingsService

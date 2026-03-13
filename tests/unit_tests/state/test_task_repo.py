@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.enums import TaskStatus
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 def _create_task(repo: TaskRepository, task_id: str = "task-1") -> None:

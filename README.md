@@ -7,28 +7,30 @@ Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
 
 Core code lives under `src/agent_teams/`:
 
-- `agents/`: agent construction, lifecycle, and execution composition
-- `coordination/`: cross-role coordination strategies
+- `agents/`: agent domain package
+  - `agents/execution/`: agent turn execution, prompt assembly, and LLM session flow
+  - `agents/orchestration/`: coordinator flow, task orchestration, verification, and human gate logic
+  - `agents/tasks/`: task domain models, ids, events, and task status utilities
 - `env/`: runtime environment loading and env-related CLI support
 - `interfaces/`: external interfaces
   - `interfaces/server/`: FastAPI HTTP/SSE API and routers
-  - `interfaces/cli/`: Typer CLI entrypoints and HTTP/SSE client behavior
+  - `interfaces/cli/`: Typer CLI entrypoints, HTTP/SSE client behavior, and prompt inspection commands
   - `interfaces/sdk/`: Python HTTP client SDK
 - `logger/`, `trace/`: structured logging and trace context
 - `mcp/`: MCP capability integration
 - `notifications/`: backend-driven notification rules and event dispatch
 - `paths/`: path and filesystem location helpers
-- `prompting/`: prompt assembly and prompt-layer abstractions
-- `providers/`: LLM provider integrations
+- `providers/`: provider contracts, model configuration, registries, and OpenAI-compatible adapters
+- `reflection/`: reflection result modeling and reflection services
 - `roles/`: role definitions and role validation
 - `runs/`: run-time orchestration, run control, event streaming, and injection flows
 - `sessions/`: session lifecycle and round projection services
 - `shared_types/`: cross-domain shared type aliases and lightweight contracts
 - `skills/`: skill loading/registry support
 - `state/`: persistence and state repositories
-- `tools/`: built-in tools (`stage/`, `workflow/`, `workspace/`)
+- `tools/`: built-in tool registration and implementations (`registry/`, `runtime/`, `stage_tools/`, `task_tools/`, `workspace_tools/`)
 - `triggers/`: trigger management and event ingestion flows
-- `workflow/`: workflow orchestration core
+- `workspace/`: workspace indexing, materialization, and workspace-facing services
 
 Frontend assets are built into `frontend/dist` (`css/` and `js/`) and served by the backend.
 
@@ -227,7 +229,7 @@ curl -X PUT http://127.0.0.1:8000/api/system/configs/notifications \
 
 Unit and integration tests are split under `tests/`:
 
-- `tests/unit_tests/`: mirrors backend modules (`agents/`, `env/`, `interfaces/`, `logger/`, `notifications/`, `paths/`, `providers/`, `roles/`, `runs/`, `sessions/`, `skills/`, `state/`, `tools/`, `trace/`, `triggers/`, `workflow/`)
+- `tests/unit_tests/` directory structure must mirror `src/agent_teams/` one-to-one.
 - `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
 
 Run unit tests:

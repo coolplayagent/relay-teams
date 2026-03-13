@@ -26,7 +26,7 @@ from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.shared_state_repo import SharedStateRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.state.token_usage_repo import TokenUsageRepository
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,

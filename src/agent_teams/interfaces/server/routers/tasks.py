@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.coordination.task_orchestration_service import (
+from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskDraft,
     TaskOrchestrationService,
     TaskUpdate,
@@ -12,7 +12,7 @@ from agent_teams.coordination.task_orchestration_service import (
 from agent_teams.interfaces.server.deps import get_task_repo, get_task_service
 from agent_teams.shared_types.json_types import JsonObject
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.models import TaskRecord
+from agent_teams.agents.tasks.models import TaskRecord
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 

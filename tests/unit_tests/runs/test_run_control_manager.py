@@ -18,8 +18,8 @@ from agent_teams.state.run_runtime_repo import (
 )
 from agent_teams.state.run_state_repo import RunStateRepository
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.enums import TaskStatus
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 def test_request_run_stop_cancels_run_task() -> None:

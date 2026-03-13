@@ -6,7 +6,7 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_teams.intent.meta_agent import MetaAgent
+from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.runs.control import RunControlManager
 from agent_teams.runs.enums import RunEventType
@@ -29,7 +29,7 @@ from agent_teams.state.session_models import SessionRecord
 from agent_teams.state.session_repo import SessionRepository
 from agent_teams.state.task_repo import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalManager
-from agent_teams.workflow.models import TaskEnvelope, VerificationPlan
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import build_workspace_id
 
 

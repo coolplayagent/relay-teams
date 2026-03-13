@@ -13,7 +13,7 @@ from agent_teams.state.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.state.task_repo import TaskRepository
-from agent_teams.workflow.models import TaskEnvelope, TaskRecord, VerificationPlan
+from agent_teams.agents.tasks.models import TaskEnvelope, TaskRecord, VerificationPlan
 from agent_teams.workspace import build_conversation_id, build_workspace_id
 
 
