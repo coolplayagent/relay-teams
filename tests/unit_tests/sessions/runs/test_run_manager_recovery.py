@@ -31,7 +31,6 @@ from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
-from agent_teams.workspace import build_workspace_id
 
 
 class _MetaAgent:
@@ -48,7 +47,7 @@ class _SessionRepo:
     def get(self, session_id: str) -> SessionRecord:
         return SessionRecord(
             session_id=session_id,
-            workspace_id=build_workspace_id(session_id),
+            workspace_id="default",
         )
 
     def create(
@@ -58,7 +57,7 @@ class _SessionRepo:
     ) -> SessionRecord:
         return SessionRecord(
             session_id=session_id,
-            workspace_id=build_workspace_id(session_id),
+            workspace_id="default",
             metadata=metadata or {},
         )
 
@@ -116,6 +115,7 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
         session_id="session-1",
         instance_id="inst-1",
         role_id="coordinator_agent",
+        workspace_id="default",
         status=InstanceStatus.RUNNING,
     )
 

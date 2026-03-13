@@ -4,11 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles import RoleDocumentDraft, RoleRegistry
+from agent_teams.roles import (
+    RoleDocumentDraft,
+    RoleRegistry,
+    default_memory_profile,
+)
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import build_default_registry
-from agent_teams.workspace import default_workspace_profile
 
 
 def test_save_role_document_renames_role_file_and_reloads_registry(
@@ -49,7 +52,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
             mcp_servers=(),
             skills=(),
             model_profile="default",
-            workspace_profile=default_workspace_profile(),
+            memory_profile=default_memory_profile(),
             system_prompt="Write with more detail.",
         ),
     )
@@ -87,7 +90,7 @@ def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:
                 mcp_servers=(),
                 skills=(),
                 model_profile="default",
-                workspace_profile=default_workspace_profile(),
+                memory_profile=default_memory_profile(),
                 system_prompt="This should fail.",
             )
         )
@@ -157,7 +160,7 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
             mcp_servers=(),
             skills=(),
             model_profile="default",
-            workspace_profile=default_workspace_profile(),
+            memory_profile=default_memory_profile(),
             system_prompt="Start from a blank role.",
         ),
     )

@@ -180,6 +180,7 @@ def test_session_guard_uses_runtime_fallback_when_process_restarted(
         session_id="session-1",
         instance_id="inst-1",
         role_id="time",
+        workspace_id="default",
         status=InstanceStatus.STOPPED,
     )
     run_runtime_repo.ensure(
@@ -251,10 +252,12 @@ def test_resume_subagent_with_message_uses_same_instance_after_restart(
         session_id="session-1",
         instance_id="inst-1",
         role_id="time",
+        workspace_id="default",
         status=InstanceStatus.STOPPED,
     )
     message_repo.append_user_prompt_if_missing(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         task_id="task-1",
         trace_id="run-1",

@@ -13,9 +13,8 @@ from agent_teams.interfaces.server.config_status_service import ConfigStatusServ
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.service import McpService
 from agent_teams.notifications.settings_service import NotificationSettingsService
-from agent_teams.reflection.service import ReflectionService
 from agent_teams.providers.model_config_service import ModelConfigService
-from agent_teams.roles import RoleRegistry
+from agent_teams.roles import RoleMemoryService, RoleRegistry
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.sessions.runs.manager import RunManager
 from agent_teams.sessions import SessionService
@@ -24,6 +23,7 @@ from agent_teams.skills.registry import SkillRegistry
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
+from agent_teams.workspace import WorkspaceService
 
 
 def get_container(request: Request) -> ServerContainer:
@@ -40,10 +40,6 @@ def get_session_service(request: Request) -> SessionService:
 
 def get_task_service(request: Request) -> TaskOrchestrationService:
     return get_container(request).task_service
-
-
-def get_reflection_service(request: Request) -> ReflectionService:
-    return get_container(request).reflection_service
 
 
 def get_trigger_service(request: Request) -> TriggerService:
@@ -92,6 +88,14 @@ def get_role_registry(request: Request) -> RoleRegistry:
 
 def get_role_settings_service(request: Request) -> RoleSettingsService:
     return get_container(request).role_settings_service
+
+
+def get_role_memory_service(request: Request) -> RoleMemoryService:
+    return get_container(request).role_memory_service
+
+
+def get_workspace_service(request: Request) -> WorkspaceService:
+    return get_container(request).workspace_service
 
 
 def get_tool_registry(request: Request) -> ToolRegistry:

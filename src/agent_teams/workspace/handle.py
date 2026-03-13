@@ -5,8 +5,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.workspace.artifacts import WorkspaceArtifacts
-from agent_teams.workspace.memory import WorkspaceMemory
 from agent_teams.workspace.models import (
     WorkspaceLocations,
     WorkspaceProfile,
@@ -20,16 +18,10 @@ class WorkspaceHandle(BaseModel):
     ref: WorkspaceRef
     profile: WorkspaceProfile
     locations: WorkspaceLocations
-    memory: WorkspaceMemory
-    artifacts: WorkspaceArtifacts
 
     @property
     def root_path(self) -> Path:
         return self.locations.execution_root
-
-    @property
-    def project_root(self) -> Path:
-        return self.locations.project_root
 
     def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
         candidate = (self.root_path / relative_path).resolve()

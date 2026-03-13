@@ -25,6 +25,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import (
@@ -71,6 +72,7 @@ def _build_coordinator(
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
+    session_repo = SessionRepository(db_path)
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
@@ -96,6 +98,7 @@ def _build_coordinator(
         )
     )
     task_execution_service = _RecordingTaskExecutionService(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
     run_control_manager = RunControlManager()
     run_control_manager.bind_runtime(
         run_event_hub=RunEventHub(),
@@ -117,6 +120,7 @@ def _build_coordinator(
         task_execution_service=task_execution_service,
         run_runtime_repo=run_runtime_repo,
         run_control_manager=run_control_manager,
+        session_repo=session_repo,
     )
     return (
         coordinator,
@@ -206,8 +210,16 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
     _ = task_repo.create(root_task)
     _ = task_repo.create(child_task)
 
-    coordinator_instance = create_subagent_instance("coordinator_agent")
-    child_instance = create_subagent_instance("time")
+    coordinator_instance = create_subagent_instance(
+        "coordinator_agent",
+        workspace_id="workspace-1",
+        conversation_id="conversation-coordinator",
+    )
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
 
     agent_repo.upsert_instance(
         run_id="run-1",
@@ -292,8 +304,16 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
     _ = task_repo.create(root_task)
     _ = task_repo.create(child_task)
 
-    coordinator_instance = create_subagent_instance("coordinator_agent")
-    child_instance = create_subagent_instance("time")
+    coordinator_instance = create_subagent_instance(
+        "coordinator_agent",
+        workspace_id="workspace-1",
+        conversation_id="conversation-coordinator",
+    )
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
 
     agent_repo.upsert_instance(
         run_id="run-1",

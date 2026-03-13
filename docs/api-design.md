@@ -156,7 +156,11 @@ Creates a session.
 Request:
 
 ```json
-{"session_id": null, "metadata": {"project": "demo"}}
+{
+  "session_id": null,
+  "workspace_id": "default",
+  "metadata": {"project": "demo"}
+}
 ```
 
 ### `GET /sessions`
@@ -173,7 +177,8 @@ Updates session metadata.
 
 ### `DELETE /sessions/{session_id}`
 
-Deletes a session and all persisted runtime data.
+Deletes a session and all persisted runtime data under that session.
+The bound workspace record is preserved.
 
 ### `GET /sessions/{session_id}/rounds`
 
@@ -420,7 +425,6 @@ Response fields:
 - `tools`
 - `mcp_servers`
 - `skills`
-- `workspace_bindings`
 
 ### `GET /roles/configs`
 
@@ -446,7 +450,7 @@ Response fields:
 - `mcp_servers`
 - `skills`
 - `model_profile`
-- `workspace_profile`
+- `memory_profile`
 - `source`
 - `system_prompt`
 - `file_name`
@@ -468,7 +472,10 @@ Request:
   "mcp_servers": [],
   "skills": [],
   "model_profile": "default",
-  "workspace_profile": {"binding": "session"},
+  "memory_profile": {
+    "enabled": true,
+    "daily_enabled": true
+  },
   "system_prompt": "Implement the requested change."
 }
 ```
@@ -493,6 +500,34 @@ Validates one in-memory role draft without saving it.
 Use cases:
 - settings UI inline validation
 - pre-save editor checks for tools, MCP servers, skills, and role schema
+
+## Workspace APIs
+
+### `GET /workspaces`
+
+Lists registered execution workspaces.
+
+### `POST /workspaces`
+
+Creates one execution workspace.
+
+Request:
+
+```json
+{
+  "workspace_id": "default",
+  "root_path": "D:/workspace/agent_teams"
+}
+```
+
+Rules:
+- `root_path` must already exist.
+- `root_path` must be a directory.
+- `workspace_id` must be unique.
+
+### `GET /workspaces/{workspace_id}`
+
+Returns one registered execution workspace.
 
 ## Prompt APIs
 
@@ -584,20 +619,10 @@ Lists persisted trigger events.
 
 Gets one persisted trigger event.
 
-## Reflection APIs
+## Memory And Stage File Notes
 
-### `GET /reflection/jobs`
-
-Lists reflection jobs.
-
-### `POST /reflection/jobs/{job_id}/retry`
-
-Retries a failed or queued reflection job.
-
-### `GET /reflection/memory/session-roles/{session_id}/{role_id}`
-
-Reads role-level long-term memory content.
-
-### `GET /reflection/memory/instances/{instance_id}/daily/{date}`
-
-Reads one instance daily memory file.
+- `workspace` now means execution workspace only.
+- Durable role memory is stored in the database and keyed by `role_id`.
+- Daily role memory is stored in the database and keyed by `role_id + memory_date + kind`.
+- Stage documents are filesystem files managed by `src/agent_teams/tools/stage_tools`.
+- Stage document paths resolve under `{workspace_root}/.agent_teams/sessions/{session_id}/roles/{role_id}/stage/{stage_name}/`.

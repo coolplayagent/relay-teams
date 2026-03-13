@@ -8,7 +8,7 @@ from pathlib import Path
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import AgentRuntimeRecord
 from agent_teams.persistence.db import open_sqlite
-from agent_teams.workspace import build_conversation_id, build_workspace_id
+from agent_teams.workspace import build_conversation_id
 
 
 class AgentInstanceRepository:
@@ -64,12 +64,11 @@ class AgentInstanceRepository:
         session_id: str,
         instance_id: str,
         role_id: str,
-        workspace_id: str | None = None,
+        workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        resolved_workspace_id = workspace_id or build_workspace_id(session_id)
         resolved_conversation_id = conversation_id or build_conversation_id(
             session_id,
             role_id,
@@ -95,7 +94,7 @@ class AgentInstanceRepository:
                 session_id,
                 instance_id,
                 role_id,
-                resolved_workspace_id,
+                workspace_id,
                 resolved_conversation_id,
                 status.value,
                 now,
@@ -218,9 +217,7 @@ class AgentInstanceRepository:
             session_id=str(row["session_id"]),
             instance_id=str(row["instance_id"]),
             role_id=str(row["role_id"]),
-            workspace_id=str(
-                row["workspace_id"] or build_workspace_id(str(row["session_id"]))
-            ),
+            workspace_id=str(row["workspace_id"]),
             conversation_id=str(
                 row["conversation_id"]
                 or build_conversation_id(

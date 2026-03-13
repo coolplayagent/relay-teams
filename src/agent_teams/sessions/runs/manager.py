@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from json import dumps
 from typing import Awaitable, Callable, cast
 
@@ -91,17 +90,9 @@ class RunManager:
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
 
-    def _ensure_session(self, session_id: str | None) -> str:
-        if not session_id:
-            new_id = f"session-{uuid.uuid4().hex[:8]}"
-            _ = self._session_repo.create(session_id=new_id)
-            return new_id
-        try:
-            _ = self._session_repo.get(session_id)
-            return session_id
-        except KeyError:
-            _ = self._session_repo.create(session_id=session_id)
-            return session_id
+    def _ensure_session(self, session_id: str) -> str:
+        _ = self._session_repo.get(session_id)
+        return session_id
 
     def _runtime_for_run(self, run_id: str) -> RunRuntimeRecord | None:
         if self._run_runtime_repo is not None:

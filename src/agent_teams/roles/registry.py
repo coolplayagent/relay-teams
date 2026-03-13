@@ -5,9 +5,9 @@ from pathlib import Path
 
 import yaml
 
+from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from agent_teams.roles.models import RoleConfigSource
 from agent_teams.roles.models import RoleDefinition
-from agent_teams.workspace import WorkspaceProfile, default_workspace_profile
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
@@ -174,14 +174,12 @@ class RoleLoader:
         if not isinstance(skills, list):
             raise ValueError(f"skills must be a list in {source_name}")
 
-        workspace_profile_raw = parsed.get("workspace_profile")
-        workspace_profile = default_workspace_profile()
-        if workspace_profile_raw is not None:
-            if not isinstance(workspace_profile_raw, dict):
-                raise ValueError(
-                    f"workspace_profile must be an object in {source_name}"
-                )
-            workspace_profile = WorkspaceProfile.model_validate(workspace_profile_raw)
+        memory_profile_raw = parsed.get("memory_profile")
+        memory_profile = default_memory_profile()
+        if memory_profile_raw is not None:
+            if not isinstance(memory_profile_raw, dict):
+                raise ValueError(f"memory_profile must be an object in {source_name}")
+            memory_profile = MemoryProfile.model_validate(memory_profile_raw)
 
         return RoleDefinition(
             role_id=str(parsed["role_id"]),
@@ -191,7 +189,7 @@ class RoleLoader:
             mcp_servers=tuple(str(item) for item in mcp_servers),
             skills=tuple(str(item) for item in skills),
             model_profile=str(parsed.get("model_profile", "default")),
-            workspace_profile=workspace_profile,
+            memory_profile=memory_profile,
             system_prompt=body.strip(),
         )
 

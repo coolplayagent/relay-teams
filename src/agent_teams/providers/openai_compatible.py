@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from agent_teams.mcp.registry import McpRegistry
     from agent_teams.notifications import NotificationService
     from agent_teams.providers.model_config import ModelEndpointConfig
+    from agent_teams.roles.memory_service import RoleMemoryService
     from agent_teams.roles.registry import RoleRegistry
     from agent_teams.sessions.runs.control import RunControlManager
     from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -56,6 +57,7 @@ class OpenAICompatibleProvider(LLMProvider):
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         workspace_manager: WorkspaceManager,
+        role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -83,6 +85,7 @@ class OpenAICompatibleProvider(LLMProvider):
             approval_ticket_repo=approval_ticket_repo,
             run_runtime_repo=run_runtime_repo,
             workspace_manager=workspace_manager,
+            role_memory_service=role_memory_service,
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_registry=skill_registry,

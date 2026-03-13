@@ -22,7 +22,7 @@ from agent_teams.roles import (
     RoleRegistry,
     RoleValidationResult,
 )
-from agent_teams.workspace import default_workspace_profile
+from agent_teams.roles import default_memory_profile
 
 
 class _FakeRoleSettingsService:
@@ -49,7 +49,7 @@ class _FakeRoleSettingsService:
             mcp_servers=(),
             skills=(),
             model_profile="default",
-            workspace_profile=default_workspace_profile(),
+            memory_profile=default_memory_profile(),
             system_prompt="Write clearly.",
             source=RoleConfigSource.APP,
             file_name="writer.md",
@@ -172,7 +172,7 @@ def test_validate_role_config() -> None:
             "mcp_servers": [],
             "skills": [],
             "model_profile": "default",
-            "workspace_profile": default_workspace_profile().model_dump(mode="json"),
+            "memory_profile": default_memory_profile().model_dump(mode="json"),
             "system_prompt": "Write clearly.",
         },
     )
@@ -194,5 +194,4 @@ def test_get_role_config_options() -> None:
         tools=("dispatch_task", "list_available_roles"),
         mcp_servers=("docs",),
         skills=("diff", "time"),
-        workspace_bindings=("session", "role", "instance", "task"),
     ).model_dump(mode="json")

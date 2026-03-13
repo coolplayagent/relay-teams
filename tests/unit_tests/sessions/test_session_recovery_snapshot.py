@@ -91,7 +91,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     hub = RunEventHub()
     service = _build_service(db_path, run_event_hub=hub)
 
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
     agent_repo = AgentInstanceRepository(db_path)
     agent_repo.upsert_instance(
@@ -100,6 +100,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
         session_id="session-1",
         instance_id="inst-2",
         role_id="spec_coder",
+        workspace_id="default",
         status=InstanceStatus.RUNNING,
     )
     runtime_repo = RunRuntimeRepository(db_path)
@@ -146,7 +147,7 @@ def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
     hub = RunEventHub()
     service = _build_service(db_path, run_event_hub=hub)
 
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(
@@ -184,7 +185,7 @@ def test_get_recovery_snapshot_uses_runtime_active_run_when_events_not_written(
         db_path,
         active_run_registry=active_run_registry,
     )
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-runtime-active", session_id="session-1")
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(
@@ -212,7 +213,7 @@ def test_get_recovery_snapshot_prefers_approval_phase(tmp_path: Path) -> None:
     db_path = tmp_path / "recovery_approval.db"
     service = _build_service(db_path)
 
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(
@@ -257,7 +258,7 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
     db_path = tmp_path / "recovery_stopped_approval.db"
     service = _build_service(db_path)
 
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(
@@ -296,7 +297,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(
 ) -> None:
     db_path = tmp_path / "recovery_graph.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
     _seed_delegated_task(
         db_path,
@@ -328,7 +329,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
 ) -> None:
     db_path = tmp_path / "recovery_tool_results.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _ = TaskRepository(db_path).create(
         TaskEnvelope(
             task_id="task-root-1",
@@ -347,6 +348,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
         session_id="session-1",
         instance_id="inst-coordinator",
         role_id="coordinator_agent",
+        workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
     runtime_repo = RunRuntimeRepository(db_path)
@@ -359,6 +361,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
     )
     MessageRepository(db_path).append(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-coordinator",
         task_id="task-root-1",
         trace_id="run-active",
@@ -401,7 +404,7 @@ def test_failed_terminal_run_is_exposed_through_round_projection_not_recovery(
     db_path = tmp_path / "recovery_failed.db"
     service = _build_service(db_path)
 
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-failed", session_id="session-1")
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.ensure(

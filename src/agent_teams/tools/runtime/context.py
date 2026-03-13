@@ -9,6 +9,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.notifications import NotificationService
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -42,6 +43,7 @@ class ToolDeps(BaseModel):
     run_event_hub: SkipValidation[RunEventHub]
     agent_repo: SkipValidation[AgentInstanceRepository]
     workspace: SkipValidation[WorkspaceHandle]
+    role_memory: SkipValidation[RoleMemoryService | None] = None
     run_id: str
     trace_id: str
     task_id: str

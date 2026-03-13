@@ -11,14 +11,8 @@ from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
-from agent_teams.reflection.config_manager import ReflectionConfigManager
-from agent_teams.reflection.models import DailyReflectionResult, LongTermMemoryDocument
-from agent_teams.reflection.repository import ReflectionJobRepository
-from agent_teams.reflection.service import (
-    ConsolidationPromptInput,
-    ReflectionPromptInput,
-    ReflectionService,
-)
+from agent_teams.roles.memory_repository import RoleMemoryRepository
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -38,7 +32,6 @@ from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
-    build_workspace_id,
 )
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -177,7 +170,7 @@ def _seed_task(
     agent_repo: AgentInstanceRepository,
     message_repo: MessageRepository,
 ) -> tuple[TaskEnvelope, str]:
-    workspace_id = build_workspace_id("session-1")
+    workspace_id = "default"
     conversation_id = build_conversation_id("session-1", "time")
     instance = create_subagent_instance(
         "time",
@@ -250,7 +243,7 @@ async def test_execute_persists_objective_before_first_turn(
         tmp_path / "task_execution_service_objective.db",
         provider,
     )
-    workspace_id = build_workspace_id("session-1")
+    workspace_id = "default"
     conversation_id = build_conversation_id("session-1", "time")
     instance = create_subagent_instance(
         "time",
@@ -426,7 +419,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
-    workspace_id = build_workspace_id("session-1")
+    workspace_id = "default"
     conversation_id = build_conversation_id("session-1", "coordinator_agent")
     instance = create_subagent_instance(
         "coordinator_agent",
@@ -482,64 +475,11 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     )
 
 
-class _FakeReflectionService:
-    def __init__(self, memory_text: str = "") -> None:
-        self.memory_text = memory_text
-        self.enqueued: list[dict[str, str]] = []
-
-    async def generate_daily_reflection(
-        self,
-        prompt_input: ReflectionPromptInput,
-    ) -> DailyReflectionResult:
-        raise AssertionError(f"unexpected daily reflection call: {prompt_input}")
-
-    async def consolidate_long_term_memory(
-        self,
-        prompt_input: ConsolidationPromptInput,
-    ) -> LongTermMemoryDocument:
-        raise AssertionError(f"unexpected long-term consolidation call: {prompt_input}")
-
-    def build_injected_memory(
-        self,
-        *,
-        session_id: str,
-        role_id: str,
-        workspace_id: str,
-    ) -> str:
-        _ = (session_id, role_id, workspace_id)
-        return self.memory_text
-
-    def enqueue_daily_reflection(
-        self,
-        *,
-        session_id: str,
-        run_id: str,
-        task_id: str,
-        instance_id: str,
-        role_id: str,
-        workspace_id: str,
-        conversation_id: str,
-    ) -> None:
-        self.enqueued.append(
-            {
-                "session_id": session_id,
-                "run_id": run_id,
-                "task_id": task_id,
-                "instance_id": instance_id,
-                "role_id": role_id,
-                "workspace_id": workspace_id,
-                "conversation_id": conversation_id,
-            }
-        )
-
-
 @pytest.mark.asyncio
-async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) -> None:
+async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) -> None:
     provider = _CapturingProvider()
     project_root = tmp_path / "project"
     project_root.mkdir()
-    config_dir = project_root / ".agent_teams"
-    config_dir.mkdir()
     role = RoleDefinition(
         role_id="time",
         name="time",
@@ -549,23 +489,20 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
     )
     role_registry = RoleRegistry()
     role_registry.register(role)
-    db_path = tmp_path / "task_execution_service_reflection.db"
+    db_path = tmp_path / "task_execution_service_role_memory.db"
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
-    reflection_service = ReflectionService(
-        config_manager=ReflectionConfigManager(config_dir=config_dir),
-        repository=ReflectionJobRepository(db_path),
-        workspace_manager=WorkspaceManager(
-            project_root=project_root, shared_store=shared_store
-        ),
-        message_repo=message_repo,
-        task_repo=task_repo,
-        agent_repo=agent_repo,
-        model_client=_FakeReflectionService(memory_text="- Prefer concise output."),
+    role_memory_service = RoleMemoryService(repository=RoleMemoryRepository(db_path))
+    role_memory_service.record_task_result(
+        role_id="time",
+        session_id="seed-session",
+        task_id="seed-task",
+        objective="Be concise",
+        result="Prefer concise output.",
+        transcript_lines=(),
     )
-    reflection_service.build_injected_memory = lambda **_: "- Prefer concise output."
     service = TaskExecutionService(
         role_registry=role_registry,
         task_repo=task_repo,
@@ -580,7 +517,7 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
         ),
         prompt_builder=RuntimePromptBuilder(),
         provider_factory=lambda _: provider,
-        reflection_service=reflection_service,
+        role_memory_service=role_memory_service,
     )
     task, instance_id = _seed_task(
         task_repo=task_repo,
@@ -596,9 +533,7 @@ async def test_execute_injects_memory_and_enqueues_reflection(tmp_path: Path) ->
 
     assert result == "ok"
     assert provider.system_prompts
-    assert "## Workspace Memory" in provider.system_prompts[0]
+    assert "## Role Memory" in provider.system_prompts[0]
     assert "Prefer concise output." in provider.system_prompts[0]
-    jobs = reflection_service.list_jobs()
-    assert len(jobs) == 1
-    assert jobs[0].role_id == "time"
-    assert jobs[0].instance_id == instance_id
+    durable = role_memory_service.build_injected_memory(role_id="time")
+    assert "query time: ok" in durable

@@ -24,7 +24,7 @@ class CreateRunRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     intent: str = Field(min_length=1)
-    session_id: str | None = None
+    session_id: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
 
 
@@ -87,6 +87,10 @@ def create_run(
                 payload={"execution_mode": req.execution_mode.value},
             )
         return CreateRunResponse(run_id=run_id, session_id=session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         log_event(
             logger,

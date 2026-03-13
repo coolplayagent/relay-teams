@@ -14,6 +14,7 @@ class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str | None = None
+    workspace_id: str
     metadata: dict[str, str] | None = None
 
 
@@ -28,7 +29,11 @@ def create_session(
     req: CreateSessionRequest,
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
-    return service.create_session(session_id=req.session_id, metadata=req.metadata)
+    return service.create_session(
+        session_id=req.session_id,
+        workspace_id=req.workspace_id,
+        metadata=req.metadata,
+    )
 
 
 @router.get("", response_model=list[SessionRecord])

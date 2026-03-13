@@ -60,6 +60,7 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
         session_id=session_id,
         instance_id=coordinator_instance_id,
         role_id="coordinator_agent",
+        workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
     run_runtime_repo.ensure(
@@ -70,6 +71,7 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
 
     message_repo.append(
         session_id=session_id,
+        workspace_id="default",
         instance_id=coordinator_instance_id,
         task_id="task-root-new",
         trace_id=new_run_id,
@@ -132,6 +134,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
         session_id=session_id,
         instance_id=coordinator_instance_id,
         role_id="coordinator_agent",
+        workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
     run_runtime_repo.ensure(
@@ -142,6 +145,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
 
     message_repo.append(
         session_id=session_id,
+        workspace_id="default",
         instance_id=coordinator_instance_id,
         task_id="task-root",
         trace_id=run_id,

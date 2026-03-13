@@ -1,31 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class WorkspaceBinding(str, Enum):
-    SESSION = "session"
-    ROLE = "role"
-    INSTANCE = "instance"
-    TASK = "task"
-
-
 class WorkspaceBackend(str, Enum):
     FILESYSTEM = "filesystem"
-    SQLITE = "sqlite"
-    HYBRID = "hybrid"
-
-
-class WorkspaceCapability(str, Enum):
-    FILES = "files"
-    SHELL = "shell"
-    HISTORY = "history"
-    MEMORY = "memory"
-    ARTIFACTS = "artifacts"
 
 
 class FileScopeBackend(str, Enum):
@@ -38,24 +22,6 @@ class BranchBinding(str, Enum):
     SESSION = "session"
     ROLE = "role"
     INSTANCE = "instance"
-
-
-class StateScope(str, Enum):
-    WORKSPACE = "workspace"
-    SESSION = "session"
-    ROLE = "role"
-    CONVERSATION = "conversation"
-    TASK = "task"
-    INSTANCE = "instance"
-
-
-def default_state_scopes() -> tuple[StateScope, ...]:
-    return (
-        StateScope.WORKSPACE,
-        StateScope.SESSION,
-        StateScope.ROLE,
-        StateScope.CONVERSATION,
-    )
 
 
 class WorkspaceFileScope(BaseModel):
@@ -71,51 +37,15 @@ class WorkspaceFileScope(BaseModel):
 
 def default_workspace_profile() -> WorkspaceProfile:
     return WorkspaceProfile(
-        binding=WorkspaceBinding.SESSION,
-        backend=WorkspaceBackend.HYBRID,
-        capabilities=(
-            WorkspaceCapability.HISTORY,
-            WorkspaceCapability.MEMORY,
-            WorkspaceCapability.ARTIFACTS,
-        ),
-        readable_scopes=default_state_scopes(),
-        writable_scopes=(
-            StateScope.ROLE,
-            StateScope.CONVERSATION,
-        ),
-        persistent_scopes=(
-            StateScope.ROLE,
-            StateScope.CONVERSATION,
-        ),
+        backend=WorkspaceBackend.FILESYSTEM,
         file_scope=WorkspaceFileScope(),
     )
-
-
-def ensure_instance_workspace_profile(
-    profile: WorkspaceProfile,
-) -> WorkspaceProfile:
-    if profile.binding == WorkspaceBinding.INSTANCE:
-        return profile
-    return profile.model_copy(update={"binding": WorkspaceBinding.INSTANCE})
 
 
 class WorkspaceProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    binding: WorkspaceBinding = WorkspaceBinding.SESSION
-    backend: WorkspaceBackend = WorkspaceBackend.HYBRID
-    capabilities: tuple[WorkspaceCapability, ...] = Field(
-        default_factory=lambda: default_workspace_profile().capabilities
-    )
-    readable_scopes: tuple[StateScope, ...] = Field(
-        default_factory=default_state_scopes
-    )
-    writable_scopes: tuple[StateScope, ...] = Field(
-        default_factory=lambda: default_workspace_profile().writable_scopes
-    )
-    persistent_scopes: tuple[StateScope, ...] = Field(
-        default_factory=lambda: default_workspace_profile().persistent_scopes
-    )
+    backend: WorkspaceBackend = WorkspaceBackend.FILESYSTEM
     file_scope: WorkspaceFileScope = Field(default_factory=WorkspaceFileScope)
 
 
@@ -133,11 +63,19 @@ class WorkspaceRef(BaseModel):
 class WorkspaceLocations(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    project_root: Path
-    config_dir: Path
     workspace_dir: Path
     execution_root: Path
     readable_roots: tuple[Path, ...]
     writable_roots: tuple[Path, ...]
     worktree_root: Path | None = None
     branch_name: str | None = None
+
+
+class WorkspaceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    root_path: Path
+    profile: WorkspaceProfile = Field(default_factory=default_workspace_profile)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

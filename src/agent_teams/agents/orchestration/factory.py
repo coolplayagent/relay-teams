@@ -6,7 +6,7 @@ from collections.abc import Callable
 from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.providers.contracts import LLMProvider
-from agent_teams.reflection.service import ReflectionService
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -35,7 +35,7 @@ def create_task_execution_service(
     provider_factory: Callable[[RoleDefinition], LLMProvider],
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
-    reflection_service: ReflectionService | None = None,
+    role_memory_service: RoleMemoryService | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -51,5 +51,5 @@ def create_task_execution_service(
         provider_factory=provider_factory,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
-        reflection_service=reflection_service,
+        role_memory_service=role_memory_service,
     )

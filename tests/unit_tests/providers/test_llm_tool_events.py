@@ -36,6 +36,7 @@ from agent_teams.tools.runtime import ToolApprovalPolicy
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
+from agent_teams.roles import RoleMemoryService
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.roles.models import RoleDefinition
@@ -101,6 +102,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             project_root=Path("."),
             shared_store=shared_store,
         ),
+        role_memory_service=cast(RoleMemoryService | None, None),
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),
@@ -125,6 +127,7 @@ def _request() -> LLMRequest:
         trace_id="trace-1",
         task_id="task-1",
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         role_id="coordinator_agent",
         system_prompt="sys",

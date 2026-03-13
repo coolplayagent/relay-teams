@@ -12,7 +12,7 @@ class LLMRequest(BaseModel):
     trace_id: str
     task_id: str
     session_id: str
-    workspace_id: str = ""
+    workspace_id: str
     conversation_id: str = ""
     instance_id: str
     role_id: str

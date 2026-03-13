@@ -18,7 +18,7 @@ from agent_teams.roles.models import (
 from agent_teams.roles.registry import RoleLoader, RoleRegistry
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.workspace import default_workspace_profile
+from agent_teams.roles.memory_models import default_memory_profile
 
 
 class RoleSettingsService:
@@ -153,7 +153,7 @@ class RoleSettingsService:
             mcp_servers=definition.mcp_servers,
             skills=definition.skills,
             model_profile=definition.model_profile,
-            workspace_profile=definition.workspace_profile,
+            memory_profile=definition.memory_profile,
             system_prompt=definition.system_prompt,
             source=source,
             file_name=file_name,
@@ -188,8 +188,8 @@ class RoleSettingsService:
             front_matter["mcp_servers"] = list(draft.mcp_servers)
         if draft.skills:
             front_matter["skills"] = list(draft.skills)
-        if draft.workspace_profile != default_workspace_profile():
-            front_matter["workspace_profile"] = draft.workspace_profile.model_dump(
+        if draft.memory_profile != default_memory_profile():
+            front_matter["memory_profile"] = draft.memory_profile.model_dump(
                 mode="json"
             )
         serialized_front_matter = yaml.safe_dump(

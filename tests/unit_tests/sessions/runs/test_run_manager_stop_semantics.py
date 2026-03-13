@@ -28,7 +28,6 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.session_models import SessionRecord
 from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
-from agent_teams.workspace import build_workspace_id
 
 
 class _MetaAgent:
@@ -86,7 +85,7 @@ class _SessionRepo:
     def get(self, session_id: str) -> SessionRecord:
         return SessionRecord(
             session_id=session_id,
-            workspace_id=build_workspace_id(session_id),
+            workspace_id="default",
         )
 
     def create(
@@ -94,7 +93,7 @@ class _SessionRepo:
     ) -> SessionRecord:
         return SessionRecord(
             session_id=session_id,
-            workspace_id=build_workspace_id(session_id),
+            workspace_id="default",
             metadata=metadata or {},
         )
 

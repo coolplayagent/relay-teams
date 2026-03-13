@@ -30,7 +30,8 @@ console.log(JSON.stringify({
     initialListHtml,
     selectedRoleId: document.getElementById("role-id-input").value,
     selectedRoleName: document.getElementById("role-name-input").value,
-    selectedBinding: document.getElementById("role-workspace-binding-input").value,
+    memoryEnabled: document.getElementById("role-memory-enabled-input").value,
+    dailyMemoryEnabled: document.getElementById("role-memory-daily-enabled-input").value,
     listDisplay: document.getElementById("roles-list").style.display,
     editorDisplay: document.getElementById("role-editor-panel").style.display,
     modelProfileValue: document.getElementById("role-model-profile-input").value,
@@ -48,7 +49,8 @@ console.log(JSON.stringify({
     assert "Reviewer" in cast(str, payload["initialListHtml"])
     assert payload["selectedRoleId"] == "reviewer"
     assert payload["selectedRoleName"] == "Reviewer"
-    assert payload["selectedBinding"] == "role"
+    assert payload["memoryEnabled"] == "true"
+    assert payload["dailyMemoryEnabled"] == "false"
     assert payload["listDisplay"] == "none"
     assert payload["editorDisplay"] == "block"
     assert payload["modelProfileValue"] == "default"
@@ -84,7 +86,8 @@ toolOptions[1].checked = true;
 toolOptions[1].onchange();
 
 document.getElementById("role-model-profile-input").value = "editor";
-document.getElementById("role-workspace-binding-input").value = "instance";
+document.getElementById("role-memory-enabled-input").value = "false";
+document.getElementById("role-memory-daily-enabled-input").value = "true";
 document.getElementById("role-system-prompt-input").value = "Write the first draft with structure.";
 
 await document.getElementById("validate-role-btn").onclick();
@@ -124,7 +127,10 @@ console.log(JSON.stringify({
     assert validate_payload["source_role_id"] == "writer"
     assert validate_payload["role_id"] == "writer"
     assert validate_payload["tools"] == ["read_file", "write_file"]
-    assert validate_payload["workspace_profile"] == {"binding": "instance"}
+    assert validate_payload["memory_profile"] == {
+        "enabled": False,
+        "daily_enabled": True,
+    }
     assert validate_payload["model_profile"] == "editor"
     assert payload["firstSavedRoleId"] == "writer"
     assert first_saved_payload == validate_payload
@@ -132,7 +138,10 @@ console.log(JSON.stringify({
     assert second_saved_payload["source_role_id"] is None
     assert second_saved_payload["role_id"] == "new_role"
     assert second_saved_payload["tools"] == ["read_file"]
-    assert second_saved_payload["workspace_profile"] == {"binding": "session"}
+    assert second_saved_payload["memory_profile"] == {
+        "enabled": True,
+        "daily_enabled": True,
+    }
     assert payload["statusText"] == "Saved and validated."
     assert payload["fileMeta"] == "File: new_role.md"
     assert payload["roleSummaryCalls"] == 3
@@ -186,7 +195,7 @@ const roleRecords = {
         mcp_servers: [],
         skills: [],
         model_profile: "default",
-        workspace_profile: { binding: "session" },
+        memory_profile: { enabled: true, daily_enabled: true },
         system_prompt: "Write the first draft.",
         file_name: "writer.md",
         content: "---\\nrole_id: writer\\n---\\n\\nWrite the first draft.\\n",
@@ -200,7 +209,7 @@ const roleRecords = {
         mcp_servers: ["docs"],
         skills: ["diff"],
         model_profile: "default",
-        workspace_profile: { binding: "role" },
+        memory_profile: { enabled: true, daily_enabled: false },
         system_prompt: "Review the delivered work.",
         file_name: "reviewer.md",
         content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
@@ -218,12 +227,11 @@ export async function fetchRoleConfigs() {
 }
 
 export async function fetchRoleConfigOptions() {
-    return {
-        tools: ["read_file", "write_file"],
-        mcp_servers: ["docs"],
-        skills: ["diff", "time"],
-        workspace_bindings: ["session", "role", "instance", "task"],
-    };
+        return {
+            tools: ["read_file", "write_file"],
+            mcp_servers: ["docs"],
+            skills: ["diff", "time"],
+        };
 }
 
 export async function fetchModelProfiles() {
@@ -457,7 +465,8 @@ function createElements() {{
         ["role-tools-picker", createElement("block")],
         ["role-mcp-picker", createElement("block")],
         ["role-skills-picker", createElement("block")],
-        ["role-workspace-binding-input", createElement("block")],
+        ["role-memory-enabled-input", createElement("block")],
+        ["role-memory-daily-enabled-input", createElement("block")],
         ["role-system-prompt-input", createElement("block")],
         ["role-system-prompt-preview", createElement("none")],
         ["role-file-meta", createElement("block")],

@@ -69,7 +69,12 @@ def execute_prompt(
 
     resolved_session_id = session_id
     if not resolved_session_id:
-        created_response = request_json(base_url, "POST", "/api/sessions", {})
+        created_response = request_json(
+            base_url,
+            "POST",
+            "/api/sessions",
+            {"workspace_id": "default"},
+        )
         created = _require_object_response(created_response, "/api/sessions")
         resolved_session_id = _require_str_field(created, "session_id")
 

@@ -22,13 +22,13 @@ from agent_teams.interfaces.server.routers import (
     logs,
     mcp,
     prompts,
-    reflection,
     roles,
     runs,
     sessions,
     system,
     tasks,
     triggers,
+    workspaces,
 )
 from agent_teams.logger import (
     configure_logging,
@@ -92,9 +92,9 @@ app.include_router(runs.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
-app.include_router(reflection.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(triggers.router, prefix="/api")
+app.include_router(workspaces.router, prefix="/api")
 
 
 @app.middleware("http")

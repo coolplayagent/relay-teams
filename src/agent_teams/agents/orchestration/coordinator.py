@@ -27,6 +27,7 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.models import IntentInput, RunEvent
 from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -34,7 +35,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
-from agent_teams.workspace import build_conversation_id, build_workspace_id
+from agent_teams.workspace import build_conversation_id
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType
 from agent_teams.agents.tasks.ids import new_task_id
@@ -62,6 +63,7 @@ class CoordinatorGraph(BaseModel):
     task_execution_service: TaskExecutionService
     run_runtime_repo: RunRuntimeRepository
     run_control_manager: RunControlManager
+    session_repo: SessionRepository | None = None
     gate_manager: GateManager = Field(default_factory=GateManager)
     run_event_hub: RunEventHub | None = None
 
@@ -501,7 +503,12 @@ class CoordinatorGraph(BaseModel):
             )
             return coordinator_instance_id
 
-        workspace_id = build_workspace_id(session_id)
+        session = self.session_repo.get(session_id) if self.session_repo else None
+        if session is None:
+            raise RuntimeError(
+                "CoordinatorGraph requires session_repo to resolve workspace"
+            )
+        workspace_id = session.workspace_id
         conversation_id = build_conversation_id(session_id, coordinator_role_id)
         instance = create_subagent_instance(
             coordinator_role_id,

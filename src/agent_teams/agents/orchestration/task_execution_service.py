@@ -11,7 +11,8 @@ from agent_teams.agents.execution.subagent_runner import SubAgentRunner
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.logger import get_logger, log_event
 from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
-from agent_teams.reflection.service import ReflectionService
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -27,11 +28,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
-from agent_teams.workspace import (
-    WorkspaceManager,
-    WorkspaceProfile,
-    ensure_instance_workspace_profile,
-)
+from agent_teams.workspace import WorkspaceManager
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType
 from agent_teams.agents.tasks.models import TaskEnvelope
@@ -55,7 +52,7 @@ class TaskExecutionService(BaseModel):
     provider_factory: Callable[[RoleDefinition], object]
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
-    reflection_service: ReflectionService | None = None
+    role_memory_service: RoleMemoryService | None = None
 
     async def execute(
         self,
@@ -151,30 +148,27 @@ class TaskExecutionService(BaseModel):
 
         role: RoleDefinition = self.role_registry.get(role_id)
         instance_record = self.agent_repo.get_instance(instance_id)
-        workspace_profile = self._workspace_profile_for_execution(
-            role_id=role_id,
-            profile=role.workspace_profile,
-        )
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,
             role_id=role_id,
             instance_id=instance_id,
             workspace_id=instance_record.workspace_id,
             conversation_id=instance_record.conversation_id,
-            profile=workspace_profile,
         )
         role_for_run = self._role_with_memory(
             role=role,
             role_id=role_id,
-            session_id=task.session_id,
-            workspace_id=workspace.ref.workspace_id,
         )
         runner = SubAgentRunner(
             role=role_for_run,
             prompt_builder=self.prompt_builder,
             provider=self.provider_factory(role_for_run),
         )
-        snapshot = workspace.memory.prompt_snapshot()
+        snapshot = self._shared_state_snapshot(
+            session_id=task.session_id,
+            role_id=role_id,
+            conversation_id=workspace.ref.conversation_id,
+        )
         try:
             self._ensure_committed_task_prompt(
                 role_id=role_id,
@@ -215,12 +209,11 @@ class TaskExecutionService(BaseModel):
                     payload_json="{}",
                 )
             )
-            self._enqueue_reflection_if_needed(
+            self._record_memory_if_needed(
                 role_id=role_id,
                 task=task,
-                instance_id=instance_id,
-                workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
+                result=result,
             )
             log_event(
                 LOGGER,
@@ -381,65 +374,68 @@ class TaskExecutionService(BaseModel):
             )
             raise
 
-    def _workspace_profile_for_execution(
-        self,
-        *,
-        role_id: str,
-        profile: WorkspaceProfile,
-    ) -> WorkspaceProfile:
-        if self.role_registry.is_coordinator_role(role_id):
-            return profile
-        return ensure_instance_workspace_profile(profile)
-
     def _role_with_memory(
         self,
         *,
         role: RoleDefinition,
         role_id: str,
-        session_id: str,
-        workspace_id: str,
     ) -> RoleDefinition:
         if (
             self.role_registry.is_coordinator_role(role_id)
-            or self.reflection_service is None
+            or self.role_memory_service is None
         ):
             return role
-        memory_text = self.reflection_service.build_injected_memory(
-            session_id=session_id,
+        memory_text = self.role_memory_service.build_injected_memory(
             role_id=role_id,
-            workspace_id=workspace_id,
         )
         if not memory_text:
             return role
         return role.model_copy(
             update={
-                "system_prompt": f"{role.system_prompt}\n\n## Workspace Memory\n{memory_text}",
+                "system_prompt": f"{role.system_prompt}\n\n## Role Memory\n{memory_text}",
             }
         )
 
-    def _enqueue_reflection_if_needed(
+    def _record_memory_if_needed(
         self,
         *,
         role_id: str,
         task: TaskEnvelope,
-        instance_id: str,
-        workspace_id: str,
         conversation_id: str,
+        result: str,
     ) -> None:
         if (
             self.role_registry.is_coordinator_role(role_id)
-            or self.reflection_service is None
+            or self.role_memory_service is None
         ):
             return
-        _ = self.reflection_service.enqueue_daily_reflection(
-            session_id=task.session_id,
-            run_id=task.trace_id,
+        transcript = self.message_repo.get_history_for_conversation_task(
+            conversation_id,
             task_id=task.task_id,
-            instance_id=instance_id,
-            role_id=role_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
         )
+        transcript_lines = tuple(str(message) for message in transcript)
+        self.role_memory_service.record_task_result(
+            role_id=role_id,
+            session_id=task.session_id,
+            task_id=task.task_id,
+            objective=task.objective,
+            result=result,
+            transcript_lines=transcript_lines,
+        )
+
+    def _shared_state_snapshot(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        scopes = (
+            ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id),
+            ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
+            ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
+        )
+        return self.shared_store.snapshot_many(scopes)
 
     def _ensure_committed_task_prompt(
         self,

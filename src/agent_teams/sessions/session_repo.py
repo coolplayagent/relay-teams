@@ -7,7 +7,6 @@ from pathlib import Path
 
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.workspace import build_workspace_id
 
 
 class SessionRepository:
@@ -39,11 +38,14 @@ class SessionRepository:
         self._conn.commit()
 
     def create(
-        self, session_id: str, metadata: dict[str, str] | None = None
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
     ) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         metadata_dict = metadata or {}
-        workspace_id = build_workspace_id(session_id)
         record = SessionRecord(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -101,9 +103,7 @@ class SessionRepository:
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
         return SessionRecord(
             session_id=str(row["session_id"]),
-            workspace_id=str(
-                row["workspace_id"] or build_workspace_id(str(row["session_id"]))
-            ),
+            workspace_id=str(row["workspace_id"]),
             metadata=json.loads(str(row["metadata"])),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),

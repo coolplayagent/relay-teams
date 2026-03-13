@@ -65,12 +65,11 @@ from agent_teams.tools.runtime import (
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.contracts import LLMRequest
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
-    build_workspace_id,
-    ensure_instance_workspace_profile,
 )
 
 if TYPE_CHECKING:
@@ -105,6 +104,7 @@ class AgentLlmSession:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         workspace_manager: WorkspaceManager,
+        role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -131,6 +131,7 @@ class AgentLlmSession:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._workspace_manager = workspace_manager
+        self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
@@ -151,9 +152,7 @@ class AgentLlmSession:
         return await self._generate_async(request)
 
     async def _generate_async(self, request: LLMRequest) -> str:
-        resolved_workspace_id = request.workspace_id or build_workspace_id(
-            request.session_id
-        )
+        resolved_workspace_id = request.workspace_id
         resolved_conversation_id = request.conversation_id or build_conversation_id(
             request.session_id,
             request.role_id,
@@ -228,10 +227,6 @@ class AgentLlmSession:
             mcp_registry=self._mcp_registry,
             skill_registry=self._skill_registry,
         )
-        role_definition = self._role_registry.get(request.role_id)
-        workspace_profile = role_definition.workspace_profile
-        if not self._role_registry.is_coordinator_role(request.role_id):
-            workspace_profile = ensure_instance_workspace_profile(workspace_profile)
         deps = ToolDeps(
             task_repo=self._task_repo,
             shared_store=self._shared_store,
@@ -248,8 +243,8 @@ class AgentLlmSession:
                 instance_id=request.instance_id,
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
-                profile=workspace_profile,
             ),
+            role_memory=self._role_memory_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,
@@ -956,7 +951,7 @@ class AgentLlmSession:
         return str(value)
 
     def _workspace_id(self, request: LLMRequest) -> str:
-        return request.workspace_id or build_workspace_id(request.session_id)
+        return request.workspace_id
 
     def _conversation_id(self, request: LLMRequest) -> str:
         return request.conversation_id or build_conversation_id(

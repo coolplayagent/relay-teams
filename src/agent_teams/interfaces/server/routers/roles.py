@@ -22,7 +22,6 @@ from agent_teams.roles import (
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.workspace import WorkspaceBinding
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
 
@@ -46,7 +45,6 @@ def get_role_config_options(
         tools=tool_registry.list_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),
-        workspace_bindings=tuple(binding.value for binding in WorkspaceBinding),
     )
 
 

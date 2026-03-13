@@ -15,14 +15,32 @@
 
 ```sql
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
-    metadata   TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    session_id   TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    metadata     TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
 );
 ```
 
-Purpose: session metadata and lifecycle.
+Purpose: session metadata, lifecycle, and bound execution workspace identity.
+
+---
+
+### 2.1.1 `workspaces`
+
+```sql
+CREATE TABLE IF NOT EXISTS workspaces (
+    workspace_id TEXT PRIMARY KEY,
+    root_path    TEXT NOT NULL,
+    backend      TEXT NOT NULL,
+    profile_json TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+```
+
+Purpose: registered execution workspaces.
 
 ---
 
@@ -30,14 +48,16 @@ Purpose: session metadata and lifecycle.
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_instances (
-    run_id TEXT NOT NULL,
-    trace_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    instance_id TEXT PRIMARY KEY,
-    role_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    run_id          TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
+    instance_id     TEXT PRIMARY KEY,
+    role_id         TEXT NOT NULL,
+    workspace_id    TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_run_status
@@ -50,6 +70,8 @@ Notes:
 - Runtime semantics are session-level: one delegated role instance is reused across all tasks in the same session.
 - `run_id` / `trace_id` are last-observed execution metadata, not uniqueness keys.
 - New dispatches for the same `session_id + role_id` reuse the existing row instead of creating a new instance.
+- `workspace_id` is the execution workspace bound from the owning session.
+- `conversation_id` is the conversation continuity key for the role instance.
 
 `status` values:
 - `idle`
@@ -164,18 +186,22 @@ Purpose: append-only business/run event log.
 
 ```sql
 CREATE TABLE IF NOT EXISTS messages (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id   TEXT NOT NULL DEFAULT '',
-    instance_id  TEXT NOT NULL,
-    task_id      TEXT NOT NULL,
-    trace_id     TEXT NOT NULL,
-    role         TEXT NOT NULL,
-    message_json TEXT NOT NULL,
-    created_at   TEXT NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL DEFAULT '',
+    workspace_id    TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    agent_role_id   TEXT NOT NULL DEFAULT '',
+    instance_id     TEXT NOT NULL,
+    task_id         TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    role            TEXT NOT NULL,
+    message_json    TEXT NOT NULL,
+    created_at      TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
 ```
 
@@ -307,6 +333,7 @@ Primary query keys used by repositories:
 
 - `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
 - `agent_teams.sessions`: `sessions`.
+- `agent_teams.workspace`: `workspaces`.
 - `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
 - `agent_teams.agents`: `agent_instances`.
 - `agent_teams.agents.tasks`: `tasks`.
@@ -314,55 +341,55 @@ Primary query keys used by repositories:
 - `agent_teams.tools.runtime`: `approval_tickets`.
 - `agent_teams.providers`: `token_usage`.
 - `agent_teams.triggers`: `triggers`, `trigger_events`.
-- `agent_teams.reflection`: `reflection_jobs`.
+- `agent_teams.roles`: `role_memories`, `role_daily_memories`.
 
 ---
 
-### 2.10 `reflection_jobs`
+### 2.10 `role_memories`
 
 ```sql
-CREATE TABLE IF NOT EXISTS reflection_jobs (
-    job_id              TEXT PRIMARY KEY,
-    job_type            TEXT NOT NULL,
-    session_id          TEXT NOT NULL,
-    run_id              TEXT NOT NULL,
-    task_id             TEXT NOT NULL,
-    instance_id         TEXT NOT NULL,
-    role_id             TEXT NOT NULL,
-    workspace_id        TEXT NOT NULL,
-    conversation_id     TEXT NOT NULL,
-    memory_owner_scope  TEXT NOT NULL,
-    memory_owner_id     TEXT NOT NULL,
-    trigger_date        TEXT NOT NULL,
-    status              TEXT NOT NULL,
-    attempt_count       INTEGER NOT NULL,
-    last_error          TEXT,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS role_memories (
+    role_id          TEXT PRIMARY KEY,
+    content_markdown TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
 );
 ```
 
-Purpose: persistent queue for subagent daily reflection and long-term memory consolidation.
-
-`job_type` values:
-- `daily_reflection`
-- `long_term_consolidation`
-
-`status` values:
-- `queued`
-- `running`
-- `completed`
-- `failed`
+Purpose: durable role memory shared by the same `role_id` across all workspaces and sessions.
 
 ---
 
-## 4. File-Based Memory Layout
+### 2.11 `role_daily_memories`
 
-### 4.1 Instance daily memory
+```sql
+CREATE TABLE IF NOT EXISTS role_daily_memories (
+    role_id           TEXT NOT NULL,
+    memory_date       TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    content_markdown  TEXT NOT NULL,
+    source_session_id TEXT,
+    source_task_id    TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (role_id, memory_date, kind)
+);
+```
 
-- `~/.config/agent-teams/workspaces/{workspace_id}/memory/daily/raw/YYYY-MM-DD.md`
-- `~/.config/agent-teams/workspaces/{workspace_id}/memory/daily/digest/YYYY-MM-DD.md`
+Purpose: per-day role memory snapshots.
 
-### 4.2 Session-role long-term memory
+`kind` values:
+- `raw`
+- `digest`
 
-- `~/.config/agent-teams/memory/session_roles/{session_id}/{role_id}/MEMORY.md`
+---
+
+## 4. Filesystem Layout
+
+### 4.1 Stage documents
+
+- `{workspace_root}/.agent_teams/sessions/{session_id}/roles/{role_id}/stage/{stage_name}/{timestamp}.md`
+
+Notes:
+- Stage files are managed directly by `src/agent_teams/tools/stage_tools`.
+- Session deletion removes that session subtree under the bound workspace.
+- Daily memory is no longer file-based.

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import shutil
 import uuid
 from typing import cast
 
 from agent_teams.agents.models import AgentRuntimeRecord
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.reflection.service import ReflectionService
 from agent_teams.sessions.rounds_projection import (
     approvals_to_projection,
     build_session_rounds,
@@ -35,6 +36,7 @@ from agent_teams.providers.token_usage_repo import (
 )
 from agent_teams.workspace import (
     WorkspaceManager,
+    WorkspaceService,
     build_conversation_id,
     build_instance_role_scope_id,
     build_instance_session_scope_id,
@@ -57,7 +59,8 @@ class SessionService:
         event_log: EventLog | None = None,
         shared_store: SharedStateRepository | None = None,
         workspace_manager: WorkspaceManager | None = None,
-        reflection_service: ReflectionService | None = None,
+        workspace_service: WorkspaceService | None = None,
+        role_memory_service: RoleMemoryService | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._task_repo = task_repo
@@ -71,17 +74,25 @@ class SessionService:
         self._event_log = event_log
         self._shared_store = shared_store
         self._workspace_manager = workspace_manager
-        self._reflection_service = reflection_service
+        self._workspace_service = workspace_service
+        self._role_memory_service = role_memory_service
 
     def create_session(
         self,
         *,
         session_id: str | None = None,
+        workspace_id: str,
         metadata: dict[str, str] | None = None,
     ) -> SessionRecord:
         if not session_id:
             session_id = f"session-{uuid.uuid4().hex[:8]}"
-        return self._session_repo.create(session_id=session_id, metadata=metadata)
+        if self._workspace_service is not None:
+            self._workspace_service.require_workspace(workspace_id)
+        return self._session_repo.create(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+        )
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
         self._session_repo.update_metadata(session_id, metadata)
@@ -92,7 +103,6 @@ class SessionService:
         agent_records = self._agent_repo.list_by_session(session_id)
         task_ids = [record.envelope.task_id for record in task_records]
         instance_ids = [record.instance_id for record in agent_records]
-        role_ids = sorted({record.role_id for record in agent_records})
         role_scope_ids = sorted(
             {f"{record.session_id}:{record.role_id}" for record in agent_records}
             | {
@@ -127,10 +137,6 @@ class SessionService:
                 for record in agent_records
             }
         )
-        workspace_ids = sorted(
-            {record.workspace_id for record in agent_records if record.workspace_id}
-            | ({session.workspace_id} if session.workspace_id else set())
-        )
         self._message_repo.delete_by_session(session_id)
         if self._event_log is not None:
             self._event_log.delete_by_session(session_id)
@@ -142,22 +148,21 @@ class SessionService:
                 role_scope_ids=role_scope_ids,
                 session_scope_ids=session_scope_ids,
                 conversation_ids=conversation_ids,
-                workspace_ids=workspace_ids,
+                workspace_ids=[],
             )
         self._approval_ticket_repo.delete_by_session(session_id)
-        if self._reflection_service is not None:
-            self._reflection_service.delete_session_artifacts(
-                session_id=session_id,
-                role_ids=role_ids,
-            )
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
         self._session_repo.delete(session_id)
         self._token_usage_repo.delete_by_session(session_id)
         if self._workspace_manager is not None:
-            for workspace_id in workspace_ids:
-                self._workspace_manager.delete_workspace(workspace_id)
+            session_dir = self._workspace_manager.session_artifact_dir(
+                workspace_id=session.workspace_id,
+                session_id=session_id,
+            )
+            if session_dir.exists():
+                shutil.rmtree(session_dir, ignore_errors=True)
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._session_repo.get(session_id)

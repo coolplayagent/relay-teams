@@ -8,7 +8,7 @@ from typing import cast
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
 from agent_teams.agents.execution.message_repo import MessageRepository
-from agent_teams.workspace import build_conversation_id, build_workspace_id
+from agent_teams.workspace import build_conversation_id
 
 
 def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) -> None:
@@ -16,6 +16,7 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
     repo = MessageRepository(db_path)
     repo.append(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         task_id="task-1",
         trace_id="run-1",
@@ -83,6 +84,7 @@ def test_message_repo_hides_duplicate_task_objective_messages(tmp_path: Path) ->
     for _ in range(2):
         repo.append(
             session_id="session-1",
+            workspace_id="default",
             instance_id="inst-1",
             task_id="task-1",
             trace_id="run-1",
@@ -106,6 +108,7 @@ def test_append_user_prompt_if_missing_dedupes_only_tail_prompt(tmp_path: Path) 
 
     inserted_first = repo.append_user_prompt_if_missing(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         task_id="task-1",
         trace_id="run-1",
@@ -113,6 +116,7 @@ def test_append_user_prompt_if_missing_dedupes_only_tail_prompt(tmp_path: Path) 
     )
     inserted_second = repo.append_user_prompt_if_missing(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         task_id="task-1",
         trace_id="run-1",
@@ -131,7 +135,7 @@ def test_conversation_history_can_span_multiple_instances(tmp_path: Path) -> Non
     db_path = tmp_path / "message_repo_conversation.db"
     repo = MessageRepository(db_path)
     conversation_id = build_conversation_id("session-1", "time")
-    workspace_id = build_workspace_id("session-1")
+    workspace_id = "default"
 
     repo.append(
         session_id="session-1",
@@ -172,6 +176,7 @@ def test_message_repo_append_is_thread_safe_under_parallel_writes(
     def _write(i: int) -> None:
         repo.append(
             session_id="session-1",
+            workspace_id="default",
             instance_id="inst-1",
             task_id="task-1",
             trace_id="run-1",

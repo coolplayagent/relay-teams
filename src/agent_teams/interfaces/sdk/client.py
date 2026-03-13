@@ -102,13 +102,18 @@ class AgentTeamsClient:
         return self._request_json("POST", "/api/system/configs/web:probe", payload)
 
     def create_session(
-        self, session_id: str | None = None, metadata: dict[str, str] | None = None
+        self,
+        *,
+        workspace_id: str,
+        session_id: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> dict[str, JsonValue]:
         metadata_payload: dict[str, JsonValue] | None = None
         if metadata is not None:
             metadata_payload = {key: value for key, value in metadata.items()}
         payload: dict[str, JsonValue] = {
             "session_id": session_id,
+            "workspace_id": workspace_id,
             "metadata": metadata_payload,
         }
         return self._request_json(
@@ -120,7 +125,7 @@ class AgentTeamsClient:
     def create_run(
         self,
         intent: str,
-        session_id: str | None = None,
+        session_id: str,
         execution_mode: str = "ai",
     ) -> RunHandle:
         payload: dict[str, JsonValue] = {

@@ -48,8 +48,8 @@ def _seed_root_task(db_path: Path, *, run_id: str, session_id: str) -> None:
 def test_list_sessions_includes_active_run_overlay(tmp_path: Path) -> None:
     db_path = tmp_path / "session_list_status.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-active")
-    _ = service.create_session(session_id="session-idle")
+    _ = service.create_session(session_id="session-active", workspace_id="default")
+    _ = service.create_session(session_id="session-idle", workspace_id="default")
 
     _seed_root_task(db_path, run_id="run-active", session_id="session-active")
     runtime_repo = RunRuntimeRepository(db_path)
@@ -97,7 +97,7 @@ def test_list_sessions_uses_runtime_overlay_for_running_subagent(
 ) -> None:
     db_path = tmp_path / "session_list_subagent_status.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-active")
+    _ = service.create_session(session_id="session-active", workspace_id="default")
 
     _seed_root_task(db_path, run_id="run-active", session_id="session-active")
     runtime_repo = RunRuntimeRepository(db_path)

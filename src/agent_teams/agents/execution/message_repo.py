@@ -15,7 +15,6 @@ from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
-from agent_teams.workspace import build_workspace_id
 
 
 class MessageRepository:
@@ -88,19 +87,18 @@ class MessageRepository:
         task_id: str,
         trace_id: str,
         messages: Sequence[ModelMessage],
-        workspace_id: str | None = None,
+        workspace_id: str,
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> None:
         if not messages:
             return
         now = datetime.now(tz=timezone.utc).isoformat()
-        resolved_workspace_id = workspace_id or build_workspace_id(session_id)
         resolved_conversation_id = conversation_id or instance_id
         rows = [
             (
                 session_id,
-                resolved_workspace_id,
+                workspace_id,
                 resolved_conversation_id,
                 agent_role_id or "",
                 instance_id,
@@ -221,7 +219,7 @@ class MessageRepository:
         task_id: str,
         trace_id: str,
         content: str,
-        workspace_id: str | None = None,
+        workspace_id: str,
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:

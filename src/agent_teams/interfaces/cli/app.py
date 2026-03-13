@@ -23,7 +23,6 @@ from agent_teams.interfaces.cli.prompt_cli import (
 from agent_teams.interfaces.server.cli import build_server_app
 from agent_teams.mcp.mcp_cli import mcp_app
 from agent_teams.interfaces.cli.prompts_cli import build_prompts_app
-from agent_teams.reflection import build_reflection_app
 from agent_teams.roles.cli import build_roles_app
 from agent_teams.skills.cli import skills_app
 from agent_teams.triggers.cli import build_triggers_app
@@ -220,11 +219,6 @@ prompts_app = build_prompts_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
-reflection_app = build_reflection_app(
-    request_json=_module_request_json,
-    auto_start_if_needed=_module_auto_start,
-    default_base_url=DEFAULT_BASE_URL,
-)
 
 
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
@@ -282,7 +276,6 @@ app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(triggers_app, name="triggers")
 app.add_typer(prompts_app, name="prompts")
-app.add_typer(reflection_app, name="reflection")
 app.add_typer(skills_app, name="skills")
 
 

@@ -11,6 +11,7 @@ from agent_teams.agents.orchestration.task_execution_service import (
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.ids import new_task_id
@@ -46,12 +47,14 @@ class TaskOrchestrationService:
         agent_repo: AgentInstanceRepository,
         task_execution_service: TaskExecutionService,
         message_repo: MessageRepository,
+        session_repo: SessionRepository | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
         self._agent_repo = agent_repo
         self._task_execution_service = task_execution_service
         self._message_repo = message_repo
+        self._session_repo = session_repo
 
     async def create_tasks(
         self,
@@ -264,7 +267,16 @@ class TaskOrchestrationService:
             )
             return existing.instance_id
 
-        instance = create_subagent_instance(role_id, session_id=session_id)
+        session = self._session_repo.get(session_id) if self._session_repo else None
+        if session is None:
+            raise RuntimeError(
+                "TaskOrchestrationService requires session_repo to resolve workspace"
+            )
+        instance = create_subagent_instance(
+            role_id,
+            session_id=session_id,
+            workspace_id=session.workspace_id,
+        )
         self._agent_repo.upsert_instance(
             run_id=run_id,
             trace_id=run_id,

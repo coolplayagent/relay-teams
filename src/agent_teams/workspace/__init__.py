@@ -7,8 +7,6 @@ from agent_teams.workspace.ids import (
     build_instance_conversation_id,
     build_instance_role_scope_id,
     build_instance_session_scope_id,
-    build_instance_workspace_id,
-    build_workspace_id,
 )
 from agent_teams.workspace.manager import (
     WorkspaceManager,
@@ -16,37 +14,33 @@ from agent_teams.workspace.manager import (
 from agent_teams.workspace.models import (
     BranchBinding,
     FileScopeBackend,
-    StateScope,
     WorkspaceBackend,
-    WorkspaceBinding,
-    WorkspaceCapability,
     WorkspaceFileScope,
     WorkspaceLocations,
     WorkspaceProfile,
+    WorkspaceRecord,
     WorkspaceRef,
     default_workspace_profile,
-    ensure_instance_workspace_profile,
 )
+from agent_teams.workspace.repository import WorkspaceRepository
+from agent_teams.workspace.service import WorkspaceService
 
 __all__ = [
     "WorkspaceBackend",
-    "WorkspaceBinding",
-    "WorkspaceCapability",
     "WorkspaceHandle",
     "WorkspaceLocations",
     "WorkspaceManager",
     "WorkspaceProfile",
+    "WorkspaceRecord",
+    "WorkspaceRepository",
     "WorkspaceRef",
+    "WorkspaceService",
     "WorkspaceFileScope",
-    "StateScope",
     "BranchBinding",
     "FileScopeBackend",
     "build_conversation_id",
     "build_instance_conversation_id",
     "build_instance_role_scope_id",
     "build_instance_session_scope_id",
-    "build_instance_workspace_id",
-    "build_workspace_id",
     "default_workspace_profile",
-    "ensure_instance_workspace_profile",
 ]

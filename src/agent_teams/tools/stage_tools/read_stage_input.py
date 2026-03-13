@@ -6,6 +6,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.stage_tools.docs import previous_stage_doc_path
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
@@ -17,8 +18,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 return f"Requirement:\n{task.envelope.objective}"
 
             try:
-                path = ctx.deps.workspace.artifacts.previous_stage_doc_path(
-                    run_id=ctx.deps.run_id,
+                path = previous_stage_doc_path(
+                    workspace=ctx.deps.workspace,
+                    session_id=ctx.deps.session_id,
                     role_id=ctx.deps.role_id,
                 )
                 if path.exists() and path.is_file():

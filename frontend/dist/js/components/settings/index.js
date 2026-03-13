@@ -31,7 +31,7 @@ const TAB_METADATA = {
     },
     roles: {
         title: 'Roles',
-        description: 'Edit role metadata, allowed tools, workspace profile, and prompt text.',
+        description: 'Edit role metadata, allowed tools, memory profile, and prompt text.',
     },
     notifications: {
         title: 'Notifications',
@@ -215,14 +215,18 @@ function createModal() {
                                                 <div class="role-option-picker role-option-picker-single" id="role-skills-picker"></div>
                                             </section>
                                             <section class="role-editor-section">
-                                                <h5>Workspace</h5>
+                                                <h5>Memory</h5>
                                                 <div class="role-workspace-row">
                                                     <div class="form-group">
-                                                        <label for="role-workspace-binding-input">Binding</label>
-                                                        <select id="role-workspace-binding-input"></select>
+                                                        <label for="role-memory-enabled-input">Durable Memory</label>
+                                                        <select id="role-memory-enabled-input"></select>
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="role-memory-daily-enabled-input">Daily Memory</label>
+                                                        <select id="role-memory-daily-enabled-input"></select>
                                                     </div>
                                                     <p class="role-workspace-note" id="role-workspace-note">
-                                                        Advanced workspace profile fields stay preserved. This editor only changes the binding mode.
+                                                        Role memory is global by role. Stage documents are managed separately under the bound workspace and session directory.
                                                     </p>
                                                 </div>
                                             </section>

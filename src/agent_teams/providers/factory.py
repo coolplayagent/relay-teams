@@ -13,6 +13,7 @@ from agent_teams.providers.contracts import EchoProvider, LLMProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.registry import create_default_provider_registry
+from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -45,6 +46,7 @@ def create_provider_factory(
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
     workspace_manager: WorkspaceManager,
+    role_memory_service: RoleMemoryService | None = None,
     tool_registry: ToolRegistry,
     mcp_registry: McpRegistry,
     skill_registry: SkillRegistry,
@@ -78,6 +80,7 @@ def create_provider_factory(
                 approval_ticket_repo=approval_ticket_repo,
                 run_runtime_repo=run_runtime_repo,
                 workspace_manager=workspace_manager,
+                role_memory_service=role_memory_service,
                 tool_registry=tool_registry,
                 mcp_registry=mcp_registry,
                 skill_registry=skill_registry,

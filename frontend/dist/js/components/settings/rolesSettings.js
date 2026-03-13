@@ -19,13 +19,12 @@ let roleConfigOptions = {
     tools: [],
     mcp_servers: [],
     skills: [],
-    workspace_bindings: [],
 };
 let availableModelProfiles = [];
 let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
-let currentWorkspaceProfile = { binding: 'session' };
+let currentMemoryProfile = { enabled: true, daily_enabled: true };
 let currentSelections = {
     tools: [],
     mcp_servers: [],
@@ -94,9 +93,6 @@ function normalizeRoleConfigOptions(options) {
         tools: Array.isArray(options?.tools) ? options.tools : [],
         mcp_servers: Array.isArray(options?.mcp_servers) ? options.mcp_servers : [],
         skills: Array.isArray(options?.skills) ? options.skills : [],
-        workspace_bindings: Array.isArray(options?.workspace_bindings)
-            ? options.workspace_bindings
-            : ['session', 'role', 'instance', 'task'],
     };
 }
 
@@ -184,7 +180,7 @@ function applyRoleRecord(record) {
     if (formEl) formEl.style.display = 'block';
     if (emptyEl) emptyEl.style.display = 'none';
 
-    currentWorkspaceProfile = record.workspace_profile || { binding: 'session' };
+    currentMemoryProfile = normalizeMemoryProfile(record.memory_profile);
     currentSelections = {
         tools: Array.isArray(record.tools) ? [...record.tools] : [],
         mcp_servers: Array.isArray(record.mcp_servers) ? [...record.mcp_servers] : [],
@@ -198,7 +194,7 @@ function applyRoleRecord(record) {
     renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, 'No tools loaded.');
     renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, 'No MCP servers loaded.');
     renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, 'No skills loaded.');
-    renderWorkspaceBindingSelect(currentWorkspaceProfile.binding || 'session');
+    renderMemoryProfileSelects(currentMemoryProfile);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
     setPromptPreviewMode('edit');
 
@@ -262,15 +258,24 @@ function syncOptionSelection(containerId) {
     }
 }
 
-function renderWorkspaceBindingSelect(selectedBinding) {
-    const selectEl = document.getElementById('role-workspace-binding-input');
+function renderMemoryProfileSelects(memoryProfile) {
+    renderBooleanSelect(
+        'role-memory-enabled-input',
+        memoryProfile.enabled !== false,
+    );
+    renderBooleanSelect(
+        'role-memory-daily-enabled-input',
+        memoryProfile.daily_enabled !== false,
+    );
+}
+
+function renderBooleanSelect(id, selected) {
+    const selectEl = document.getElementById(id);
     if (!selectEl) return;
-    const bindings = Array.isArray(roleConfigOptions.workspace_bindings)
-        ? roleConfigOptions.workspace_bindings
-        : ['session', 'role', 'instance', 'task'];
-    selectEl.innerHTML = bindings
-        .map(binding => `<option value="${escapeHtml(binding)}"${binding === selectedBinding ? ' selected' : ''}>${escapeHtml(formatBindingLabel(binding))}</option>`)
-        .join('');
+    selectEl.innerHTML = [
+        `<option value="true"${selected ? ' selected' : ''}>Enabled</option>`,
+        `<option value="false"${selected ? '' : ' selected'}>Disabled</option>`,
+    ].join('');
 }
 
 function renderModelProfileSelect(selectedProfile) {
@@ -333,7 +338,7 @@ function handleAddRole() {
         mcp_servers: [],
         skills: [],
         model_profile: 'default',
-        workspace_profile: { binding: 'session' },
+        memory_profile: { enabled: true, daily_enabled: true },
         system_prompt: '',
         file_name: '',
     });
@@ -398,12 +403,12 @@ function buildDraftFromForm() {
         throw new Error('System prompt is required.');
     }
 
-    const selectedBinding = String(getInputValue('role-workspace-binding-input')).trim() || 'session';
-    const workspaceProfile = {
-        ...(currentWorkspaceProfile || {}),
-        binding: selectedBinding,
-    };
     const selectedModelProfile = resolveSelectedModelProfile();
+    const memoryProfile = {
+        ...(currentMemoryProfile || {}),
+        enabled: getBooleanSelectValue('role-memory-enabled-input', true),
+        daily_enabled: getBooleanSelectValue('role-memory-daily-enabled-input', true),
+    };
 
     return {
         source_role_id: selectedSourceRoleId || null,
@@ -414,7 +419,7 @@ function buildDraftFromForm() {
         tools: [...currentSelections.tools],
         mcp_servers: [...currentSelections.mcp_servers],
         skills: [...currentSelections.skills],
-        workspace_profile: workspaceProfile,
+        memory_profile: memoryProfile,
         system_prompt: systemPrompt,
     };
 }
@@ -517,12 +522,21 @@ function resolveSelectedModelProfile() {
     return availableModelProfiles[0] || 'default';
 }
 
-function formatBindingLabel(binding) {
-    if (binding === 'session') return 'Session';
-    if (binding === 'role') return 'Role';
-    if (binding === 'instance') return 'Instance';
-    if (binding === 'task') return 'Task';
-    return binding;
+function getBooleanSelectValue(id, defaultValue) {
+    const rawValue = String(getInputValue(id)).trim().toLowerCase();
+    if (rawValue === 'true') return true;
+    if (rawValue === 'false') return false;
+    return Boolean(defaultValue);
+}
+
+function normalizeMemoryProfile(memoryProfile) {
+    if (!memoryProfile || typeof memoryProfile !== 'object') {
+        return { enabled: true, daily_enabled: true };
+    }
+    return {
+        enabled: memoryProfile.enabled !== false,
+        daily_enabled: memoryProfile.daily_enabled !== false,
+    };
 }
 
 function escapeHtml(value) {

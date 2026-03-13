@@ -5,7 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.workspace import WorkspaceProfile, default_workspace_profile
+from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
 
 
 class RoleConfigSource(str, Enum):
@@ -23,9 +23,7 @@ class RoleDefinition(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default")
-    workspace_profile: WorkspaceProfile = Field(
-        default_factory=default_workspace_profile
-    )
+    memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
 
@@ -50,9 +48,7 @@ class RoleDocumentDraft(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default", min_length=1)
-    workspace_profile: WorkspaceProfile = Field(
-        default_factory=default_workspace_profile
-    )
+    memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
 
@@ -76,4 +72,3 @@ class RoleConfigOptions(BaseModel):
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
-    workspace_bindings: tuple[str, ...] = ()

@@ -34,7 +34,7 @@ def _build_service(db_path: Path) -> SessionService:
 def test_get_agent_messages_includes_role_id(tmp_path: Path) -> None:
     db_path = tmp_path / "session_agent_messages.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
 
     agent_repo = AgentInstanceRepository(db_path)
     agent_repo.upsert_instance(
@@ -43,12 +43,14 @@ def test_get_agent_messages_includes_role_id(tmp_path: Path) -> None:
         session_id="session-1",
         instance_id="inst-1",
         role_id="time",
+        workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
 
     message_repo = MessageRepository(db_path)
     message_repo.append(
         session_id="session-1",
+        workspace_id="default",
         instance_id="inst-1",
         task_id="task-1",
         trace_id="run-1",

@@ -13,7 +13,7 @@ def new_session_id(prefix: str) -> str:
 
 
 def create_session(client: httpx.Client, *, session_id: str | None = None) -> str:
-    payload: dict[str, object] = {}
+    payload: dict[str, object] = {"workspace_id": "default"}
     if session_id:
         payload["session_id"] = session_id
     response = client.post("/api/sessions", json=payload)

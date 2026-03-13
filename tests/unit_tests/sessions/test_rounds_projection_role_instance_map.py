@@ -14,7 +14,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 )
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.tasks.models import TaskEnvelope, TaskRecord, VerificationPlan
-from agent_teams.workspace import build_conversation_id, build_workspace_id
+from agent_teams.workspace import build_conversation_id
 
 
 class _FakeAgentRepo:
@@ -57,7 +57,7 @@ def test_build_session_rounds_uses_task_bound_role_instance_map() -> None:
         session_id=session_id,
         instance_id="inst-new",
         role_id=role_id,
-        workspace_id=build_workspace_id(session_id),
+        workspace_id="default",
         conversation_id=build_conversation_id(session_id, role_id),
         status=InstanceStatus.IDLE,
     )

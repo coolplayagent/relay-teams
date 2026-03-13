@@ -19,6 +19,7 @@ from agent_teams.roles.registry import RoleRegistry
 
 from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.tasks.enums import TaskStatus
@@ -109,14 +110,17 @@ def _build_service(
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
+    session_repo = SessionRepository(db_path)
     execution_service = _FakeTaskExecutionService(task_repo)
     _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
     service = TaskOrchestrationService(
         task_repo=task_repo,
         role_registry=_build_role_registry(),
         agent_repo=agent_repo,
         task_execution_service=cast(TaskExecutionService, execution_service),
         message_repo=message_repo,
+        session_repo=session_repo,
     )
     return service, task_repo, agent_repo, message_repo, execution_service
 

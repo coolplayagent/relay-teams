@@ -27,6 +27,7 @@ from agent_teams.agents.execution.provider_prompts import PromptSkillInstruction
 from agent_teams.providers.contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
+from agent_teams.roles import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -44,11 +45,7 @@ from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
-from agent_teams.workspace import (
-    WorkspaceManager,
-    build_conversation_id,
-    build_workspace_id,
-)
+from agent_teams.workspace import WorkspaceManager, build_conversation_id
 
 
 class _FakeRunEventHub:
@@ -527,6 +524,7 @@ def _build_provider(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
+        role_memory_service=cast(RoleMemoryService | None, None),
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=registry,
@@ -559,7 +557,7 @@ def _seed_request(
 ) -> None:
     message_repo.append(
         session_id=session_id,
-        workspace_id=build_workspace_id(session_id),
+        workspace_id="default",
         conversation_id=build_conversation_id(session_id, role_id),
         agent_role_id=role_id,
         instance_id=instance_id,
@@ -599,6 +597,7 @@ async def test_generate_persists_current_turn_prompt_even_with_existing_history(
         trace_id="run-2",
         task_id="task-2",
         session_id="session-2",
+        workspace_id="default",
         instance_id="inst-2",
         role_id="coordinator_agent",
         system_prompt="system",
@@ -623,7 +622,7 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
     provider, message_repo = _build_provider(tmp_path / "pending_tail.db", fake_hub)
     message_repo.append(
         session_id="session-pending-tool",
-        workspace_id=build_workspace_id("session-pending-tool"),
+        workspace_id="default",
         conversation_id=build_conversation_id(
             "session-pending-tool",
             "coordinator_agent",
@@ -657,6 +656,7 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
         trace_id="run-pending-tool",
         task_id="task-pending-tool",
         session_id="session-pending-tool",
+        workspace_id="default",
         instance_id="inst-pending-tool",
         role_id="coordinator_agent",
         system_prompt="system",
@@ -694,6 +694,7 @@ async def test_generate_enables_continuous_stream_usage_stats(
         trace_id="run-3",
         task_id="task-3",
         session_id="session-3",
+        workspace_id="default",
         instance_id="inst-3",
         role_id="coordinator_agent",
         system_prompt="system",
@@ -745,6 +746,7 @@ async def test_generate_builds_augmented_system_prompt(
         trace_id="run-augment",
         task_id="task-augment",
         session_id="session-augment",
+        workspace_id="default",
         instance_id="inst-augment",
         role_id="coordinator_agent",
         system_prompt="## Role\nBase system prompt.",
@@ -792,6 +794,7 @@ async def test_generate_token_usage_tracks_request_level_delta(
         trace_id="run-4",
         task_id="task-4",
         session_id="session-4",
+        workspace_id="default",
         instance_id="inst-4",
         role_id="coordinator_agent",
         system_prompt="system",
@@ -837,6 +840,7 @@ async def test_generate_token_usage_delta_works_with_mutated_usage_object(
         trace_id="run-5",
         task_id="task-5",
         session_id="session-5",
+        workspace_id="default",
         instance_id="inst-5",
         role_id="coordinator_agent",
         system_prompt="system",
@@ -902,6 +906,7 @@ async def test_subagent_resume_after_stream_cancellation_reuses_db_history(
         trace_id="run-sub",
         task_id="task-sub",
         session_id="session-sub",
+        workspace_id="default",
         instance_id="inst-sub",
         role_id="time",
         system_prompt="system",
@@ -997,6 +1002,7 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
         trace_id="run-sub",
         task_id="task-sub",
         session_id="session-sub",
+        workspace_id="default",
         instance_id="inst-sub",
         role_id="time",
         system_prompt="system",
@@ -1137,6 +1143,7 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
         trace_id="run-sub",
         task_id="task-sub",
         session_id="session-sub",
+        workspace_id="default",
         instance_id="inst-sub",
         role_id="time",
         system_prompt="system",

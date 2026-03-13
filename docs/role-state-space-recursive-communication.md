@@ -12,17 +12,17 @@ The design follows these principles:
 2. Memory is layered and scoped by role context rather than instance identity.
 3. Communication is modeled as encoded state transitions.
 4. Collaboration must define convergence conditions with explicit acceptance and verification signals.
-5. Role-scoped workspace and conversation binding provides isolation and traceability.
+5. Workspace binding provides execution isolation, while role memory remains independent from workspace identity.
 
 ## 2. Layered Memory Scope Strategy
 
 To avoid over-constraining all memory into one key shape, memory scopes are split into three layers:
 
-- `RoleWorkspaceMemoryScope(workspace_id, role_id)` for durable role-level memory.
+- `RoleWorkspaceMemoryScope(workspace_id, role_id)` for role-bound execution context references.
 - `RoleConversationMemoryScope(workspace_id, role_id, conversation_id)` for conversation-thread continuity.
 - `RoleTaskMemoryScope(workspace_id, role_id, conversation_id, task_id)` for short-lived task scratchpad state.
 
-This aligns with the workspace-memory layering documented in `docs/role-workspace-memory-design.md` and supports both reuse and isolation.
+The runtime now stores durable role memory separately inside the `roles` domain. These scope models remain useful for communication and binding validation where workspace and conversation identity still matter.
 
 ## 3. Module Responsibilities
 
@@ -49,7 +49,7 @@ Reference:
 - `RoleStateSpace` and `RoleStateTransition`: role-defined state-space boundary.
 - `RoleInstanceExecution` and `execute_role_transition(...)`: instance execution inside role boundary.
 - `RoleAgentBinding` and `bind_role_to_agent_instance(...)`: connect `RoleDefinition` with runtime agent records.
-- `build_role_workspace_memory_scope_from_binding(...)`: build role-level durable memory scope.
+- `build_role_workspace_memory_scope_from_binding(...)`: build the role-bound workspace scope used by communication/binding checks.
 - `build_memory_scope_from_binding(...)`: build conversation-level thread memory scope.
 - `build_task_memory_scope_from_binding(...)`: build task-level scratchpad scope.
 - `RoleCommunicationExchange`, `validate_role_communication(...)`, and `validate_exchange_binding(...)`: communication as transition payload and boundary validation.
@@ -69,7 +69,7 @@ Output:
 
 ### Step 2: Build memory scope by memory type
 
-- Role durable memory: `build_role_workspace_memory_scope_from_binding(binding)`.
+- Role-bound workspace scope: `build_role_workspace_memory_scope_from_binding(binding)`.
 - Conversation continuity: `build_memory_scope_from_binding(binding)`.
 - Task scratchpad: `build_task_memory_scope_from_binding(binding, task_id)`.
 

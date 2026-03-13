@@ -36,7 +36,7 @@ def _build_service(db_path: Path) -> SessionService:
 def test_session_rounds_include_persisted_run_state_overlay(tmp_path: Path) -> None:
     db_path = tmp_path / "round_state_overlay.db"
     service = _build_service(db_path)
-    _ = service.create_session(session_id="session-1")
+    _ = service.create_session(session_id="session-1", workspace_id="default")
 
     task_repo = TaskRepository(db_path)
     _ = task_repo.create(

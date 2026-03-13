@@ -44,7 +44,7 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert calls == [
-        ("POST", "/api/sessions", {}),
+        ("POST", "/api/sessions", {"workspace_id": "default"}),
         (
             "POST",
             "/api/runs",
@@ -78,4 +78,3 @@ def test_root_help_lists_env_module() -> None:
     assert "skills" in result.output
     assert "triggers" in result.output
     assert "prompts" in result.output
-    assert "reflection" in result.output
