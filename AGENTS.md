@@ -1,117 +1,80 @@
 # Repository Guidelines
 
 ## Project Layout
-- Core code: `src/agent_teams/`
+- Core package: `src/agent_teams/`
 - Main modules:
-  - `agents/`: agent domain package
-    - `agents/execution/`: agent turn execution, prompt assembly, and LLM session flow
-    - `agents/orchestration/`: coordinator flow, task orchestration, verification, and human gate logic
-    - `agents/tasks/`: task domain models, ids, events, and task status utilities
-  - `env/`: runtime environment loading and env-related CLI support
+  - `agents/`: agent models, execution flow, orchestration, and task domain
+    - `agents/execution/`: prompt assembly, message persistence, subagent running, LLM session flow
+    - `agents/orchestration/`: coordinator, meta-agent, verification, human gate, task execution/orchestration
+    - `agents/tasks/`: task models, ids, events, repository, and status helpers
+  - `builtin/`: built-in roles, default config, logging config, and bundled skills/resources
+  - `env/`: runtime env loading, proxy support, web connectivity, and env CLI
   - `interfaces/`: external interfaces
-    - `interfaces/server/`: FastAPI HTTP/SSE API and routers
-    - `interfaces/cli/`: Typer CLI entrypoints, HTTP/SSE client behavior, and prompt inspection commands
-    - `interfaces/sdk/`: Python HTTP client SDK
-  - `logger/`, `trace/`: structured logging and trace context
-  - `mcp/`: MCP capability integration
-  - `notifications/`: backend-driven notification models, dispatch, and channel rules
-  - `paths/`: path and filesystem location helpers
-  - `providers/`: provider contracts, model configuration, registries, and OpenAI-compatible adapters
-  - `reflection/`: reflection result modeling and reflection services
-  - `roles/`: role definitions and role validation
-  - `sessions/`: session lifecycle, round projection services, and run-scoped execution packages
-    - `sessions/runs/`: run-time orchestration, run control, event streaming, injection flows, and active-run coordination
-  - `shared_types/`: cross-domain shared type aliases and lightweight contracts
-  - `skills/`: skill loading/registry support
-  - `state/`: persistence and state repositories
-  - `tools/`: built-in tool registration and implementations (`registry/`, `runtime/`, `stage_tools/`, `task_tools/`, `workspace_tools/`)
-  - `triggers/`: trigger management and event ingestion flows
-  - `workspace/`: workspace indexing, materialization, and workspace-facing services
-- Frontend: `frontend/dist` (currently `css/` and `js/` assets)
+    - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, reflection, and skills
+    - `interfaces/server/`: FastAPI app, DI container, config services, and `/api/*` routers
+    - `interfaces/sdk/`: HTTP client SDK
+  - `logger/`: runtime logging
+  - `mcp/`: MCP config, registry, service, and CLI
+  - `notifications/`: notification models, settings, config, and delivery service
+  - `paths/`: repository and runtime path helpers
+  - `persistence/`: DB access and shared persistence models/repos
+  - `providers/`: provider contracts, model config, HTTP client factory, OpenAI-compatible adapters, token usage
+  - `reflection/`: reflection config, models, repository, service, and CLI
+  - `roles/`: role models, registry, settings, and CLI
+  - `sessions/`: session models, repository, service, round projection
+    - `sessions/runs/`: active run registry, control, runtime config, event log/stream, injection queue, state repos
+  - `skills/`: skill discovery, registry, config reload, and CLI
+  - `tools/`: tool registry, runtime policy/state, and built-in tools
+  - `trace/`: trace/span context
+  - `triggers/`: trigger models, repository, service, and CLI
+  - `workspace/`: workspace ids, handles, memory, artifacts, and manager
+- Frontend assets: `frontend/dist/`
 - Tests:
-  - `tests/unit_tests/`: unit tests covering `agents/`, `env/`, `frontend/`, `interfaces/`, `logger/`, `mcp/`, `notifications/`, `paths/`, `providers/`, `reflection/`, `roles/`, `sessions/`, `sessions/runs/`, `skills/`, `state/`, `tools/`, `trace/`, `triggers/`, and `workspace/`
-    - `tests/unit_tests/agents/models/`: tests for agent instance models
-    - `tests/unit_tests/agents/execution/`: tests for agent builders, subagent runners, and prompt assembly
-    - `tests/unit_tests/agents/orchestration/`: tests for coordinator and task orchestration flows
-    - `tests/unit_tests/agents/tasks/`: tests for task models and task-domain helpers
-  - `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
+  - `tests/unit_tests/`: mirrors `src/agent_teams/` by module
+  - `tests/integration_tests/api/`: HTTP/SSE integration flows
+  - `tests/integration_tests/browser/`: browser scenarios
+  - `tests/integration_tests/cli/`: CLI integration coverage
+  - `tests/integration_tests/support/`: shared integration helpers
 
-## Core Principles
-- **提交规范**: 禁止绕过 pre-commit 检查。
-- **文件编码规范**: 所有文件统一使用 utf-8 编码，Python 文件头统一添加 utf-8 编码声明。
-- **编程规范**: 禁止使用 `os.path`，应使用 `pathlib.Path`。
-- **Strong typing**: Never use untyped `{}` structures, `typing.Any`, or `dataclass` for domain contracts. Use explicit strong types and Pydantic v2 models for schema safety.
-- **Clean code**: Follow SOLID principles, keep modules high-cohesion/low-coupling, and depend on abstractions rather than concrete implementations.
-- **模块配置职责**: 每个模块负责管理自身配置，禁止将模块专属配置集中堆放到无关模块中。
-- **Public interfaces**: Expose package-level public APIs through `__init__.py`.
-- **Test-driven changes**: Every feature and bug fix must be guarded by unit tests. Unit test directories and files must correspond one-to-one with business code paths (for example, `src/agent_teams/tools/` -> `tests/unit_tests/tools/`).
-- **No emoji policy**: Do not use emoji in code, comments, docs, or commit messages.
-- **Import policy**: Do not place imports inside functions; keep imports at module top level to expose circular dependencies early.
-- **Network access policy**: For any change that introduces or alters outbound network access, explicitly evaluate whether proxy support is required; when it is, integrate with the existing proxy module rather than adding ad hoc proxy handling.
-- **CLI 模块规范**: 每个模块必须提供本模块的 CLI 子命令，且列表/查询类输出必须同时支持表格（默认）与 `--format json`。
-- **Design policy**: Database schema and API changes do not need to maintain backward compatibility. After making such changes, update the corresponding documentation in the `docs/` directory in the same task.
+## Working Rules
+- Do not bypass pre-commit checks.
+- Use UTF-8 for all files. Python modules should include `from __future__ import annotations`.
+- Use `pathlib.Path`; do not use `os.path`.
+- For domain contracts, do not use loose `{}` structures, `typing.Any`, or `dataclass`. Prefer explicit types and Pydantic v2 models.
+- Keep imports at module top level.
+- Each module owns its own configuration. Do not centralize unrelated module config elsewhere.
+- Expose public package APIs through package-level `__init__.py`.
+- Use the project logger in production paths; do not use `print()`.
+- Do not use emoji in code, comments, docs, or commit messages.
+- For outbound network changes, evaluate proxy requirements first and reuse the existing proxy module when needed.
+- CLI modules should provide their own subcommands. List/query output must support default table output and `--format json`.
+- Database schema and API changes do not need backward compatibility, but matching `docs/` updates must be included in the same task.
 
-## Development Setup
-Run setup before starting implementation work.
-
-1. Run setup script:
-   - Windows: `setup.bat`
-   - Linux/macOS: `sh setup.sh`
-2. Activate virtual environment:
-   - Windows: `.venv\\Scripts\\activate`
-   - Linux/macOS: `source .venv/bin/activate`
-3. Ensure development dependencies are installed:
-   - `uv sync --extra dev`
-
-## Development Commands
-- Install dependencies: `uv sync --extra dev`
-- Start server: `uv run agent-teams server start`
-- Force stop server: `uv run agent-teams server stop --force`
-- Restart server: `uv run agent-teams server restart`
-- Run a one-off prompt: `uv run agent-teams -m "hello"`
-- Validate roles: `uv run agent-teams roles validate`
-- List merged environment variables: `uv run agent-teams env list`
-- Run all tests: `uv run pytest -q`
-- Run unit tests: `uv run pytest -q tests/unit_tests`
-- Run integration tests: `uv run pytest -q tests/integration_tests`
+## Development
+- Initial setup:
+  - Windows: `setup.bat`
+  - Linux/macOS: `sh setup.sh`
+  - Then: `uv sync --extra dev`
 
 ## Coding Standards
-- Python 3.12+, 4 spaces, and explicit type annotations are required.
-- Use `from __future__ import annotations` in Python modules.
-- Import order: standard library / third-party / local.
-- Prefer Pydantic models and enums over loose dictionaries.
-- Do not use `typing.Any` in project code (parameters, return types, fields, or local variables).
-- Do not use `hasattr` for schema decisions; fix the type design instead.
-- Follow PEP 8.
-- Do not use `# type: ignore` unless absolutely required for third-party compatibility, and always include a clear inline reason.
-- Use runtime logger facilities; avoid `print()` in production code paths.
+- Prefer enums and Pydantic models over loose dictionaries.
+- Do not use `typing.Any`, `hasattr`, or unexplained `# type: ignore`.
+- Changed behavior must come with tests.
+- `tests/unit_tests/` should mirror `src/agent_teams/`. Add matching `__init__.py` files for new test directories.
+- Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
 
-### Recommended Practices
-1. Defensive programming: perform `None` checks before consuming dictionary values from untrusted inputs.
-2. Explicit return contracts: annotate expected return types for all functions.
-3. Scenario-based tests: for changed files, add or update unit tests that cover real usage paths.
-
-## API and Data Contracts
+## Interface Boundaries
 - Public backend contract is `/api/*`.
-- CLI/frontend/SDK must communicate via HTTP/SSE only.
-- Interface layers must not access backend internal repositories directly.
+- CLI, frontend, and SDK communicate with backend via HTTP/SSE only.
+- Interface layers must not access backend repositories directly.
 
-## Testing Rules
-- `tests/unit_tests/` directory structure must mirror `src/agent_teams/` one-to-one.
-- `tests/integration_tests/` stores integration test scenarios and API/SSE flow coverage.
-- When adding new test folders, also add corresponding `__init__.py` files.
-- Add or update tests for behavior changes, especially orchestration and streaming.
-- Prefer focused unit tests first; add integration tests for run/SSE flows when needed.
-
-## Commit Self-Check (Required Before Every Commit)
-1. Run Ruff autofix and clean all possible lint issues:
-   - `uv run ruff check --fix`
-2. Run basedpyright and resolve all type issues:
-   - `uv run basedpyright`
-3. Run unit tests and ensure all pass:
-   - `uv run pytest -q tests/unit_tests`
-   - `uv run pytest -q tests/integration_tests`
+## Pre-Commit Self-Check
+1. `uv run ruff check --fix`
+2. `uv run ruff format --no-cache --force-exclude`
+3. `uv run basedpyright`
+4. `uv run pytest -q tests/unit_tests`
+5. `uv run pytest -q tests/integration_tests`
 
 ## Security
-- Store secrets only in `.agent_teams/.env`.
+- Secrets only in keyring.
 - Never commit keys or tokens.
