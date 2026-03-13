@@ -3,7 +3,7 @@
  * Session timeline rendering, scroll-sync, and paging orchestration.
  */
 import { els } from '../../utils/dom.js';
-import { state } from '../../core/state.js';
+import { isCoordinatorRoleId, state } from '../../core/state.js';
 import { fetchRunTokenUsage } from '../../core/api.js';
 import { setRoundPendingApprovals } from '../agentPanel.js';
 import {
@@ -208,7 +208,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
 
         const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
             const roleId = item?.role_id || '';
-            return roleId === '' || roleId === 'coordinator_agent';
+            return roleId === '' || isCoordinatorRoleId(roleId);
         });
         const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
 

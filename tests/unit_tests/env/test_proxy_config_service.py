@@ -58,8 +58,8 @@ def test_get_proxy_status_masks_embedded_credentials(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "HTTP_PROXY=http://user:pass@proxy.example:8080\n",
         encoding="utf-8",
@@ -81,8 +81,8 @@ def test_reload_proxy_config_passes_current_config_to_callback(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "NO_PROXY=localhost,127.0.0.1\n",
         encoding="utf-8",
@@ -107,13 +107,13 @@ def test_reload_proxy_config_passes_current_config_to_callback(
     ]
 
 
-def test_get_saved_proxy_config_reads_project_env_values(
+def test_get_saved_proxy_config_reads_app_env_values(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "HTTP_PROXY=http://proxy.example:8080\nNO_PROXY=localhost,127.0.0.1\n",
         encoding="utf-8",
@@ -141,8 +141,8 @@ def test_save_proxy_config_rewrites_managed_keys_and_reloads_runtime(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "# existing\nFOO=bar\nhttp_proxy=http://old.example:8080\nNO_PROXY=localhost\n",
         encoding="utf-8",
@@ -170,6 +170,7 @@ def test_save_proxy_config_rewrites_managed_keys_and_reloads_runtime(
         "FOO=bar\n"
         "NO_PROXY=localhost,127.0.0.1\n"
         "HTTPS_PROXY=http://alice@proxy.example:8443\n"
+        "AGENT_TEAMS_LLM_SSL_VERIFY=true\n"
     )
     assert secret_store.get_password(config_dir) == "secret"
     assert reloaded_configs == [
@@ -188,8 +189,8 @@ def test_get_saved_proxy_config_extracts_shared_proxy_credentials(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         (
             "HTTP_PROXY=http://alice:secret@proxy.example:8080\n"
@@ -220,8 +221,8 @@ def test_get_saved_proxy_config_reads_password_from_secret_store(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "HTTPS_PROXY=http://alice@secure.example:8443\n",
         encoding="utf-8",
@@ -251,8 +252,8 @@ def test_save_proxy_config_rejects_password_persistence_without_keyring(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     service = ProxyConfigService(
         config_dir=config_dir,
         on_proxy_reloaded=lambda _config: None,
@@ -280,8 +281,8 @@ def test_save_proxy_config_rejects_multiple_distinct_proxy_passwords(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     service = ProxyConfigService(
         config_dir=config_dir,
         on_proxy_reloaded=lambda _config: None,
@@ -308,8 +309,8 @@ def test_save_proxy_config_clears_runtime_proxy_env_when_proxy_removed(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
 
     def _reload_proxy_env(proxy_config: ProxyEnvConfig) -> None:
         sync_proxy_env_to_process_env(proxy_config)
@@ -343,8 +344,8 @@ def test_reload_proxy_config_ignores_stale_process_proxy_env(
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    config_dir = tmp_path / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text("", encoding="utf-8")
     monkeypatch.setenv("HTTP_PROXY", "http://bad-proxy.invalid:8080")
     monkeypatch.setenv("http_proxy", "http://bad-proxy.invalid:8080")

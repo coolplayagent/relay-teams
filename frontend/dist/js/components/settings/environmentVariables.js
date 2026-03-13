@@ -12,18 +12,18 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 
 const DEFAULT_EXPANDED_SCOPES = {
     system: true,
-    user: true,
+    app: true,
 };
 
 let environmentState = {
     variablesByScope: {
         system: [],
-        user: [],
+        app: [],
     },
     expandedScopes: { ...DEFAULT_EXPANDED_SCOPES },
     editor: {
         visible: false,
-        scope: 'user',
+        scope: 'app',
         sourceKey: '',
     },
 };
@@ -45,7 +45,7 @@ export async function loadEnvironmentVariablesPanel() {
             },
             editor: {
                 visible: false,
-                scope: 'user',
+                scope: 'app',
                 sourceKey: '',
             },
         };
@@ -75,7 +75,7 @@ function bindActionButton(id, handler) {
 function normalizeEnvironmentPayload(payload) {
     return {
         system: sortRecords(Array.isArray(payload?.system) ? payload.system : [], 'system'),
-        user: sortRecords(Array.isArray(payload?.user) ? payload.user : [], 'user'),
+        app: sortRecords(Array.isArray(payload?.app) ? payload.app : [], 'app'),
     };
 }
 
@@ -103,7 +103,7 @@ function renderEnvironmentHelp() {
     if (!helpEl) {
         return;
     }
-    helpEl.textContent = 'Changes are written to the Windows registry. Restart shells or the server process if existing processes do not pick up updated values.';
+    helpEl.textContent = 'System variables are read-only OS values. App variables are saved to ~/.config/agent-teams/.env and used by Agent Teams runtime processes.';
 }
 
 function renderEnvironmentEditor() {
@@ -114,12 +114,12 @@ function renderEnvironmentEditor() {
 
     if (!environmentState.editor.visible) {
         shell.style.display = 'none';
-        setInputValue('env-scope-select', 'user');
+        setInputValue('env-scope-select', 'app');
         setInputValue('env-key-input', '');
         setInputValue('env-value-input', '');
         setInputValue('env-source-key-input', '');
         setTextContent('env-editor-title', 'Add Environment Variable');
-        setTextContent('env-editor-meta', 'Choose a scope, then save the key and value.');
+        setTextContent('env-editor-meta', 'Save a key and value into the Agent Teams app environment.');
         return;
     }
 
@@ -136,7 +136,7 @@ function renderEnvironmentEditor() {
         'env-editor-meta',
         environmentState.editor.sourceKey
             ? 'Update the name, scope, or value before saving.'
-            : 'Choose a scope, then save the key and value.',
+            : 'Save a key and value into the Agent Teams app environment.',
     );
 }
 
@@ -146,19 +146,19 @@ function renderEnvironmentGroups() {
         return;
     }
 
-    const totalCount = environmentState.variablesByScope.system.length + environmentState.variablesByScope.user.length;
+    const totalCount = environmentState.variablesByScope.system.length + environmentState.variablesByScope.app.length;
     if (totalCount === 0) {
         groupsEl.innerHTML = `
             <div class="settings-empty-state settings-empty-state-compact">
                 <h4>No environment variables managed here</h4>
-                <p>Add a user-level or system-level variable to start managing registry values.</p>
+                <p>Add an app-level variable to start managing Agent Teams runtime values.</p>
             </div>
         `;
         bindEnvironmentListHandlers();
         return;
     }
 
-    groupsEl.innerHTML = ['system', 'user']
+    groupsEl.innerHTML = ['system', 'app']
         .map(scope => renderEnvironmentScope(scope, environmentState.variablesByScope[scope]))
         .join('');
     bindEnvironmentListHandlers();
@@ -166,10 +166,10 @@ function renderEnvironmentGroups() {
 
 function renderEnvironmentScope(scope, records) {
     const expanded = environmentState.expandedScopes[scope] !== false;
-    const scopeLabel = scope === 'system' ? 'System Variables' : 'User Variables';
+    const scopeLabel = scope === 'system' ? 'System Variables' : 'App Variables';
     const scopeCopy = scope === 'system'
-        ? 'Machine-wide values from HKLM.'
-        : 'Per-user values from HKCU.';
+        ? 'Effective OS-visible environment variables. Read-only here.'
+        : 'Saved to ~/.config/agent-teams/.env.';
     return `
         <section class="env-scope-card" data-env-scope="${escapeHtml(scope)}">
             <button class="env-scope-toggle" data-env-toggle-scope="${escapeHtml(scope)}" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
@@ -197,6 +197,7 @@ function renderEnvironmentRecord(record) {
         ? `${record.value.slice(0, 117)}...`
         : record.value;
     const kindLabel = record.value_kind === 'expandable' ? 'Expandable' : 'String';
+    const isEditable = record.scope === 'app';
     return `
         <div class="env-record" data-env-key="${escapeHtml(record.key)}" data-env-scope="${escapeHtml(record.scope)}">
             <div class="env-record-main">
@@ -206,10 +207,12 @@ function renderEnvironmentRecord(record) {
                 </div>
                 <div class="env-record-value" title="${escapeHtml(record.value)}">${escapeHtml(valuePreview)}</div>
             </div>
-            <div class="env-record-actions">
-                <button class="settings-inline-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
-                <button class="settings-inline-action env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
-            </div>
+            ${isEditable ? `
+                <div class="env-record-actions">
+                    <button class="settings-inline-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
+                    <button class="settings-inline-action env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
+                </div>
+            ` : ''}
         </div>
     `;
 }
@@ -268,7 +271,7 @@ function openEditorForRecord(recordRef) {
 function handleAddEnvironmentVariable() {
     environmentState.editor = {
         visible: true,
-        scope: 'user',
+        scope: 'app',
         key: '',
         value: '',
         sourceKey: '',
@@ -279,14 +282,14 @@ function handleAddEnvironmentVariable() {
 function handleCancelEnvironmentVariable() {
     environmentState.editor = {
         visible: false,
-        scope: 'user',
+        scope: 'app',
         sourceKey: '',
     };
     renderEnvironmentVariablesPanel();
 }
 
 async function handleSaveEnvironmentVariable() {
-    const scope = readInputValue('env-scope-select') || 'user';
+    const scope = readInputValue('env-scope-select') || 'app';
     const key = readInputValue('env-key-input');
     const value = readInputValue('env-value-input', false);
     const sourceKey = readInputValue('env-source-key-input');

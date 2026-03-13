@@ -3,13 +3,12 @@
  * Session-level subagent rail state, selector, and visibility controls.
  */
 import { fetchSessionAgents, fetchSessionTasks } from '../core/api.js';
-import { state } from '../core/state.js';
+import { isCoordinatorRoleId, state } from '../core/state.js';
 import { openAgentPanel } from './agentPanel.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 
 const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
-const COORDINATOR_ROLE_ID = 'coordinator_agent';
 
 export function initializeSubagentRail() {
     const collapsed = localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) === '1';
@@ -62,7 +61,7 @@ export async function refreshSubagentRail(
 export function rememberLiveSubagent(instanceId, roleId) {
     const safeInstanceId = String(instanceId || '').trim();
     const safeRoleId = String(roleId || '').trim();
-    if (!safeInstanceId || !safeRoleId || safeRoleId === COORDINATOR_ROLE_ID) return;
+    if (!safeInstanceId || !safeRoleId || isCoordinatorRoleId(safeRoleId)) return;
 
     const nowIso = new Date().toISOString();
     const nextAgents = [...(state.sessionAgents || [])];
@@ -131,7 +130,7 @@ export function focusSubagent(instanceId, roleId) {
 
 export function syncSelectedRoleByInstance(instanceId, roleId) {
     const safeRoleId = String(roleId || '').trim();
-    if (!safeRoleId || safeRoleId === COORDINATOR_ROLE_ID) return;
+    if (!safeRoleId || isCoordinatorRoleId(safeRoleId)) return;
     state.selectedRoleId = safeRoleId;
     if (els.subagentRoleSelect && els.subagentRoleSelect.value !== safeRoleId) {
         els.subagentRoleSelect.value = safeRoleId;
@@ -300,7 +299,7 @@ function normalizeSessionAgents(payload) {
         if (!item || typeof item !== 'object') return;
         const roleId = String(item.role_id || '').trim();
         const instanceId = String(item.instance_id || '').trim();
-        if (!roleId || !instanceId || roleId === COORDINATOR_ROLE_ID) return;
+        if (!roleId || !instanceId || isCoordinatorRoleId(roleId)) return;
         const record = {
             instance_id: instanceId,
             role_id: roleId,
@@ -321,7 +320,7 @@ function normalizeSessionAgents(payload) {
 function normalizeSessionTasks(payload) {
     const rows = Array.isArray(payload) ? payload : [];
     return rows
-        .filter(item => item && typeof item === 'object' && String(item.role_id || '') !== COORDINATOR_ROLE_ID)
+        .filter(item => item && typeof item === 'object' && !isCoordinatorRoleId(item.role_id))
         .map(item => ({
             task_id: String(item.task_id || ''),
             title: String(item.title || item.task_id || ''),

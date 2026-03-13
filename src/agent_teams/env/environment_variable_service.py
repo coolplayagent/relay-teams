@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import ctypes
 from ctypes import wintypes
 from contextlib import AbstractContextManager
+from pathlib import Path
 import re
 import sys
 from typing import Protocol, cast
@@ -16,6 +17,7 @@ from agent_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
     EnvironmentVariableValueKind,
 )
+from agent_teams.env.runtime_env import get_app_env_file_path, load_env_file
 
 try:
     import winreg as _winreg
@@ -97,21 +99,25 @@ class EnvironmentVariableService:
         self,
         *,
         backend: EnvironmentVariableBackend | None = None,
+        app_env_file_path: Path | None = None,
     ) -> None:
         self._backend: EnvironmentVariableBackend = (
             WindowsRegistryEnvironmentVariableBackend() if backend is None else backend
+        )
+        self._app_env_file_path: Path = (
+            get_app_env_file_path()
+            if app_env_file_path is None
+            else app_env_file_path.expanduser().resolve()
         )
 
     def list_environment_variables(self) -> EnvironmentVariableCatalog:
         system_records = self._sort_records(
             self._backend.list_values(EnvironmentVariableScope.SYSTEM)
         )
-        user_records = self._sort_records(
-            self._backend.list_values(EnvironmentVariableScope.USER)
-        )
+        app_records = self._sort_records(self._load_app_records())
         return EnvironmentVariableCatalog(
             system=tuple(system_records),
-            user=tuple(user_records),
+            app=tuple(app_records),
         )
 
     def save_environment_variable(
@@ -121,14 +127,17 @@ class EnvironmentVariableService:
         key: str,
         request: EnvironmentVariableSaveRequest,
     ) -> EnvironmentVariableRecord:
+        if scope == EnvironmentVariableScope.SYSTEM:
+            raise ValueError("System environment variables are read-only.")
         normalized_key = _normalize_key(key)
         source_key = (
             normalized_key
             if request.source_key is None
             else _normalize_key(request.source_key)
         )
-        target_existing = self._backend.get_value(scope, normalized_key)
-        source_existing = self._backend.get_value(scope, source_key)
+        app_records = self._build_app_record_map()
+        target_existing = app_records.get(normalized_key)
+        source_existing = app_records.get(source_key)
         is_rename = source_key != normalized_key
 
         if request.source_key is not None and source_existing is None:
@@ -143,19 +152,19 @@ class EnvironmentVariableService:
             source_existing=source_existing,
             target_existing=target_existing,
         )
-        self._backend.set_value(
-            scope,
-            normalized_key,
-            request.value,
+        app_records[normalized_key] = EnvironmentVariableRecord(
+            key=normalized_key,
+            value=request.value,
+            scope=EnvironmentVariableScope.APP,
             value_kind=value_kind,
         )
         if is_rename and source_existing is not None:
-            self._backend.delete_value(scope, source_key)
-        self._backend.broadcast_change()
+            app_records.pop(source_key, None)
+        self._write_app_records(app_records)
         return EnvironmentVariableRecord(
             key=normalized_key,
             value=request.value,
-            scope=scope,
+            scope=EnvironmentVariableScope.APP,
             value_kind=value_kind,
         )
 
@@ -165,20 +174,86 @@ class EnvironmentVariableService:
         scope: EnvironmentVariableScope,
         key: str,
     ) -> None:
+        if scope == EnvironmentVariableScope.SYSTEM:
+            raise ValueError("System environment variables are read-only.")
         normalized_key = _normalize_key(key)
-        existing = self._backend.get_value(scope, normalized_key)
+        app_records = self._build_app_record_map()
+        existing = app_records.get(normalized_key)
         if existing is None:
-            raise ValueError(
-                f"Environment variable not found in {scope.value}: {normalized_key}"
-            )
-        self._backend.delete_value(scope, normalized_key)
-        self._backend.broadcast_change()
+            raise ValueError(f"Environment variable not found in app: {normalized_key}")
+        app_records.pop(normalized_key, None)
+        self._write_app_records(app_records)
 
     def _sort_records(
         self,
         records: Sequence[EnvironmentVariableRecord],
     ) -> list[EnvironmentVariableRecord]:
         return sorted(records, key=lambda record: record.key.upper())
+
+    def _load_app_records(self) -> tuple[EnvironmentVariableRecord, ...]:
+        values = load_env_file(self._app_env_file_path)
+        records = [
+            EnvironmentVariableRecord(
+                key=key,
+                value=value,
+                scope=EnvironmentVariableScope.APP,
+                value_kind=(
+                    EnvironmentVariableValueKind.EXPANDABLE
+                    if _EXPANDABLE_VALUE_PATTERN.search(value)
+                    else EnvironmentVariableValueKind.STRING
+                ),
+            )
+            for key, value in values.items()
+        ]
+        return tuple(records)
+
+    def _build_app_record_map(self) -> dict[str, EnvironmentVariableRecord]:
+        return {record.key: record for record in self._load_app_records()}
+
+    def _write_app_records(
+        self,
+        records_by_key: dict[str, EnvironmentVariableRecord],
+    ) -> None:
+        env_file_path = self._app_env_file_path
+        written_keys: set[str] = set()
+        output_lines: list[str] = []
+        existing_lines: list[str] = []
+        if env_file_path.exists() and env_file_path.is_file():
+            existing_lines = env_file_path.read_text(encoding="utf-8").splitlines()
+
+        for raw_line in existing_lines:
+            stripped_line = raw_line.strip()
+            if (
+                not stripped_line
+                or stripped_line.startswith("#")
+                or "=" not in raw_line
+            ):
+                output_lines.append(raw_line)
+                continue
+            raw_key, _raw_value = raw_line.split("=", 1)
+            normalized_key = raw_key.strip()
+            record = records_by_key.get(normalized_key)
+            if record is None:
+                continue
+            if normalized_key in written_keys:
+                continue
+            output_lines.append(
+                f"{normalized_key}={_serialize_env_value(record.value)}"
+            )
+            written_keys.add(normalized_key)
+
+        for key in sorted(records_by_key):
+            if key in written_keys:
+                continue
+            output_lines.append(
+                f"{key}={_serialize_env_value(records_by_key[key].value)}"
+            )
+
+        env_file_path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = "\n".join(output_lines)
+        if serialized:
+            serialized = f"{serialized}\n"
+        env_file_path.write_text(serialized, encoding="utf-8")
 
 
 class WindowsRegistryEnvironmentVariableBackend:
@@ -187,66 +262,41 @@ class WindowsRegistryEnvironmentVariableBackend:
         scope: EnvironmentVariableScope,
     ) -> Sequence[EnvironmentVariableRecord]:
         registry_module = _require_winreg()
-        root_key, sub_key = _resolve_registry_location(scope)
-        values: list[EnvironmentVariableRecord] = []
-        with registry_module.OpenKey(
-            root_key,
-            sub_key,
-            0,
-            registry_module.KEY_READ,
-        ) as registry_key:
-            index = 0
-            while True:
-                try:
-                    key, value, raw_type = registry_module.EnumValue(
-                        registry_key, index
-                    )
-                except OSError:
-                    break
-                index += 1
-                if not isinstance(value, str):
-                    continue
-                value_kind = _registry_type_to_value_kind(raw_type)
-                if value_kind is None:
-                    continue
-                values.append(
-                    EnvironmentVariableRecord(
-                        key=key,
-                        value=value,
-                        scope=scope,
-                        value_kind=value_kind,
-                    )
-                )
-        return tuple(values)
+        if scope != EnvironmentVariableScope.SYSTEM:
+            return ()
+        system_values = _read_registry_values(
+            registry_module,
+            registry_module.HKEY_LOCAL_MACHINE,
+            _SYSTEM_ENV_REGISTRY_PATH,
+        )
+        user_values = _read_registry_values(
+            registry_module,
+            registry_module.HKEY_CURRENT_USER,
+            _USER_ENV_REGISTRY_PATH,
+        )
+        merged_values: dict[str, EnvironmentVariableRecord] = {
+            record.key: record for record in system_values
+        }
+        for record in user_values:
+            merged_values[record.key] = EnvironmentVariableRecord(
+                key=record.key,
+                value=record.value,
+                scope=EnvironmentVariableScope.SYSTEM,
+                value_kind=record.value_kind,
+            )
+        return tuple(merged_values.values())
 
     def get_value(
         self,
         scope: EnvironmentVariableScope,
         key: str,
     ) -> EnvironmentVariableRecord | None:
-        registry_module = _require_winreg()
-        root_key, sub_key = _resolve_registry_location(scope)
-        try:
-            with registry_module.OpenKey(
-                root_key,
-                sub_key,
-                0,
-                registry_module.KEY_READ,
-            ) as registry_key:
-                value, raw_type = registry_module.QueryValueEx(registry_key, key)
-        except FileNotFoundError:
+        if scope != EnvironmentVariableScope.SYSTEM:
             return None
-        if not isinstance(value, str):
-            return None
-        value_kind = _registry_type_to_value_kind(raw_type)
-        if value_kind is None:
-            return None
-        return EnvironmentVariableRecord(
-            key=key,
-            value=value,
-            scope=scope,
-            value_kind=value_kind,
-        )
+        for record in self.list_values(scope):
+            if record.key == key:
+                return record
+        return None
 
     def set_value(
         self,
@@ -256,23 +306,10 @@ class WindowsRegistryEnvironmentVariableBackend:
         *,
         value_kind: EnvironmentVariableValueKind,
     ) -> None:
-        registry_module = _require_winreg()
-        root_key, sub_key = _resolve_registry_location(scope)
-        raw_type = _value_kind_to_registry_type(value_kind)
-        access = registry_module.KEY_SET_VALUE | registry_module.KEY_QUERY_VALUE
-        with registry_module.OpenKey(root_key, sub_key, 0, access) as registry_key:
-            registry_module.SetValueEx(registry_key, key, 0, raw_type, value)
+        raise PermissionError("System environment variables are read-only.")
 
     def delete_value(self, scope: EnvironmentVariableScope, key: str) -> None:
-        registry_module = _require_winreg()
-        root_key, sub_key = _resolve_registry_location(scope)
-        with registry_module.OpenKey(
-            root_key,
-            sub_key,
-            0,
-            registry_module.KEY_SET_VALUE,
-        ) as registry_key:
-            registry_module.DeleteValue(registry_key, key)
+        raise PermissionError("System environment variables are read-only.")
 
     def broadcast_change(self) -> None:
         _ = _require_winreg()
@@ -297,6 +334,41 @@ class WindowsRegistryEnvironmentVariableBackend:
             5000,
             ctypes.byref(result),
         )
+
+
+def _read_registry_values(
+    registry_module: WinRegModuleProtocol,
+    root_key: int,
+    sub_key: str,
+) -> tuple[EnvironmentVariableRecord, ...]:
+    values: list[EnvironmentVariableRecord] = []
+    with registry_module.OpenKey(
+        root_key,
+        sub_key,
+        0,
+        registry_module.KEY_READ,
+    ) as registry_key:
+        index = 0
+        while True:
+            try:
+                key, value, raw_type = registry_module.EnumValue(registry_key, index)
+            except OSError:
+                break
+            index += 1
+            if not isinstance(value, str):
+                continue
+            value_kind = _registry_type_to_value_kind(raw_type)
+            if value_kind is None:
+                continue
+            values.append(
+                EnvironmentVariableRecord(
+                    key=key,
+                    value=value,
+                    scope=EnvironmentVariableScope.SYSTEM,
+                    value_kind=value_kind,
+                )
+            )
+    return tuple(values)
 
 
 def _normalize_key(key: str) -> str:
@@ -337,9 +409,9 @@ def _resolve_registry_location(
     scope: EnvironmentVariableScope,
 ) -> tuple[int, str]:
     registry_module = _require_winreg()
-    if scope == EnvironmentVariableScope.SYSTEM:
-        return registry_module.HKEY_LOCAL_MACHINE, _SYSTEM_ENV_REGISTRY_PATH
-    return registry_module.HKEY_CURRENT_USER, _USER_ENV_REGISTRY_PATH
+    if scope != EnvironmentVariableScope.SYSTEM:
+        raise ValueError(f"Unsupported registry scope: {scope.value}")
+    return registry_module.HKEY_LOCAL_MACHINE, _SYSTEM_ENV_REGISTRY_PATH
 
 
 def _registry_type_to_value_kind(
@@ -358,3 +430,10 @@ def _value_kind_to_registry_type(value_kind: EnvironmentVariableValueKind) -> in
     if value_kind == EnvironmentVariableValueKind.EXPANDABLE:
         return registry_module.REG_EXPAND_SZ
     return registry_module.REG_SZ
+
+
+def _serialize_env_value(value: str) -> str:
+    if any(character.isspace() for character in value) or "#" in value:
+        escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped_value}"'
+    return value

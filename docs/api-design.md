@@ -75,17 +75,18 @@ Reloads model config into runtime.
 
 ### `GET /system/configs/proxy`
 
-Returns the proxy values currently saved in project `.agent_teams/.env`.
-Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`.
+Returns the proxy values currently saved in app `~/.config/agent-teams/.env`.
+Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, `verify_ssl`.
 Saved proxy URLs are returned without embedded credentials when the configured proxy URLs share the same username/password pair.
 If the password was persisted through the system keyring, the API rehydrates it into `proxy_password` for editing.
 If a user manually forces `user:password@host` into `.env`, runtime loading still supports it and the API can read it back, but the save flow will not write that password back to `.env`.
 
 ### `PUT /system/configs/proxy`
 
-Saves proxy values into project `.agent_teams/.env` and reloads runtime proxy state immediately.
+Saves proxy values into app `~/.config/agent-teams/.env` and reloads runtime proxy state immediately.
 Blank values remove the corresponding proxy key.
 `proxy_username` and `proxy_password` are optional shared credentials.
+`verify_ssl` controls TLS certificate verification for proxy-backed LLM and web HTTP clients.
 On save, proxy passwords are persisted only through a usable system keyring backend. The `.env` file stores proxy URLs without the password portion.
 If no usable keyring backend is available, saving a proxy password fails with a user-facing error instead of falling back to plaintext file storage.
 Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
@@ -114,26 +115,25 @@ Replaces notification rules.
 
 ### `GET /system/configs/environment-variables`
 
-Returns Windows environment variables grouped by `system` and `user` scope.
-Only registry-backed string values are included.
-`system` reads from `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`.
-`user` reads from `HKCU\Environment`.
+Returns environment variables grouped by `system` and `app` scope.
+`system` is read-only and reflects the effective Windows environment visible to new processes, built from `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` plus `HKCU\Environment` with `HKCU` overriding duplicate keys.
+`app` is editable and stored in `~/.config/agent-teams/.env`.
 Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
 
 ### `PUT /system/configs/environment-variables/{scope}/{key}`
 
-Upserts one Windows environment variable in the target `scope`.
+Upserts one environment variable in the target `scope`.
 Request body fields:
 - `value`: raw variable value
 - optional `source_key`: rename from an existing key before saving the new key
 
-The backend preserves the existing registry value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
-After save, the server broadcasts `WM_SETTINGCHANGE` with `Environment` so new processes can observe the change.
-System-scope writes may return `403` when the process lacks registry write permission.
+`app` writes preserve unrelated `.env` lines and comments where possible.
+The backend preserves the existing value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
+`system` scope is read-only and returns a user-facing validation error on mutation.
 
 ### `DELETE /system/configs/environment-variables/{scope}/{key}`
 
-Deletes one Windows environment variable from the target scope and broadcasts `WM_SETTINGCHANGE`.
+Deletes one app environment variable from the target scope.
 Deleting a missing key returns a user-facing validation error.
 
 ### `POST /system/configs/web:probe`
@@ -428,6 +428,7 @@ Response fields:
 - `name`
 - `version`
 - `model_profile`
+- `source`
 
 ### `GET /roles/configs/{role_id}`
 
@@ -443,6 +444,7 @@ Response fields:
 - `skills`
 - `model_profile`
 - `workspace_profile`
+- `source`
 - `system_prompt`
 - `file_name`
 - `content`
@@ -527,7 +529,7 @@ Response:
 
 ### `GET /mcp/servers`
 
-Lists effective MCP servers after config merge.
+Lists effective MCP servers from app scope.
 
 ### `GET /mcp/servers/{server_name}/tools`
 

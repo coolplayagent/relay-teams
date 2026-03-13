@@ -20,12 +20,14 @@ import {
     openAgentPanel,
 } from '../../components/agentPanel.js';
 import {
-    COORDINATOR_ROLE,
-    coordinatorContainerFor,
-} from './utils.js';
+    getCoordinatorRoleId,
+    isCoordinatorRoleId,
+} from '../state.js';
+import { coordinatorContainerFor } from './utils.js';
 
 export function handleToolCall(payload, eventMeta, instanceId, roleId) {
-    const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
+    const coordinatorRoleId = getCoordinatorRoleId();
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const container = isCoordinator
         ? coordinatorContainerFor(eventMeta)
         : getPanelScrollContainer(instanceId, roleId);
@@ -41,7 +43,7 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
         payload.tool_name,
         payload.args,
         payload.tool_call_id || null,
-        { runId, roleId: isCoordinator ? COORDINATOR_ROLE : roleId, label },
+        { runId, roleId: isCoordinator ? coordinatorRoleId : roleId, label },
     );
     sysLog(`[Tool] ${payload.tool_name}`);
 }

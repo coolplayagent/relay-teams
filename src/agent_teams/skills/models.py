@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SkillScope(str, Enum):
-    USER = "user"
-    PROJECT = "project"
+    BUILTIN = "builtin"
+    APP = "app"
 
 
 class SkillResource(BaseModel):

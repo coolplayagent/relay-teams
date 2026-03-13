@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 class EnvironmentVariableScope(str, Enum):
     SYSTEM = "system"
-    USER = "user"
+    APP = "app"
 
 
 class EnvironmentVariableValueKind(str, Enum):
@@ -29,7 +29,7 @@ class EnvironmentVariableCatalog(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system: tuple[EnvironmentVariableRecord, ...] = ()
-    user: tuple[EnvironmentVariableRecord, ...] = ()
+    app: tuple[EnvironmentVariableRecord, ...] = ()
 
 
 class EnvironmentVariableSaveRequest(BaseModel):

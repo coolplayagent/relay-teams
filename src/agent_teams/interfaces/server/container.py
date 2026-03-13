@@ -4,6 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from agent_teams.builtin import (
+    ensure_app_config_bootstrap,
+    get_builtin_roles_dir,
+)
 from agent_teams.intent.meta_agent import MetaAgent
 from agent_teams.coordination.coordinator import CoordinatorGraph
 from agent_teams.coordination.human_gate import GateManager
@@ -80,6 +84,7 @@ class ServerContainer:
             roles_dir=roles_dir,
             db_path=db_path,
         )
+        ensure_app_config_bootstrap(config_dir)
         self.config_dir: Path = config_dir
         self.runtime: RuntimeConfig = runtime
 
@@ -97,19 +102,20 @@ class ServerContainer:
             EnvironmentVariableService()
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
-            project_config_dir=config_dir
+            app_config_dir=config_dir
         )
         self.reflection_config_manager: ReflectionConfigManager = (
             ReflectionConfigManager(config_dir=config_dir)
         )
-        self.role_registry: RoleRegistry = RoleLoader().load_all(
-            runtime.paths.roles_dir
+        self.role_registry: RoleRegistry = RoleLoader().load_builtin_and_app(
+            builtin_roles_dir=get_builtin_roles_dir(),
+            app_roles_dir=runtime.paths.roles_dir,
         )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
-            project_config_dir=config_dir
+            app_config_dir=config_dir
         )
 
         for role in self.role_registry.list_roles():
@@ -265,6 +271,7 @@ class ServerContainer:
         )
         self.role_settings_service: RoleSettingsService = RoleSettingsService(
             roles_dir=self.runtime.paths.roles_dir,
+            builtin_roles_dir=get_builtin_roles_dir(),
             get_tool_registry=lambda: self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
             get_skill_registry=lambda: self.skill_registry,

@@ -6,8 +6,9 @@ import re
 
 import yaml
 
+from agent_teams.builtin import get_builtin_skills_dir
 from agent_teams.logger import get_logger
-from agent_teams.paths import get_project_config_dir, get_user_config_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.skills.models import (
     Skill,
     SkillMetadata,
@@ -24,12 +25,21 @@ _SCRIPT_DESCRIPTION_PATTERN = re.compile(
 )
 
 
+def get_builtin_skills_dir_path() -> Path:
+    return get_builtin_skills_dir()
+
+
+def get_app_skills_dir(user_home_dir: Path | None = None) -> Path:
+    return get_app_config_dir(user_home_dir=user_home_dir) / "skills"
+
+
 def get_user_skills_dir(user_home_dir: Path | None = None) -> Path:
-    return get_user_config_dir(user_home_dir=user_home_dir) / "skills"
+    return get_app_skills_dir(user_home_dir=user_home_dir)
 
 
 def get_project_skills_dir(project_root: Path | None = None) -> Path:
-    return get_project_config_dir(project_root=project_root) / "skills"
+    _ = project_root
+    return get_app_skills_dir()
 
 
 class SkillsDirectory:
@@ -48,17 +58,19 @@ class SkillsDirectory:
     def from_skill_dirs(
         cls,
         *,
-        project_skills_dir: Path,
-        user_skills_dir: Path | None = None,
+        app_skills_dir: Path,
+        builtin_skills_dir: Path | None = None,
         max_depth: int = 3,
     ) -> SkillsDirectory:
-        resolved_project_skills_dir = _resolve_dir(project_skills_dir)
-        resolved_project_skills_dir.mkdir(parents=True, exist_ok=True)
+        resolved_app_skills_dir = _resolve_dir(app_skills_dir)
+        resolved_app_skills_dir.mkdir(parents=True, exist_ok=True)
         fallback_dirs = (
-            (_resolve_dir(user_skills_dir),) if user_skills_dir is not None else ()
+            (_resolve_dir(builtin_skills_dir),)
+            if builtin_skills_dir is not None
+            else ()
         )
         return cls(
-            base_dir=resolved_project_skills_dir,
+            base_dir=resolved_app_skills_dir,
             max_depth=max_depth,
             fallback_dirs=fallback_dirs,
         )
@@ -67,13 +79,12 @@ class SkillsDirectory:
     def from_config_dirs(
         cls,
         *,
-        project_config_dir: Path,
-        user_home_dir: Path | None = None,
+        app_config_dir: Path,
         max_depth: int = 3,
     ) -> SkillsDirectory:
         return cls.from_skill_dirs(
-            project_skills_dir=_resolve_dir(project_config_dir) / "skills",
-            user_skills_dir=get_user_skills_dir(user_home_dir=user_home_dir),
+            app_skills_dir=_resolve_dir(app_config_dir) / "skills",
+            builtin_skills_dir=get_builtin_skills_dir_path(),
             max_depth=max_depth,
         )
 
@@ -81,13 +92,12 @@ class SkillsDirectory:
     def from_default_scopes(
         cls,
         *,
-        project_root: Path | None = None,
         user_home_dir: Path | None = None,
         max_depth: int = 3,
     ) -> SkillsDirectory:
         return cls.from_skill_dirs(
-            project_skills_dir=get_project_skills_dir(project_root=project_root),
-            user_skills_dir=get_user_skills_dir(user_home_dir=user_home_dir),
+            app_skills_dir=get_app_skills_dir(user_home_dir=user_home_dir),
+            builtin_skills_dir=get_builtin_skills_dir_path(),
             max_depth=max_depth,
         )
 
@@ -125,9 +135,9 @@ class SkillsDirectory:
 
     def _iter_sources(self) -> tuple[tuple[SkillScope, Path], ...]:
         fallback_sources = tuple(
-            (SkillScope.USER, base_dir) for base_dir in self.fallback_dirs
+            (SkillScope.BUILTIN, base_dir) for base_dir in self.fallback_dirs
         )
-        return (*fallback_sources, (SkillScope.PROJECT, self.base_dir))
+        return (*fallback_sources, (SkillScope.APP, self.base_dir))
 
     def _split_front_matter(self, content: str) -> tuple[str, str]:
         if not content.startswith("---"):

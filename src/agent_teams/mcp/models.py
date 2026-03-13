@@ -9,8 +9,7 @@ from agent_teams.shared_types.json_types import JsonObject
 
 
 class McpConfigScope(str, Enum):
-    USER = "user"
-    PROJECT = "project"
+    APP = "app"
 
 
 class McpToolInfo(BaseModel):

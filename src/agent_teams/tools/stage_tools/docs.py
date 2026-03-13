@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.paths import get_project_config_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.workspace import WorkspaceHandle
 
 
@@ -16,7 +16,7 @@ def stage_docs_dir(
         return workspace.artifacts.stage_docs_dir(run_id)
     if workspace_root is None:
         raise ValueError("workspace or workspace_root is required")
-    return get_project_config_dir(project_root=workspace_root) / "stage_docs" / run_id
+    return get_app_config_dir() / "stage_docs" / run_id
 
 
 def current_stage_doc_path(

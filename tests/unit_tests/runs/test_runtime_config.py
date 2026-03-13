@@ -14,7 +14,7 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".agent_teams"
+    config_dir = tmp_path / ".config" / "agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -28,7 +28,7 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(runtime_config, "get_project_config_dir", lambda: config_dir)
+    monkeypatch.setattr(runtime_config, "get_app_config_dir", lambda: config_dir)
     monkeypatch.setattr(runtime_config, "load_merged_env_vars", lambda **kwargs: {})
 
     resolved = runtime_config.load_runtime_config()
@@ -39,11 +39,11 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
 
 
-def test_load_runtime_config_resolves_relative_roles_dir_from_env(
+def test_load_runtime_config_ignores_roles_dir_env_override(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".agent_teams"
+    config_dir = tmp_path / ".config" / "agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -66,6 +66,21 @@ def test_load_runtime_config_resolves_relative_roles_dir_from_env(
     resolved = runtime_config.load_runtime_config(config_dir=config_dir)
 
     assert resolved.paths.roles_dir == (config_dir / "roles")
+
+
+def test_load_runtime_config_reports_missing_model_config_without_raising(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_config, "load_merged_env_vars", lambda **kwargs: {})
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.llm_profiles == {}
+    assert resolved.model_status.loaded is False
+    assert resolved.model_status.error is not None
 
 
 def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None:

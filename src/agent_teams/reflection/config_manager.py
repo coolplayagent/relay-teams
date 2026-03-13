@@ -13,6 +13,10 @@ class ReflectionConfigManager:
     def __init__(self, *, config_dir: Path) -> None:
         self._config_dir = config_dir
 
+    @property
+    def config_dir(self) -> Path:
+        return self._config_dir
+
     def get_reflection_config(self) -> ReflectionConfig:
         config_file = self._config_dir / "reflection.json"
         if not config_file.exists():

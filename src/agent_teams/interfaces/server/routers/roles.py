@@ -36,11 +36,13 @@ def list_roles(
 
 @router.get(":options", response_model=RoleConfigOptions)
 def get_role_config_options(
+    role_registry: RoleRegistry = Depends(get_role_registry),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     mcp_service: McpService = Depends(get_mcp_service),
     skill_registry: SkillRegistry = Depends(get_skill_registry),
 ) -> RoleConfigOptions:
     return RoleConfigOptions(
+        coordinator_role_id=role_registry.get_coordinator_role_id(),
         tools=tool_registry.list_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),

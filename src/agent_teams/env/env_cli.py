@@ -21,6 +21,7 @@ from agent_teams.env.proxy_env import (
     sync_proxy_env_to_process_env,
 )
 from agent_teams.env.runtime_env import (
+    get_app_env_file_path,
     get_project_env_file_path,
     get_user_env_file_path,
     load_env_file,
@@ -133,15 +134,14 @@ def probe_web(
 def collect_env_entries(
     *, prefix: str | None, show_secrets: bool
 ) -> list[EnvListEntry]:
-    user_env = load_env_file(get_user_env_file_path())
-    project_env = load_env_file(get_project_env_file_path())
+    _ = (get_user_env_file_path, get_project_env_file_path)
+    app_env = load_env_file(get_app_env_file_path())
     process_env = dict(os.environ)
 
     merged: dict[str, str] = {}
     source_by_key: dict[str, str] = {}
 
-    merge_env_source(merged, source_by_key, user_env, "user")
-    merge_env_source(merged, source_by_key, project_env, "project")
+    merge_env_source(merged, source_by_key, app_env, "app")
     merge_env_source(merged, source_by_key, process_env, "process")
 
     entries: list[EnvListEntry] = []

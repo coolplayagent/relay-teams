@@ -5,6 +5,7 @@ from json import loads
 from pathlib import Path
 from typing import cast
 
+from agent_teams.builtin import ensure_app_config_bootstrap
 from agent_teams.env import (
     apply_proxy_env_to_process_env,
     extract_proxy_env_vars,
@@ -13,7 +14,7 @@ from agent_teams.env import (
 from agent_teams.logger import get_logger
 from agent_teams.mcp.models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.paths import get_project_config_dir, get_user_config_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.shared_types.json_types import JsonObject, JsonValue
 from agent_teams.trace import trace_span
 
@@ -23,50 +24,44 @@ _ENV_FILE_NAME = ".env"
 
 
 def get_user_mcp_file_path(user_home_dir: Path | None = None) -> Path:
-    return get_user_config_dir(user_home_dir=user_home_dir) / _MCP_FILE_NAME
+    return get_app_config_dir(user_home_dir=user_home_dir) / _MCP_FILE_NAME
 
 
 def get_project_mcp_file_path(project_root: Path | None = None) -> Path:
-    return get_project_config_dir(project_root=project_root) / _MCP_FILE_NAME
+    _ = project_root
+    return get_app_config_dir() / _MCP_FILE_NAME
 
 
 class McpConfigManager:
     def __init__(
         self,
         *,
-        project_config_dir: Path,
+        app_config_dir: Path,
         user_home_dir: Path | None = None,
     ) -> None:
-        self._project_config_dir: Path = project_config_dir.expanduser().resolve()
+        self._app_config_dir: Path = app_config_dir.expanduser().resolve()
         self._user_home_dir: Path | None = user_home_dir
 
     def load_registry(self) -> McpRegistry:
+        ensure_app_config_bootstrap(self._app_config_dir)
         with trace_span(
             logger,
             component="mcp.config",
             operation="load_registry",
-            attributes={"project_config_dir": str(self._project_config_dir)},
+            attributes={"app_config_dir": str(self._app_config_dir)},
         ):
             merged_specs: dict[str, McpServerSpec] = {}
             merged_env = load_merged_env_vars(
-                user_home_dir=self._user_home_dir,
-                extra_env_files=(self._project_config_dir / _ENV_FILE_NAME,),
+                extra_env_files=(self._app_config_dir / _ENV_FILE_NAME,),
             )
             proxy_env = apply_proxy_env_to_process_env(merged_env)
-            for source, file_path in self._iter_sources():
-                for spec in _load_specs_from_file(
-                    file_path=file_path,
-                    source=source,
-                    proxy_env=proxy_env,
-                ):
-                    merged_specs[spec.name] = spec
+            for spec in _load_specs_from_file(
+                file_path=self._app_config_dir / _MCP_FILE_NAME,
+                source=McpConfigScope.APP,
+                proxy_env=proxy_env,
+            ):
+                merged_specs[spec.name] = spec
             return McpRegistry(tuple(merged_specs.values()))
-
-    def _iter_sources(self) -> tuple[tuple[McpConfigScope, Path], ...]:
-        return (
-            (McpConfigScope.USER, get_user_mcp_file_path(self._user_home_dir)),
-            (McpConfigScope.PROJECT, self._project_config_dir / _MCP_FILE_NAME),
-        )
 
 
 def _load_specs_from_file(

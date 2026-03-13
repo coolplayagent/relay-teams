@@ -32,7 +32,7 @@ class SkillsConfigReloadService:
             attributes={"config_dir": str(self._config_dir)},
         ):
             skill_registry = SkillRegistry.from_config_dirs(
-                project_config_dir=self._config_dir
+                app_config_dir=self._config_dir
             )
             for role in self._role_registry.list_roles():
                 skill_registry.validate_known(role.skills)

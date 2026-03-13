@@ -5,17 +5,22 @@ from collections.abc import Mapping
 import os
 from pathlib import Path
 
-from agent_teams.paths import get_project_config_dir, get_user_config_dir
+from agent_teams.paths import get_app_config_dir
 
 _ENV_FILE_NAME = ".env"
 
 
+def get_app_env_file_path(user_home_dir: Path | None = None) -> Path:
+    return get_app_config_dir(user_home_dir=user_home_dir) / _ENV_FILE_NAME
+
+
 def get_user_env_file_path(user_home_dir: Path | None = None) -> Path:
-    return get_user_config_dir(user_home_dir=user_home_dir) / _ENV_FILE_NAME
+    return get_app_env_file_path(user_home_dir=user_home_dir)
 
 
 def get_project_env_file_path(project_root: Path | None = None) -> Path:
-    return get_project_config_dir(project_root=project_root) / _ENV_FILE_NAME
+    _ = project_root
+    return get_app_env_file_path()
 
 
 def load_env_file(env_file_path: Path) -> dict[str, str]:
@@ -47,11 +52,9 @@ def load_merged_env_vars(
 ) -> dict[str, str]:
     merged: dict[str, str] = {}
 
-    user_env_path = get_user_env_file_path(user_home_dir=user_home_dir)
-    project_env_path = get_project_env_file_path(project_root=project_root)
-
-    merged.update(load_env_file(user_env_path))
-    merged.update(load_env_file(project_env_path))
+    _ = project_root
+    app_env_path = get_app_env_file_path(user_home_dir=user_home_dir)
+    merged.update(load_env_file(app_env_path))
 
     for file_path in extra_env_files:
         merged.update(load_env_file(file_path))

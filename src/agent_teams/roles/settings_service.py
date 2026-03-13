@@ -8,6 +8,7 @@ import yaml
 
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.models import (
+    RoleConfigSource,
     RoleDefinition,
     RoleDocumentDraft,
     RoleDocumentRecord,
@@ -25,12 +26,14 @@ class RoleSettingsService:
         self,
         *,
         roles_dir: Path,
+        builtin_roles_dir: Path,
         get_tool_registry: Callable[[], ToolRegistry],
         get_mcp_registry: Callable[[], McpRegistry],
         get_skill_registry: Callable[[], SkillRegistry],
         on_roles_reloaded: Callable[[RoleRegistry], None],
     ) -> None:
         self._roles_dir: Path = roles_dir
+        self._builtin_roles_dir: Path = builtin_roles_dir
         self._loader: RoleLoader = RoleLoader()
         self._get_tool_registry: Callable[[], ToolRegistry] = get_tool_registry
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
@@ -45,13 +48,14 @@ class RoleSettingsService:
         return tuple(documents)
 
     def get_role_document(self, role_id: str) -> RoleDocumentRecord:
-        role_path = self._find_role_path(role_id)
+        role_path, source = self._find_role_record(role_id)
         content = role_path.read_text(encoding="utf-8")
         role = self._loader.load_from_text(content, source_name=role_path.name)
         return self._record_from_definition(
             definition=role,
             file_name=role_path.name,
             content=content,
+            source=source,
         )
 
     def validate_role_document(
@@ -72,6 +76,7 @@ class RoleSettingsService:
                 file_name=f"{normalized.role_id}.md",
                 content=content,
                 source_role_id=normalized.source_role_id,
+                source=RoleConfigSource.APP,
             ),
         )
 
@@ -85,27 +90,23 @@ class RoleSettingsService:
             raise ValueError("Path role_id must match payload role_id")
 
         source_role_id = normalized.source_role_id or role_id
-        source_path = self._find_role_path_optional(source_role_id)
+        source_record = self._find_role_record_optional(source_role_id)
+        source_path = None if source_record is None else source_record[0]
         validated = self.validate_role_document(normalized).role
-        target_path = (
-            source_path
-            if source_path is not None and normalized.role_id == source_role_id
-            else self._roles_dir / f"{normalized.role_id}.md"
-        )
-        if source_path is None and normalized.source_role_id:
+        target_path = self._roles_dir / f"{normalized.role_id}.md"
+        if source_record is None and normalized.source_role_id:
             raise ValueError(f"Role not found: {source_role_id}")
-        if (
-            source_path is not None
-            and target_path != source_path
-            and target_path.exists()
+        if target_path.exists() and (
+            source_path is None or target_path.resolve() != source_path.resolve()
         ):
             raise ValueError(f"Role file already exists: {target_path.name}")
-        if source_path is None and target_path.exists():
-            raise ValueError(f"Role file already exists: {target_path.name}")
 
+        self._roles_dir.mkdir(parents=True, exist_ok=True)
         target_path.write_text(validated.content, encoding="utf-8")
         if (
             source_path is not None
+            and source_record is not None
+            and source_record[1] == RoleConfigSource.APP
             and target_path != source_path
             and source_path.exists()
         ):
@@ -131,6 +132,7 @@ class RoleSettingsService:
             name=definition.name,
             version=definition.version,
             model_profile=definition.model_profile,
+            source=self._resolve_role_source(definition.role_id),
         )
 
     def _record_from_definition(
@@ -140,6 +142,7 @@ class RoleSettingsService:
         file_name: str,
         content: str,
         source_role_id: str | None = None,
+        source: RoleConfigSource = RoleConfigSource.APP,
     ) -> RoleDocumentRecord:
         return RoleDocumentRecord(
             source_role_id=source_role_id,
@@ -152,6 +155,7 @@ class RoleSettingsService:
             model_profile=definition.model_profile,
             workspace_profile=definition.workspace_profile,
             system_prompt=definition.system_prompt,
+            source=source,
             file_name=file_name,
             content=content,
         )
@@ -196,7 +200,10 @@ class RoleSettingsService:
         return f"---\n{serialized_front_matter}\n---\n\n{draft.system_prompt.strip()}\n"
 
     def _load_registry(self) -> RoleRegistry:
-        registry = self._loader.load_all(self._roles_dir)
+        registry = self._loader.load_builtin_and_app(
+            builtin_roles_dir=self._builtin_roles_dir,
+            app_roles_dir=self._roles_dir,
+        )
         for definition in registry.list_roles():
             self._validate_definition(definition)
         return registry
@@ -206,15 +213,23 @@ class RoleSettingsService:
         self._get_mcp_registry().validate_known(definition.mcp_servers)
         self._get_skill_registry().validate_known(definition.skills)
 
-    def _find_role_path(self, role_id: str) -> Path:
-        role_path = self._find_role_path_optional(role_id)
-        if role_path is None:
+    def _find_role_record(self, role_id: str) -> tuple[Path, RoleConfigSource]:
+        role_record = self._find_role_record_optional(role_id)
+        if role_record is None:
             raise ValueError(f"Role not found: {role_id}")
-        return role_path
+        return role_record
 
-    def _find_role_path_optional(self, role_id: str) -> Path | None:
-        for role_path in sorted(self._roles_dir.glob("*.md")):
-            definition = self._loader.load_one(role_path)
-            if definition.role_id == role_id:
-                return role_path
-        return None
+    def _find_role_record_optional(
+        self,
+        role_id: str,
+    ) -> tuple[Path, RoleConfigSource] | None:
+        return self._loader.build_effective_role_map(
+            builtin_roles_dir=self._builtin_roles_dir,
+            app_roles_dir=self._roles_dir,
+        ).get(role_id)
+
+    def _resolve_role_source(self, role_id: str) -> RoleConfigSource:
+        role_record = self._find_role_record_optional(role_id)
+        if role_record is None:
+            return RoleConfigSource.APP
+        return role_record[1]

@@ -33,14 +33,14 @@ class SkillRegistry(BaseModel):
     def from_skill_dirs(
         cls,
         *,
-        project_skills_dir: Path,
-        user_skills_dir: Path | None = None,
+        app_skills_dir: Path,
+        builtin_skills_dir: Path | None = None,
         max_depth: int = 3,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_skill_dirs(
-                project_skills_dir=project_skills_dir,
-                user_skills_dir=user_skills_dir,
+                app_skills_dir=app_skills_dir,
+                builtin_skills_dir=builtin_skills_dir,
                 max_depth=max_depth,
             )
         )
@@ -49,14 +49,12 @@ class SkillRegistry(BaseModel):
     def from_config_dirs(
         cls,
         *,
-        project_config_dir: Path,
-        user_home_dir: Path | None = None,
+        app_config_dir: Path,
         max_depth: int = 3,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_config_dirs(
-                project_config_dir=project_config_dir,
-                user_home_dir=user_home_dir,
+                app_config_dir=app_config_dir,
                 max_depth=max_depth,
             )
         )
@@ -65,13 +63,11 @@ class SkillRegistry(BaseModel):
     def from_default_scopes(
         cls,
         *,
-        project_root: Path | None = None,
         user_home_dir: Path | None = None,
         max_depth: int = 3,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_default_scopes(
-                project_root=project_root,
                 user_home_dir=user_home_dir,
                 max_depth=max_depth,
             )

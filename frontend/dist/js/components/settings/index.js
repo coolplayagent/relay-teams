@@ -27,7 +27,7 @@ const TAB_METADATA = {
     },
     environment: {
         title: 'Environment Variables',
-        description: 'Manage Windows registry environment variables by system and user scope.',
+        description: 'Inspect system environment values and manage Agent Teams app environment variables.',
     },
     notifications: {
         title: 'Notifications',
@@ -252,8 +252,7 @@ function createModal() {
                                         <div class="form-group env-inline-field env-inline-field-compact">
                                             <label for="env-scope-select">Scope</label>
                                             <select id="env-scope-select">
-                                                <option value="user">User</option>
-                                                <option value="system">System</option>
+                                                <option value="app">App</option>
                                             </select>
                                         </div>
                                         <div class="form-group env-inline-field">
@@ -397,6 +396,13 @@ function createModal() {
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-no-proxy">NO_PROXY</label>
                                                 <input type="text" id="proxy-no-proxy" placeholder="localhost;127.*;192.168.*;<local>" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field proxy-inline-field-compact">
+                                                <label class="notification-toggle" for="proxy-verify-ssl">
+                                                    <input type="checkbox" id="proxy-verify-ssl" checked>
+                                                    <span class="notification-toggle-check" aria-hidden="true"></span>
+                                                    <span class="notification-toggle-label">Verify SSL</span>
+                                                </label>
                                             </div>
                                         </div>
                                     </section>

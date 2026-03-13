@@ -23,29 +23,15 @@ def _clear_proxy_env(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_load_registry_merges_user_scope_and_project_scope(tmp_path: Path) -> None:
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    user_home_dir = tmp_path / "user"
-    project_config_dir.mkdir(parents=True)
-    (user_home_dir / ".agent_teams").mkdir(parents=True)
-
-    (user_home_dir / ".agent_teams" / "mcp.json").write_text(
+def test_load_registry_reads_app_scope_only(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
         json.dumps(
             {
                 "mcpServers": {
-                    "shared": {"command": "user-shared"},
-                    "user_only": {"url": "https://example.com/sse"},
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    (project_config_dir / "mcp.json").write_text(
-        json.dumps(
-            {
-                "mcpServers": {
-                    "shared": {"command": "project-shared"},
-                    "project_only": {
+                    "shared": {"command": "app-shared"},
+                    "app_only": {
                         "transport": "streamable-http",
                         "url": "https://example.com/mcp",
                     },
@@ -55,18 +41,14 @@ def test_load_registry_merges_user_scope_and_project_scope(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    manager = config_manager.McpConfigManager(
-        project_config_dir=project_config_dir,
-        user_home_dir=user_home_dir,
-    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
 
     registry = manager.load_registry()
     specs = registry.list_specs()
 
-    assert [spec.name for spec in specs] == ["project_only", "shared", "user_only"]
-    assert registry.get_spec("shared").source == McpConfigScope.PROJECT
-    assert registry.get_spec("shared").server_config["command"] == "project-shared"
-    assert registry.get_spec("user_only").source == McpConfigScope.USER
+    assert [spec.name for spec in specs] == ["app_only", "shared"]
+    assert registry.get_spec("shared").source == McpConfigScope.APP
+    assert registry.get_spec("shared").server_config["command"] == "app-shared"
 
 
 def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
@@ -74,16 +56,14 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
     monkeypatch,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    user_home_dir = tmp_path / "user"
-    project_config_dir.mkdir(parents=True)
-    (user_home_dir / ".agent_teams").mkdir(parents=True)
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir.mkdir(parents=True)
 
-    (project_config_dir / ".env").write_text(
+    (app_config_dir / ".env").write_text(
         "HTTP_PROXY=http://proxy.internal:8080\nNO_PROXY=localhost,127.0.0.1\n",
         encoding="utf-8",
     )
-    (project_config_dir / "mcp.json").write_text(
+    (app_config_dir / "mcp.json").write_text(
         json.dumps(
             {
                 "mcpServers": {
@@ -105,10 +85,7 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
         encoding="utf-8",
     )
 
-    manager = config_manager.McpConfigManager(
-        project_config_dir=project_config_dir,
-        user_home_dir=user_home_dir,
-    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
 
     registry = manager.load_registry()
 
@@ -132,13 +109,13 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
     monkeypatch,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    project_config_dir.mkdir(parents=True)
-    (project_config_dir / ".env").write_text(
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / ".env").write_text(
         "HTTP_PROXY=http://proxy.internal:8080\n",
         encoding="utf-8",
     )
-    (project_config_dir / "mcp.json").write_text(
+    (app_config_dir / "mcp.json").write_text(
         json.dumps(
             {
                 "mcpServers": {
@@ -156,7 +133,7 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
         encoding="utf-8",
     )
 
-    manager = config_manager.McpConfigManager(project_config_dir=project_config_dir)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
 
     registry = manager.load_registry()
 
@@ -168,8 +145,8 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
 
 
 def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    project_config_dir.mkdir(parents=True)
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir.mkdir(parents=True)
     content = json.dumps(
         {
             "mcpServers": {
@@ -181,9 +158,9 @@ def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
         },
         indent=2,
     )
-    (project_config_dir / "mcp.json").write_text(content, encoding="utf-8-sig")
+    (app_config_dir / "mcp.json").write_text(content, encoding="utf-8-sig")
 
-    manager = config_manager.McpConfigManager(project_config_dir=project_config_dir)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
 
     registry = manager.load_registry()
 
@@ -193,18 +170,12 @@ def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
 def test_get_mcp_file_paths_follow_scope_conventions(
     monkeypatch,
 ) -> None:
-    project_config_dir = Path("D:/repo/.agent_teams").resolve()
-    user_config_dir = Path("D:/home/.agent_teams").resolve()
+    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
     monkeypatch.setattr(
         config_manager,
-        "get_project_config_dir",
-        lambda **kwargs: project_config_dir,
-    )
-    monkeypatch.setattr(
-        config_manager,
-        "get_user_config_dir",
-        lambda **kwargs: user_config_dir,
+        "get_app_config_dir",
+        lambda **kwargs: app_config_dir,
     )
 
-    assert config_manager.get_project_mcp_file_path() == project_config_dir / "mcp.json"
-    assert config_manager.get_user_mcp_file_path() == user_config_dir / "mcp.json"
+    assert config_manager.get_project_mcp_file_path() == app_config_dir / "mcp.json"
+    assert config_manager.get_user_mcp_file_path() == app_config_dir / "mcp.json"

@@ -5,16 +5,19 @@
 import { initSettings, openSettings } from '../components/settings.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
 import { handleNewSessionClick, loadSessions } from '../components/sidebar.js';
+import { fetchRoleConfigOptions } from '../core/api.js';
+import { setCoordinatorRoleId, state } from '../core/state.js';
 import { setupNavbarBindings } from '../components/navbar.js';
 import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
 import { resumeRecoverableRun } from './recovery.js';
-import { state } from '../core/state.js';
 import { requestStopCurrentRun } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import {
+    errorToPayload,
     installGlobalErrorLogging,
     logInfo,
+    logError,
     sysLog,
 } from '../utils/logger.js';
 
@@ -66,6 +69,20 @@ function setupSettingsButton() {
     }
 }
 
+async function hydrateCoordinatorRoleId() {
+    try {
+        const options = await fetchRoleConfigOptions();
+        setCoordinatorRoleId(options?.coordinator_role_id || '');
+    } catch (error) {
+        logError(
+            'frontend.bootstrap.coordinator_role_failed',
+            'Failed to load coordinator role metadata',
+            errorToPayload(error),
+        );
+        setCoordinatorRoleId('');
+    }
+}
+
 export async function initApp(selectSession, handleSend) {
     installGlobalErrorLogging();
     logInfo('frontend.bootstrap.started', 'Frontend bootstrap started');
@@ -73,6 +90,7 @@ export async function initApp(selectSession, handleSend) {
     initUiFeedback();
     initBackendStatusMonitor();
     setupNavbarBindings();
+    await hydrateCoordinatorRoleId();
     initializeSubagentRail();
     setupEventBindings(handleSend);
     initSettings();

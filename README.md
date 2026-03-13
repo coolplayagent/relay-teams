@@ -58,16 +58,18 @@ uv sync
 Linux/macOS:
 
 ```bash
-cp .agent_teams/model.json.example .agent_teams/model.json
+mkdir -p ~/.config/agent-teams
+cp src/agent_teams/builtin/config/model.json ~/.config/agent-teams/model.json
 ```
 
 Windows PowerShell:
 
 ```powershell
-Copy-Item .agent_teams/model.json.example .agent_teams/model.json
+New-Item -ItemType Directory -Force "$HOME/.config/agent-teams" | Out-Null
+Copy-Item src/agent_teams/builtin/config/model.json "$HOME/.config/agent-teams/model.json"
 ```
 
-Then edit `.agent_teams/model.json`. You must configure the `default` profile, and optionally add more profiles for different roles.
+Then edit `~/.config/agent-teams/model.json`. You must configure the `default` profile, and optionally add more profiles for different roles.
 
 ```json
 {
@@ -86,7 +88,7 @@ Then edit `.agent_teams/model.json`. You must configure the `default` profile, a
 }
 ```
 
-If you use placeholders such as `${OPENAI_API_KEY}`, define them in the ignored `.agent_teams/.env` file or in the process environment before starting the server.
+If you use placeholders such as `${OPENAI_API_KEY}`, define them in the ignored `~/.config/agent-teams/.env` file or in the process environment before starting the server.
 
 ```dotenv
 OPENAI_API_KEY=<your-openai-api-key>
@@ -95,21 +97,20 @@ ANTHROPIC_API_KEY=<your-anthropic-api-key>
 HTTP_PROXY=http://proxy.example:8080
 HTTPS_PROXY=http://proxy.example:8080
 NO_PROXY=localhost,127.0.0.1
-# Optional: disable TLS verification for LLM API requests behind a corporate proxy
-AGENT_TEAMS_LLM_SSL_VERIFY=false
 ```
 
 Proxy behavior:
-- LLM OpenAI-compatible requests read proxy settings from the merged env (`.agent_teams/.env`, user env, process env).
+- LLM OpenAI-compatible requests read proxy settings from app `~/.config/agent-teams/.env` and the process environment.
 - All MCP transports read proxy settings from the merged env.
 - Every MCP server config inherits merged proxy env values in its `env` settings.
 - stdio MCP servers consume those values when Agent Teams launches subprocess transports such as `uvx` and `npx`.
 - Remote MCP transports (`sse`, `http`, `streamable-http`) also use the merged proxy env through the backend process environment.
 - If an MCP server defines explicit `env` entries in `mcp.json`, those values override the inherited proxy defaults.
+- `verify_ssl` is managed from `Settings -> Proxy`, not from `.env`.
 
 #### Per-role model configuration
 
-In each role's markdown file (e.g., `.agent_teams/roles/coordinator_agent.md`), add `model_profile` to use a specific model:
+In each role's markdown file (stored under `~/.config/agent-teams/roles/` when overridden), add `model_profile` to use a specific model:
 
 ```yaml
 ---
@@ -136,7 +137,7 @@ uv run agent-teams server start
 
 Then open http://127.0.0.1:8000 in your browser to access the web interface.
 
-The server CLI now manages a local PID record in `.agent_teams/server-process.json` for `restart` and `stop --force`:
+The server CLI now manages a local PID record in `~/.config/agent-teams/server-process.json` for `restart` and `stop --force`:
 
 ```bash
 uv run agent-teams server restart
@@ -158,16 +159,14 @@ uv run agent-teams env list
 ### 5.1.1) Manage Windows environment variables in Settings
 
 After the server starts, open `Settings -> Environment` in the web UI.
-The page manages Windows registry-backed environment variables grouped into `System` and `User` scope, and each group can be expanded or collapsed independently.
-You can add, edit, rename, and delete variables there.
-This settings page edits persisted Windows environment variables, while `uv run agent-teams env list` shows the merged runtime environment seen by Agent Teams.
-System-scope writes may require administrator permission; when the backend process cannot write that registry path, the API returns a user-facing permission error.
+The page shows read-only `System` variables and editable `App` variables.
+App variables are stored in `~/.config/agent-teams/.env`.
+This settings page edits Agent Teams app runtime variables, while `uv run agent-teams env list` shows the merged runtime environment seen by Agent Teams.
 
 ### 5.2) Inspect merged MCP servers
 
-`mcp` config now follows module-local scope merge rules:
-- `~/.agent_teams/mcp.json` (user scope)
-- `.agent_teams/mcp.json` (project scope, overrides user servers with the same name)
+`mcp` config is app-scoped:
+- `~/.config/agent-teams/mcp.json`
 - All MCP transports read proxy env values from merged runtime env.
 - Every MCP server config inherits merged proxy env values in its `env` settings.
 - stdio MCP servers consume those values when Agent Teams starts subprocess transports.

@@ -19,7 +19,7 @@ class _FakeMcpService:
         return (
             McpServerSummary(
                 name="filesystem",
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
                 transport="stdio",
             ),
         )
@@ -29,7 +29,7 @@ class _FakeMcpService:
             raise ValueError(f"Unknown MCP server: {name}")
         return McpServerToolsSummary(
             server="filesystem",
-            source=McpConfigScope.PROJECT,
+            source=McpConfigScope.APP,
             transport="stdio",
             tools=(McpToolInfo(name="read_file", description="Read a file"),),
         )
@@ -51,7 +51,7 @@ def test_list_mcp_servers() -> None:
     assert response.json() == [
         {
             "name": "filesystem",
-            "source": "project",
+            "source": "app",
             "transport": "stdio",
         }
     ]
@@ -65,7 +65,7 @@ def test_list_mcp_server_tools() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "server": "filesystem",
-        "source": "project",
+        "source": "app",
         "transport": "stdio",
         "tools": [{"name": "read_file", "description": "Read a file"}],
     }

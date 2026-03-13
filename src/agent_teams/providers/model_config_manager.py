@@ -80,7 +80,10 @@ class ModelConfigManager:
 
 
 def _load_json_object(file_path: Path) -> JsonObject:
-    raw = cast(object, loads(file_path.read_text("utf-8")))
+    try:
+        raw = cast(object, loads(file_path.read_text("utf-8")))
+    except Exception:
+        return {}
     if isinstance(raw, dict):
         return cast(JsonObject, raw)
     return {}

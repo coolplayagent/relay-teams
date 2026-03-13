@@ -19,8 +19,44 @@ export const state = {
     sessionAgents: [],
     sessionTasks: [],
     selectedRoleId: null,
+    coordinatorRoleId: null,
     rightRailExpanded: true,
 };
+
+export function setCoordinatorRoleId(roleId) {
+    state.coordinatorRoleId = normalizeRoleId(roleId) || null;
+}
+
+export function getCoordinatorRoleId() {
+    return normalizeRoleId(state.coordinatorRoleId);
+}
+
+export function isCoordinatorRoleId(roleId) {
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRoleId) {
+        return false;
+    }
+    return safeRoleId === getCoordinatorRoleId();
+}
+
+export function humanizeRoleId(roleId, { coordinatorLabel = 'Coordinator', fallback = 'Agent' } = {}) {
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRoleId) {
+        return fallback;
+    }
+    if (isCoordinatorRoleId(safeRoleId)) {
+        return coordinatorLabel;
+    }
+    return safeRoleId
+        .split(/[_\\s-]+/)
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+}
+
+function normalizeRoleId(roleId) {
+    return String(roleId || '').trim();
+}
 
 export const els = {
     newBtn: document.getElementById('new-btn'),

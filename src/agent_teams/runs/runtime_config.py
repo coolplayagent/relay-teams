@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.env import load_merged_env_vars
-from agent_teams.paths import get_project_config_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
@@ -26,11 +26,20 @@ class RuntimePaths(BaseModel):
     roles_dir: Path
 
 
+class ModelConfigStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    loaded: bool
+    profiles: tuple[str, ...] = ()
+    error: str | None = None
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     paths: RuntimePaths
     llm_profiles: dict[str, ModelEndpointConfig]
+    model_status: ModelConfigStatus = ModelConfigStatus(loaded=True)
 
 
 def load_runtime_config(
@@ -39,7 +48,7 @@ def load_runtime_config(
     db_path: Path | None = None,
 ) -> RuntimeConfig:
     resolved_config_dir = (
-        get_project_config_dir()
+        get_app_config_dir()
         if config_dir is None
         else config_dir.expanduser().resolve()
     )
@@ -48,15 +57,29 @@ def load_runtime_config(
     env_file = resolved_config_dir / ".env"
     merged_env = load_merged_env_vars(extra_env_files=(env_file,))
 
-    resolved_roles_dir = _resolve_path(
-        resolved_config_dir,
-        str(roles_dir or merged_env.get("AGENT_TEAMS_ROLES_DIR", "roles")),
+    resolved_roles_dir = (
+        roles_dir.expanduser().resolve()
+        if roles_dir is not None
+        else resolved_config_dir / "roles"
     )
-    resolved_db_path = db_path or _resolve_path(
-        resolved_config_dir,
-        merged_env.get("AGENT_TEAMS_DB_PATH", "agent_teams.db"),
+    resolved_db_path = (
+        db_path.expanduser().resolve()
+        if db_path is not None
+        else resolved_config_dir / "agent_teams.db"
     )
-    llm_profiles = load_llm_configs(resolved_config_dir, merged_env)
+    try:
+        llm_profiles = load_llm_configs(resolved_config_dir, merged_env)
+        model_status = ModelConfigStatus(
+            loaded=True,
+            profiles=tuple(sorted(llm_profiles.keys())),
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        llm_profiles = {}
+        model_status = ModelConfigStatus(
+            loaded=False,
+            profiles=(),
+            error=str(exc),
+        )
 
     return RuntimeConfig(
         paths=RuntimePaths(
@@ -66,6 +89,7 @@ def load_runtime_config(
             roles_dir=resolved_roles_dir,
         ),
         llm_profiles=llm_profiles,
+        model_status=model_status,
     )
 
 

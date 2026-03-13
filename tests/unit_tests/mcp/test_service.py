@@ -20,13 +20,13 @@ def test_list_servers_reports_effective_transport() -> None:
                 name="filesystem",
                 config={"mcpServers": {"filesystem": {"command": "npx"}}},
                 server_config={"command": "npx"},
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
             ),
             McpServerSpec(
                 name="remote",
                 config={"mcpServers": {"remote": {"url": "https://example.com/sse"}}},
                 server_config={"url": "https://example.com/sse"},
-                source=McpConfigScope.USER,
+                source=McpConfigScope.APP,
             ),
         )
     )
@@ -46,7 +46,7 @@ def test_list_servers_binds_trace_context(monkeypatch) -> None:
                 name="filesystem",
                 config={"mcpServers": {"filesystem": {"command": "npx"}}},
                 server_config={"command": "npx"},
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
             ),
         )
     )
@@ -75,7 +75,7 @@ async def test_list_server_tools_uses_registry_result(monkeypatch) -> None:
                 name="filesystem",
                 config={"mcpServers": {"filesystem": {"command": "npx"}}},
                 server_config={"command": "npx"},
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
             ),
         )
     )

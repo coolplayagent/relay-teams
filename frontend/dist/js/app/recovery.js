@@ -10,7 +10,7 @@ import {
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import { fetchSessionRecovery, resolveToolApproval, resumeRun } from '../core/api.js';
-import { state } from '../core/state.js';
+import { humanizeRoleId, state } from '../core/state.js';
 import { resumeRunStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
@@ -1176,14 +1176,7 @@ function normalizeCount(value) {
 }
 
 function humanizeRoleLabel(value) {
-    const safe = String(value || '').trim();
-    if (!safe) return 'Agent';
-    if (safe === 'coordinator_agent') return 'Coordinator Agent';
-    return safe
-        .split('_')
-        .filter(Boolean)
-        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
+    return humanizeRoleId(value, { coordinatorLabel: 'Coordinator Agent' });
 }
 
 function humanizeToolName(value) {

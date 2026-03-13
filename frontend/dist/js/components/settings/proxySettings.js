@@ -148,6 +148,7 @@ function writeProxyFormValues(config) {
     setInputValue('proxy-no-proxy', config.no_proxy);
     setInputValue('proxy-username', config.proxy_username);
     setInputValue('proxy-password', config.proxy_password);
+    setCheckboxValue('proxy-verify-ssl', config.verify_ssl !== false);
 }
 
 function readProxyFormValues() {
@@ -158,6 +159,7 @@ function readProxyFormValues() {
         no_proxy: readInputValue('proxy-no-proxy'),
         proxy_username: readInputValue('proxy-username'),
         proxy_password: readInputValue('proxy-password'),
+        verify_ssl: readCheckboxValue('proxy-verify-ssl', true),
     };
 }
 
@@ -175,4 +177,20 @@ function readInputValue(id) {
         return '';
     }
     return input.value.trim();
+}
+
+function setCheckboxValue(id, value) {
+    const input = document.getElementById(id);
+    if (!input) {
+        return;
+    }
+    input.checked = Boolean(value);
+}
+
+function readCheckboxValue(id, fallback) {
+    const input = document.getElementById(id);
+    if (!input) {
+        return fallback;
+    }
+    return Boolean(input.checked);
 }

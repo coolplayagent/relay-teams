@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
+from agent_teams.builtin import ensure_app_config_bootstrap
 from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
@@ -34,7 +35,7 @@ from agent_teams.logger import (
     log_event,
     shutdown_logging,
 )
-from agent_teams.paths import get_project_config_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.trace import bind_trace_context, generate_request_id
 
 logger = get_logger(__name__)
@@ -51,8 +52,8 @@ _SUPPRESSED_SUCCESS_PATHS = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    config_dir = get_project_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir = get_app_config_dir()
+    ensure_app_config_bootstrap(config_dir)
     configure_logging(config_dir=config_dir)
     _register_signal_handlers()
     app.state.container = ServerContainer(config_dir=config_dir)

@@ -14,13 +14,13 @@ skills_app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     help=(
-        "Inspect skills discovered from both user and project directories.\n\n"
+        "Inspect skills discovered from built-in defaults and the app directory.\n\n"
         "Load order:\n"
-        "1. ~/.agent_teams/skills (user scope)\n"
-        "2. .agent_teams/skills (project scope, overrides user skills with the same name)\n\n"
+        "1. built-in skills (builtin scope)\n"
+        "2. ~/.config/agent-teams/skills (app scope, overrides builtin skills with the same name)\n\n"
         "Common usage:\n"
         "- agent-teams skills list\n"
-        "- agent-teams skills list --source project --format json\n"
+        "- agent-teams skills list --source app --format json\n"
         "- agent-teams skills show time"
     ),
 )
@@ -33,8 +33,8 @@ class SkillOutputFormat(str, Enum):
 
 class SkillSourceFilter(str, Enum):
     ALL = "all"
-    USER = "user"
-    PROJECT = "project"
+    BUILTIN = "builtin"
+    APP = "app"
 
 
 class SkillListEntry(TypedDict):
@@ -47,11 +47,11 @@ class SkillListEntry(TypedDict):
 @skills_app.command(
     "list",
     help=(
-        "List effective skills after merging user and project scopes.\n\n"
-        "If the same skill exists in both places, the project copy is shown.\n\n"
+        "List effective skills after merging builtin and app scopes.\n\n"
+        "If the same skill exists in both places, the app copy is shown.\n\n"
         "Examples:\n"
         "- agent-teams skills list\n"
-        "- agent-teams skills list --source user\n"
+        "- agent-teams skills list --source builtin\n"
         "- agent-teams skills list --format json"
     ),
 )
@@ -66,8 +66,8 @@ def skills_list(
         SkillSourceFilter.ALL,
         "--source",
         help=(
-            "Filter by resolved scope: all, user, or project. This applies after "
-            "project-over-user override resolution."
+            "Filter by resolved scope: all, builtin, or app. This applies after "
+            "app-over-builtin override resolution."
         ),
         case_sensitive=False,
     ),
@@ -88,8 +88,8 @@ def skills_list(
     "show",
     help=(
         "Show the effective definition for a single skill.\n\n"
-        "The result reflects the same merge rules as runtime loading, so if a project "
-        "skill shadows a user skill with the same name, the project skill is shown.\n\n"
+        "The result reflects the same merge rules as runtime loading, so if an app "
+        "skill shadows a built-in skill with the same name, the app skill is shown.\n\n"
         "Examples:\n"
         "- agent-teams skills show time\n"
         "- agent-teams skills show time --format json"

@@ -23,6 +23,9 @@ _PROXY_ENV_KEY_GROUPS: tuple[tuple[str, str], ...] = (
 _PROXY_ENV_KEYS: tuple[str, ...] = tuple(
     key for key_group in _PROXY_ENV_KEY_GROUPS for key in key_group
 )
+_SSL_VERIFY_ENV_KEYS: tuple[str, ...] = ("AGENT_TEAMS_LLM_SSL_VERIFY",)
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 class ProxyEnvConfig(BaseModel):
@@ -64,6 +67,7 @@ class ProxyEnvInput(BaseModel):
     no_proxy: str | None = None
     proxy_username: str | None = None
     proxy_password: str | None = None
+    verify_ssl: bool = True
 
     @classmethod
     def from_config(cls, config: ProxyEnvConfig) -> ProxyEnvInput:
@@ -95,9 +99,10 @@ class ProxyEnvInput(BaseModel):
             no_proxy=config.no_proxy,
             proxy_username=shared_auth.username,
             proxy_password=shared_auth.password,
+            verify_ssl=config.verify_ssl,
         )
 
-    def to_config(self, *, verify_ssl: bool = True) -> ProxyEnvConfig:
+    def to_config(self, *, verify_ssl: bool | None = None) -> ProxyEnvConfig:
         normalized_username = _normalize_proxy_value(self.proxy_username)
         normalized_password = _normalize_proxy_value(self.proxy_password)
         return ProxyEnvConfig(
@@ -117,7 +122,7 @@ class ProxyEnvInput(BaseModel):
                 password=normalized_password,
             ),
             no_proxy=_normalize_proxy_value(self.no_proxy),
-            verify_ssl=verify_ssl,
+            verify_ssl=self.verify_ssl if verify_ssl is None else verify_ssl,
         )
 
 
@@ -176,6 +181,7 @@ def resolve_proxy_env_config(env_values: Mapping[str, str]) -> ProxyEnvConfig:
         https_proxy=_resolve_env_value(env_values, "HTTPS_PROXY", "https_proxy"),
         all_proxy=_resolve_env_value(env_values, "ALL_PROXY", "all_proxy"),
         no_proxy=_resolve_env_value(env_values, "NO_PROXY", "no_proxy"),
+        verify_ssl=_read_verify_ssl_env(env_values),
     )
 
 
@@ -569,6 +575,27 @@ def _resolve_proxy_secret_config_dir(extra_env_files: tuple[Path, ...]) -> Path:
     if extra_env_files:
         return extra_env_files[0].expanduser().resolve().parent
     return get_project_env_file_path().parent
+
+
+def _read_verify_ssl_env(env_values: Mapping[str, str]) -> bool:
+    raw_value = None
+    for key in _SSL_VERIFY_ENV_KEYS:
+        candidate = env_values.get(key)
+        if candidate is not None:
+            raw_value = candidate
+            break
+    if raw_value is None:
+        return True
+
+    normalized = raw_value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise ValueError(
+        "Invalid AGENT_TEAMS_LLM_SSL_VERIFY value. "
+        "Use one of: true/false, yes/no, on/off, 1/0."
+    )
 
 
 def _is_ip_literal(value: str) -> bool:

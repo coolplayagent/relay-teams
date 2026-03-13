@@ -29,8 +29,9 @@ class ConfigStatusService:
         skill_registry = self._get_skill_registry()
         return {
             "model": {
-                "loaded": True,
-                "profiles": list(runtime.llm_profiles.keys()),
+                "loaded": runtime.model_status.loaded,
+                "profiles": list(runtime.model_status.profiles),
+                "error": runtime.model_status.error,
             },
             "mcp": {
                 "loaded": True,

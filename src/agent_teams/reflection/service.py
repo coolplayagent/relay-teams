@@ -16,7 +16,6 @@ from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from agent_teams.logger import get_logger, log_event
-from agent_teams.paths import get_project_config_dir
 from agent_teams.providers.http_client_factory import build_llm_http_client
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.reflection.config_manager import ReflectionConfigManager
@@ -701,11 +700,7 @@ class ReflectionService:
         )
 
     def _role_memory_root(self) -> Path:
-        return (
-            get_project_config_dir(project_root=self.workspace_manager.project_root)
-            / "memory"
-            / "session_roles"
-        )
+        return self.config_manager.config_dir / "memory" / "session_roles"
 
     def _memory_owner_id(self, *, session_id: str, role_id: str) -> str:
         return f"{session_id}:{role_id}"

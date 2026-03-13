@@ -14,10 +14,6 @@ from agent_teams.env.proxy_env import (
 from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
-_SSL_VERIFY_KEYS = ("AGENT_TEAMS_LLM_SSL_VERIFY",)
-_TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
-
 
 def create_proxy_http_client(
     *,
@@ -77,15 +73,7 @@ def _resolve_proxy_config(
 def _resolve_proxy_env_config(
     env_values: Mapping[str, str],
 ) -> ProxyEnvConfig:
-    proxy_config = resolve_proxy_env_config(env_values)
-    verify_ssl = _read_verify_ssl_env(env_values)
-    return ProxyEnvConfig(
-        http_proxy=proxy_config.http_proxy,
-        https_proxy=proxy_config.https_proxy,
-        all_proxy=proxy_config.all_proxy,
-        no_proxy=proxy_config.no_proxy,
-        verify_ssl=verify_ssl,
-    )
+    return resolve_proxy_env_config(env_values)
 
 
 class _SyncProxyRoutingTransport(httpx.BaseTransport):
@@ -207,25 +195,4 @@ def _build_async_proxy_transport(
         proxy=normalized_proxy_url,
         trust_env=False,
         verify=verify_ssl,
-    )
-
-
-def _read_verify_ssl_env(env_values: Mapping[str, str]) -> bool:
-    raw_value = None
-    for key in _SSL_VERIFY_KEYS:
-        candidate = env_values.get(key)
-        if candidate is not None:
-            raw_value = candidate
-            break
-    if raw_value is None:
-        return True
-
-    normalized = raw_value.strip().lower()
-    if normalized in _TRUE_VALUES:
-        return True
-    if normalized in _FALSE_VALUES:
-        return False
-    raise ValueError(
-        "Invalid AGENT_TEAMS_LLM_SSL_VERIFY value. "
-        "Use one of: true/false, yes/no, on/off, 1/0."
     )

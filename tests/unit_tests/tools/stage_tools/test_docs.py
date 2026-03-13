@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.tools.stage_tools import docs as stage_docs_module
 from agent_teams.tools.stage_tools.docs import (
     current_stage_doc_path,
     previous_stage_doc_path,
@@ -12,29 +13,31 @@ from agent_teams.tools.stage_tools.docs import (
 )
 
 
-def test_stage_doc_paths(tmp_path: Path) -> None:
+def test_stage_doc_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "workspace" / "agent_teams"
     run_id = "run123"
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    monkeypatch.setattr(stage_docs_module, "get_app_config_dir", lambda: app_config_dir)
 
     assert current_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_spec"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "spec.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "spec.md")
     assert current_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_design"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "design.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "design.md")
     assert current_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_verify"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "verify.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "verify.md")
 
     assert previous_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_design"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "spec.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "spec.md")
     assert previous_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_coder"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "design.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "design.md")
     assert previous_stage_doc_path(
         workspace_root=root, run_id=run_id, role_id="spec_verify"
-    ) == (root / ".agent_teams" / "stage_docs" / run_id / "design.md")
+    ) == (app_config_dir / "stage_docs" / run_id / "design.md")
 
 
 def test_write_stage_doc_once_rejects_duplicate(

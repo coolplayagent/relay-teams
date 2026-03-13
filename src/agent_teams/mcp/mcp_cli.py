@@ -12,16 +12,15 @@ import typer
 from agent_teams.mcp.config_manager import McpConfigManager
 from agent_teams.mcp.models import McpServerSummary, McpServerToolsSummary
 from agent_teams.mcp.service import McpService
-from agent_teams.paths import get_project_config_dir
+from agent_teams.paths import get_app_config_dir
 
 mcp_app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     help=(
-        "Inspect MCP servers after merging user and project scopes.\n\n"
-        "Load order:\n"
-        "1. ~/.agent_teams/mcp.json (user scope)\n"
-        "2. .agent_teams/mcp.json (project scope, overrides user servers with the same name)\n\n"
+        "Inspect MCP servers from the app config directory.\n\n"
+        "Config file:\n"
+        "1. ~/.config/agent-teams/mcp.json (app scope)\n\n"
         "Common usage:\n"
         "- agent-teams mcp list\n"
         "- agent-teams mcp list --format json\n"
@@ -50,10 +49,7 @@ class _SuppressKnownMcpNoise(logging.Filter):
 
 @mcp_app.command(
     "list",
-    help=(
-        "List effective MCP servers after merging user and project scopes.\n\n"
-        "If the same server exists in both places, the project copy is shown."
-    ),
+    help=("List effective MCP servers from app scope."),
 )
 def mcp_list(
     output_format: McpOutputFormat = typer.Option(
@@ -116,7 +112,7 @@ def build_mcp_app() -> typer.Typer:
 
 
 def load_mcp_service() -> McpService:
-    config_manager = McpConfigManager(project_config_dir=get_project_config_dir())
+    config_manager = McpConfigManager(app_config_dir=get_app_config_dir())
     return McpService(registry=config_manager.load_registry())
 
 

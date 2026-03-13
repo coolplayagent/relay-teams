@@ -1,0 +1,28 @@
+{
+  "tool_approval_requested": {
+    "enabled": true,
+    "channels": [
+      "browser",
+      "toast"
+    ]
+  },
+  "run_completed": {
+    "enabled": false,
+    "channels": [
+      "toast"
+    ]
+  },
+  "run_failed": {
+    "enabled": true,
+    "channels": [
+      "browser",
+      "toast"
+    ]
+  },
+  "run_stopped": {
+    "enabled": false,
+    "channels": [
+      "toast"
+    ]
+  }
+}

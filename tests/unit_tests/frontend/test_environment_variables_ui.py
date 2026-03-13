@@ -39,10 +39,10 @@ console.log(JSON.stringify({
     )
 
     assert payload["notifications"] == []
-    assert "Windows registry" in cast(str, payload["helpText"])
+    assert "System variables are read-only OS values" in cast(str, payload["helpText"])
     groups_html = cast(str, payload["groupsHtml"])
     assert "System Variables" in groups_html
-    assert "User Variables" in groups_html
+    assert "App Variables" in groups_html
     assert 'style="display:none;"' in groups_html
     assert payload["addDisplay"] == "inline-flex"
     assert payload["saveDisplay"] == "none"
@@ -63,7 +63,7 @@ installGlobals(elements, notifications);
 bindEnvironmentVariableSettingsHandlers();
 await loadEnvironmentVariablesPanel();
 await document.getElementById("add-env-btn").onclick();
-document.getElementById("env-scope-select").value = "user";
+document.getElementById("env-scope-select").value = "app";
 document.getElementById("env-key-input").value = "NEW_KEY";
 document.getElementById("env-value-input").value = "updated-value";
 await document.getElementById("save-env-btn").onclick();
@@ -87,7 +87,7 @@ console.log(JSON.stringify({
 
     notifications = cast(list[JsonObject], payload["notifications"])
     assert payload["savePayload"] == {
-        "scope": "user",
+        "scope": "app",
         "key": "NEW_KEY",
         "payload": {
             "source_key": None,
@@ -95,8 +95,8 @@ console.log(JSON.stringify({
         },
     }
     assert payload["deletePayload"] == {
-        "scope": "system",
-        "key": "ComSpec",
+        "scope": "app",
+        "key": "OPENAI_API_KEY",
     }
     assert payload["saveCalls"] == 1
     assert payload["deleteCalls"] == 1
@@ -106,12 +106,12 @@ console.log(JSON.stringify({
     assert notifications == [
         {
             "title": "Environment Variable Saved",
-            "message": "NEW_KEY saved in user scope.",
+            "message": "NEW_KEY saved in app scope.",
             "tone": "success",
         },
         {
             "title": "Environment Variable Deleted",
-            "message": "ComSpec removed from system scope.",
+            "message": "OPENAI_API_KEY removed from app scope.",
             "tone": "success",
         },
     ]
@@ -150,11 +150,11 @@ export async function fetchEnvironmentVariables() {
                 value_kind: "expandable",
             },
         ],
-        user: [
+        app: [
             {
                 key: "OPENAI_API_KEY",
                 value: "secret",
-                scope: "user",
+                scope: "app",
                 value_kind: "string",
             },
         ],

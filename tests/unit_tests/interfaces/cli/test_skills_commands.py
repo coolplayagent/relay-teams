@@ -13,7 +13,7 @@ from agent_teams.skills.registry import SkillRegistry
 runner = CliRunner()
 
 
-def test_skills_list_prefers_project_skill_in_json_output(
+def test_skills_list_prefers_app_skill_in_json_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     registry = _build_registry(tmp_path)
@@ -25,28 +25,26 @@ def test_skills_list_prefers_project_skill_in_json_output(
     payload = json.loads(result.output)
     assert payload == [
         {
-            "name": "project_only",
-            "source": "project",
+            "name": "app_only",
+            "source": "app",
             "directory": str(
-                tmp_path / "project" / ".agent_teams" / "skills" / "project_only"
+                tmp_path / ".config" / "agent-teams" / "skills" / "app_only"
             ),
-            "description": "project only skill",
+            "description": "app only skill",
+        },
+        {
+            "name": "builtin_only",
+            "source": "builtin",
+            "directory": str(tmp_path / "builtin" / "skills" / "builtin_only"),
+            "description": "builtin only skill",
         },
         {
             "name": "shared",
-            "source": "project",
+            "source": "app",
             "directory": str(
-                tmp_path / "project" / ".agent_teams" / "skills" / "shared"
+                tmp_path / ".config" / "agent-teams" / "skills" / "shared"
             ),
-            "description": "project shared skill",
-        },
-        {
-            "name": "user_only",
-            "source": "user",
-            "directory": str(
-                tmp_path / "user" / ".agent_teams" / "skills" / "user_only"
-            ),
-            "description": "user only skill",
+            "description": "app shared skill",
         },
     ]
 
@@ -64,9 +62,9 @@ def test_skills_show_returns_effective_skill_details(
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["name"] == "shared"
-    assert payload["source"] == "project"
-    assert payload["description"] == "project shared skill"
-    assert payload["instructions"] == "Project instructions."
+    assert payload["source"] == "app"
+    assert payload["description"] == "app shared skill"
+    assert payload["instructions"] == "App instructions."
 
 
 def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> None:
@@ -79,7 +77,7 @@ def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> No
     assert result.output.startswith("Skills (3 total)")
     assert "| Name" in result.output
     assert "shared" in result.output
-    assert "project" in result.output
+    assert "app" in result.output
 
 
 def test_skills_help_explains_merge_order() -> None:
@@ -87,11 +85,11 @@ def test_skills_help_explains_merge_order() -> None:
 
     assert result.exit_code == 0
     assert (
-        "Inspect skills discovered from both user and project directories."
+        "Inspect skills discovered from built-in defaults and the app directory."
         in result.output
     )
-    assert "~/.agent_teams/skills" in result.output
-    assert ".agent_teams/skills (project scope, overrides user skills" in result.output
+    assert "~/.config/agent-teams/skills" in result.output
+    assert "app scope, overrides builtin skills" in result.output
     assert "agent-teams skills show time" in result.output
 
 
@@ -100,14 +98,14 @@ def test_skills_list_help_includes_examples_and_source_behavior() -> None:
 
     assert result.exit_code == 0
     assert (
-        "List effective skills after merging user and project scopes." in result.output
+        "List effective skills after merging builtin and app scopes." in result.output
     )
     assert (
-        "If the same skill exists in both places, the project copy is shown."
+        "If the same skill exists in both places, the app copy is shown."
         in result.output
     )
     assert "--source" in result.output
-    assert "agent-teams skills list --source user" in result.output
+    assert "agent-teams skills list --source builtin" in result.output
 
 
 def test_skills_show_help_describes_effective_skill_resolution() -> None:
@@ -115,44 +113,44 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
 
     assert result.exit_code == 0
     assert "Show the effective definition for a single skill." in result.output
-    assert "skill shadows a user skill with the same name" in result.output
+    assert "skill shadows a built-in skill with the same name" in result.output
     assert "Skill name to inspect after scope merge and override" in result.output
     assert "agent-teams skills show time --format json" in result.output
 
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:
-    user_skills_dir = tmp_path / "user" / ".agent_teams" / "skills"
-    project_skills_dir = tmp_path / "project" / ".agent_teams" / "skills"
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
+    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
 
     _write_skill(
-        user_skills_dir / "shared",
+        builtin_skills_dir / "shared",
         name="shared",
-        description="user shared skill",
-        instructions="User instructions.",
+        description="builtin shared skill",
+        instructions="Builtin instructions.",
     )
     _write_skill(
-        user_skills_dir / "user_only",
-        name="user_only",
-        description="user only skill",
-        instructions="User only instructions.",
+        builtin_skills_dir / "builtin_only",
+        name="builtin_only",
+        description="builtin only skill",
+        instructions="Builtin only instructions.",
     )
     _write_skill(
-        project_skills_dir / "shared",
+        app_skills_dir / "shared",
         name="shared",
-        description="project shared skill",
-        instructions="Project instructions.",
+        description="app shared skill",
+        instructions="App instructions.",
     )
     _write_skill(
-        project_skills_dir / "project_only",
-        name="project_only",
-        description="project only skill",
-        instructions="Project only instructions.",
+        app_skills_dir / "app_only",
+        name="app_only",
+        description="app only skill",
+        instructions="App only instructions.",
     )
 
     return SkillRegistry(
         directory=SkillsDirectory(
-            base_dir=project_skills_dir,
-            fallback_dirs=(user_skills_dir,),
+            base_dir=app_skills_dir,
+            fallback_dirs=(builtin_skills_dir,),
         )
     )
 

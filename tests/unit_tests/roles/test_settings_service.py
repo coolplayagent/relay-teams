@@ -29,10 +29,11 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
     captured_registry: list[RoleRegistry] = []
     service = RoleSettingsService(
         roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
         get_tool_registry=build_default_registry,
         get_mcp_registry=McpRegistry,
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
-            project_skills_dir=skills_dir
+            app_skills_dir=skills_dir
         ),
         on_roles_reloaded=lambda registry: captured_registry.append(registry),
     )
@@ -67,10 +68,11 @@ def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:
     skills_dir.mkdir()
     service = RoleSettingsService(
         roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
         get_tool_registry=build_default_registry,
         get_mcp_registry=McpRegistry,
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
-            project_skills_dir=skills_dir
+            app_skills_dir=skills_dir
         ),
         on_roles_reloaded=lambda registry: None,
     )
@@ -111,10 +113,11 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
     skills_dir.mkdir()
     service = RoleSettingsService(
         roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
         get_tool_registry=build_default_registry,
         get_mcp_registry=McpRegistry,
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
-            project_skills_dir=skills_dir
+            app_skills_dir=skills_dir
         ),
         on_roles_reloaded=lambda registry: None,
     )
@@ -135,10 +138,11 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     captured_registry: list[RoleRegistry] = []
     service = RoleSettingsService(
         roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
         get_tool_registry=build_default_registry,
         get_mcp_registry=McpRegistry,
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
-            project_skills_dir=skills_dir
+            app_skills_dir=skills_dir
         ),
         on_roles_reloaded=lambda registry: captured_registry.append(registry),
     )
@@ -186,3 +190,9 @@ def _write_role(
         + "\n",
         encoding="utf-8",
     )
+
+
+def _create_builtin_roles_dir(tmp_path: Path) -> Path:
+    builtin_roles_dir = tmp_path / "builtin_roles"
+    builtin_roles_dir.mkdir()
+    return builtin_roles_dir

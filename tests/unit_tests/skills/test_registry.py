@@ -54,127 +54,134 @@ def test_get_instruction_entries_returns_structured_data(tmp_path: Path) -> None
 def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
     tmp_path: Path,
 ) -> None:
-    user_skill_dir = tmp_path / "user" / ".agent_teams" / "skills" / "time"
-    project_skill_dir = tmp_path / "project" / ".agent_teams" / "skills" / "time"
-    user_skill_dir.mkdir(parents=True)
-    project_skill_dir.mkdir(parents=True)
+    builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
+    app_skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "time"
+    builtin_skill_dir.mkdir(parents=True)
+    app_skill_dir.mkdir(parents=True)
 
-    (user_skill_dir / "SKILL.md").write_text(
+    (builtin_skill_dir / "SKILL.md").write_text(
         "---\n"
         "name: time\n"
-        "description: user timezone helper\n"
+        "description: builtin timezone helper\n"
         "---\n"
-        "Use the user's default timezone.\n",
+        "Use the builtin timezone.\n",
         encoding="utf-8",
     )
-    (project_skill_dir / "SKILL.md").write_text(
+    (app_skill_dir / "SKILL.md").write_text(
         "---\n"
         "name: time\n"
-        "description: project timezone helper\n"
+        "description: app timezone helper\n"
         "---\n"
-        "Use UTC for all project timestamps.\n",
+        "Use UTC for all app timestamps.\n",
         encoding="utf-8",
     )
 
     registry = SkillRegistry.from_skill_dirs(
-        project_skills_dir=tmp_path / "project" / ".agent_teams" / "skills",
-        user_skills_dir=tmp_path / "user" / ".agent_teams" / "skills",
+        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        builtin_skills_dir=tmp_path / "builtin" / "skills",
     )
 
     skill = registry.get_skill_definition("time")
     entries = registry.get_instruction_entries(("time",))
 
     assert skill is not None
-    assert skill.scope == SkillScope.PROJECT
-    assert skill.metadata.description == "project timezone helper"
-    assert entries[0].instructions == "Use UTC for all project timestamps."
+    assert skill.scope == SkillScope.APP
+    assert skill.metadata.description == "app timezone helper"
+    assert entries[0].instructions == "Use UTC for all app timestamps."
 
 
 def test_registry_from_skill_dirs_loads_user_skill_when_project_skill_missing(
     tmp_path: Path,
 ) -> None:
-    user_skill_dir = tmp_path / "user" / ".agent_teams" / "skills" / "time"
-    user_skill_dir.mkdir(parents=True)
-    (user_skill_dir / "SKILL.md").write_text(
+    builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
+    builtin_skill_dir.mkdir(parents=True)
+    (builtin_skill_dir / "SKILL.md").write_text(
         "---\n"
         "name: time\n"
-        "description: user timezone helper\n"
+        "description: builtin timezone helper\n"
         "---\n"
-        "Use the user's default timezone.\n",
+        "Use the builtin timezone.\n",
         encoding="utf-8",
     )
 
     registry = SkillRegistry.from_skill_dirs(
-        project_skills_dir=tmp_path / "project" / ".agent_teams" / "skills",
-        user_skills_dir=tmp_path / "user" / ".agent_teams" / "skills",
+        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        builtin_skills_dir=tmp_path / "builtin" / "skills",
     )
 
     skill = registry.get_skill_definition("time")
 
     assert skill is not None
-    assert skill.scope == SkillScope.USER
+    assert skill.scope == SkillScope.BUILTIN
     assert registry.list_names() == ("time",)
 
 
-def test_registry_from_config_dirs_merges_user_and_project_skills(
+def test_registry_from_config_dirs_merges_builtin_and_app_skills(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    user_home_dir = tmp_path / "user"
-
-    _write_skill(
-        user_home_dir / ".agent_teams" / "skills" / "shared",
-        name="shared",
-        description="user shared skill",
-        instructions="User instructions.",
-    )
-    _write_skill(
-        user_home_dir / ".agent_teams" / "skills" / "user_only",
-        name="user_only",
-        description="user only skill",
-        instructions="User only instructions.",
-    )
-    _write_skill(
-        project_config_dir / "skills" / "shared",
-        name="shared",
-        description="project shared skill",
-        instructions="Project instructions.",
-    )
-    _write_skill(
-        project_config_dir / "skills" / "project_only",
-        name="project_only",
-        description="project only skill",
-        instructions="Project only instructions.",
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
+    monkeypatch.setattr(
+        "agent_teams.skills.discovery.get_builtin_skills_dir_path",
+        lambda: builtin_skills_dir.resolve(),
     )
 
-    registry = SkillRegistry.from_config_dirs(
-        project_config_dir=project_config_dir,
-        user_home_dir=user_home_dir,
+    _write_skill(
+        builtin_skills_dir / "shared",
+        name="shared",
+        description="builtin shared skill",
+        instructions="Builtin instructions.",
     )
+    _write_skill(
+        builtin_skills_dir / "builtin_only",
+        name="builtin_only",
+        description="builtin only skill",
+        instructions="Builtin only instructions.",
+    )
+    _write_skill(
+        app_config_dir / "skills" / "shared",
+        name="shared",
+        description="app shared skill",
+        instructions="App instructions.",
+    )
+    _write_skill(
+        app_config_dir / "skills" / "app_only",
+        name="app_only",
+        description="app only skill",
+        instructions="App only instructions.",
+    )
+
+    registry = SkillRegistry.from_config_dirs(app_config_dir=app_config_dir)
 
     skills = registry.list_skill_definitions()
     shared_skill = registry.get_skill_definition("shared")
-    user_only_skill = registry.get_skill_definition("user_only")
+    builtin_only_skill = registry.get_skill_definition("builtin_only")
 
     assert tuple(skill.metadata.name for skill in skills) == (
-        "project_only",
+        "app_only",
+        "builtin_only",
         "shared",
-        "user_only",
     )
     assert shared_skill is not None
-    assert shared_skill.scope == SkillScope.PROJECT
-    assert user_only_skill is not None
-    assert user_only_skill.scope == SkillScope.USER
+    assert shared_skill.scope == SkillScope.APP
+    assert builtin_only_skill is not None
+    assert builtin_only_skill.scope == SkillScope.BUILTIN
 
 
-def test_registry_from_config_dirs_creates_project_skills_directory(
+def test_registry_from_config_dirs_creates_app_skills_directory(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    project_config_dir = tmp_path / "project" / ".agent_teams"
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    monkeypatch.setattr(
+        "agent_teams.skills.discovery.get_builtin_skills_dir_path",
+        lambda: (tmp_path / "builtin" / "skills").resolve(),
+    )
 
-    registry = SkillRegistry.from_config_dirs(project_config_dir=project_config_dir)
+    registry = SkillRegistry.from_config_dirs(app_config_dir=app_config_dir)
 
-    assert (project_config_dir / "skills").is_dir()
+    assert (app_config_dir / "skills").is_dir()
     assert registry.list_skill_definitions() == ()
 
 

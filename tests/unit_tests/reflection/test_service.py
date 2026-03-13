@@ -74,8 +74,8 @@ class _FakeReflectionModelClient:
 async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    config_dir = project_root / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     db_path = tmp_path / "reflection_service.db"
 
     task_repo = TaskRepository(db_path)
@@ -162,8 +162,7 @@ async def test_service_processes_daily_and_long_term_memory(tmp_path: Path) -> N
     assert "Prefer concise output." in digest_files[0].read_text(encoding="utf-8")
 
     long_term_path = (
-        project_root
-        / ".agent_teams"
+        config_dir
         / "memory"
         / "session_roles"
         / "session-1"

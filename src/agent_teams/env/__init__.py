@@ -29,6 +29,7 @@ from agent_teams.env.proxy_http_client import (
 )
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.runtime_env import (
+    get_app_env_file_path,
     get_env_var,
     get_project_env_file_path,
     get_user_env_file_path,
@@ -57,6 +58,7 @@ __all__ = [
     "create_proxy_async_http_client",
     "create_proxy_http_client",
     "extract_proxy_env_vars",
+    "get_app_env_file_path",
     "get_env_var",
     "get_project_env_file_path",
     "get_user_env_file_path",

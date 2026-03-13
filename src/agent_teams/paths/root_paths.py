@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 
 
-_CONFIG_DIR_NAME = ".agent_teams"
+_APP_CONFIG_DIR_RELATIVE = Path(".config") / "agent-teams"
 _GIT_TOPLEVEL_CMD: tuple[str, str, str] = ("git", "rev-parse", "--show-toplevel")
 _GIT_TIMEOUT_SECONDS = 5.0
 
@@ -14,13 +14,17 @@ def get_user_home_dir() -> Path:
     return Path.home().resolve()
 
 
-def get_user_config_dir(user_home_dir: Path | None = None) -> Path:
+def get_app_config_dir(user_home_dir: Path | None = None) -> Path:
     resolved_home_dir = (
         get_user_home_dir()
         if user_home_dir is None
         else user_home_dir.expanduser().resolve()
     )
-    return resolved_home_dir / _CONFIG_DIR_NAME
+    return resolved_home_dir / _APP_CONFIG_DIR_RELATIVE
+
+
+def get_user_config_dir(user_home_dir: Path | None = None) -> Path:
+    return get_app_config_dir(user_home_dir=user_home_dir)
 
 
 def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
@@ -49,27 +53,17 @@ def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
 
 
 def get_project_config_dir(project_root: Path | None = None) -> Path:
-    resolved_project_root = (
-        _resolve_project_root_from_context()
-        if project_root is None
-        else project_root.expanduser().resolve()
-    )
-    return resolved_project_root / _CONFIG_DIR_NAME
+    _ = project_root
+    return get_app_config_dir()
 
 
 def get_project_log_dir(project_root: Path | None = None) -> Path:
-    resolved_project_root = (
-        _resolve_project_root_from_context()
-        if project_root is None
-        else project_root.expanduser().resolve()
-    )
-    return resolved_project_root / _CONFIG_DIR_NAME / "log"
+    _ = project_root
+    return get_app_config_dir() / "log"
 
 
 def _resolve_project_root_from_context() -> Path:
     cwd = Path.cwd().resolve()
-    if (cwd / _CONFIG_DIR_NAME).exists():
-        return cwd
     return get_project_root_or_none(start_dir=cwd) or cwd
 
 

@@ -2,7 +2,11 @@
  * core/eventRouter/runEvents.js
  * Handlers for run lifecycle and model-step events.
  */
-import { state } from '../state.js';
+import {
+    getCoordinatorRoleId,
+    isCoordinatorRoleId,
+    state,
+} from '../state.js';
 import {
     markRunStreamConnected,
     markRunTerminalState,
@@ -24,7 +28,6 @@ import {
     openAgentPanel,
 } from '../../components/agentPanel.js';
 import {
-    COORDINATOR_ROLE,
     coordinatorContainerFor,
 } from './utils.js';
 
@@ -34,7 +37,7 @@ export function handleRunStarted(eventMeta) {
     if (runId) {
         markRunStreamConnected(runId, { phase: 'running' });
     }
-    state.activeAgentRoleId = COORDINATOR_ROLE;
+    state.activeAgentRoleId = getCoordinatorRoleId() || null;
     state.activeAgentInstanceId = null;
 }
 
@@ -45,7 +48,7 @@ export function handleModelStepStarted(instanceId, roleId) {
         if (!state.autoSwitchedSubagentInstances) state.autoSwitchedSubagentInstances = {};
         state.instanceRoleMap[instanceId] = roleId;
         state.roleInstanceMap[roleId] = instanceId;
-        if (roleId !== COORDINATOR_ROLE) {
+        if (!isCoordinatorRoleId(roleId)) {
             rememberLiveSubagent(instanceId, roleId);
             getPanelScrollContainer(instanceId, roleId);
             if (!state.autoSwitchedSubagentInstances[instanceId]) {
@@ -59,15 +62,16 @@ export function handleModelStepStarted(instanceId, roleId) {
 }
 
 export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
-    const isCoordinator = !roleId || roleId === COORDINATOR_ROLE;
+    const coordinatorRoleId = getCoordinatorRoleId();
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
     const streamKey = instanceId || (isCoordinator ? 'coordinator' : roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
 
     if (isCoordinator) {
         const container = coordinatorContainerFor(eventMeta);
-        getOrCreateStreamBlock(container, streamKey, COORDINATOR_ROLE, label, runId);
-        appendStreamChunk(streamKey, payload.text || '', runId, COORDINATOR_ROLE, label);
+        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
+        appendStreamChunk(streamKey, payload.text || '', runId, coordinatorRoleId, label);
     } else {
         const container = getPanelScrollContainer(instanceId, roleId);
         // Do not keep stealing focus from user-selected panel during streaming.
@@ -81,7 +85,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 
 export function handleModelStepFinished(instanceId) {
     const key = instanceId || 'coordinator';
-    finalizeStream(key, instanceId ? '' : COORDINATOR_ROLE);
+    finalizeStream(key, instanceId ? '' : getCoordinatorRoleId());
     if (instanceId) {
         markSubagentStatus(instanceId, 'completed');
     }

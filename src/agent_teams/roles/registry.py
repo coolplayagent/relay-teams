@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from agent_teams.roles.models import RoleConfigSource
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.workspace import WorkspaceProfile, default_workspace_profile
 
@@ -106,6 +107,38 @@ class RoleLoader:
         if not registry.list_roles():
             raise ValueError(f"No role files found in {roles_dir}")
         return registry
+
+    def load_builtin_and_app(
+        self,
+        *,
+        builtin_roles_dir: Path,
+        app_roles_dir: Path,
+    ) -> RoleRegistry:
+        registry = RoleRegistry()
+        for md_file in sorted(builtin_roles_dir.glob("*.md")):
+            registry.register(self.load_one(md_file))
+        for md_file in sorted(app_roles_dir.glob("*.md")):
+            registry.register(self.load_one(md_file))
+        if not registry.list_roles():
+            raise ValueError(
+                f"No role files found in {builtin_roles_dir} or {app_roles_dir}"
+            )
+        return registry
+
+    def build_effective_role_map(
+        self,
+        *,
+        builtin_roles_dir: Path,
+        app_roles_dir: Path,
+    ) -> dict[str, tuple[Path, RoleConfigSource]]:
+        resolved: dict[str, tuple[Path, RoleConfigSource]] = {}
+        for md_file in sorted(builtin_roles_dir.glob("*.md")):
+            definition = self.load_one(md_file)
+            resolved[definition.role_id] = (md_file, RoleConfigSource.BUILTIN)
+        for md_file in sorted(app_roles_dir.glob("*.md")):
+            definition = self.load_one(md_file)
+            resolved[definition.role_id] = (md_file, RoleConfigSource.APP)
+        return resolved
 
     def load_one(self, path: Path) -> RoleDefinition:
         raw = path.read_text(encoding="utf-8")

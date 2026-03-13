@@ -2,6 +2,7 @@
  * components/messageRenderer/stream.js
  * Streaming message mutation helpers plus a durable in-browser overlay cache.
  */
+import { isCoordinatorRoleId } from '../../core/state.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import {
     findToolBlock,
@@ -347,7 +348,7 @@ function ensureApprovalState(toolBlock) {
 function resolveStreamKey(instanceId, roleId) {
     const safeInstanceId = String(instanceId || '').trim();
     if (safeInstanceId) return safeInstanceId;
-    return String(roleId || '').trim() === 'coordinator_agent' || !roleId
+    return isCoordinatorRoleId(roleId) || !roleId
         ? COORDINATOR_KEY
         : `role:${String(roleId || '').trim()}`;
 }

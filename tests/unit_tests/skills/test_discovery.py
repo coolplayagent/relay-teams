@@ -10,116 +10,101 @@ from agent_teams.skills.discovery import SkillsDirectory
 def test_get_user_skills_dir_uses_user_config_dir_when_home_not_provided(
     monkeypatch,
 ) -> None:
-    user_config_dir = Path("D:/home/.agent_teams").resolve()
+    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
     monkeypatch.setattr(
-        discovery,
-        "get_user_config_dir",
-        lambda **kwargs: user_config_dir,
+        discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
 
     skills_dir = discovery.get_user_skills_dir()
 
-    assert skills_dir == user_config_dir / "skills"
+    assert skills_dir == app_config_dir / "skills"
 
 
 def test_get_user_skills_dir_uses_user_home_override(monkeypatch) -> None:
     user_home_dir = Path("D:/home").resolve()
 
-    def fake_get_user_config_dir(*, user_home_dir: Path | None = None) -> Path:
+    def fake_get_app_config_dir(*, user_home_dir: Path | None = None) -> Path:
         assert user_home_dir is not None
-        return user_home_dir / ".agent_teams"
+        return user_home_dir / ".config" / "agent-teams"
 
-    monkeypatch.setattr(discovery, "get_user_config_dir", fake_get_user_config_dir)
+    monkeypatch.setattr(discovery, "get_app_config_dir", fake_get_app_config_dir)
 
     skills_dir = discovery.get_user_skills_dir(user_home_dir=user_home_dir)
 
-    assert skills_dir == user_home_dir / ".agent_teams" / "skills"
+    assert skills_dir == user_home_dir / ".config" / "agent-teams" / "skills"
 
 
-def test_get_project_skills_dir_uses_project_config_dir_when_root_not_provided(
+def test_get_project_skills_dir_uses_app_config_dir_when_root_not_provided(
     monkeypatch,
 ) -> None:
-    project_config_dir = Path("D:/repo-root/.agent_teams").resolve()
+    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
     monkeypatch.setattr(
-        discovery,
-        "get_project_config_dir",
-        lambda **kwargs: project_config_dir,
+        discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
 
     skills_dir = discovery.get_project_skills_dir()
 
-    assert skills_dir == project_config_dir / "skills"
+    assert skills_dir == app_config_dir / "skills"
 
 
-def test_get_project_skills_dir_uses_project_root_override(monkeypatch) -> None:
-    project_root = Path("D:/repo-root").resolve()
-
-    def fake_get_project_config_dir(*, project_root: Path | None = None) -> Path:
-        assert project_root is not None
-        return project_root / ".agent_teams"
-
+def test_get_project_skills_dir_ignores_project_root_and_uses_app_dir(
+    monkeypatch,
+) -> None:
+    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
     monkeypatch.setattr(
-        discovery,
-        "get_project_config_dir",
-        fake_get_project_config_dir,
+        discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
 
-    skills_dir = discovery.get_project_skills_dir(project_root=project_root)
+    skills_dir = discovery.get_project_skills_dir(project_root=Path("D:/repo-root"))
 
-    assert skills_dir == project_root / ".agent_teams" / "skills"
+    assert skills_dir == app_config_dir / "skills"
 
 
-def test_skills_directory_from_skill_dirs_creates_project_directory(
+def test_skills_directory_from_skill_dirs_creates_app_directory(
     tmp_path: Path,
 ) -> None:
-    project_skills_dir = tmp_path / "project" / ".agent_teams" / "skills"
-    user_skills_dir = tmp_path / "user" / ".agent_teams" / "skills"
+    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
 
     directory = SkillsDirectory.from_skill_dirs(
-        project_skills_dir=project_skills_dir,
-        user_skills_dir=user_skills_dir,
+        app_skills_dir=app_skills_dir,
+        builtin_skills_dir=builtin_skills_dir,
     )
 
-    assert project_skills_dir.is_dir()
-    assert directory.base_dir == project_skills_dir.resolve()
-    assert directory.fallback_dirs == (user_skills_dir.resolve(),)
+    assert app_skills_dir.is_dir()
+    assert directory.base_dir == app_skills_dir.resolve()
+    assert directory.fallback_dirs == (builtin_skills_dir.resolve(),)
 
 
-def test_skills_directory_from_config_dirs_uses_user_and_project_scopes(
+def test_skills_directory_from_config_dirs_uses_app_and_builtin_scopes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    project_config_dir = tmp_path / "project" / ".agent_teams"
-    user_skills_dir = tmp_path / "user" / ".agent_teams" / "skills"
+    app_config_dir = tmp_path / ".config" / "agent-teams"
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
     monkeypatch.setattr(
-        discovery,
-        "get_user_skills_dir",
-        lambda **kwargs: user_skills_dir,
+        discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
     )
 
-    directory = SkillsDirectory.from_config_dirs(project_config_dir=project_config_dir)
+    directory = SkillsDirectory.from_config_dirs(app_config_dir=app_config_dir)
 
-    assert directory.base_dir == (project_config_dir / "skills").resolve()
-    assert directory.fallback_dirs == (user_skills_dir.resolve(),)
+    assert directory.base_dir == (app_config_dir / "skills").resolve()
+    assert directory.fallback_dirs == (builtin_skills_dir.resolve(),)
 
 
 def test_skills_directory_from_default_scopes_uses_resolved_scope_dirs(
     monkeypatch,
 ) -> None:
-    project_skills_dir = Path("D:/repo-root/.agent_teams/skills").resolve()
-    user_skills_dir = Path("D:/home/.agent_teams/skills").resolve()
+    app_skills_dir = Path("D:/home/.config/agent-teams/skills").resolve()
+    builtin_skills_dir = Path("D:/agent-teams/builtin/skills").resolve()
     monkeypatch.setattr(
-        discovery,
-        "get_project_skills_dir",
-        lambda **kwargs: project_skills_dir,
+        discovery, "get_app_skills_dir", lambda **kwargs: app_skills_dir
     )
     monkeypatch.setattr(
-        discovery,
-        "get_user_skills_dir",
-        lambda **kwargs: user_skills_dir,
+        discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
     )
 
     directory = SkillsDirectory.from_default_scopes()
 
-    assert directory.base_dir == project_skills_dir
-    assert directory.fallback_dirs == (user_skills_dir,)
+    assert directory.base_dir == app_skills_dir
+    assert directory.fallback_dirs == (builtin_skills_dir,)

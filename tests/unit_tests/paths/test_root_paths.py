@@ -207,61 +207,44 @@ def test_get_project_config_dir_uses_project_root_when_available(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    project_root = Path("D:/repo-root").resolve()
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        root_paths,
-        "get_project_root_or_none",
-        lambda start_dir=None: project_root,
-    )
+    user_home_dir = tmp_path / "home"
+    monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == project_root / ".agent_teams"
+    assert config_dir == user_home_dir / ".config" / "agent-teams"
 
 
 def test_get_project_config_dir_falls_back_to_cwd_when_git_root_is_missing(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        root_paths,
-        "get_project_root_or_none",
-        lambda start_dir=None: None,
-    )
+    user_home_dir = tmp_path / "home"
+    monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == tmp_path.resolve() / ".agent_teams"
+    assert config_dir == user_home_dir / ".config" / "agent-teams"
 
 
 def test_get_project_config_dir_prefers_cwd_local_config_over_git_root(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    cwd = tmp_path / "worktree"
-    (cwd / ".agent_teams").mkdir(parents=True)
-    git_root = tmp_path / "repo-root"
-    git_root.mkdir()
-    monkeypatch.chdir(cwd)
-    monkeypatch.setattr(
-        root_paths,
-        "get_project_root_or_none",
-        lambda start_dir=None: git_root,
-    )
+    user_home_dir = tmp_path / "home"
+    monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == cwd.resolve() / ".agent_teams"
+    assert config_dir == user_home_dir / ".config" / "agent-teams"
 
 
 def test_get_project_config_dir_uses_project_root_override() -> None:
-    project_root = Path("D:/repo-root").resolve()
+    user_home_dir = Path("D:/home-root").resolve()
 
-    config_dir = root_paths.get_project_config_dir(project_root=project_root)
+    config_dir = root_paths.get_project_config_dir(project_root=user_home_dir)
 
-    assert config_dir == project_root / ".agent_teams"
+    assert config_dir == Path.home().resolve() / ".config" / "agent-teams"
 
 
 def test_get_user_home_dir_returns_resolved_home() -> None:
@@ -274,7 +257,7 @@ def test_get_user_config_dir_uses_resolved_home(monkeypatch, tmp_path: Path) -> 
 
     config_dir = root_paths.get_user_config_dir()
 
-    assert config_dir == user_home_dir / ".agent_teams"
+    assert config_dir == user_home_dir / ".config" / "agent-teams"
 
 
 def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
@@ -282,7 +265,7 @@ def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
 
     config_dir = root_paths.get_user_config_dir(user_home_dir=user_home_dir)
 
-    assert config_dir == user_home_dir.resolve() / ".agent_teams"
+    assert config_dir == user_home_dir.resolve() / ".config" / "agent-teams"
 
 
 def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> None:
@@ -291,7 +274,7 @@ def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> N
 
     config_dir = root_paths.get_project_config_dir(project_root=unresolved_project_root)
 
-    assert config_dir == (tmp_path / "project-root").resolve() / ".agent_teams"
+    assert config_dir == Path.home().resolve() / ".config" / "agent-teams"
 
 
 def test_resolve_start_dir_defaults_to_cwd(monkeypatch, tmp_path: Path) -> None:

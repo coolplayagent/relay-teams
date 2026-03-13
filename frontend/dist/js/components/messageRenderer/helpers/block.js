@@ -2,6 +2,7 @@
  * components/messageRenderer/helpers/block.js
  * Message block and part rendering helpers.
  */
+import { isCoordinatorRoleId } from '../../../core/state.js';
 import { parseMarkdown } from '../../../utils/markdown.js';
 import {
     applyToolReturn,
@@ -99,7 +100,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
 
 export function labelFromRole(role, roleId, instanceId) {
     if (role === 'user') return 'System';
-    if (roleId === 'coordinator_agent') return 'Coordinator';
+    if (isCoordinatorRoleId(roleId)) return 'Coordinator';
     if (roleId) return roleId;
     return instanceId ? instanceId.slice(0, 8) : 'Agent';
 }
@@ -109,7 +110,7 @@ export function scrollBottom(container) {
 }
 
 function roleClassName(role, label) {
-    if (label?.toLowerCase().includes('coordinator')) return 'role-coordinator_agent';
+    if (label?.toLowerCase().includes('coordinator')) return 'role-coordinator';
     if (role === 'user') return 'role-user';
     return 'role-agent';
 }

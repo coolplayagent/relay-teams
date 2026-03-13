@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import configparser
 import json
 import logging
 import sys
@@ -14,8 +15,11 @@ from threading import Lock
 from types import TracebackType
 from typing import Literal, cast, override
 
+from agent_teams.builtin import (
+    get_builtin_logger_ini_path,
+)
 from agent_teams.env import load_merged_env_vars
-from agent_teams.paths import get_project_config_dir, get_project_log_dir
+from agent_teams.paths import get_app_config_dir
 from agent_teams.shared_types.json_types import JsonObject, JsonValue
 from agent_teams.trace import get_trace_context
 
@@ -29,6 +33,7 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_DEBUG_LOG_LEVEL = "DEBUG"
 DEFAULT_LOG_CONSOLE = "1"
 DEFAULT_BACKUP_COUNT = 14
+_LOGGER_INI_NAME = "logger.ini"
 
 _RUNTIME_ENV_VALUES: dict[str, str] | None = None
 _LOGGING_LOCK = Lock()
@@ -174,25 +179,26 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
         _refresh_runtime_env_values()
 
         resolved_config_dir = (
-            get_project_config_dir()
+            get_app_config_dir()
             if config_dir is None
             else config_dir.expanduser().resolve()
         )
         resolved_config_dir.mkdir(parents=True, exist_ok=True)
-        log_dir = (
-            get_project_log_dir() if config_dir is None else resolved_config_dir / "log"
-        )
+        log_dir = resolved_config_dir / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
+        logger_settings = _load_logger_settings(resolved_config_dir)
 
         backend_level = _resolve_log_level(
             env_key="AGENT_TEAMS_LOG_BACKEND_LEVEL",
             fallback_key="AGENT_TEAMS_LOG_LEVEL",
+            default_name=logger_settings.backend_level,
         )
         frontend_level = _resolve_log_level(
             env_key="AGENT_TEAMS_LOG_FRONTEND_LEVEL",
             fallback_key="AGENT_TEAMS_LOG_LEVEL",
+            default_name=logger_settings.frontend_level,
         )
-        debug_level = _resolve_debug_log_level()
+        debug_level = _resolve_debug_log_level(default_name=logger_settings.debug_level)
 
         backend_formatter = HumanReadableFormatter()
         debug_formatter = HumanReadableFormatter()
@@ -217,7 +223,7 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
         )
 
         console_handler: logging.Handler | None = None
-        if _console_enabled():
+        if _console_enabled(default_enabled=logger_settings.console_enabled):
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(backend_level)
             console_handler.setFormatter(backend_formatter)
@@ -421,15 +427,45 @@ def _get_runtime_env_value(key: str, default: str) -> str:
     return values.get(key, default)
 
 
-def _console_enabled() -> bool:
+class _LoggerSettings:
+    def __init__(
+        self,
+        *,
+        backend_level: str | None = None,
+        frontend_level: str | None = None,
+        debug_level: str | None = None,
+        console_enabled: bool | None = None,
+    ) -> None:
+        self.backend_level = backend_level
+        self.frontend_level = frontend_level
+        self.debug_level = debug_level
+        self.console_enabled = console_enabled
+
+
+def _console_enabled(default_enabled: bool | None = None) -> bool:
     raw = _get_runtime_env_value("AGENT_TEAMS_LOG_CONSOLE", DEFAULT_LOG_CONSOLE)
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if default_enabled is not None:
+        return default_enabled
+    return DEFAULT_LOG_CONSOLE.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_log_level(*, env_key: str, fallback_key: str) -> int:
+def _resolve_log_level(
+    *,
+    env_key: str,
+    fallback_key: str,
+    default_name: str | None = None,
+) -> int:
     level_name = _get_runtime_env_value(
         env_key,
-        _get_runtime_env_value(fallback_key, DEFAULT_LOG_LEVEL),
+        _get_runtime_env_value(
+            fallback_key,
+            default_name or DEFAULT_LOG_LEVEL,
+        ),
     )
     resolved = getattr(logging, level_name.strip().upper(), logging.INFO)
     if isinstance(resolved, int):
@@ -437,15 +473,41 @@ def _resolve_log_level(*, env_key: str, fallback_key: str) -> int:
     return logging.INFO
 
 
-def _resolve_debug_log_level() -> int:
+def _resolve_debug_log_level(*, default_name: str | None = None) -> int:
     level_name = _get_runtime_env_value(
         "AGENT_TEAMS_LOG_DEBUG_LEVEL",
-        DEFAULT_DEBUG_LOG_LEVEL,
+        default_name or DEFAULT_DEBUG_LOG_LEVEL,
     )
     resolved = getattr(logging, level_name.strip().upper(), logging.DEBUG)
     if isinstance(resolved, int):
         return resolved
     return logging.DEBUG
+
+
+def _load_logger_settings(config_dir: Path) -> _LoggerSettings:
+    logger_ini_path = config_dir / _LOGGER_INI_NAME
+    if not logger_ini_path.exists():
+        logger_ini_path = get_builtin_logger_ini_path()
+    parser = configparser.ConfigParser()
+    try:
+        with logger_ini_path.open("r", encoding="utf-8") as handle:
+            parser.read_file(handle)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load logger.ini: {exc}") from exc
+
+    if not parser.has_section("agent_teams"):
+        return _LoggerSettings()
+
+    section = parser["agent_teams"]
+    console_enabled: bool | None = None
+    if "console" in section:
+        console_enabled = section.getboolean("console", fallback=True)
+    return _LoggerSettings(
+        backend_level=section.get("backend_level"),
+        frontend_level=section.get("frontend_level"),
+        debug_level=section.get("debug_level"),
+        console_enabled=console_enabled,
+    )
 
 
 def _build_file_handler(

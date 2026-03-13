@@ -445,7 +445,7 @@
     color: var(--primary-hover);
 }
 
-.role-coordinator_agent {
+.role-coordinator {
     background-color: rgba(245, 158, 11, 0.2);
     color: var(--warning);
 }
@@ -4190,7 +4190,7 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
 .role-user,
 .role-agent,
-.role-coordinator_agent {
+.role-coordinator {
     background: none;
 }
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from agent_teams.paths.root_paths import (
+    get_app_config_dir,
     get_project_config_dir,
     get_project_log_dir,
     get_project_root_or_none,
@@ -10,6 +11,7 @@ from agent_teams.paths.root_paths import (
 )
 
 __all__ = [
+    "get_app_config_dir",
     "get_project_config_dir",
     "get_project_log_dir",
     "get_project_root_or_none",

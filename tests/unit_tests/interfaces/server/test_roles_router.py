@@ -14,6 +14,7 @@ from agent_teams.interfaces.server.deps import (
 from agent_teams.interfaces.server.routers import roles
 from agent_teams.mcp.models import McpConfigScope, McpServerSummary
 from agent_teams.roles import (
+    RoleConfigSource,
     RoleConfigOptions,
     RoleDefinition,
     RoleDocumentRecord,
@@ -32,6 +33,7 @@ class _FakeRoleSettingsService:
                 name="Writer",
                 version="1.0.0",
                 model_profile="default",
+                source=RoleConfigSource.APP,
             ),
         )
 
@@ -49,6 +51,7 @@ class _FakeRoleSettingsService:
             model_profile="default",
             workspace_profile=default_workspace_profile(),
             system_prompt="Write clearly.",
+            source=RoleConfigSource.APP,
             file_name="writer.md",
             content="---\nrole_id: writer\n---\n\nWrite clearly.\n",
         )
@@ -82,7 +85,7 @@ class _FakeMcpService:
         return (
             McpServerSummary(
                 name="docs",
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
                 transport="stdio",
             ),
         )
@@ -97,6 +100,16 @@ def _create_test_client() -> TestClient:
     app = FastAPI()
     app.include_router(roles.router, prefix="/api")
     registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
     registry.register(
         RoleDefinition(
             role_id="writer",
@@ -130,6 +143,7 @@ def test_list_role_configs() -> None:
             "name": "Writer",
             "version": "1.0.0",
             "model_profile": "default",
+            "source": "app",
         }
     ]
 
@@ -176,6 +190,7 @@ def test_get_role_config_options() -> None:
 
     assert response.status_code == 200
     assert response.json() == RoleConfigOptions(
+        coordinator_role_id="Coordinator",
         tools=("dispatch_task", "list_available_roles"),
         mcp_servers=("docs",),
         skills=("diff", "time"),

@@ -264,8 +264,8 @@ class _NoopReflectionModelClient:
 def test_delete_session_cleans_reflection_artifacts(tmp_path: Path) -> None:
     project_root = tmp_path / "project_reflection"
     project_root.mkdir()
-    config_dir = project_root / ".agent_teams"
-    config_dir.mkdir()
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
     db_path = tmp_path / "session_cleanup_reflection.db"
     shared_store = SharedStateRepository(db_path)
     reflection_service = ReflectionService(

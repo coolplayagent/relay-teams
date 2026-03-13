@@ -7,21 +7,6 @@ __pycache__/
 .idea/
 coverage.json
 
-.agent_teams/stage_docs
-.agent_teams/.env
-.agent_teams/*.db
-.agent_teams/*.db-shm
-.agent_teams/*.db-wal
-.agent_teams/*.db-journal
-.agent_teams/model.json
-.agent_teams/notifications.json
-.agent_teams/log
-.agent_teams/logs
-.agent_teams/workspaces/
-.agent_teams/skills
-.agent_teams/mcp.json
-.agent_teams/server-process.json
-
 tmp.db
 tmp.db-journal
 .tmp_pytest/

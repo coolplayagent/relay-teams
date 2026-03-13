@@ -3,9 +3,9 @@
 ## 1. Storage
 
 - Engine: SQLite
-- Database file: `.agent_teams/agent_teams.db`
+- Database file: `~/.config/agent-teams/agent_teams.db`
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
-- Runtime logs are file-based and stored under `.agent_teams/log/backend.log`, `.agent_teams/log/debug.log`, and `.agent_teams/log/frontend.log`
+- Runtime logs are file-based and stored under `~/.config/agent-teams/log/backend.log`, `~/.config/agent-teams/log/debug.log`, and `~/.config/agent-teams/log/frontend.log`
 
 ---
 
@@ -345,9 +345,9 @@ Purpose: persistent queue for subagent daily reflection and long-term memory con
 
 ### 4.1 Instance daily memory
 
-- `.agent_teams/workspaces/{workspace_id}/memory/daily/raw/YYYY-MM-DD.md`
-- `.agent_teams/workspaces/{workspace_id}/memory/daily/digest/YYYY-MM-DD.md`
+- `~/.config/agent-teams/workspaces/{workspace_id}/memory/daily/raw/YYYY-MM-DD.md`
+- `~/.config/agent-teams/workspaces/{workspace_id}/memory/daily/digest/YYYY-MM-DD.md`
 
 ### 4.2 Session-role long-term memory
 
-- `.agent_teams/memory/session_roles/{session_id}/{role_id}/MEMORY.md`
+- `~/.config/agent-teams/memory/session_roles/{session_id}/{role_id}/MEMORY.md`

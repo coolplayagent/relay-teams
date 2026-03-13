@@ -67,6 +67,7 @@ class _FakeSystemService:
             "no_proxy": "localhost,127.0.0.1",
             "proxy_username": "alice",
             "proxy_password": "secret",
+            "verify_ssl": True,
         }
 
     def save_proxy_config(self, config: ProxyEnvInput) -> None:
@@ -297,6 +298,7 @@ def test_get_proxy_config() -> None:
         "no_proxy": "localhost,127.0.0.1",
         "proxy_username": "alice",
         "proxy_password": "secret",
+        "verify_ssl": True,
     }
 
 
@@ -313,6 +315,7 @@ def test_save_proxy_config() -> None:
             "no_proxy": "localhost,127.0.0.1",
             "proxy_username": "alice",
             "proxy_password": "secret",
+            "verify_ssl": True,
         },
     )
 
@@ -325,6 +328,7 @@ def test_save_proxy_config() -> None:
         "no_proxy": "localhost,127.0.0.1",
         "proxy_username": "alice",
         "proxy_password": "secret",
+        "verify_ssl": True,
     }
 
 
@@ -452,11 +456,11 @@ class _FakeEnvironmentVariableService:
                     "value_kind": "expandable",
                 }
             ],
-            "user": [
+            "app": [
                 {
                     "key": "OPENAI_API_KEY",
                     "value": "secret",
-                    "scope": "user",
+                    "scope": "app",
                     "value_kind": "string",
                 }
             ],
@@ -507,7 +511,7 @@ def test_get_environment_variables() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["system"][0]["key"] == "ComSpec"
-    assert payload["user"][0]["scope"] == "user"
+    assert payload["app"][0]["scope"] == "app"
 
 
 def test_save_environment_variable() -> None:
@@ -515,7 +519,7 @@ def test_save_environment_variable() -> None:
     client = _create_env_test_client(service)
 
     response = client.put(
-        "/api/system/configs/environment-variables/user/OPENAI_API_KEY",
+        "/api/system/configs/environment-variables/app/OPENAI_API_KEY",
         json={
             "source_key": "OPENAI_KEY",
             "value": "updated-secret",
@@ -526,11 +530,11 @@ def test_save_environment_variable() -> None:
     assert response.json() == {
         "key": "OPENAI_API_KEY",
         "value": "updated-secret",
-        "scope": "user",
+        "scope": "app",
         "value_kind": "string",
     }
     assert service.saved_payload == {
-        "scope": "user",
+        "scope": "app",
         "key": "OPENAI_API_KEY",
         "source_key": "OPENAI_KEY",
         "value": "updated-secret",

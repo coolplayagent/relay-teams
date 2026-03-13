@@ -7,8 +7,6 @@ import { els } from '../../utils/dom.js';
 import { sysLog } from '../../utils/logger.js';
 import { dispatchHumanTask } from '../api.js';
 
-export const COORDINATOR_ROLE = 'coordinator_agent';
-
 export function coordinatorContainerFor(eventMeta) {
     const runId = eventMeta?.trace_id || eventMeta?.run_id || state.activeRunId;
     if (runId) {

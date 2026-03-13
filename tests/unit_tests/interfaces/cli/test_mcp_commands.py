@@ -21,12 +21,12 @@ class _FakeMcpService:
         return (
             McpServerSummary(
                 name="filesystem",
-                source=McpConfigScope.PROJECT,
+                source=McpConfigScope.APP,
                 transport="stdio",
             ),
             McpServerSummary(
-                name="memory",
-                source=McpConfigScope.USER,
+                name="browser",
+                source=McpConfigScope.APP,
                 transport="http",
             ),
         )
@@ -36,7 +36,7 @@ class _FakeMcpService:
             raise ValueError(f"Unknown MCP server: {name}")
         return McpServerToolsSummary(
             server="filesystem",
-            source=McpConfigScope.PROJECT,
+            source=McpConfigScope.APP,
             transport="stdio",
             tools=(
                 McpToolInfo(name="read_file", description="Read a file"),
@@ -63,8 +63,8 @@ def test_mcp_list_supports_json_output(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert json.loads(result.output) == [
-        {"name": "filesystem", "source": "project", "transport": "stdio"},
-        {"name": "memory", "source": "user", "transport": "http"},
+        {"name": "filesystem", "source": "app", "transport": "stdio"},
+        {"name": "browser", "source": "app", "transport": "http"},
     ]
 
 
