@@ -5,11 +5,12 @@
 import { isCoordinatorRoleId } from '../../core/state.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import {
+    applyToolReturn,
     findToolBlock,
+    findToolBlockInContainer,
     renderMessageBlock,
     scrollBottom,
     setToolValidationFailureState,
-    syncApprovalStateFromEnvelope,
 } from './helpers.js';
 
 const streamState = new Map();
@@ -202,75 +203,56 @@ export function updateToolResult(
 ) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
+    const container = options.container || null;
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
-    if (!st) {
+    const toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
+    if (!toolBlock) {
         updateOverlayToolResult(runId, instanceId, roleId, toolName, toolCallId, result, isError);
         return;
     }
-
-    const toolBlock = findToolBlock(st.contentEl, toolName, toolCallId);
-    if (!toolBlock) {
-        updateOverlayToolResult(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, toolCallId, result, isError);
-        return;
-    }
-
-    const statusEl = toolBlock.querySelector('.tool-status');
-    const resultEl = toolBlock.querySelector('.tool-result');
-    if (isError) {
-        statusEl.innerHTML = `<svg class="status-icon status-error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
-        resultEl.classList.add('error-text');
-    } else {
-        statusEl.innerHTML = `<svg class="status-icon status-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>`;
-        resultEl.classList.remove('error-text');
-    }
-    const val = typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result ?? '');
-    resultEl.innerHTML = parseMarkdown(val);
-
-    syncApprovalStateFromEnvelope(toolBlock, result);
+    applyToolReturn(toolBlock, result);
     updateOverlayToolResult(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, toolCallId, result, isError);
-    scrollBottom(st.container);
+    scrollBottom((st && st.container) || container);
 }
 
 export function markToolInputValidationFailed(instanceId, payload, options = {}) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
+    const container = options.container || null;
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
-    if (!st) {
-        updateOverlayToolValidation(runId, instanceId, roleId, payload);
-        return false;
-    }
-
-    const toolBlock = findToolBlock(
-        st.contentEl,
+    const toolBlock = resolveToolBlockTarget(
+        st,
+        container,
         payload?.tool_name,
         payload?.tool_call_id || null,
     );
     if (!toolBlock) {
-        updateOverlayToolValidation(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, payload);
+        updateOverlayToolValidation(runId, instanceId, roleId, payload);
         return false;
     }
 
     setToolValidationFailureState(toolBlock, payload);
     updateOverlayToolValidation(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, payload);
-    scrollBottom(st.container);
+    scrollBottom((st && st.container) || container);
     return true;
 }
 
 export function attachToolApprovalControls(instanceId, toolName, payload, handlers, options = {}) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
+    const container = options.container || null;
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
-    if (!st) {
-        updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload, 'requested');
-        return false;
-    }
-
-    const toolBlock = findToolBlock(st.contentEl, toolName, payload?.tool_call_id || null);
+    const toolBlock = resolveToolBlockTarget(
+        st,
+        container,
+        toolName,
+        payload?.tool_call_id || null,
+    );
     if (!toolBlock) {
-        updateOverlayToolApproval(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, payload, 'requested');
+        updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload, 'requested');
         return false;
     }
     if (payload?.tool_call_id) {
@@ -286,13 +268,14 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
     if (stateEl) stateEl.textContent = 'Approval required';
 
     updateOverlayToolApproval(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, payload, 'requested');
-    scrollBottom(st.container);
+    scrollBottom((st && st.container) || container);
     return true;
 }
 
 export function markToolApprovalResolved(instanceId, payload, options = {}) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
+    const container = options.container || null;
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
     updateOverlayToolApproval(
@@ -303,11 +286,10 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
         payload,
         String(payload?.action || '').toLowerCase() || 'resolved',
     );
-    if (!st) return false;
     const toolCallId = payload?.tool_call_id;
     if (!toolCallId) return false;
 
-    const toolBlock = findToolBlock(st.contentEl, payload?.tool_name, toolCallId);
+    const toolBlock = resolveToolBlockTarget(st, container, payload?.tool_name, toolCallId);
     if (!toolBlock) return false;
     toolBlock.dataset.toolCallId = toolCallId;
 
@@ -325,6 +307,7 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
             resultEl.innerHTML = 'Approval submitted. Waiting for tool result...';
         }
     }
+    scrollBottom((st && st.container) || container);
     return true;
 }
 
@@ -351,6 +334,15 @@ function resolveStreamKey(instanceId, roleId) {
     return isCoordinatorRoleId(roleId) || !roleId
         ? COORDINATOR_KEY
         : `role:${String(roleId || '').trim()}`;
+}
+
+function resolveToolBlockTarget(st, container, toolName, toolCallId) {
+    if (st) {
+        const byStreamState = findToolBlock(st.contentEl, toolName, toolCallId);
+        if (byStreamState) return byStreamState;
+    }
+    if (!container) return null;
+    return findToolBlockInContainer(container, toolName, toolCallId);
 }
 
 function ensureOverlayEntry(runId, instanceId, roleId, label) {

@@ -208,7 +208,7 @@ class TaskOrchestrationService:
                 content=normalized_feedback,
             )
 
-        result = await self._task_execution_service.execute(
+        await self._task_execution_service.execute(
             instance_id=instance_id,
             role_id=role_id,
             task=record.envelope,
@@ -217,7 +217,6 @@ class TaskOrchestrationService:
         return {
             "ok": True,
             "task": _task_projection(refreshed),
-            "result": result,
         }
 
     def _append_followup_prompt(

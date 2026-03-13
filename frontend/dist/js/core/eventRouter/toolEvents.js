@@ -27,10 +27,11 @@ import { coordinatorContainerFor } from './utils.js';
 
 export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     const coordinatorRoleId = getCoordinatorRoleId();
-    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
-    const container = isCoordinator
-        ? coordinatorContainerFor(eventMeta)
-        : getPanelScrollContainer(instanceId, roleId);
+    const { container, isCoordinator } = resolveToolEventTarget(
+        instanceId,
+        roleId,
+        eventMeta,
+    );
     if (!isCoordinator && !getActiveInstanceId()) {
         openAgentPanel(instanceId, roleId);
     }
@@ -50,9 +51,11 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
 
 export function handleToolInputValidationFailed(payload, instanceId, eventMeta = null, roleId = '') {
     const streamKey = instanceId || 'coordinator';
+    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const bound = markToolInputValidationFailed(streamKey, payload, {
         runId: eventMeta?.run_id || eventMeta?.trace_id || '',
         roleId,
+        container,
     });
     if (!bound) {
         sysLog(
@@ -65,6 +68,7 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
 export function handleToolResult(payload, instanceId, eventMeta = null, roleId = '') {
     const streamKey = instanceId || 'coordinator';
     const resultEnvelope = payload.result || {};
+    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isError = typeof resultEnvelope === 'object'
         ? resultEnvelope.ok === false
         : !!payload.error;
@@ -77,6 +81,7 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
         {
             runId: eventMeta?.run_id || eventMeta?.trace_id || '',
             roleId,
+            container,
         },
     );
 }
@@ -84,6 +89,8 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
 export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
     const streamKey = instanceId || 'coordinator';
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const roleId = payload?.role_id || '';
+    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     markToolApprovalRequested(payload);
     if (runId && payload?.tool_call_id) {
         document.dispatchEvent(
@@ -97,7 +104,8 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
     }
     const bound = attachToolApprovalControls(streamKey, payload.tool_name, payload, {}, {
         runId,
-        roleId: payload?.role_id || '',
+        roleId,
+        container,
     });
     if (!bound) {
         sysLog(`Approval requested for ${payload.tool_name}`, 'log-info');
@@ -106,9 +114,21 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
 
 export function handleToolApprovalResolved(payload, instanceId, eventMeta = null, roleId = '') {
     const streamKey = instanceId || 'coordinator';
+    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     markRecoveryToolApprovalResolved(payload?.tool_call_id || '');
     markToolApprovalResolved(streamKey, payload, {
         runId: eventMeta?.run_id || eventMeta?.trace_id || '',
         roleId,
+        container,
     });
+}
+
+function resolveToolEventTarget(instanceId, roleId, eventMeta) {
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
+    return {
+        isCoordinator,
+        container: isCoordinator
+            ? coordinatorContainerFor(eventMeta)
+            : getPanelScrollContainer(instanceId, roleId),
+    };
 }

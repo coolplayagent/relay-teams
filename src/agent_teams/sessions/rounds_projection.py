@@ -100,9 +100,7 @@ def build_session_rounds(
         coordinator_messages = [
             message
             for message in run_messages
-            if str(message.get("role") or "") != "user"
-            and coordinator_role_id is not None
-            and str(message.get("role_id") or "") == coordinator_role_id
+            if _is_round_coordinator_message(message, coordinator_role_id)
         ]
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)
@@ -233,3 +231,39 @@ def _extract_user_prompt(message: object) -> str | None:
     if not chunks:
         return None
     return "\n".join(chunks).strip() or None
+
+
+def _is_round_coordinator_message(
+    message: dict[str, object],
+    coordinator_role_id: str | None,
+) -> bool:
+    if coordinator_role_id is None:
+        return False
+    if str(message.get("role_id") or "") != coordinator_role_id:
+        return False
+    role = str(message.get("role") or "")
+    if role != "user":
+        return True
+    return _is_tool_outcome_message(cast(object, message.get("message")))
+
+
+def _is_tool_outcome_message(message: object) -> bool:
+    if not isinstance(message, dict):
+        return False
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return False
+    for part in parts:
+        if not isinstance(part, dict):
+            return False
+        part_kind = str(part.get("part_kind") or "")
+        if part_kind in {"tool-return", "retry-prompt"}:
+            continue
+        if (
+            part.get("tool_name") is not None
+            and part.get("content") is not None
+            and part.get("args") is None
+        ):
+            continue
+        return False
+    return True

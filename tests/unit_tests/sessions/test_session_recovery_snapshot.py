@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+)
+
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.runs.event_stream import RunEventHub
 from agent_teams.sessions.service import SessionService
@@ -310,6 +317,78 @@ def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(
     assert len(tasks) == 1
     assert tasks[0]["task_id"] == "task-sub-1"
     assert tasks[0]["role_id"] == "time"
+
+
+def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_tool_results.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1")
+    _ = TaskRepository(db_path).create(
+        TaskEnvelope(
+            task_id="task-root-1",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-active",
+            role_id="coordinator_agent",
+            objective="recover tool results",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-active",
+        trace_id="run-active",
+        session_id="session-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator_agent",
+        status=InstanceStatus.COMPLETED,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    MessageRepository(db_path).append(
+        session_id="session-1",
+        instance_id="inst-coordinator",
+        task_id="task-root-1",
+        trace_id="run-active",
+        agent_role_id="coordinator_agent",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="list_available_roles",
+                        args={},
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="list_available_roles",
+                        tool_call_id="call-1",
+                        content={"ok": True, "data": {"roles": ["time"]}},
+                    )
+                ]
+            ),
+        ],
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    coordinator_messages = round_snapshot.get("coordinator_messages")
+    assert isinstance(coordinator_messages, list)
+    assert len(coordinator_messages) == 2
+    assert coordinator_messages[1]["message"]["parts"][0]["part_kind"] == "tool-return"
 
 
 def test_failed_terminal_run_is_exposed_through_round_projection_not_recovery(

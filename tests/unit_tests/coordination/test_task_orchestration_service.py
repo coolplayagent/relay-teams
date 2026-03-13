@@ -246,6 +246,38 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_dispatch_task_returns_result_only_inside_task_projection(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        _execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_dispatch_payload.db")
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    payload = await service.dispatch_task(run_id="run-1", task_id="task-1")
+
+    task_payload = cast(JsonObject, payload["task"])
+    assert payload["ok"] is True
+    assert "result" not in payload
+    assert task_payload["result"] == "done:task-1"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_task_reuses_session_role_instance_across_tasks(
     tmp_path: Path,
 ) -> None:
