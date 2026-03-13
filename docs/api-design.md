@@ -55,6 +55,7 @@ Returns normalized model profiles.
 
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
+Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 
 ### `DELETE /system/configs/model/profiles/{name}`
 
@@ -67,6 +68,7 @@ Replaces the full model config object.
 ### `POST /system/configs/model:probe`
 
 Tests model connectivity for a saved profile and/or draft override.
+Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `true`.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:reload`
@@ -76,7 +78,7 @@ Reloads model config into runtime.
 ### `GET /system/configs/proxy`
 
 Returns the proxy values currently saved in app `~/.config/agent-teams/.env`.
-Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, `verify_ssl`.
+Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, `ssl_verify`.
 Saved proxy URLs are returned without embedded credentials when the configured proxy URLs share the same username/password pair.
 If the password was persisted through the system keyring, the API rehydrates it into `proxy_password` for editing.
 If a user manually forces `user:password@host` into `.env`, runtime loading still supports it and the API can read it back, but the save flow will not write that password back to `.env`.
@@ -86,7 +88,8 @@ If a user manually forces `user:password@host` into `.env`, runtime loading stil
 Saves proxy values into app `~/.config/agent-teams/.env` and reloads runtime proxy state immediately.
 Blank values remove the corresponding proxy key.
 `proxy_username` and `proxy_password` are optional shared credentials.
-`verify_ssl` controls TLS certificate verification for proxy-backed LLM and web HTTP clients.
+`ssl_verify` controls the default TLS certificate verification policy for Agent Teams outbound HTTP clients.
+When omitted or `null`, the backend removes `SSL_VERIFY` from `.env` and falls back to strict verification by default.
 On save, proxy passwords are persisted only through a usable system keyring backend. The `.env` file stores proxy URLs without the password portion.
 If no usable keyring backend is available, saving a proxy password fails with a user-facing error instead of falling back to plaintext file storage.
 Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
@@ -116,7 +119,7 @@ Replaces notification rules.
 ### `GET /system/configs/environment-variables`
 
 Returns environment variables grouped by `system` and `app` scope.
-`system` is read-only and reflects the effective Windows environment visible to new processes, built from `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` plus `HKCU\Environment` with `HKCU` overriding duplicate keys.
+`system` is read-only and reflects the effective runtime environment currently visible to the Agent Teams server and newly spawned child processes.
 `app` is editable and stored in `~/.config/agent-teams/.env`.
 Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
 
@@ -138,8 +141,8 @@ Deleting a missing key returns a user-facing validation error.
 
 ### `POST /system/configs/web:probe`
 
-Tests whether a target `http` or `https` URL is reachable under the current proxy settings.
-The request may also include `proxy_override` with `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, and `proxy_password` to run a one-shot probe against unsaved form values.
+Tests whether a target `http` or `https` URL is reachable under the current proxy and global SSL settings.
+The request may also include `proxy_override` with `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, and `ssl_verify` to run a one-shot probe against unsaved form values.
 The backend uses `HEAD` first and falls back to `GET` when the target does not support `HEAD`.
 Any HTTP response (`2xx` through `5xx`) counts as reachable.
 Only transport-level failures such as timeout, DNS, TLS, or proxy handshake errors return `ok=false`.

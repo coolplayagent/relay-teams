@@ -152,6 +152,31 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     assert payload["model"] == "draft-model"
 
 
+def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured, response=httpx.Response(200, json={"usage": {}})
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            profile_name="default",
+            override=ModelConnectivityProbeOverride(ssl_verify=False),
+        )
+    )
+
+    assert result.ok is True
+    assert captured["ssl_verify"] is False
+
+
 def test_probe_returns_timeout_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
@@ -235,6 +260,7 @@ def _runtime_config() -> RuntimeConfig:
         model="saved-model",
         base_url="https://example.test/v1",
         api_key="saved-api-key",
+        ssl_verify=True,
         sampling=SamplingConfig(
             temperature=1.0,
             top_p=0.95,

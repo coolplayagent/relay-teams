@@ -8,7 +8,10 @@ import sys
 import httpx
 import pytest
 
-from integration_tests.support.config_builder import write_test_runtime_config
+from integration_tests.support.config_builder import (
+    assert_integration_model_config_uses_fake_llm,
+    write_test_runtime_config,
+)
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.process_control import (
     ManagedProcess,
@@ -17,6 +20,34 @@ from integration_tests.support.process_control import (
     stop_process,
     wait_for_http_ready,
 )
+
+
+_HOME_ENV_KEYS: tuple[str, ...] = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+
+
+def _capture_home_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _HOME_ENV_KEYS}
+
+
+def _apply_home_env(runtime_root: Path) -> None:
+    resolved_runtime_root = runtime_root.resolve()
+    os.environ["HOME"] = str(resolved_runtime_root)
+    os.environ["USERPROFILE"] = str(resolved_runtime_root)
+    drive, tail = os.path.splitdrive(str(resolved_runtime_root))
+    if drive:
+        os.environ["HOMEDRIVE"] = drive
+        os.environ["HOMEPATH"] = tail or "\\"
+    else:
+        os.environ.pop("HOMEDRIVE", None)
+        os.environ.pop("HOMEPATH", None)
+
+
+def _restore_home_env(original_env: dict[str, str | None]) -> None:
+    for key, value in original_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+            continue
+        os.environ[key] = value
 
 
 @pytest.fixture(scope="session")
@@ -38,6 +69,10 @@ def integration_env(
         config_dir=config_dir,
         fake_llm_v1_base_url=fake_llm_v1_base_url,
     )
+    assert_integration_model_config_uses_fake_llm(config_dir=config_dir)
+
+    original_home_env = _capture_home_env()
+    _apply_home_env(runtime_root)
 
     shared_env = os.environ.copy()
     python_paths = [str(repo_root), str(repo_root / "src"), str(repo_root / "tests")]
@@ -45,12 +80,6 @@ def integration_env(
     if existing_pythonpath:
         python_paths.append(existing_pythonpath)
     shared_env["PYTHONPATH"] = os.pathsep.join(python_paths)
-    shared_env["HOME"] = str(runtime_root)
-    shared_env["USERPROFILE"] = str(runtime_root)
-    drive, tail = os.path.splitdrive(str(runtime_root))
-    if drive:
-        shared_env["HOMEDRIVE"] = drive
-        shared_env["HOMEPATH"] = tail or "\\"
 
     fake_llm_log_file = runtime_root / "fake-llm.log"
     backend_log_file = runtime_root / "backend.log"
@@ -117,6 +146,7 @@ def integration_env(
         if backend_process is not None:
             stop_process(backend_process)
         stop_process(fake_llm_process)
+        _restore_home_env(original_home_env)
 
 
 @pytest.fixture()

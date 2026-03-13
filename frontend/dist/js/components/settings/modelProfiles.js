@@ -100,6 +100,7 @@ function handleAddProfile() {
     document.getElementById('profile-top-p').value = '1.0';
     document.getElementById('profile-max-tokens').value = '4096';
     document.getElementById('profile-connect-timeout').value = '15';
+    document.getElementById('profile-ssl-verify').value = '';
 
     showProfileEditor();
     renderDraftProbeState();
@@ -124,6 +125,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
     document.getElementById('profile-max-tokens').value = profile.max_tokens || 4096;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
+    document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
 
     showProfileEditor();
     renderDraftProbeState();
@@ -145,6 +147,7 @@ async function handleSaveProfile() {
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
+    const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
     if (!name) {
         showToast({ title: 'Profile Required', message: 'Profile name is required.', tone: 'warning' });
@@ -164,6 +167,9 @@ async function handleSaveProfile() {
         max_tokens: maxTokens,
         connect_timeout_seconds: connectTimeoutSeconds,
     };
+    if (sslVerify !== null) {
+        profile.ssl_verify = sslVerify;
+    }
 
     if (apiKey) {
         profile.api_key = apiKey;
@@ -267,6 +273,7 @@ function buildDraftProbePayload() {
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
+    const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
     if (!model || !baseUrl || (!apiKey && !editingProfile)) {
         draftProbeState = {
@@ -284,6 +291,9 @@ function buildDraftProbePayload() {
         top_p: topP,
         max_tokens: maxTokens,
     };
+    if (sslVerify !== null) {
+        override.ssl_verify = sslVerify;
+    }
 
     if (apiKey) {
         override.api_key = apiKey;
@@ -336,6 +346,27 @@ function renderDraftProbeState() {
     statusEl.className = `profile-probe-status probe-status probe-status-${draftProbeState.status}`;
     testBtn.disabled = draftProbeState.status === 'probing';
     testBtn.textContent = draftProbeState.status === 'probing' ? 'Testing...' : 'Test';
+}
+
+function parseTriStateValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'true') {
+        return true;
+    }
+    if (normalized === 'false') {
+        return false;
+    }
+    return null;
+}
+
+function serializeTriStateValue(value) {
+    if (value === true) {
+        return 'true';
+    }
+    if (value === false) {
+        return 'false';
+    }
+    return '';
 }
 
 function showProfilesList() {

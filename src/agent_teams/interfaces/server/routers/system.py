@@ -78,6 +78,7 @@ class ModelProfileRequest(BaseModel):
     model: str
     base_url: str
     api_key: str | None = None
+    ssl_verify: bool | None = None
     temperature: float = 0.7
     top_p: float = 1.0
     max_tokens: int = 4096
@@ -100,6 +101,8 @@ def save_model_profile(
             "max_tokens": req.max_tokens,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
+        if req.ssl_verify is not None:
+            profile["ssl_verify"] = req.ssl_verify
         if req.api_key is not None and req.api_key.strip():
             profile["api_key"] = req.api_key
         service.save_model_profile(name, profile, source_name=req.source_name)

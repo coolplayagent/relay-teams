@@ -19,6 +19,7 @@ def _clear_proxy_env(monkeypatch) -> None:
         "all_proxy",
         "NO_PROXY",
         "no_proxy",
+        "SSL_VERIFY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -94,6 +95,7 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
         "http_proxy": "http://proxy.internal:8080",
         "NO_PROXY": "localhost,127.0.0.1",
         "no_proxy": "localhost,127.0.0.1",
+        "SSL_VERIFY": "true",
     }
     assert registry.get_spec("filesystem").server_config["env"] == expected_proxy_env
     assert registry.get_spec("events").server_config["env"] == expected_proxy_env
@@ -141,6 +143,7 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
         "HTTP_PROXY": "http://custom-proxy.internal:9000",
         "http_proxy": "http://custom-proxy.internal:9000",
         "CUSTOM_TOKEN": "secret",
+        "SSL_VERIFY": "true",
     }
 
 

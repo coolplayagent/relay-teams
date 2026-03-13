@@ -8,6 +8,8 @@ from pathlib import Path
 from agent_teams.paths import get_app_config_dir
 
 _ENV_FILE_NAME = ".env"
+_PROCESS_ENV_BASELINE: dict[str, str] = dict(os.environ)
+_SYNCED_APP_ENV_KEYS: set[str] = set()
 
 
 def get_app_env_file_path(user_home_dir: Path | None = None) -> Path:
@@ -63,6 +65,28 @@ def load_merged_env_vars(
         merged.update(dict(os.environ))
 
     return merged
+
+
+def sync_app_env_to_process_env(env_file_path: Path | None = None) -> dict[str, str]:
+    resolved_env_file = (
+        (get_app_env_file_path() if env_file_path is None else env_file_path)
+        .expanduser()
+        .resolve()
+    )
+    app_env = load_env_file(resolved_env_file)
+    managed_keys = _SYNCED_APP_ENV_KEYS | set(app_env.keys())
+    for key in managed_keys:
+        if key in app_env:
+            os.environ[key] = app_env[key]
+            continue
+        baseline_value = _PROCESS_ENV_BASELINE.get(key)
+        if baseline_value is None:
+            os.environ.pop(key, None)
+            continue
+        os.environ[key] = baseline_value
+    _SYNCED_APP_ENV_KEYS.clear()
+    _SYNCED_APP_ENV_KEYS.update(app_env.keys())
+    return app_env.copy()
 
 
 def get_env_var(

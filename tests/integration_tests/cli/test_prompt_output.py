@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import httpx
+from pathlib import Path
 from typer.testing import CliRunner
 
 from agent_teams.interfaces.cli import app as cli_app
@@ -15,6 +16,7 @@ def test_root_message_prints_fake_llm_output(
     monkeypatch,
 ) -> None:
     before_calls = _get_fake_llm_call_count(integration_env)
+    assert Path.home().resolve() == integration_env.config_dir.parent.parent.resolve()
     monkeypatch.setattr(cli_app, "DEFAULT_BASE_URL", integration_env.api_base_url)
 
     result = runner.invoke(cli_app.app, ["-m", "hello integration prompt"])

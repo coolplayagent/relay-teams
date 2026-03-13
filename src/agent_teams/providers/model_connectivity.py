@@ -29,6 +29,7 @@ class ModelConnectivityProbeOverride(BaseModel):
     model: str | None = Field(default=None, min_length=1)
     base_url: str | None = Field(default=None, min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
+    ssl_verify: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -139,6 +140,7 @@ class ModelConnectivityProbeService:
                 model=override_model,
                 base_url=override_base_url,
                 api_key=override_api_key,
+                ssl_verify=override.ssl_verify,
                 sampling=SamplingConfig(
                     temperature=(
                         override.temperature
@@ -167,6 +169,11 @@ class ModelConnectivityProbeService:
             model=override.model or base_config.model,
             base_url=override.base_url or base_config.base_url,
             api_key=override.api_key or base_config.api_key,
+            ssl_verify=(
+                override.ssl_verify
+                if override.ssl_verify is not None
+                else base_config.ssl_verify
+            ),
             sampling=SamplingConfig(
                 temperature=(
                     override.temperature
@@ -243,6 +250,7 @@ class ModelConnectivityProbeService:
             with create_proxy_http_client(
                 timeout_seconds=timeout_ms / 1000,
                 connect_timeout_seconds=timeout_ms / 1000,
+                ssl_verify=config.ssl_verify,
             ) as client:
                 response = client.post(
                     endpoint,

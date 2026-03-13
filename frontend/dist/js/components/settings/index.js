@@ -27,7 +27,7 @@ const TAB_METADATA = {
     },
     environment: {
         title: 'Environment Variables',
-        description: 'Inspect system environment values and manage Agent Teams app environment variables.',
+        description: 'Inspect effective runtime environment values and manage Agent Teams app environment variables.',
     },
     notifications: {
         title: 'Notifications',
@@ -35,7 +35,7 @@ const TAB_METADATA = {
     },
     proxy: {
         title: 'Proxy',
-        description: 'Edit runtime proxy values and test outbound web connectivity.',
+        description: 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
     },
     mcp: {
         title: 'MCP Config',
@@ -144,6 +144,14 @@ function createModal() {
                                                     <label for="profile-connect-timeout">Connect Timeout (s)</label>
                                                     <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300" autocomplete="off">
                                                 </div>
+                                                <div class="form-group">
+                                                    <label for="profile-ssl-verify">SSL Verification</label>
+                                                    <select id="profile-ssl-verify">
+                                                        <option value="">Inherit Default</option>
+                                                        <option value="true">Verify</option>
+                                                        <option value="false">Skip Verify</option>
+                                                    </select>
+                                                </div>
                                             </div>
                                         </div>
                                         <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
@@ -240,31 +248,6 @@ function createModal() {
                         <div class="settings-section">
                             <div class="settings-content-stack env-panel-body">
                                 <p class="env-settings-help" id="env-variables-help"></p>
-                                <div class="env-editor-shell" id="env-editor-shell" style="display:none;">
-                                    <div class="env-editor-header">
-                                        <div>
-                                            <h5 id="env-editor-title">Add Environment Variable</h5>
-                                            <p id="env-editor-meta">Choose a scope, then save the key and value.</p>
-                                        </div>
-                                    </div>
-                                    <input type="hidden" id="env-source-key-input" value="">
-                                    <div class="env-editor-grid">
-                                        <div class="form-group env-inline-field env-inline-field-compact">
-                                            <label for="env-scope-select">Scope</label>
-                                            <select id="env-scope-select">
-                                                <option value="app">App</option>
-                                            </select>
-                                        </div>
-                                        <div class="form-group env-inline-field">
-                                            <label for="env-key-input">Key</label>
-                                            <input type="text" id="env-key-input" placeholder="e.g. OPENAI_API_KEY" autocomplete="off">
-                                        </div>
-                                        <div class="form-group env-inline-field env-inline-field-value">
-                                            <label for="env-value-input">Value</label>
-                                            <textarea id="env-value-input" class="config-textarea env-value-textarea" placeholder="Variable value"></textarea>
-                                        </div>
-                                    </div>
-                                </div>
                                 <div class="env-groups" id="environment-variables-groups"></div>
                             </div>
                         </div>
@@ -398,11 +381,12 @@ function createModal() {
                                                 <input type="text" id="proxy-no-proxy" placeholder="localhost;127.*;192.168.*;<local>" autocomplete="off">
                                             </div>
                                             <div class="form-group proxy-inline-field proxy-inline-field-compact">
-                                                <label class="notification-toggle" for="proxy-verify-ssl">
-                                                    <input type="checkbox" id="proxy-verify-ssl" checked>
-                                                    <span class="notification-toggle-check" aria-hidden="true"></span>
-                                                    <span class="notification-toggle-label">Verify SSL</span>
-                                                </label>
+                                                <label for="proxy-ssl-verify">Default SSL Verification</label>
+                                                <select id="proxy-ssl-verify">
+                                                    <option value="">Inherit Default</option>
+                                                    <option value="true">Verify</option>
+                                                    <option value="false">Skip Verify</option>
+                                                </select>
                                             </div>
                                         </div>
                                     </section>

@@ -78,6 +78,7 @@ document.getElementById("profile-api-key").value = "draft-api-key";
 document.getElementById("profile-temperature").value = "0.4";
 document.getElementById("profile-top-p").value = "0.9";
 document.getElementById("profile-max-tokens").value = "256";
+document.getElementById("profile-ssl-verify").value = "false";
 
 await document.getElementById("test-profile-btn").onclick();
 
@@ -103,6 +104,7 @@ console.log(JSON.stringify({
     assert probe_override["model"] == "draft-model"
     assert probe_override["base_url"] == "https://draft.test/v1"
     assert probe_override["api_key"] == "draft-api-key"
+    assert probe_override["ssl_verify"] is False
 
 
 def test_edit_profile_preserves_existing_api_key_when_left_blank(
@@ -445,11 +447,11 @@ function createElement(initialDisplay = "block") {{
 }}
 
 function createElements() {{
-    return new Map([
-        ["profiles-list", createElement("block")],
-        ["profile-editor", createElement("none")],
-        ["add-profile-btn", createElement("block")],
-        ["save-profile-btn", createElement("block")],
+        return new Map([
+            ["profiles-list", createElement("block")],
+            ["profile-editor", createElement("none")],
+            ["add-profile-btn", createElement("block")],
+            ["save-profile-btn", createElement("block")],
         ["test-profile-btn", createElement("block")],
         ["cancel-profile-btn", createElement("block")],
         ["profile-probe-status", createElement("none")],
@@ -458,12 +460,13 @@ function createElements() {{
         ["profile-model", createElement("block")],
         ["profile-base-url", createElement("block")],
         ["profile-api-key", createElement("block")],
-        ["profile-temperature", createElement("block")],
-        ["profile-top-p", createElement("block")],
-        ["profile-max-tokens", createElement("block")],
-        ["profile-connect-timeout", createElement("block")],
-    ]);
-}}
+            ["profile-temperature", createElement("block")],
+            ["profile-top-p", createElement("block")],
+            ["profile-max-tokens", createElement("block")],
+            ["profile-connect-timeout", createElement("block")],
+            ["profile-ssl-verify", createElement("block")],
+        ]);
+    }}
 
 function installGlobals(elements, notifications) {{
     function collectDocumentMatches(selector) {{

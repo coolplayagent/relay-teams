@@ -2,13 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import ctypes
-from ctypes import wintypes
-from contextlib import AbstractContextManager
-from pathlib import Path
+import os
 import re
-import sys
-from typing import Protocol, cast
+from pathlib import Path
+from typing import Protocol
 
 from agent_teams.env.environment_variable_models import (
     EnvironmentVariableCatalog,
@@ -17,22 +14,13 @@ from agent_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
     EnvironmentVariableValueKind,
 )
-from agent_teams.env.runtime_env import get_app_env_file_path, load_env_file
-
-try:
-    import winreg as _winreg
-except ImportError:  # pragma: no cover - only exercised on non-Windows systems.
-    _winreg = None
-
+from agent_teams.env.runtime_env import (
+    get_app_env_file_path,
+    load_env_file,
+    sync_app_env_to_process_env,
+)
 
 _EXPANDABLE_VALUE_PATTERN = re.compile(r"%[^%]+%")
-_SYSTEM_ENV_REGISTRY_PATH = (
-    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
-)
-_USER_ENV_REGISTRY_PATH = r"Environment"
-_HWND_BROADCAST = 0xFFFF
-_WM_SETTINGCHANGE = 0x001A
-_SMTO_ABORTIFHUNG = 0x0002
 
 
 class EnvironmentVariableBackend(Protocol):
@@ -61,39 +49,6 @@ class EnvironmentVariableBackend(Protocol):
     def broadcast_change(self) -> None: ...
 
 
-class WinRegModuleProtocol(Protocol):
-    HKEY_LOCAL_MACHINE: int
-    HKEY_CURRENT_USER: int
-    KEY_READ: int
-    KEY_SET_VALUE: int
-    KEY_QUERY_VALUE: int
-    REG_EXPAND_SZ: int
-    REG_SZ: int
-
-    def OpenKey(
-        self,
-        key: int,
-        sub_key: str,
-        reserved: int = 0,
-        access: int = 0,
-    ) -> AbstractContextManager[object]: ...
-
-    def EnumValue(self, key: object, index: int) -> tuple[str, object, int]: ...
-
-    def QueryValueEx(self, key: object, value_name: str) -> tuple[object, int]: ...
-
-    def SetValueEx(
-        self,
-        key: object,
-        value_name: str,
-        reserved: int,
-        value_type: int,
-        value: str,
-    ) -> None: ...
-
-    def DeleteValue(self, key: object, value_name: str) -> None: ...
-
-
 class EnvironmentVariableService:
     def __init__(
         self,
@@ -102,7 +57,7 @@ class EnvironmentVariableService:
         app_env_file_path: Path | None = None,
     ) -> None:
         self._backend: EnvironmentVariableBackend = (
-            WindowsRegistryEnvironmentVariableBackend() if backend is None else backend
+            ProcessEnvironmentVariableBackend() if backend is None else backend
         )
         self._app_env_file_path: Path = (
             get_app_env_file_path()
@@ -254,37 +209,29 @@ class EnvironmentVariableService:
         if serialized:
             serialized = f"{serialized}\n"
         env_file_path.write_text(serialized, encoding="utf-8")
+        sync_app_env_to_process_env(env_file_path)
 
 
-class WindowsRegistryEnvironmentVariableBackend:
+class ProcessEnvironmentVariableBackend:
     def list_values(
         self,
         scope: EnvironmentVariableScope,
     ) -> Sequence[EnvironmentVariableRecord]:
-        registry_module = _require_winreg()
         if scope != EnvironmentVariableScope.SYSTEM:
             return ()
-        system_values = _read_registry_values(
-            registry_module,
-            registry_module.HKEY_LOCAL_MACHINE,
-            _SYSTEM_ENV_REGISTRY_PATH,
-        )
-        user_values = _read_registry_values(
-            registry_module,
-            registry_module.HKEY_CURRENT_USER,
-            _USER_ENV_REGISTRY_PATH,
-        )
-        merged_values: dict[str, EnvironmentVariableRecord] = {
-            record.key: record for record in system_values
-        }
-        for record in user_values:
-            merged_values[record.key] = EnvironmentVariableRecord(
-                key=record.key,
-                value=record.value,
+        return tuple(
+            EnvironmentVariableRecord(
+                key=key,
+                value=value,
                 scope=EnvironmentVariableScope.SYSTEM,
-                value_kind=record.value_kind,
+                value_kind=(
+                    EnvironmentVariableValueKind.EXPANDABLE
+                    if _EXPANDABLE_VALUE_PATTERN.search(value)
+                    else EnvironmentVariableValueKind.STRING
+                ),
             )
-        return tuple(merged_values.values())
+            for key, value in os.environ.items()
+        )
 
     def get_value(
         self,
@@ -293,10 +240,19 @@ class WindowsRegistryEnvironmentVariableBackend:
     ) -> EnvironmentVariableRecord | None:
         if scope != EnvironmentVariableScope.SYSTEM:
             return None
-        for record in self.list_values(scope):
-            if record.key == key:
-                return record
-        return None
+        value = os.environ.get(key)
+        if value is None:
+            return None
+        return EnvironmentVariableRecord(
+            key=key,
+            value=value,
+            scope=EnvironmentVariableScope.SYSTEM,
+            value_kind=(
+                EnvironmentVariableValueKind.EXPANDABLE
+                if _EXPANDABLE_VALUE_PATTERN.search(value)
+                else EnvironmentVariableValueKind.STRING
+            ),
+        )
 
     def set_value(
         self,
@@ -306,69 +262,15 @@ class WindowsRegistryEnvironmentVariableBackend:
         *,
         value_kind: EnvironmentVariableValueKind,
     ) -> None:
+        _ = (scope, key, value, value_kind)
         raise PermissionError("System environment variables are read-only.")
 
     def delete_value(self, scope: EnvironmentVariableScope, key: str) -> None:
+        _ = (scope, key)
         raise PermissionError("System environment variables are read-only.")
 
     def broadcast_change(self) -> None:
-        _ = _require_winreg()
-        send_message_timeout = ctypes.windll.user32.SendMessageTimeoutW
-        send_message_timeout.argtypes = (
-            wintypes.HWND,
-            wintypes.UINT,
-            wintypes.WPARAM,
-            wintypes.LPCWSTR,
-            wintypes.UINT,
-            wintypes.UINT,
-            ctypes.POINTER(wintypes.DWORD),
-        )
-        send_message_timeout.restype = wintypes.LPARAM
-        result = wintypes.DWORD(0)
-        send_message_timeout(
-            _HWND_BROADCAST,
-            _WM_SETTINGCHANGE,
-            0,
-            "Environment",
-            _SMTO_ABORTIFHUNG,
-            5000,
-            ctypes.byref(result),
-        )
-
-
-def _read_registry_values(
-    registry_module: WinRegModuleProtocol,
-    root_key: int,
-    sub_key: str,
-) -> tuple[EnvironmentVariableRecord, ...]:
-    values: list[EnvironmentVariableRecord] = []
-    with registry_module.OpenKey(
-        root_key,
-        sub_key,
-        0,
-        registry_module.KEY_READ,
-    ) as registry_key:
-        index = 0
-        while True:
-            try:
-                key, value, raw_type = registry_module.EnumValue(registry_key, index)
-            except OSError:
-                break
-            index += 1
-            if not isinstance(value, str):
-                continue
-            value_kind = _registry_type_to_value_kind(raw_type)
-            if value_kind is None:
-                continue
-            values.append(
-                EnvironmentVariableRecord(
-                    key=key,
-                    value=value,
-                    scope=EnvironmentVariableScope.SYSTEM,
-                    value_kind=value_kind,
-                )
-            )
-    return tuple(values)
+        return None
 
 
 def _normalize_key(key: str) -> str:
@@ -380,14 +282,6 @@ def _normalize_key(key: str) -> str:
     if "\x00" in normalized:
         raise ValueError("Environment variable key cannot contain NUL bytes.")
     return normalized
-
-
-def _require_winreg() -> WinRegModuleProtocol:
-    if sys.platform != "win32" or _winreg is None:
-        raise RuntimeError(
-            "Environment variable settings are only supported on Windows."
-        )
-    return cast(WinRegModuleProtocol, _winreg)
 
 
 def _resolve_value_kind(
@@ -403,33 +297,6 @@ def _resolve_value_kind(
     if _EXPANDABLE_VALUE_PATTERN.search(value):
         return EnvironmentVariableValueKind.EXPANDABLE
     return EnvironmentVariableValueKind.STRING
-
-
-def _resolve_registry_location(
-    scope: EnvironmentVariableScope,
-) -> tuple[int, str]:
-    registry_module = _require_winreg()
-    if scope != EnvironmentVariableScope.SYSTEM:
-        raise ValueError(f"Unsupported registry scope: {scope.value}")
-    return registry_module.HKEY_LOCAL_MACHINE, _SYSTEM_ENV_REGISTRY_PATH
-
-
-def _registry_type_to_value_kind(
-    raw_type: int,
-) -> EnvironmentVariableValueKind | None:
-    registry_module = _require_winreg()
-    if raw_type == registry_module.REG_EXPAND_SZ:
-        return EnvironmentVariableValueKind.EXPANDABLE
-    if raw_type == registry_module.REG_SZ:
-        return EnvironmentVariableValueKind.STRING
-    return None
-
-
-def _value_kind_to_registry_type(value_kind: EnvironmentVariableValueKind) -> int:
-    registry_module = _require_winreg()
-    if value_kind == EnvironmentVariableValueKind.EXPANDABLE:
-        return registry_module.REG_EXPAND_SZ
-    return registry_module.REG_SZ
 
 
 def _serialize_env_value(value: str) -> str:

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
 from agent_teams.builtin import ensure_app_config_bootstrap
+from agent_teams.env.runtime_env import sync_app_env_to_process_env
 from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
@@ -54,6 +55,7 @@ _SUPPRESSED_SUCCESS_PATHS = (
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config_dir = get_app_config_dir()
     ensure_app_config_bootstrap(config_dir)
+    sync_app_env_to_process_env(config_dir / ".env")
     configure_logging(config_dir=config_dir)
     _register_signal_handlers()
     app.state.container = ServerContainer(config_dir=config_dir)

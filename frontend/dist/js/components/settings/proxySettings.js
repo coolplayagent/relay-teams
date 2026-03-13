@@ -148,7 +148,7 @@ function writeProxyFormValues(config) {
     setInputValue('proxy-no-proxy', config.no_proxy);
     setInputValue('proxy-username', config.proxy_username);
     setInputValue('proxy-password', config.proxy_password);
-    setCheckboxValue('proxy-verify-ssl', config.verify_ssl !== false);
+    setInputValue('proxy-ssl-verify', serializeTriStateValue(config.ssl_verify));
 }
 
 function readProxyFormValues() {
@@ -159,7 +159,7 @@ function readProxyFormValues() {
         no_proxy: readInputValue('proxy-no-proxy'),
         proxy_username: readInputValue('proxy-username'),
         proxy_password: readInputValue('proxy-password'),
-        verify_ssl: readCheckboxValue('proxy-verify-ssl', true),
+        ssl_verify: parseTriStateValue(readInputValue('proxy-ssl-verify')),
     };
 }
 
@@ -179,18 +179,23 @@ function readInputValue(id) {
     return input.value.trim();
 }
 
-function setCheckboxValue(id, value) {
-    const input = document.getElementById(id);
-    if (!input) {
-        return;
+function parseTriStateValue(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'true') {
+        return true;
     }
-    input.checked = Boolean(value);
+    if (normalized === 'false') {
+        return false;
+    }
+    return null;
 }
 
-function readCheckboxValue(id, fallback) {
-    const input = document.getElementById(id);
-    if (!input) {
-        return fallback;
+function serializeTriStateValue(value) {
+    if (value === true) {
+        return 'true';
     }
-    return Boolean(input.checked);
+    if (value === false) {
+        return 'false';
+    }
+    return '';
 }

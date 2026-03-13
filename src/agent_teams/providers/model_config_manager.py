@@ -33,6 +33,7 @@ class ModelConfigManager:
                 "model": profile.get("model", ""),
                 "base_url": profile.get("base_url", ""),
                 "has_api_key": bool(profile.get("api_key")),
+                "ssl_verify": profile.get("ssl_verify"),
                 "temperature": profile.get("temperature", 0.7),
                 "top_p": profile.get("top_p", 1.0),
                 "max_tokens": profile.get("max_tokens", 4096),

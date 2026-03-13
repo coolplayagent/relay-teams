@@ -41,8 +41,13 @@ def test_build_coordination_agent_passes_proxy_http_client(
     sentinel_client = object()
     fake_tool_registry = _FakeToolRegistry()
 
-    def _fake_build_llm_http_client(*, connect_timeout_seconds: float) -> object:
+    def _fake_build_llm_http_client(
+        *,
+        connect_timeout_seconds: float,
+        ssl_verify: bool | None = None,
+    ) -> object:
         captured["connect_timeout_seconds"] = connect_timeout_seconds
+        captured["ssl_verify"] = ssl_verify
         return sentinel_client
 
     def _fake_openai_provider(**kwargs: object) -> _FakeOpenAIProvider:
@@ -100,5 +105,6 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert provider.kwargs["api_key"] == "secret"
     assert provider.kwargs["http_client"] is sentinel_client
     assert captured["connect_timeout_seconds"] == 22.0
+    assert captured["ssl_verify"] is None
     assert fake_tool_registry.required == ("dispatch_task",)
     assert agent is captured["agent"]

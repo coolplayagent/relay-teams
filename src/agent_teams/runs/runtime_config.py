@@ -16,6 +16,9 @@ from agent_teams.providers.model_config import (
     SamplingConfig,
 )
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
 
 class RuntimePaths(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -137,6 +140,10 @@ def load_llm_configs(
         top_p = cfg.get("top_p", 1.0)
         max_tokens = cfg.get("max_tokens", 1024)
         top_k = cfg.get("top_k")
+        ssl_verify = _coerce_optional_ssl_verify(
+            cfg.get("ssl_verify"),
+            profile_name=name,
+        )
         connect_timeout_seconds = cfg.get(
             "connect_timeout_seconds",
             DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
@@ -147,6 +154,7 @@ def load_llm_configs(
             model=model,
             base_url=base_url,
             api_key=api_key,
+            ssl_verify=ssl_verify,
             connect_timeout_seconds=connect_timeout_seconds,
             sampling=SamplingConfig(
                 temperature=temperature,
@@ -184,6 +192,24 @@ def _resolve_required_config_value(
             )
         return resolved_value
     return value
+
+
+def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+    raise ValueError(
+        f"Invalid profile '{profile_name}': ssl_verify must be true, false, or null."
+    )
 
 
 def _resolve_path(config_dir: Path, raw_path: str) -> Path:

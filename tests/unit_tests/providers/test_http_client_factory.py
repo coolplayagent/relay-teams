@@ -102,7 +102,7 @@ def test_build_llm_http_client_disables_ssl_verification_when_configured() -> No
     client = http_client_factory.build_llm_http_client(
         merged_env={
             "HTTP_PROXY": "http://proxy.internal:8080",
-            "AGENT_TEAMS_LLM_SSL_VERIFY": "false",
+            "SSL_VERIFY": "false",
         }
     )
     transport = _routing_transport(client)
@@ -119,7 +119,7 @@ def test_build_llm_http_client_creates_direct_client_when_only_ssl_verification_
     None
 ):
     client = http_client_factory.build_llm_http_client(
-        merged_env={"AGENT_TEAMS_LLM_SSL_VERIFY": "false"}
+        merged_env={"SSL_VERIFY": "false"}
     )
     transport = _routing_transport(client)
     direct_transport = getattr(transport, "_direct_transport")

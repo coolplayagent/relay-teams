@@ -49,6 +49,7 @@ def _clear_proxy_env(monkeypatch) -> None:
         "all_proxy",
         "NO_PROXY",
         "no_proxy",
+        "SSL_VERIFY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -102,7 +103,7 @@ def test_reload_proxy_config_passes_current_config_to_callback(
             https_proxy=None,
             all_proxy=None,
             no_proxy="localhost,127.0.0.1",
-            verify_ssl=True,
+            ssl_verify=True,
         )
     ]
 
@@ -170,7 +171,6 @@ def test_save_proxy_config_rewrites_managed_keys_and_reloads_runtime(
         "FOO=bar\n"
         "NO_PROXY=localhost,127.0.0.1\n"
         "HTTPS_PROXY=http://alice@proxy.example:8443\n"
-        "AGENT_TEAMS_LLM_SSL_VERIFY=true\n"
     )
     assert secret_store.get_password(config_dir) == "secret"
     assert reloaded_configs == [
@@ -179,7 +179,7 @@ def test_save_proxy_config_rewrites_managed_keys_and_reloads_runtime(
             https_proxy="http://alice:secret@proxy.example:8443",
             all_proxy=None,
             no_proxy="localhost,127.0.0.1",
-            verify_ssl=True,
+            ssl_verify=True,
         )
     ]
 
@@ -335,7 +335,7 @@ def test_save_proxy_config_clears_runtime_proxy_env_when_proxy_removed(
         https_proxy=None,
         all_proxy=None,
         no_proxy=None,
-        verify_ssl=True,
+        ssl_verify=True,
     )
 
 
@@ -364,6 +364,6 @@ def test_reload_proxy_config_ignores_stale_process_proxy_env(
             https_proxy=None,
             all_proxy=None,
             no_proxy=None,
-            verify_ssl=True,
+            ssl_verify=True,
         )
     ]

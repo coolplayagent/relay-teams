@@ -9,7 +9,7 @@ from typing import cast
 from agent_teams.shared_types.json_types import JsonObject
 
 
-def test_environment_variables_panel_loads_scoped_groups_and_supports_collapse(
+def test_environment_variables_panel_renders_app_first_and_system_collapsed(
     tmp_path: Path,
 ) -> None:
     payload = _run_environment_variables_script(
@@ -31,7 +31,9 @@ await toggles[0].onclick();
 console.log(JSON.stringify({
     notifications,
     helpText: document.getElementById("env-variables-help").textContent,
+    helpDisplay: document.getElementById("env-variables-help").style.display,
     groupsHtml: groups.innerHTML,
+    toggleCount: toggles.length,
     addDisplay: document.getElementById("add-env-btn").style.display,
     saveDisplay: document.getElementById("save-env-btn").style.display,
 }));
@@ -39,16 +41,25 @@ console.log(JSON.stringify({
     )
 
     assert payload["notifications"] == []
-    assert "System variables are read-only OS values" in cast(str, payload["helpText"])
+    assert payload["helpText"] == ""
+    assert payload["helpDisplay"] == "none"
     groups_html = cast(str, payload["groupsHtml"])
+    assert groups_html.index("App Variables") < groups_html.index("System Variables")
     assert "System Variables" in groups_html
     assert "App Variables" in groups_html
-    assert 'style="display:none;"' in groups_html
+    assert "HTTP_PROXY" not in groups_html
+    assert "SSL_VERIFY" not in groups_html
+    assert payload["toggleCount"] == 1
+    assert 'data-env-scope="app"' in groups_html
+    assert 'data-env-scope="system"' in groups_html
+    assert 'aria-expanded="true"' in groups_html
+    assert ">Hide<" in groups_html
+    assert ">+<" not in groups_html
     assert payload["addDisplay"] == "inline-flex"
     assert payload["saveDisplay"] == "none"
 
 
-def test_environment_variables_save_and_delete_use_current_form_values(
+def test_environment_variables_add_row_is_inline_and_save_delete_use_app_scope(
     tmp_path: Path,
 ) -> None:
     payload = _run_environment_variables_script(
@@ -63,7 +74,8 @@ installGlobals(elements, notifications);
 bindEnvironmentVariableSettingsHandlers();
 await loadEnvironmentVariablesPanel();
 await document.getElementById("add-env-btn").onclick();
-document.getElementById("env-scope-select").value = "app";
+const groupsHtmlWithEditor = document.getElementById("environment-variables-groups").innerHTML;
+const keyInput = document.getElementById("env-key-input");
 document.getElementById("env-key-input").value = "NEW_KEY";
 document.getElementById("env-value-input").value = "updated-value";
 await document.getElementById("save-env-btn").onclick();
@@ -74,6 +86,9 @@ await new Promise(resolve => setTimeout(resolve, 0));
 
 console.log(JSON.stringify({
     notifications,
+    groupsHtmlWithEditor,
+    focusCalls: keyInput.focusCalls,
+    scrollCalls: keyInput.scrollCalls,
     savePayload: globalThis.__saveEnvironmentPayload,
     deletePayload: globalThis.__deleteEnvironmentPayload,
     saveCalls: globalThis.__saveEnvironmentCalls,
@@ -86,6 +101,15 @@ console.log(JSON.stringify({
     )
 
     notifications = cast(list[JsonObject], payload["notifications"])
+    groups_html_with_editor = cast(str, payload["groupsHtmlWithEditor"])
+    assert 'class="env-record env-record-editor"' in groups_html_with_editor
+    assert 'id="env-key-input"' in groups_html_with_editor
+    assert 'id="env-value-input"' in groups_html_with_editor
+    assert groups_html_with_editor.index(
+        "OPENAI_API_KEY"
+    ) < groups_html_with_editor.index('id="env-key-input"')
+    assert payload["focusCalls"] == 1
+    assert payload["scrollCalls"] == 1
     assert payload["savePayload"] == {
         "scope": "app",
         "key": "NEW_KEY",
@@ -115,6 +139,56 @@ console.log(JSON.stringify({
             "tone": "success",
         },
     ]
+
+
+def test_environment_variables_edit_replaces_row_in_place(
+    tmp_path: Path,
+) -> None:
+    payload = _run_environment_variables_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from "./environmentVariables.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindEnvironmentVariableSettingsHandlers();
+await loadEnvironmentVariablesPanel();
+
+const editButtons = document.getElementById("environment-variables-groups").querySelectorAll(".env-edit-btn");
+await editButtons[0].onclick();
+const groupsHtmlWithEditor = document.getElementById("environment-variables-groups").innerHTML;
+const keyInput = document.getElementById("env-key-input");
+document.getElementById("env-key-input").value = "OPENAI_API_KEY";
+document.getElementById("env-source-key-input").value = "OPENAI_API_KEY";
+document.getElementById("env-value-input").value = "edited-value";
+await document.getElementById("save-env-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    groupsHtmlWithEditor,
+    focusCalls: keyInput.focusCalls,
+    scrollCalls: keyInput.scrollCalls,
+    savePayload: globalThis.__saveEnvironmentPayload,
+}));
+""".strip(),
+    )
+
+    groups_html_with_editor = cast(str, payload["groupsHtmlWithEditor"])
+    assert groups_html_with_editor.count('data-env-key="OPENAI_API_KEY"') == 0
+    assert 'id="env-key-input"' in groups_html_with_editor
+    assert 'value="OPENAI_API_KEY"' in groups_html_with_editor
+    assert payload["focusCalls"] == 1
+    assert payload["scrollCalls"] == 1
+    assert payload["savePayload"] == {
+        "scope": "app",
+        "key": "OPENAI_API_KEY",
+        "payload": {
+            "source_key": "OPENAI_API_KEY",
+            "value": "edited-value",
+        },
+    }
 
 
 def _run_environment_variables_script(
@@ -154,6 +228,18 @@ export async function fetchEnvironmentVariables() {
             {
                 key: "OPENAI_API_KEY",
                 value: "secret",
+                scope: "app",
+                value_kind: "string",
+            },
+            {
+                key: "HTTP_PROXY",
+                value: "http://proxy.example:8080",
+                scope: "app",
+                value_kind: "string",
+            },
+            {
+                key: "SSL_VERIFY",
+                value: "false",
                 scope: "app",
                 value_kind: "string",
             },
@@ -227,7 +313,15 @@ function createElement(initialDisplay = "block") {{
         innerHTML: "",
         onclick: null,
         dataset: {{}},
+        focusCalls: 0,
+        scrollCalls: 0,
         __selectorCache: new Map(),
+        focus() {{
+            this.focusCalls += 1;
+        }},
+        scrollIntoView() {{
+            this.scrollCalls += 1;
+        }},
         querySelectorAll(selector) {{
             if (!this.__selectorCache.has(selector)) {{
                 this.__selectorCache.set(selector, parseSelector(this.innerHTML, selector));
@@ -279,13 +373,9 @@ function createElements() {{
         ["save-env-btn", createElement("none")],
         ["cancel-env-btn", createElement("none")],
         ["env-variables-help", createElement()],
-        ["env-editor-shell", createElement("none")],
-        ["env-scope-select", createElement()],
         ["env-key-input", createElement()],
         ["env-value-input", createElement()],
         ["env-source-key-input", createElement()],
-        ["env-editor-title", createElement()],
-        ["env-editor-meta", createElement()],
         ["environment-variables-groups", createElement()],
     ]);
 }}

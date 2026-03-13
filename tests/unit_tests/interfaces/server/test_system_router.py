@@ -67,7 +67,7 @@ class _FakeSystemService:
             "no_proxy": "localhost,127.0.0.1",
             "proxy_username": "alice",
             "proxy_password": "secret",
-            "verify_ssl": True,
+            "ssl_verify": None,
         }
 
     def save_proxy_config(self, config: ProxyEnvInput) -> None:
@@ -298,7 +298,7 @@ def test_get_proxy_config() -> None:
         "no_proxy": "localhost,127.0.0.1",
         "proxy_username": "alice",
         "proxy_password": "secret",
-        "verify_ssl": True,
+        "ssl_verify": None,
     }
 
 
@@ -315,7 +315,7 @@ def test_save_proxy_config() -> None:
             "no_proxy": "localhost,127.0.0.1",
             "proxy_username": "alice",
             "proxy_password": "secret",
-            "verify_ssl": True,
+            "ssl_verify": None,
         },
     )
 
@@ -328,7 +328,7 @@ def test_save_proxy_config() -> None:
         "no_proxy": "localhost,127.0.0.1",
         "proxy_username": "alice",
         "proxy_password": "secret",
-        "verify_ssl": True,
+        "ssl_verify": None,
     }
 
 

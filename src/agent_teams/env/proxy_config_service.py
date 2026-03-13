@@ -117,8 +117,10 @@ class ProxyConfigService:
             "HTTPS_PROXY": proxy_config.https_proxy,
             "ALL_PROXY": proxy_config.all_proxy,
             "NO_PROXY": proxy_config.no_proxy,
-            "AGENT_TEAMS_LLM_SSL_VERIFY": (
-                "true" if proxy_config.verify_ssl else "false"
+            "SSL_VERIFY": (
+                None
+                if proxy_config.ssl_verify is None
+                else ("true" if proxy_config.ssl_verify else "false")
             ),
         }
         managed_keys = tuple(managed_values.keys())

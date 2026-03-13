@@ -23,9 +23,11 @@ _PROXY_ENV_KEY_GROUPS: tuple[tuple[str, str], ...] = (
 _PROXY_ENV_KEYS: tuple[str, ...] = tuple(
     key for key_group in _PROXY_ENV_KEY_GROUPS for key in key_group
 )
-_SSL_VERIFY_ENV_KEYS: tuple[str, ...] = ("AGENT_TEAMS_LLM_SSL_VERIFY",)
+_SSL_VERIFY_ENV_KEYS: tuple[str, ...] = ("SSL_VERIFY",)
+_PROCESS_ENV_KEYS: tuple[str, ...] = _PROXY_ENV_KEYS + _SSL_VERIFY_ENV_KEYS
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
+_DEFAULT_SSL_VERIFY = True
 
 
 class ProxyEnvConfig(BaseModel):
@@ -35,7 +37,7 @@ class ProxyEnvConfig(BaseModel):
     https_proxy: str | None = None
     all_proxy: str | None = None
     no_proxy: str | None = None
-    verify_ssl: bool = True
+    ssl_verify: bool | None = None
 
     def normalized_env(self) -> dict[str, str]:
         env_values: dict[str, str] = {}
@@ -51,6 +53,8 @@ class ProxyEnvConfig(BaseModel):
         if self.no_proxy:
             env_values["NO_PROXY"] = self.no_proxy
             env_values["no_proxy"] = self.no_proxy
+        if self.ssl_verify is not None:
+            env_values["SSL_VERIFY"] = "true" if self.ssl_verify else "false"
         return env_values
 
     @property
@@ -67,7 +71,7 @@ class ProxyEnvInput(BaseModel):
     no_proxy: str | None = None
     proxy_username: str | None = None
     proxy_password: str | None = None
-    verify_ssl: bool = True
+    ssl_verify: bool | None = None
 
     @classmethod
     def from_config(cls, config: ProxyEnvConfig) -> ProxyEnvInput:
@@ -99,10 +103,10 @@ class ProxyEnvInput(BaseModel):
             no_proxy=config.no_proxy,
             proxy_username=shared_auth.username,
             proxy_password=shared_auth.password,
-            verify_ssl=config.verify_ssl,
+            ssl_verify=config.ssl_verify,
         )
 
-    def to_config(self, *, verify_ssl: bool | None = None) -> ProxyEnvConfig:
+    def to_config(self, *, ssl_verify: bool | None = None) -> ProxyEnvConfig:
         normalized_username = _normalize_proxy_value(self.proxy_username)
         normalized_password = _normalize_proxy_value(self.proxy_password)
         return ProxyEnvConfig(
@@ -122,7 +126,7 @@ class ProxyEnvInput(BaseModel):
                 password=normalized_password,
             ),
             no_proxy=_normalize_proxy_value(self.no_proxy),
-            verify_ssl=self.verify_ssl if verify_ssl is None else verify_ssl,
+            ssl_verify=self.ssl_verify if ssl_verify is None else ssl_verify,
         )
 
 
@@ -181,7 +185,7 @@ def resolve_proxy_env_config(env_values: Mapping[str, str]) -> ProxyEnvConfig:
         https_proxy=_resolve_env_value(env_values, "HTTPS_PROXY", "https_proxy"),
         all_proxy=_resolve_env_value(env_values, "ALL_PROXY", "all_proxy"),
         no_proxy=_resolve_env_value(env_values, "NO_PROXY", "no_proxy"),
-        verify_ssl=_read_verify_ssl_env(env_values),
+        ssl_verify=_read_ssl_verify_env(env_values),
     )
 
 
@@ -202,7 +206,7 @@ def load_proxy_env_config(
 
 def sync_proxy_env_to_process_env(proxy_config: ProxyEnvConfig) -> dict[str, str]:
     normalized_env = proxy_config.normalized_env()
-    for key in _PROXY_ENV_KEYS:
+    for key in _PROCESS_ENV_KEYS:
         if key in normalized_env:
             os.environ[key] = normalized_env[key]
             continue
@@ -216,12 +220,24 @@ def build_subprocess_env(
     extra_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     resolved_env = dict(os.environ if base_env is None else base_env)
-    for key in _PROXY_ENV_KEYS:
+    for key in _PROCESS_ENV_KEYS:
         resolved_env.pop(key, None)
     resolved_env.update(extract_proxy_env_vars(os.environ))
     if extra_env is not None:
         resolved_env.update(extra_env)
     return resolved_env
+
+
+def resolve_ssl_verify(
+    *,
+    proxy_config: ProxyEnvConfig | None = None,
+    explicit_ssl_verify: bool | None = None,
+) -> bool:
+    if explicit_ssl_verify is not None:
+        return explicit_ssl_verify
+    if proxy_config is not None and proxy_config.ssl_verify is not None:
+        return proxy_config.ssl_verify
+    return _DEFAULT_SSL_VERIFY
 
 
 def mask_proxy_url(value: str | None) -> str | None:
@@ -372,7 +388,7 @@ def apply_proxy_password(
             proxy_config.all_proxy, password=password
         ),
         no_proxy=proxy_config.no_proxy,
-        verify_ssl=proxy_config.verify_ssl,
+        ssl_verify=proxy_config.ssl_verify,
     )
 
 
@@ -382,7 +398,7 @@ def sanitize_proxy_config_for_storage(proxy_config: ProxyEnvConfig) -> ProxyEnvC
         https_proxy=_strip_password_from_proxy_url(proxy_config.https_proxy),
         all_proxy=_strip_password_from_proxy_url(proxy_config.all_proxy),
         no_proxy=proxy_config.no_proxy,
-        verify_ssl=proxy_config.verify_ssl,
+        ssl_verify=proxy_config.ssl_verify,
     )
 
 
@@ -577,7 +593,7 @@ def _resolve_proxy_secret_config_dir(extra_env_files: tuple[Path, ...]) -> Path:
     return get_project_env_file_path().parent
 
 
-def _read_verify_ssl_env(env_values: Mapping[str, str]) -> bool:
+def _read_ssl_verify_env(env_values: Mapping[str, str]) -> bool | None:
     raw_value = None
     for key in _SSL_VERIFY_ENV_KEYS:
         candidate = env_values.get(key)
@@ -585,16 +601,17 @@ def _read_verify_ssl_env(env_values: Mapping[str, str]) -> bool:
             raw_value = candidate
             break
     if raw_value is None:
-        return True
+        return None
 
     normalized = raw_value.strip().lower()
+    if not normalized:
+        return None
     if normalized in _TRUE_VALUES:
         return True
     if normalized in _FALSE_VALUES:
         return False
     raise ValueError(
-        "Invalid AGENT_TEAMS_LLM_SSL_VERIFY value. "
-        "Use one of: true/false, yes/no, on/off, 1/0."
+        "Invalid SSL_VERIFY value. Use one of: true/false, yes/no, on/off, 1/0."
     )
 
 

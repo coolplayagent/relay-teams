@@ -50,6 +50,7 @@ class AgentTeamsClient:
         no_proxy: str | None = None,
         proxy_username: str | None = None,
         proxy_password: str | None = None,
+        ssl_verify: bool | None = None,
     ) -> JsonObject:
         payload: JsonObject = {
             "http_proxy": http_proxy,
@@ -58,6 +59,7 @@ class AgentTeamsClient:
             "no_proxy": no_proxy,
             "proxy_username": proxy_username,
             "proxy_password": proxy_password,
+            "ssl_verify": ssl_verify,
         }
         return self._request_json("PUT", "/api/system/configs/proxy", payload)
 
@@ -72,6 +74,7 @@ class AgentTeamsClient:
         no_proxy: str | None = None,
         proxy_username: str | None = None,
         proxy_password: str | None = None,
+        ssl_verify: bool | None = None,
     ) -> JsonObject:
         payload: JsonObject = {"url": url}
         if timeout_ms is not None:
@@ -85,6 +88,7 @@ class AgentTeamsClient:
                 no_proxy,
                 proxy_username,
                 proxy_password,
+                ssl_verify,
             )
         ):
             payload["proxy_override"] = {
@@ -94,6 +98,7 @@ class AgentTeamsClient:
                 "no_proxy": no_proxy,
                 "proxy_username": proxy_username,
                 "proxy_password": proxy_password,
+                "ssl_verify": ssl_verify,
             }
         return self._request_json("POST", "/api/system/configs/web:probe", payload)
 

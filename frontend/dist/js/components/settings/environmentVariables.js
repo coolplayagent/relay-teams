@@ -1,6 +1,6 @@
 /**
  * components/settings/environmentVariables.js
- * Windows environment variable settings panel bindings.
+ * Runtime environment variable settings panel bindings.
  */
 import {
     deleteEnvironmentVariable,
@@ -11,9 +11,21 @@ import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const DEFAULT_EXPANDED_SCOPES = {
-    system: true,
-    app: true,
+    system: false,
 };
+
+const HIDDEN_APP_ENV_KEYS = new Set([
+    'HTTP_PROXY',
+    'http_proxy',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'ALL_PROXY',
+    'all_proxy',
+    'NO_PROXY',
+    'no_proxy',
+    'SSL_VERIFY',
+    'ssl_verify',
+]);
 
 let environmentState = {
     variablesByScope: {
@@ -23,7 +35,8 @@ let environmentState = {
     expandedScopes: { ...DEFAULT_EXPANDED_SCOPES },
     editor: {
         visible: false,
-        scope: 'app',
+        key: '',
+        value: '',
         sourceKey: '',
     },
 };
@@ -45,7 +58,8 @@ export async function loadEnvironmentVariablesPanel() {
             },
             editor: {
                 visible: false,
-                scope: 'app',
+                key: '',
+                value: '',
                 sourceKey: '',
             },
         };
@@ -56,7 +70,9 @@ export async function loadEnvironmentVariablesPanel() {
             'Failed to load environment variables',
             errorToPayload(error),
         );
-        renderEnvironmentFailure(error?.message || 'Unable to load environment variables.');
+        renderEnvironmentFailure(
+            error?.message || 'Unable to load environment variables.',
+        );
         showToast({
             title: 'Load Failed',
             message: `Failed to load environment variables: ${error.message}`,
@@ -74,8 +90,14 @@ function bindActionButton(id, handler) {
 
 function normalizeEnvironmentPayload(payload) {
     return {
-        system: sortRecords(Array.isArray(payload?.system) ? payload.system : [], 'system'),
-        app: sortRecords(Array.isArray(payload?.app) ? payload.app : [], 'app'),
+        app: sortRecords(
+            Array.isArray(payload?.app) ? payload.app : [],
+            'app',
+        ).filter(record => !HIDDEN_APP_ENV_KEYS.has(record.key)),
+        system: sortRecords(
+            Array.isArray(payload?.system) ? payload.system : [],
+            'system',
+        ),
     };
 }
 
@@ -85,17 +107,23 @@ function sortRecords(records, fallbackScope) {
             key: String(record?.key || '').trim(),
             value: String(record?.value || ''),
             scope: String(record?.scope || fallbackScope).trim() || fallbackScope,
-            value_kind: String(record?.value_kind || 'string').trim() || 'string',
+            value_kind:
+                String(record?.value_kind || 'string').trim() || 'string',
         }))
         .filter(record => record.key)
-        .sort((left, right) => left.key.localeCompare(right.key, undefined, { sensitivity: 'base' }));
+        .sort((left, right) =>
+            left.key.localeCompare(right.key, undefined, {
+                sensitivity: 'base',
+            }),
+        );
 }
 
 function renderEnvironmentVariablesPanel() {
     renderEnvironmentHelp();
-    renderEnvironmentEditor();
+    renderLegacyEditorShell();
     renderEnvironmentGroups();
     renderEnvironmentActionMode(environmentState.editor.visible);
+    focusEnvironmentEditorIfNeeded();
 }
 
 function renderEnvironmentHelp() {
@@ -103,41 +131,16 @@ function renderEnvironmentHelp() {
     if (!helpEl) {
         return;
     }
-    helpEl.textContent = 'System variables are read-only OS values. App variables are saved to ~/.config/agent-teams/.env and used by Agent Teams runtime processes.';
+    helpEl.textContent = '';
+    helpEl.style.display = 'none';
 }
 
-function renderEnvironmentEditor() {
+function renderLegacyEditorShell() {
     const shell = document.getElementById('env-editor-shell');
-    if (!shell) {
-        return;
-    }
-
-    if (!environmentState.editor.visible) {
+    if (shell) {
         shell.style.display = 'none';
-        setInputValue('env-scope-select', 'app');
-        setInputValue('env-key-input', '');
-        setInputValue('env-value-input', '');
-        setInputValue('env-source-key-input', '');
-        setTextContent('env-editor-title', 'Add Environment Variable');
-        setTextContent('env-editor-meta', 'Save a key and value into the Agent Teams app environment.');
-        return;
+        shell.innerHTML = '';
     }
-
-    shell.style.display = 'block';
-    setInputValue('env-scope-select', environmentState.editor.scope);
-    setInputValue('env-key-input', environmentState.editor.key || '');
-    setInputValue('env-value-input', environmentState.editor.value || '');
-    setInputValue('env-source-key-input', environmentState.editor.sourceKey || '');
-    setTextContent(
-        'env-editor-title',
-        environmentState.editor.sourceKey ? 'Edit Environment Variable' : 'Add Environment Variable',
-    );
-    setTextContent(
-        'env-editor-meta',
-        environmentState.editor.sourceKey
-            ? 'Update the name, scope, or value before saving.'
-            : 'Save a key and value into the Agent Teams app environment.',
-    );
 }
 
 function renderEnvironmentGroups() {
@@ -146,73 +149,123 @@ function renderEnvironmentGroups() {
         return;
     }
 
-    const totalCount = environmentState.variablesByScope.system.length + environmentState.variablesByScope.app.length;
-    if (totalCount === 0) {
-        groupsEl.innerHTML = `
-            <div class="settings-empty-state settings-empty-state-compact">
-                <h4>No environment variables managed here</h4>
-                <p>Add an app-level variable to start managing Agent Teams runtime values.</p>
-            </div>
-        `;
-        bindEnvironmentListHandlers();
-        return;
-    }
-
-    groupsEl.innerHTML = ['system', 'app']
-        .map(scope => renderEnvironmentScope(scope, environmentState.variablesByScope[scope]))
-        .join('');
+    groupsEl.innerHTML = [
+        renderAppEnvironmentScope(environmentState.variablesByScope.app),
+        renderSystemEnvironmentScope(environmentState.variablesByScope.system),
+    ].join('');
     bindEnvironmentListHandlers();
 }
 
-function renderEnvironmentScope(scope, records) {
-    const expanded = environmentState.expandedScopes[scope] !== false;
-    const scopeLabel = scope === 'system' ? 'System Variables' : 'App Variables';
-    const scopeCopy = scope === 'system'
-        ? 'Effective OS-visible environment variables. Read-only here.'
-        : 'Saved to ~/.config/agent-teams/.env.';
+function renderAppEnvironmentScope(records) {
+    const editingExistingRecord = Boolean(environmentState.editor.sourceKey);
+    const recordsMarkup =
+        records.length === 0 && !environmentState.editor.visible
+            ? `
+                <div class="env-scope-empty">No app variables yet.</div>
+            `
+            : `
+                <div class="env-records">
+                    ${records
+                        .map(record =>
+                            environmentState.editor.visible &&
+                            environmentState.editor.sourceKey === record.key
+                                ? renderEnvironmentEditorRow()
+                                : renderEnvironmentRecord(record),
+                        )
+                        .join('')}
+                    ${
+                        environmentState.editor.visible && !editingExistingRecord
+                            ? renderEnvironmentEditorRow()
+                            : ''
+                    }
+                </div>
+            `;
+
     return `
-        <section class="env-scope-card" data-env-scope="${escapeHtml(scope)}">
-            <button class="env-scope-toggle" data-env-toggle-scope="${escapeHtml(scope)}" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
-                <span class="env-scope-toggle-title-wrap">
-                    <span class="env-scope-toggle-title">${escapeHtml(scopeLabel)}</span>
-                    <span class="env-scope-toggle-meta">${records.length} item${records.length === 1 ? '' : 's'} · ${escapeHtml(scopeCopy)}</span>
-                </span>
-                <span class="env-scope-toggle-icon">${expanded ? '−' : '+'}</span>
-            </button>
-            <div class="env-scope-body" style="display:${expanded ? 'block' : 'none'};">
-                ${records.length === 0 ? `
-                    <div class="env-scope-empty">No variables in this scope.</div>
-                ` : `
-                    <div class="env-records">
-                        ${records.map(record => renderEnvironmentRecord(record)).join('')}
-                    </div>
-                `}
+        <section class="env-scope-section" data-env-scope="app">
+            <div class="env-scope-heading">App Variables</div>
+            <div class="env-scope-content" style="display:block;">
+                ${recordsMarkup}
             </div>
         </section>
     `;
 }
 
+function renderSystemEnvironmentScope(records) {
+    const expanded = environmentState.expandedScopes.system === true;
+    return `
+        <section class="env-scope-section" data-env-scope="system">
+            <button class="env-scope-toggle" data-env-toggle-scope="system" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
+                <span class="env-scope-toggle-title">System Variables</span>
+                <span class="env-scope-toggle-icon">${expanded ? 'Hide' : 'Show'}</span>
+            </button>
+            <div class="env-scope-content" style="display:${expanded ? 'block' : 'none'};">
+                ${
+                    records.length === 0
+                        ? `
+                    <div class="env-scope-empty">No system variables available.</div>
+                `
+                        : `
+                    <div class="env-records">
+                        ${records.map(record => renderEnvironmentRecord(record)).join('')}
+                    </div>
+                `
+                }
+            </div>
+        </section>
+    `;
+}
+
+function renderEnvironmentEditorRow() {
+    return `
+        <div class="env-record env-record-editor" data-env-scope="app">
+            <input type="hidden" id="env-source-key-input" value="${escapeHtml(environmentState.editor.sourceKey || '')}">
+            <div class="env-record-editor-row">
+                <input
+                    type="text"
+                    id="env-key-input"
+                    class="env-record-editor-input env-record-editor-input-key"
+                    placeholder="Key"
+                    autocomplete="off"
+                    value="${escapeHtml(environmentState.editor.key || '')}"
+                >
+                <input
+                    type="text"
+                    id="env-value-input"
+                    class="env-record-editor-input env-record-editor-input-value"
+                    placeholder="Value"
+                    autocomplete="off"
+                    value="${escapeHtml(environmentState.editor.value || '')}"
+                >
+            </div>
+        </div>
+    `;
+}
+
 function renderEnvironmentRecord(record) {
-    const valuePreview = record.value.length > 120
-        ? `${record.value.slice(0, 117)}...`
-        : record.value;
-    const kindLabel = record.value_kind === 'expandable' ? 'Expandable' : 'String';
+    const valuePreview =
+        record.value.length > 120
+            ? `${record.value.slice(0, 117)}...`
+            : record.value;
     const isEditable = record.scope === 'app';
     return `
         <div class="env-record" data-env-key="${escapeHtml(record.key)}" data-env-scope="${escapeHtml(record.scope)}">
             <div class="env-record-main">
                 <div class="env-record-title-row">
-                    <div class="env-record-key">${escapeHtml(record.key)}</div>
-                    <span class="env-record-kind">${escapeHtml(kindLabel)}</span>
+                    <div class="env-record-key" title="${escapeHtml(record.key)}">${escapeHtml(record.key)}</div>
                 </div>
                 <div class="env-record-value" title="${escapeHtml(record.value)}">${escapeHtml(valuePreview)}</div>
             </div>
-            ${isEditable ? `
+            ${
+                isEditable
+                    ? `
                 <div class="env-record-actions">
                     <button class="settings-inline-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
                     <button class="settings-inline-action env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
                 </div>
-            ` : ''}
+            `
+                    : ''
+            }
         </div>
     `;
 }
@@ -225,11 +278,8 @@ function bindEnvironmentListHandlers() {
 
     groupsEl.querySelectorAll('.env-scope-toggle').forEach(button => {
         button.onclick = () => {
-            const scope = String(button.dataset.envToggleScope || '').trim();
-            if (!scope) {
-                return;
-            }
-            environmentState.expandedScopes[scope] = !(environmentState.expandedScopes[scope] !== false);
+            environmentState.expandedScopes.system =
+                environmentState.expandedScopes.system !== true;
             renderEnvironmentGroups();
         };
     });
@@ -251,7 +301,7 @@ function bindEnvironmentListHandlers() {
 
 function openEditorForRecord(recordRef) {
     const [scope, key] = parseRecordRef(recordRef);
-    if (!scope || !key) {
+    if (scope !== 'app' || !key) {
         return;
     }
     const record = findEnvironmentRecord(scope, key);
@@ -260,7 +310,6 @@ function openEditorForRecord(recordRef) {
     }
     environmentState.editor = {
         visible: true,
-        scope,
         key: record.key,
         value: record.value,
         sourceKey: record.key,
@@ -271,7 +320,6 @@ function openEditorForRecord(recordRef) {
 function handleAddEnvironmentVariable() {
     environmentState.editor = {
         visible: true,
-        scope: 'app',
         key: '',
         value: '',
         sourceKey: '',
@@ -282,14 +330,14 @@ function handleAddEnvironmentVariable() {
 function handleCancelEnvironmentVariable() {
     environmentState.editor = {
         visible: false,
-        scope: 'app',
+        key: '',
+        value: '',
         sourceKey: '',
     };
     renderEnvironmentVariablesPanel();
 }
 
 async function handleSaveEnvironmentVariable() {
-    const scope = readInputValue('env-scope-select') || 'app';
     const key = readInputValue('env-key-input');
     const value = readInputValue('env-value-input', false);
     const sourceKey = readInputValue('env-source-key-input');
@@ -304,13 +352,13 @@ async function handleSaveEnvironmentVariable() {
     }
 
     try {
-        await saveEnvironmentVariable(scope, key, {
+        await saveEnvironmentVariable('app', key, {
             source_key: sourceKey || null,
             value,
         });
         showToast({
             title: 'Environment Variable Saved',
-            message: `${key} saved in ${scope} scope.`,
+            message: `${key} saved in app scope.`,
             tone: 'success',
         });
         await loadEnvironmentVariablesPanel();
@@ -367,10 +415,6 @@ function renderEnvironmentFailure(message) {
             <p>${escapeHtml(message)}</p>
         </div>
     `;
-    const shell = document.getElementById('env-editor-shell');
-    if (shell) {
-        shell.style.display = 'none';
-    }
     renderEnvironmentActionMode(false);
 }
 
@@ -379,13 +423,34 @@ function renderEnvironmentActionMode(isEditing) {
     const saveBtn = document.getElementById('save-env-btn');
     const cancelBtn = document.getElementById('cancel-env-btn');
     if (addBtn) {
-        addBtn.style.display = 'inline-flex';
+        addBtn.style.display = isEditing ? 'none' : 'inline-flex';
     }
     if (saveBtn) {
         saveBtn.style.display = isEditing ? 'inline-flex' : 'none';
     }
     if (cancelBtn) {
         cancelBtn.style.display = isEditing ? 'inline-flex' : 'none';
+    }
+}
+
+function focusEnvironmentEditorIfNeeded() {
+    if (!environmentState.editor.visible) {
+        return;
+    }
+    const keyInput = document.getElementById('env-key-input');
+    if (!keyInput || typeof keyInput.focus !== 'function') {
+        return;
+    }
+    if (typeof keyInput.scrollIntoView === 'function') {
+        keyInput.scrollIntoView({
+            block: 'nearest',
+            inline: 'nearest',
+        });
+    }
+    try {
+        keyInput.focus({ preventScroll: true });
+    } catch {
+        keyInput.focus();
     }
 }
 
@@ -401,17 +466,7 @@ function parseRecordRef(recordRef) {
     if (separatorIndex < 0) {
         return ['', ''];
     }
-    return [
-        recordRef.slice(0, separatorIndex),
-        recordRef.slice(separatorIndex + 2),
-    ];
-}
-
-function setInputValue(id, value) {
-    const input = document.getElementById(id);
-    if (input) {
-        input.value = value || '';
-    }
+    return [recordRef.slice(0, separatorIndex), recordRef.slice(separatorIndex + 2)];
 }
 
 function readInputValue(id, trim = true) {
@@ -420,13 +475,6 @@ function readInputValue(id, trim = true) {
         return '';
     }
     return trim ? String(input.value || '').trim() : String(input.value || '');
-}
-
-function setTextContent(id, value) {
-    const element = document.getElementById(id);
-    if (element) {
-        element.textContent = value || '';
-    }
 }
 
 function escapeHtml(value) {

@@ -29,7 +29,7 @@ console.log(JSON.stringify({
     noProxy: document.getElementById("proxy-no-proxy").value,
     proxyUsername: document.getElementById("proxy-username").value,
     proxyPassword: document.getElementById("proxy-password").value,
-    verifySsl: document.getElementById("proxy-verify-ssl").checked,
+    sslVerify: document.getElementById("proxy-ssl-verify").value,
 }));
 """.strip(),
     )
@@ -41,7 +41,7 @@ console.log(JSON.stringify({
     assert payload["noProxy"] == "localhost,127.0.0.1"
     assert payload["proxyUsername"] == "alice"
     assert payload["proxyPassword"] == "secret"
-    assert payload["verifySsl"] is True
+    assert payload["sslVerify"] == "true"
 
 
 def test_proxy_probe_and_save_actions_use_current_inputs(tmp_path: Path) -> None:
@@ -62,7 +62,7 @@ document.getElementById("proxy-https-proxy").value = "http://edited.example:8443
 document.getElementById("proxy-username").value = "alice";
 document.getElementById("proxy-password").value = "secret";
 document.getElementById("proxy-no-proxy").value = "localhost,127.0.0.1,.internal";
-document.getElementById("proxy-verify-ssl").checked = false;
+document.getElementById("proxy-ssl-verify").value = "false";
 document.getElementById("proxy-probe-url").value = "https://example.com";
 document.getElementById("proxy-probe-timeout").value = "2500";
 
@@ -93,7 +93,7 @@ console.log(JSON.stringify({
             "no_proxy": "localhost,127.0.0.1,.internal",
             "proxy_username": "alice",
             "proxy_password": "secret",
-            "verify_ssl": False,
+            "ssl_verify": False,
         },
     }
     assert payload["savePayload"] == {
@@ -103,7 +103,7 @@ console.log(JSON.stringify({
         "no_proxy": "localhost,127.0.0.1,.internal",
         "proxy_username": "alice",
         "proxy_password": "secret",
-        "verify_ssl": False,
+        "ssl_verify": False,
     }
     assert payload["saveCalls"] == 1
     assert payload["probeStatusDisplay"] == "block"
@@ -198,7 +198,7 @@ export async function fetchProxyConfig() {
         no_proxy: "localhost,127.0.0.1",
         proxy_username: "alice",
         proxy_password: "secret",
-        verify_ssl: true,
+        ssl_verify: true,
     };
 }
 
@@ -278,11 +278,7 @@ function createElements() {{
         ["proxy-username", createElement("block")],
         ["proxy-password", createElement("block")],
         ["proxy-no-proxy", createElement("block")],
-        ["proxy-verify-ssl", (() => {{
-            const element = createElement("block");
-            element.checked = true;
-            return element;
-        }})()],
+        ["proxy-ssl-verify", createElement("block")],
         ["proxy-probe-url", createElement("block")],
         ["proxy-probe-timeout", createElement("block")],
         ["proxy-probe-status", createElement("none")],

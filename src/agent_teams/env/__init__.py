@@ -35,6 +35,7 @@ from agent_teams.env.runtime_env import (
     get_user_env_file_path,
     load_env_file,
     load_merged_env_vars,
+    sync_app_env_to_process_env,
 )
 from agent_teams.env.web_connectivity import (
     WebConnectivityProbeDiagnostics,
@@ -66,6 +67,7 @@ __all__ = [
     "load_proxy_env_config",
     "load_env_file",
     "load_merged_env_vars",
+    "sync_app_env_to_process_env",
     "mask_proxy_url",
     "parse_no_proxy_rules",
     "proxy_applies_to_url",

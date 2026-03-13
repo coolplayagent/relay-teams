@@ -120,6 +120,7 @@ def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
             "no_proxy": "localhost,127.0.0.1",
             "proxy_username": "alice",
             "proxy_password": "secret",
+            "ssl_verify": None,
         },
     }
 
@@ -163,6 +164,7 @@ def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
                 "no_proxy": "localhost,127.0.0.1",
                 "proxy_username": "alice",
                 "proxy_password": "secret",
+                "ssl_verify": None,
             },
         },
     }

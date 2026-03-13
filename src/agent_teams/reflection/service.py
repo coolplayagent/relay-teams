@@ -205,7 +205,8 @@ class PydanticAIReflectionModelClient:
                 base_url=config.base_url,
                 api_key=config.api_key,
                 http_client=build_llm_http_client(
-                    connect_timeout_seconds=config.connect_timeout_seconds
+                    connect_timeout_seconds=config.connect_timeout_seconds,
+                    ssl_verify=config.ssl_verify,
                 ),
             ),
         )

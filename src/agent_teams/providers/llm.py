@@ -243,6 +243,7 @@ class OpenAICompatibleProvider(LLMProvider):
             system_prompt=agent_system_prompt,
             allowed_tools=self._allowed_tools,
             model_settings=model_settings,
+            ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
             allowed_mcp_servers=self._allowed_mcp_servers,
             allowed_skills=self._allowed_skills,

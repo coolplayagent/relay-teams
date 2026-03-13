@@ -38,9 +38,7 @@ def test_create_proxy_http_client_routes_requests_with_runtime_proxy_rules() -> 
 
 
 def test_create_proxy_http_client_disables_ssl_verification_when_configured() -> None:
-    with create_proxy_http_client(
-        merged_env={"AGENT_TEAMS_LLM_SSL_VERIFY": "false"}
-    ) as client:
+    with create_proxy_http_client(merged_env={"SSL_VERIFY": "false"}) as client:
         verify_mode = _transport_verify_mode(
             getattr(client._transport, "_direct_transport")
         )

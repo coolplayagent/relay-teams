@@ -21,6 +21,7 @@ def build_coordination_agent(
     system_prompt: str,
     allowed_tools: tuple[str, ...],
     model_settings: OpenAIChatModelSettings | None = None,
+    ssl_verify: bool | None = None,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     allowed_mcp_servers: tuple[str, ...] = (),
     allowed_skills: tuple[str, ...] = (),
@@ -43,7 +44,8 @@ def build_coordination_agent(
         skill_tools = skill_registry.get_toolset_tools(allowed_skills)
 
     llm_http_client = build_llm_http_client(
-        connect_timeout_seconds=connect_timeout_seconds
+        connect_timeout_seconds=connect_timeout_seconds,
+        ssl_verify=ssl_verify,
     )
     model = OpenAIChatModel(
         model_name,

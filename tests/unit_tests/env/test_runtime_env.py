@@ -73,3 +73,46 @@ def test_get_app_env_file_path_uses_app_config_dir(monkeypatch, tmp_path: Path) 
     env_file_path = runtime_env.get_app_env_file_path()
 
     assert env_file_path == config_dir / ".env"
+
+
+def test_sync_app_env_to_process_env_applies_and_removes_managed_keys(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".config" / "agent-teams" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("SYNCED_KEY=from-file\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
+    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    monkeypatch.delenv("SYNCED_KEY", raising=False)
+
+    synced_env = runtime_env.sync_app_env_to_process_env(env_file)
+
+    assert synced_env == {"SYNCED_KEY": "from-file"}
+    assert runtime_env.os.environ["SYNCED_KEY"] == "from-file"
+
+    env_file.write_text("", encoding="utf-8")
+    runtime_env.sync_app_env_to_process_env(env_file)
+
+    assert "SYNCED_KEY" not in runtime_env.os.environ
+
+
+def test_sync_app_env_to_process_env_restores_baseline_values(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".config" / "agent-teams" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("RESTORE_KEY=overlay\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {"RESTORE_KEY": "base"})
+    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    monkeypatch.setenv("RESTORE_KEY", "base")
+
+    runtime_env.sync_app_env_to_process_env(env_file)
+
+    assert runtime_env.os.environ["RESTORE_KEY"] == "overlay"
+
+    env_file.write_text("", encoding="utf-8")
+    runtime_env.sync_app_env_to_process_env(env_file)
+
+    assert runtime_env.os.environ["RESTORE_KEY"] == "base"

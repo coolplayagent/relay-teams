@@ -9,6 +9,7 @@ from pydantic_ai.models import DEFAULT_HTTP_TIMEOUT, get_user_agent
 from agent_teams.env.proxy_env import (
     ProxyEnvConfig,
     proxy_applies_to_url,
+    resolve_ssl_verify,
     resolve_proxy_env_config,
 )
 from agent_teams.env.runtime_env import load_merged_env_vars
@@ -19,6 +20,7 @@ def create_proxy_http_client(
     *,
     merged_env: Mapping[str, str] | None = None,
     proxy_config: ProxyEnvConfig | None = None,
+    ssl_verify: bool | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     follow_redirects: bool = False,
@@ -27,12 +29,19 @@ def create_proxy_http_client(
         merged_env=merged_env,
         proxy_config=proxy_config,
     )
+    resolved_ssl_verify = resolve_ssl_verify(
+        proxy_config=resolved_proxy_config,
+        explicit_ssl_verify=ssl_verify,
+    )
     return httpx.Client(
         timeout=httpx.Timeout(timeout=timeout_seconds, connect=connect_timeout_seconds),
         headers={"User-Agent": get_user_agent()},
         trust_env=False,
-        verify=resolved_proxy_config.verify_ssl,
-        transport=_SyncProxyRoutingTransport(resolved_proxy_config),
+        verify=resolved_ssl_verify,
+        transport=_SyncProxyRoutingTransport(
+            proxy_config=resolved_proxy_config,
+            ssl_verify=resolved_ssl_verify,
+        ),
         follow_redirects=follow_redirects,
     )
 
@@ -41,6 +50,7 @@ def create_proxy_async_http_client(
     *,
     merged_env: Mapping[str, str] | None = None,
     proxy_config: ProxyEnvConfig | None = None,
+    ssl_verify: bool | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     follow_redirects: bool = False,
@@ -49,12 +59,19 @@ def create_proxy_async_http_client(
         merged_env=merged_env,
         proxy_config=proxy_config,
     )
+    resolved_ssl_verify = resolve_ssl_verify(
+        proxy_config=resolved_proxy_config,
+        explicit_ssl_verify=ssl_verify,
+    )
     return httpx.AsyncClient(
         timeout=httpx.Timeout(timeout=timeout_seconds, connect=connect_timeout_seconds),
         headers={"User-Agent": get_user_agent()},
         trust_env=False,
-        verify=resolved_proxy_config.verify_ssl,
-        transport=_AsyncProxyRoutingTransport(resolved_proxy_config),
+        verify=resolved_ssl_verify,
+        transport=_AsyncProxyRoutingTransport(
+            proxy_config=resolved_proxy_config,
+            ssl_verify=resolved_ssl_verify,
+        ),
         follow_redirects=follow_redirects,
     )
 
@@ -80,22 +97,25 @@ class _SyncProxyRoutingTransport(httpx.BaseTransport):
     def __init__(
         self,
         proxy_config: ProxyEnvConfig,
+        *,
+        ssl_verify: bool,
     ) -> None:
         self._proxy_config = proxy_config
+        self._ssl_verify = ssl_verify
         self._direct_transport = httpx.HTTPTransport(
             trust_env=False,
-            verify=proxy_config.verify_ssl,
+            verify=ssl_verify,
             retries=0,
         )
         self._http_proxy_transport = _build_sync_proxy_transport(
             proxy_config.http_proxy or proxy_config.all_proxy,
-            verify_ssl=proxy_config.verify_ssl,
+            ssl_verify=ssl_verify,
         )
         self._https_proxy_transport = _build_sync_proxy_transport(
             proxy_config.https_proxy
             or proxy_config.http_proxy
             or proxy_config.all_proxy,
-            verify_ssl=proxy_config.verify_ssl,
+            ssl_verify=ssl_verify,
         )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
@@ -126,22 +146,25 @@ class _AsyncProxyRoutingTransport(httpx.AsyncBaseTransport):
     def __init__(
         self,
         proxy_config: ProxyEnvConfig,
+        *,
+        ssl_verify: bool,
     ) -> None:
         self._proxy_config = proxy_config
+        self._ssl_verify = ssl_verify
         self._direct_transport = httpx.AsyncHTTPTransport(
             trust_env=False,
-            verify=proxy_config.verify_ssl,
+            verify=ssl_verify,
             retries=0,
         )
         self._http_proxy_transport = _build_async_proxy_transport(
             proxy_config.http_proxy or proxy_config.all_proxy,
-            verify_ssl=proxy_config.verify_ssl,
+            ssl_verify=ssl_verify,
         )
         self._https_proxy_transport = _build_async_proxy_transport(
             proxy_config.https_proxy
             or proxy_config.http_proxy
             or proxy_config.all_proxy,
-            verify_ssl=proxy_config.verify_ssl,
+            ssl_verify=ssl_verify,
         )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -171,7 +194,7 @@ class _AsyncProxyRoutingTransport(httpx.AsyncBaseTransport):
 def _build_sync_proxy_transport(
     proxy_url: str | None,
     *,
-    verify_ssl: bool,
+    ssl_verify: bool,
 ) -> httpx.HTTPTransport | None:
     if proxy_url is None:
         return None
@@ -179,14 +202,14 @@ def _build_sync_proxy_transport(
     return httpx.HTTPTransport(
         proxy=normalized_proxy_url,
         trust_env=False,
-        verify=verify_ssl,
+        verify=ssl_verify,
     )
 
 
 def _build_async_proxy_transport(
     proxy_url: str | None,
     *,
-    verify_ssl: bool,
+    ssl_verify: bool,
 ) -> httpx.AsyncHTTPTransport | None:
     if proxy_url is None:
         return None
@@ -194,5 +217,5 @@ def _build_async_proxy_transport(
     return httpx.AsyncHTTPTransport(
         proxy=normalized_proxy_url,
         trust_env=False,
-        verify=verify_ssl,
+        verify=ssl_verify,
     )
