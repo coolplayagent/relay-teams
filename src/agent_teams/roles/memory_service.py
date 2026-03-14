@@ -16,12 +16,17 @@ class RoleMemoryService:
         self,
         *,
         role_id: str,
+        workspace_id: str,
         memory_date: str | None = None,
     ) -> str:
         resolved_date = memory_date or date.today().isoformat()
-        durable = self._repository.read_role_memory(role_id).content_markdown.strip()
+        durable = self._repository.read_role_memory(
+            role_id=role_id,
+            workspace_id=workspace_id,
+        ).content_markdown.strip()
         daily_digest = self._repository.read_daily_memory(
             role_id=role_id,
+            workspace_id=workspace_id,
             memory_date=resolved_date,
             kind=MemoryKind.DIGEST,
         ).content_markdown.strip()
@@ -36,6 +41,7 @@ class RoleMemoryService:
         self,
         *,
         role_id: str,
+        workspace_id: str,
         session_id: str,
         task_id: str,
         objective: str,
@@ -63,6 +69,7 @@ class RoleMemoryService:
         digest_markdown = f"- {digest_text}"
         self._repository.write_daily_memory(
             role_id=role_id,
+            workspace_id=workspace_id,
             memory_date=resolved_date,
             kind=MemoryKind.RAW,
             content_markdown=raw_markdown,
@@ -71,13 +78,17 @@ class RoleMemoryService:
         )
         self._repository.write_daily_memory(
             role_id=role_id,
+            workspace_id=workspace_id,
             memory_date=resolved_date,
             kind=MemoryKind.DIGEST,
             content_markdown=digest_markdown,
             source_session_id=session_id,
             source_task_id=task_id,
         )
-        current = self._repository.read_role_memory(role_id).content_markdown.strip()
+        current = self._repository.read_role_memory(
+            role_id=role_id,
+            workspace_id=workspace_id,
+        ).content_markdown.strip()
         durable_entry = f"- {trimmed_objective}: {trimmed_result or '(empty)'}"
         if durable_entry not in current.splitlines():
             next_text = "\n".join(
@@ -85,5 +96,6 @@ class RoleMemoryService:
             ).strip()
             self._repository.write_role_memory(
                 role_id=role_id,
+                workspace_id=workspace_id,
                 content_markdown=next_text,
             )

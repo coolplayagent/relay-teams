@@ -369,13 +369,15 @@ Purpose: stores the user intent and per-run execution settings needed for queued
 
 ```sql
 CREATE TABLE IF NOT EXISTS role_memories (
-    role_id          TEXT PRIMARY KEY,
+    role_id          TEXT NOT NULL,
+    workspace_id     TEXT NOT NULL,
     content_markdown TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (role_id, workspace_id)
 );
 ```
 
-Purpose: durable role memory shared by the same `role_id` across all workspaces and sessions.
+Purpose: durable role memory shared by the same `role_id` inside one workspace.
 
 ---
 
@@ -384,6 +386,7 @@ Purpose: durable role memory shared by the same `role_id` across all workspaces 
 ```sql
 CREATE TABLE IF NOT EXISTS role_daily_memories (
     role_id           TEXT NOT NULL,
+    workspace_id      TEXT NOT NULL,
     memory_date       TEXT NOT NULL,
     kind              TEXT NOT NULL,
     content_markdown  TEXT NOT NULL,
@@ -391,11 +394,11 @@ CREATE TABLE IF NOT EXISTS role_daily_memories (
     source_task_id    TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    PRIMARY KEY (role_id, memory_date, kind)
+    PRIMARY KEY (role_id, workspace_id, memory_date, kind)
 );
 ```
 
-Purpose: per-day role memory snapshots.
+Purpose: per-day role memory snapshots scoped to one workspace.
 
 `kind` values:
 - `raw`

@@ -20,55 +20,45 @@ class RoleMemoryRepository:
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS role_memories (
-                role_id TEXT PRIMARY KEY,
-                content_markdown TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS role_daily_memories (
-                role_id TEXT NOT NULL,
-                memory_date TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                content_markdown TEXT NOT NULL,
-                source_session_id TEXT,
-                source_task_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (role_id, memory_date, kind)
-            )
-            """
-        )
+        self._ensure_role_memories_schema()
+        self._ensure_role_daily_memories_schema()
         self._conn.commit()
 
-    def read_role_memory(self, role_id: str) -> RoleMemoryRecord:
+    def read_role_memory(self, *, role_id: str, workspace_id: str) -> RoleMemoryRecord:
         row = self._conn.execute(
-            "SELECT * FROM role_memories WHERE role_id=?",
-            (role_id,),
+            "SELECT * FROM role_memories WHERE role_id=? AND workspace_id=?",
+            (role_id, workspace_id),
         ).fetchone()
         if row is None:
-            return RoleMemoryRecord(role_id=role_id, content_markdown="")
+            return RoleMemoryRecord(
+                role_id=role_id,
+                workspace_id=workspace_id,
+                content_markdown="",
+            )
         return RoleMemoryRecord(
             role_id=str(row["role_id"]),
+            workspace_id=str(row["workspace_id"]),
             content_markdown=str(row["content_markdown"]),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
-    def write_role_memory(self, *, role_id: str, content_markdown: str) -> None:
+    def write_role_memory(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        content_markdown: str,
+    ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         self._conn.execute(
             """
-            INSERT INTO role_memories(role_id, content_markdown, updated_at)
-            VALUES(?, ?, ?)
-            ON CONFLICT(role_id)
-            DO UPDATE SET content_markdown=excluded.content_markdown, updated_at=excluded.updated_at
+            INSERT INTO role_memories(role_id, workspace_id, content_markdown, updated_at)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(role_id, workspace_id)
+            DO UPDATE SET content_markdown=excluded.content_markdown,
+                          updated_at=excluded.updated_at
             """,
-            (role_id, content_markdown, now),
+            (role_id, workspace_id, content_markdown, now),
         )
         self._conn.commit()
 
@@ -76,25 +66,28 @@ class RoleMemoryRepository:
         self,
         *,
         role_id: str,
+        workspace_id: str,
         memory_date: str,
         kind: MemoryKind,
     ) -> RoleDailyMemoryRecord:
         row = self._conn.execute(
             """
             SELECT * FROM role_daily_memories
-            WHERE role_id=? AND memory_date=? AND kind=?
+            WHERE role_id=? AND workspace_id=? AND memory_date=? AND kind=?
             """,
-            (role_id, memory_date, kind.value),
+            (role_id, workspace_id, memory_date, kind.value),
         ).fetchone()
         if row is None:
             return RoleDailyMemoryRecord(
                 role_id=role_id,
+                workspace_id=workspace_id,
                 memory_date=memory_date,
                 kind=kind,
                 content_markdown="",
             )
         return RoleDailyMemoryRecord(
             role_id=str(row["role_id"]),
+            workspace_id=str(row["workspace_id"]),
             memory_date=str(row["memory_date"]),
             kind=MemoryKind(str(row["kind"])),
             content_markdown=str(row["content_markdown"]),
@@ -112,6 +105,7 @@ class RoleMemoryRepository:
         self,
         *,
         role_id: str,
+        workspace_id: str,
         memory_date: str,
         kind: MemoryKind,
         content_markdown: str,
@@ -122,11 +116,11 @@ class RoleMemoryRepository:
         self._conn.execute(
             """
             INSERT INTO role_daily_memories(
-                role_id, memory_date, kind, content_markdown,
+                role_id, workspace_id, memory_date, kind, content_markdown,
                 source_session_id, source_task_id, created_at, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(role_id, memory_date, kind)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(role_id, workspace_id, memory_date, kind)
             DO UPDATE SET
                 content_markdown=excluded.content_markdown,
                 source_session_id=excluded.source_session_id,
@@ -135,6 +129,7 @@ class RoleMemoryRepository:
             """,
             (
                 role_id,
+                workspace_id,
                 memory_date,
                 kind.value,
                 content_markdown,
@@ -145,3 +140,92 @@ class RoleMemoryRepository:
             ),
         )
         self._conn.commit()
+
+    def _ensure_role_memories_schema(self) -> None:
+        columns = self._table_info("role_memories")
+        if not columns:
+            self._create_role_memories_table()
+            return
+        if self._has_role_memories_schema(columns):
+            return
+
+        self._conn.execute("DROP TABLE role_memories")
+        self._create_role_memories_table()
+
+    def _ensure_role_daily_memories_schema(self) -> None:
+        columns = self._table_info("role_daily_memories")
+        if not columns:
+            self._create_role_daily_memories_table()
+            return
+        if self._has_role_daily_memories_schema(columns):
+            return
+
+        self._conn.execute("DROP TABLE role_daily_memories")
+        self._create_role_daily_memories_table()
+
+    def _create_role_memories_table(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS role_memories (
+                role_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                content_markdown TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (role_id, workspace_id)
+            )
+            """
+        )
+
+    def _create_role_daily_memories_table(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS role_daily_memories (
+                role_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                memory_date TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                content_markdown TEXT NOT NULL,
+                source_session_id TEXT,
+                source_task_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (role_id, workspace_id, memory_date, kind)
+            )
+            """
+        )
+
+    def _table_info(self, table_name: str) -> list[sqlite3.Row]:
+        return self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+
+    def _has_role_memories_schema(self, columns: list[sqlite3.Row]) -> bool:
+        column_names = [str(column["name"]) for column in columns]
+        pk_columns = [
+            str(column["name"])
+            for column in sorted(columns, key=lambda column: int(column["pk"]))
+            if int(column["pk"]) > 0
+        ]
+        return column_names == [
+            "role_id",
+            "workspace_id",
+            "content_markdown",
+            "updated_at",
+        ] and pk_columns == ["role_id", "workspace_id"]
+
+    def _has_role_daily_memories_schema(self, columns: list[sqlite3.Row]) -> bool:
+        column_names = [str(column["name"]) for column in columns]
+        pk_columns = [
+            str(column["name"])
+            for column in sorted(columns, key=lambda column: int(column["pk"]))
+            if int(column["pk"]) > 0
+        ]
+        return column_names == [
+            "role_id",
+            "workspace_id",
+            "memory_date",
+            "kind",
+            "content_markdown",
+            "source_session_id",
+            "source_task_id",
+            "created_at",
+            "updated_at",
+        ] and pk_columns == ["role_id", "workspace_id", "memory_date", "kind"]

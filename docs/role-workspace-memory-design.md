@@ -6,7 +6,7 @@ The runtime now uses three separate concepts:
 
 - `workspace`: execution directory and path boundary only
 - `session`: runtime container bound to one workspace
-- `role memory`: durable and daily memory stored in the database and keyed by `role_id`
+- `role memory`: durable and daily memory stored in the database and keyed by `role_id + workspace_id`
 
 This replaces the older mixed design where workspace, memory, reflection, and file artifacts were modeled together.
 
@@ -55,9 +55,9 @@ It lives under `src/agent_teams/roles/` and uses two database tables:
 
 Scope rules:
 
-- durable memory is keyed by `role_id`
-- daily memory is keyed by `role_id + memory_date + kind`
-- the same role shares memory across all sessions and workspaces
+- durable memory is keyed by `role_id + workspace_id`
+- daily memory is keyed by `role_id + workspace_id + memory_date + kind`
+- the same role shares memory across sessions inside the same workspace only
 - session deletion does not delete role memory
 
 `memory_profile` is now the role-level configuration surface. It controls whether durable and daily memory are enabled for that role.
@@ -105,4 +105,5 @@ If you are reading older code or older discussions, note these incompatible chan
 - role configs must use `memory_profile`; `workspace_profile` is no longer accepted
 - role durable memory now lives in `role_memories`
 - daily memory now lives in `role_daily_memories`
+- both tables are workspace-scoped; older global role-memory rows are not preserved
 - stage files now use the direct `stage_tools` layout under workspace/session/role

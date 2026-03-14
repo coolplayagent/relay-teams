@@ -27,6 +27,7 @@ class RoleMemoryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
     content_markdown: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -35,6 +36,7 @@ class RoleDailyMemoryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
     memory_date: str = Field(min_length=1)
     kind: MemoryKind
     content_markdown: str = ""

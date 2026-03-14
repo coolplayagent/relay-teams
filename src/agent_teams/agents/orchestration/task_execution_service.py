@@ -158,6 +158,7 @@ class TaskExecutionService(BaseModel):
         role_for_run = self._role_with_memory(
             role=role,
             role_id=role_id,
+            workspace_id=workspace.ref.workspace_id,
         )
         runner = SubAgentRunner(
             role=role_for_run,
@@ -211,6 +212,7 @@ class TaskExecutionService(BaseModel):
             )
             self._record_memory_if_needed(
                 role_id=role_id,
+                workspace_id=workspace.ref.workspace_id,
                 task=task,
                 conversation_id=workspace.ref.conversation_id,
                 result=result,
@@ -379,6 +381,7 @@ class TaskExecutionService(BaseModel):
         *,
         role: RoleDefinition,
         role_id: str,
+        workspace_id: str,
     ) -> RoleDefinition:
         if (
             self.role_registry.is_coordinator_role(role_id)
@@ -387,6 +390,7 @@ class TaskExecutionService(BaseModel):
             return role
         memory_text = self.role_memory_service.build_injected_memory(
             role_id=role_id,
+            workspace_id=workspace_id,
         )
         if not memory_text:
             return role
@@ -400,6 +404,7 @@ class TaskExecutionService(BaseModel):
         self,
         *,
         role_id: str,
+        workspace_id: str,
         task: TaskEnvelope,
         conversation_id: str,
         result: str,
@@ -416,6 +421,7 @@ class TaskExecutionService(BaseModel):
         transcript_lines = tuple(str(message) for message in transcript)
         self.role_memory_service.record_task_result(
             role_id=role_id,
+            workspace_id=workspace_id,
             session_id=task.session_id,
             task_id=task.task_id,
             objective=task.objective,

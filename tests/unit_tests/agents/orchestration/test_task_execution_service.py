@@ -523,10 +523,20 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     role_memory_service = RoleMemoryService(repository=RoleMemoryRepository(db_path))
     role_memory_service.record_task_result(
         role_id="time",
+        workspace_id="default",
         session_id="seed-session",
         task_id="seed-task",
         objective="Be concise",
         result="Prefer concise output.",
+        transcript_lines=(),
+    )
+    role_memory_service.record_task_result(
+        role_id="time",
+        workspace_id="other-workspace",
+        session_id="other-session",
+        task_id="other-task",
+        objective="Use other cwd",
+        result="Refer to /d/workspace/aider.",
         transcript_lines=(),
     )
     service = TaskExecutionService(
@@ -564,5 +574,10 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     assert provider.system_prompts
     assert "## Role Memory" in provider.system_prompts[0]
     assert "Prefer concise output." in provider.system_prompts[0]
-    durable = role_memory_service.build_injected_memory(role_id="time")
+    assert "/d/workspace/aider" not in provider.system_prompts[0]
+    durable = role_memory_service.build_injected_memory(
+        role_id="time",
+        workspace_id="default",
+    )
     assert "query time: ok" in durable
+    assert "Refer to /d/workspace/aider." not in durable
