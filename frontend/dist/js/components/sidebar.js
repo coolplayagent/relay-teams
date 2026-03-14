@@ -6,6 +6,7 @@ import { els } from '../utils/dom.js';
 import { showConfirmDialog } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 import {
+    deleteWorkspace,
     deleteSession,
     fetchSessions,
     fetchWorkspaces,
@@ -19,6 +20,9 @@ let refreshTimer = null;
 const expandedProjectIds = new Set();
 const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
+let projectSortMode = 'recent';
+let openProjectMenuId = null;
+let projectMenuDismissBound = false;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
@@ -120,16 +124,51 @@ function buildProjectGroups(workspaces, sessions) {
             expandedProjectIds.add(workspaceId);
             initializedProjectIds.add(workspaceId);
         }
+        const latestWorkspaceTimestamp = Math.max(
+            timestampValue(projectSessions[0]?.updated_at),
+            timestampValue(workspace.updated_at),
+        );
         return {
             workspace,
             sessions: projectSessions,
-            latestUpdatedAt: projectSessions[0]?.updated_at || workspace.updated_at,
+            latestUpdatedAt: latestWorkspaceTimestamp,
         };
     });
 
+    if (projectSortMode === 'name') {
+        return groups.sort((left, right) => {
+            const leftLabel = formatProjectLabel(left.workspace).toLowerCase();
+            const rightLabel = formatProjectLabel(right.workspace).toLowerCase();
+            return leftLabel.localeCompare(rightLabel);
+        });
+    }
+
     return groups.sort(
-        (left, right) => timestampValue(right.latestUpdatedAt) - timestampValue(left.latestUpdatedAt),
+        (left, right) => Number(right.latestUpdatedAt) - Number(left.latestUpdatedAt),
     );
+}
+
+function syncProjectSortButton() {
+    if (!els.projectSortBtn) {
+        return;
+    }
+    const sortLabel = projectSortMode === 'name' ? 'Sort by name' : 'Sort by recent';
+    els.projectSortBtn.title = sortLabel;
+    els.projectSortBtn.setAttribute('aria-label', sortLabel);
+    els.projectSortBtn.dataset.sortMode = projectSortMode;
+    els.projectSortBtn.innerHTML = projectSortMode === 'name'
+        ? `
+            <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                <path d="M6 7h8M6 12h6M6 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <path d="M17 6l2-2 2 2M19 4v16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        `
+        : `
+            <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                <path d="M7 6h10M7 12h7M7 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <path d="M17 8l2-2 2 2M19 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        `;
 }
 
 async function selectSessionById(sessionId) {
@@ -155,11 +194,34 @@ function renderEmptyProjectsState() {
     `;
 }
 
+function ensureProjectMenuDismissBinding() {
+    if (
+        projectMenuDismissBound
+        || typeof document === 'undefined'
+        || typeof document.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    document.addEventListener('click', event => {
+        const target = event?.target;
+        if (target?.closest?.('.project-options-btn, .project-menu')) {
+            return;
+        }
+        if (openProjectMenuId !== null) {
+            openProjectMenuId = null;
+            void loadProjects();
+        }
+    });
+    projectMenuDismissBound = true;
+}
+
 function bindProjectCard(card, group) {
     const { workspace } = group;
     const workspaceId = workspace.workspace_id;
     const toggleBtn = card.querySelector('.project-toggle');
     const newSessionButtons = card.querySelectorAll('.project-new-session-btn');
+    const optionsButtons = card.querySelectorAll('.project-options-btn');
+    const removeButtons = card.querySelectorAll('.project-remove-btn');
     const deleteButtons = card.querySelectorAll('.session-delete-btn');
     const sessionButtons = card.querySelectorAll('.session-item');
 
@@ -178,6 +240,21 @@ function bindProjectCard(card, group) {
         button.onclick = event => {
             event?.stopPropagation?.();
             void handleNewSessionClick(workspaceId, true);
+        };
+    });
+
+    optionsButtons.forEach(button => {
+        button.onclick = event => {
+            event?.stopPropagation?.();
+            openProjectMenuId = openProjectMenuId === workspaceId ? null : workspaceId;
+            void loadProjects();
+        };
+    });
+
+    removeButtons.forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            void handleRemoveWorkspaceClick(workspace);
         };
     });
 
@@ -248,6 +325,7 @@ function renderProjectCard(group) {
     const workspaceId = workspace.workspace_id;
     const workspaceLabel = formatProjectLabel(workspace);
     const expanded = expandedProjectIds.has(workspaceId);
+    const menuOpen = openProjectMenuId === workspaceId;
 
     const card = document.createElement('section');
     card.className = 'project-card';
@@ -266,6 +344,11 @@ function renderProjectCard(group) {
                 <span class="project-title">${escapeHtml(workspaceLabel)}</span>
             </button>
             <div class="project-actions">
+                <button class="project-options-btn project-action-btn" type="button" title="Project options" aria-label="Project options">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                        <path d="M6 12a1.25 1.25 0 1 0 0 .01M12 12a1.25 1.25 0 1 0 0 .01M18 12a1.25 1.25 0 1 0 0 .01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
                 <button class="project-new-session-btn project-action-btn" type="button" title="New session" aria-label="New session">
                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                         <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
@@ -273,6 +356,21 @@ function renderProjectCard(group) {
                 </button>
             </div>
         </div>
+        <div class="project-path-hint">${escapeHtml(String(workspace.root_path || ''))}</div>
+        ${
+            menuOpen
+                ? `
+                    <div class="project-menu" role="menu">
+                        <button class="project-remove-btn" type="button" role="menuitem">
+                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <span>Remove</span>
+                        </button>
+                    </div>
+                `
+                : ''
+        }
         <div class="project-body${expanded ? '' : ' is-collapsed'}">
             <div class="project-session-list">
                 ${
@@ -318,6 +416,8 @@ export async function loadProjects() {
     }
 
     try {
+        ensureProjectMenuDismissBinding();
+        syncProjectSortButton();
         const [workspaces, sessions] = await Promise.all([
             fetchWorkspaces(),
             fetchSessions(),
@@ -326,11 +426,15 @@ export async function loadProjects() {
         els.projectsList.innerHTML = '';
 
         if (!Array.isArray(workspaces) || workspaces.length === 0) {
+            openProjectMenuId = null;
             renderEmptyProjectsState();
             return;
         }
 
         const groups = buildProjectGroups(workspaces, Array.isArray(sessions) ? sessions : []);
+        if (!groups.some(group => group.workspace.workspace_id === openProjectMenuId)) {
+            openProjectMenuId = null;
+        }
         groups.forEach(group => {
             els.projectsList.appendChild(renderProjectCard(group));
         });
@@ -347,6 +451,12 @@ export function scheduleSessionsRefresh(delayMs = 120) {
         refreshTimer = null;
         void loadProjects();
     }, delayMs);
+}
+
+export function toggleProjectSortMode() {
+    projectSortMode = projectSortMode === 'recent' ? 'name' : 'recent';
+    syncProjectSortButton();
+    void loadProjects();
 }
 
 export function setSessionMode() {
@@ -376,8 +486,74 @@ export async function handleNewProjectClick() {
         state.currentWorkspaceId = workspace.workspace_id;
         sysLog(`Added project: ${workspace.workspace_id}`);
         await loadProjects();
+        await handleNewSessionClick(workspace.workspace_id, true);
     } catch (error) {
         sysLog(`Error creating project: ${error.message}`, 'log-error');
+    }
+}
+
+export async function handleRemoveWorkspaceClick(workspace) {
+    const workspaceId = String(workspace?.workspace_id || '').trim();
+    if (!workspaceId) {
+        return;
+    }
+    const workspaceLabel = formatProjectLabel(workspace);
+    const shouldDelete = await showConfirmDialog({
+        title: 'Remove Workspace',
+        message: `Remove workspace ${workspaceLabel}? This will also delete its sessions from the sidebar.`,
+        tone: 'warning',
+        confirmLabel: 'Remove',
+        cancelLabel: 'Cancel',
+    });
+    if (!shouldDelete) {
+        return;
+    }
+
+    try {
+        const sessions = await fetchSessions();
+        const workspaceSessions = Array.isArray(sessions)
+            ? sessions.filter(session => String(session?.workspace_id || '') === workspaceId)
+            : [];
+        const removedCurrentSession = workspaceSessions.some(
+            session => session.session_id === state.currentSessionId,
+        );
+
+        for (const session of workspaceSessions) {
+            await deleteSession(session.session_id);
+        }
+        await deleteWorkspace(workspaceId);
+
+        expandedProjectIds.delete(workspaceId);
+        initializedProjectIds.delete(workspaceId);
+        sessionWorkspaceMap.forEach((value, key) => {
+            if (value === workspaceId) {
+                sessionWorkspaceMap.delete(key);
+            }
+        });
+        openProjectMenuId = null;
+
+        if (state.currentWorkspaceId === workspaceId) {
+            state.currentWorkspaceId = null;
+        }
+        if (removedCurrentSession) {
+            state.currentSessionId = null;
+        }
+
+        await loadProjects();
+
+        if (removedCurrentSession) {
+            const nextSessionEl = document.querySelector('.session-item');
+            const nextSessionId = String(
+                nextSessionEl?.getAttribute('data-session-id') || '',
+            ).trim();
+            if (nextSessionId) {
+                await selectSessionById(nextSessionId);
+            } else {
+                els.chatMessages.innerHTML = '';
+            }
+        }
+    } catch (error) {
+        sysLog(`Error removing project: ${error.message}`, 'log-error');
     }
 }
 

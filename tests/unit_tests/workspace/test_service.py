@@ -71,3 +71,19 @@ def test_workspace_service_create_for_root_generates_unique_workspace_id(
 
     assert first.workspace_id == "demo-project"
     assert second.workspace_id == "demo-project-2"
+
+
+def test_workspace_service_deletes_workspace(tmp_path: Path) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    service.delete_workspace("project-alpha")
+
+    assert service.list_workspaces() == ()

@@ -765,18 +765,17 @@ body.is-resizing-rails .right-rail-resizer {
     width: var(--sidebar-width, 260px);
     min-width: 220px;
     flex: 0 0 var(--sidebar-width, 260px);
-    background: var(--bg-surface);
+    background: var(--bg-surface-glass);
     border-right: 1px solid var(--border-color);
     transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
 }
 
 .sidebar-header {
-    padding: 0.9rem 1rem 0.8rem;
+    padding: 0.75rem 0.8rem 0.4rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-color);
+    background: transparent;
 }
 
 .sidebar-brand {
@@ -792,25 +791,55 @@ body.is-resizing-rails .right-rail-resizer {
     letter-spacing: 0;
 }
 
-.sidebar-toolbar {
-    padding: 0.35rem 0.6rem 0.55rem;
-    background: var(--bg-surface);
-}
-
-.sidebar-create-project-btn {
-    width: 100%;
-    justify-content: flex-start;
-    min-height: 32px;
-    padding: 0.4rem 0.55rem;
-    border: none;
-    border-radius: 8px;
+.sidebar-section-bar {
+    padding: 0.15rem 0.65rem 0.38rem 0.78rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     background: transparent;
-    box-shadow: none;
 }
 
+.sidebar-section-title {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.sidebar-section-title h2 {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-secondary) 84%, transparent);
+}
+
+.sidebar-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+}
+
+.sidebar-header-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.sidebar-header-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.projects-list,
 .sidebar-footer {
-    padding: 0.875rem 1rem;
-    background: var(--bg-surface);
+    background: transparent;
 }
 
 .workspace {
@@ -962,9 +991,6 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 body.light-theme .sidebar,
-body.light-theme .sidebar-header,
-body.light-theme .projects-list,
-body.light-theme .sessions-list,
 body.light-theme .topbar,
 body.light-theme .right-rail,
 body.light-theme .subagent-rail-header,
@@ -975,6 +1001,14 @@ body.light-theme .rail-inspector-card,
 body.light-theme .rail-inspector-card .inspector-header,
 body.light-theme .sidebar-footer {
     background: var(--bg-surface-glass);
+}
+
+body.light-theme .sidebar-header,
+body.light-theme .sidebar-section-bar,
+body.light-theme .projects-list,
+body.light-theme .sessions-list,
+body.light-theme .sidebar-footer {
+    background: transparent;
 }
 
 body.light-theme .workspace,

@@ -112,3 +112,19 @@ def test_pick_workspace_returns_null_when_cancelled(
 
     assert response.status_code == 200
     assert response.json() == {"workspace": None}
+
+
+def test_delete_workspace(tmp_path: Path) -> None:
+    client, service = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    response = client.delete("/api/workspaces/project-alpha")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.list_workspaces() == ()

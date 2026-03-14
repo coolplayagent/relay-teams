@@ -4,7 +4,11 @@
  */
 import { initSettings, openSettings } from '../components/settings.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
-import { handleNewProjectClick, loadProjects } from '../components/sidebar.js';
+import {
+    handleNewProjectClick,
+    loadProjects,
+    toggleProjectSortMode,
+} from '../components/sidebar.js';
 import { fetchRoleConfigOptions } from '../core/api.js';
 import { setCoordinatorRoleId, state } from '../core/state.js';
 import { setupNavbarBindings } from '../components/navbar.js';
@@ -53,6 +57,11 @@ export function setupEventBindings(handleSend) {
     if (els.newProjectBtn) {
         els.newProjectBtn.onclick = () => {
             void handleNewProjectClick();
+        };
+    }
+    if (els.projectSortBtn) {
+        els.projectSortBtn.onclick = () => {
+            toggleProjectSortMode();
         };
     }
     document.addEventListener('run-approval-resolved', (event) => {

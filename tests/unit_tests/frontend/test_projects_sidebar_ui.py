@@ -17,6 +17,7 @@ import {
     handleNewProjectClick,
     loadProjects,
     setSelectSessionHandler,
+    toggleProjectSortMode,
 } from "./sidebar.mjs";
 
 installGlobals(createDomEnvironment());
@@ -45,6 +46,11 @@ await flushTasks();
 
 await handleNewProjectClick();
 await flushTasks();
+const finalFirstProjectTitle = projectsList.children[0].querySelector(".project-title").textContent;
+
+toggleProjectSortMode();
+await flushTasks();
+const sortedFirstProjectTitle = projectsList.children[0].querySelector(".project-title").textContent;
 
 console.log(JSON.stringify({
     initialProjectCount: 2,
@@ -57,7 +63,8 @@ console.log(JSON.stringify({
     initialFirstProjectTitle,
     initialSecondProjectTitle,
     initialFirstSessionLabel,
-    finalFirstProjectTitle: projectsList.children[0].querySelector(".project-title").textContent,
+    finalFirstProjectTitle,
+    sortedFirstProjectTitle,
 }));
 """.strip(),
     )
@@ -66,13 +73,14 @@ console.log(JSON.stringify({
     assert payload["initialSessionCount"] == 7
     assert payload["initialProjectExpanded"] == "true"
     assert payload["collapsedProjectExpanded"] == "false"
-    assert payload["createdSessionWorkspaceIds"] == ["alpha-project"]
-    assert payload["selectedSessionIds"] == ["session-new"]
+    assert payload["createdSessionWorkspaceIds"] == ["alpha-project", "gamma-project"]
+    assert payload["selectedSessionIds"] == ["session-new-1", "session-new-2"]
     assert payload["finalProjectCount"] == 3
     assert payload["initialFirstProjectTitle"] == "Alpha Project"
     assert payload["initialSecondProjectTitle"] == "Beta Project"
     assert payload["initialFirstSessionLabel"] == "Reply to greeting"
     assert payload["finalFirstProjectTitle"] == "Gamma Project"
+    assert payload["sortedFirstProjectTitle"] == "Alpha Project"
 
 
 def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -313,8 +321,9 @@ export async function fetchSessions() {
 
 export async function startNewSession(workspaceId) {
     globalThis.__createdSessionWorkspaceIds.push(workspaceId);
+    const suffix = globalThis.__createdSessionWorkspaceIds.length;
     const session = {
-        session_id: "session-new",
+        session_id: `session-new-${suffix}`,
         workspace_id: workspaceId,
         updated_at: "2026-03-14T11:00:00Z",
         pending_tool_approval_count: 0,
@@ -336,6 +345,10 @@ export async function pickWorkspace() {
 
 export async function deleteSession() {
     return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
 }
 """.strip(),
         encoding="utf-8",

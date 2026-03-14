@@ -58,6 +58,10 @@ class WorkspaceService:
     def list_workspaces(self) -> tuple[WorkspaceRecord, ...]:
         return self._repository.list_all()
 
+    def delete_workspace(self, workspace_id: str) -> None:
+        _ = self._repository.get(workspace_id)
+        self._repository.delete(workspace_id)
+
     def require_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self.get_workspace(workspace_id)
 

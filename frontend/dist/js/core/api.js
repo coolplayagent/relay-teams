@@ -48,6 +48,7 @@ export {
     validateRoleConfig,
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
+    deleteWorkspace,
     fetchWorkspaces,
     pickWorkspace,
 } from './api/index.js';

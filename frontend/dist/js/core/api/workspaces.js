@@ -17,3 +17,13 @@ export async function pickWorkspace() {
         'Failed to choose project directory',
     );
 }
+
+export async function deleteWorkspace(workspaceId) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+        {
+            method: 'DELETE',
+        },
+        'Failed to remove project',
+    );
+}

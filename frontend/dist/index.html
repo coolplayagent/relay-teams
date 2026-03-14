@@ -20,13 +20,23 @@
                     <h2>agent-teams</h2>
                 </div>
             </header>
-            <div class="sidebar-toolbar">
-                <button id="new-project-btn" class="secondary-btn sidebar-create-project-btn" type="button">
-                    <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                        <path d="M12 4V20M4 12H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                    </svg>
-                    <span>New project</span>
-                </button>
+            <div class="sidebar-section-bar">
+                <div class="sidebar-section-title">
+                    <h2>Workspace</h2>
+                </div>
+                <div class="sidebar-header-actions">
+                    <button id="new-project-btn" class="sidebar-header-btn" type="button" title="New project" aria-label="New project">
+                        <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                        </svg>
+                    </button>
+                    <button id="project-sort-btn" class="sidebar-header-btn" type="button" title="Sort by recent" aria-label="Sort by recent">
+                        <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                            <path d="M7 6h10M7 12h7M7 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                            <path d="M17 8l2-2 2 2M19 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
             </div>
 
             <button id="back-btn" class="back-btn" style="display: none;">

@@ -78,3 +78,15 @@ def get_workspace(
         return service.get_workspace(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
+
+
+@router.delete("/{workspace_id}")
+def delete_workspace(
+    workspace_id: str,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> dict[str, str]:
+    try:
+        service.delete_workspace(workspace_id)
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc

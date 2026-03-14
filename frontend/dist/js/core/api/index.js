@@ -63,6 +63,7 @@ export {
 } from './token_usage.js';
 
 export {
+    deleteWorkspace,
     fetchWorkspaces,
     pickWorkspace,
 } from './workspaces.js';
