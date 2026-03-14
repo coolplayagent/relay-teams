@@ -535,6 +535,17 @@ Opens a native directory picker on the local machine, then registers the chosen
 directory as a workspace. If the selected directory is already registered, the
 existing workspace record is returned.
 
+Request:
+
+```json
+{
+  "root_path": "D:/workspace/agent_teams"
+}
+```
+
+If `root_path` is provided, the server skips the native picker and registers the
+specified directory directly.
+
 Response:
 
 ```json
@@ -561,6 +572,9 @@ Response:
 
 Rules:
 - Returns `{ "workspace": null }` when the picker is cancelled.
+- `root_path`, when provided, must already exist and be a directory.
+- Linux native picking requires an installed desktop picker such as `zenity`,
+  `qarma`, `yad`, or `kdialog`.
 - Returns `503` when the runtime cannot open a native directory picker.
 
 ## Prompt APIs

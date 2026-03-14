@@ -30,6 +30,10 @@ export async function requestJson(url, options, errorMessage) {
             );
             const error = new Error(detail);
             error.__agentTeamsLogged = true;
+            error.status = res.status;
+            error.detail = detail;
+            error.url = url;
+            error.method = options?.method || 'GET';
             throw error;
         }
         return res.json();

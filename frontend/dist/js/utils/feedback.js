@@ -82,6 +82,27 @@ export function showConfirmDialog({
     });
 }
 
+export function showTextInputDialog({
+    title = 'Input Required',
+    message = '',
+    tone = 'info',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    placeholder = '',
+    value = '',
+} = {}) {
+    return enqueueDialog({
+        kind: 'prompt',
+        title,
+        message,
+        tone,
+        confirmLabel,
+        cancelLabel,
+        placeholder,
+        value,
+    });
+}
+
 function enqueueDialog(dialog) {
     ensureHosts();
     return new Promise(resolve => {
@@ -103,8 +124,22 @@ function renderNextDialog() {
                     <h3>${escapeHtml(activeDialog.title || 'Notice')}</h3>
                 </div>
                 <div class="feedback-dialog-body">${escapeHtml(activeDialog.message || '')}</div>
+                ${activeDialog.kind === 'prompt'
+                    ? `
+                        <div class="feedback-dialog-input-wrap">
+                            <input
+                                type="text"
+                                class="feedback-dialog-input"
+                                data-feedback-input
+                                placeholder="${escapeHtml(activeDialog.placeholder || '')}"
+                                value="${escapeHtml(activeDialog.value || '')}"
+                            />
+                        </div>
+                    `
+                    : ''
+                }
                 <div class="feedback-dialog-actions">
-                    ${activeDialog.kind === 'confirm'
+                    ${activeDialog.kind !== 'alert'
                         ? `<button type="button" class="secondary-btn feedback-action-btn" data-feedback-cancel>${escapeHtml(activeDialog.cancelLabel || 'Cancel')}</button>`
                         : ''
                     }
@@ -118,18 +153,40 @@ function renderNextDialog() {
     const backdrop = hosts.dialogRoot.querySelector('.feedback-dialog-backdrop');
     const confirmBtn = hosts.dialogRoot.querySelector('[data-feedback-confirm]');
     const cancelBtn = hosts.dialogRoot.querySelector('[data-feedback-cancel]');
+    const input = hosts.dialogRoot.querySelector('[data-feedback-input]');
     if (confirmBtn) {
-        confirmBtn.onclick = () => settleDialog(true);
-        confirmBtn.focus();
+        confirmBtn.onclick = () => {
+            if (activeDialog?.kind === 'prompt') {
+                settleDialog(String(input?.value || '').trim());
+                return;
+            }
+            settleDialog(true);
+        };
     }
     if (cancelBtn) {
-        cancelBtn.onclick = () => settleDialog(false);
+        cancelBtn.onclick = () => settleDialog(activeDialog?.kind === 'prompt' ? null : false);
     }
     if (backdrop) {
         backdrop.onclick = event => {
             if (event.target !== backdrop) return;
-            settleDialog(activeDialog?.kind === 'alert');
+            if (activeDialog?.kind === 'alert') {
+                settleDialog(true);
+                return;
+            }
+            settleDialog(activeDialog?.kind === 'prompt' ? null : false);
         };
+    }
+    if (input) {
+        input.onkeydown = event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                settleDialog(String(input.value || '').trim());
+            }
+        };
+        input.focus();
+        input.select?.();
+    } else if (confirmBtn) {
+        confirmBtn.focus();
     }
 }
 
@@ -139,7 +196,7 @@ function settleDialog(value) {
     activeDialog = null;
     dialogRoot.classList.remove('active');
     dialogRoot.innerHTML = '';
-    current.resolve(Boolean(value));
+    current.resolve(value);
     renderNextDialog();
 }
 
@@ -174,7 +231,11 @@ function bindEscapeHandler() {
     if (escapeHandlerBound || typeof document === 'undefined') return;
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !activeDialog) return;
-        settleDialog(activeDialog.kind === 'alert');
+        if (activeDialog.kind === 'alert') {
+            settleDialog(true);
+            return;
+        }
+        settleDialog(activeDialog.kind === 'prompt' ? null : false);
     });
     escapeHandlerBound = true;
 }

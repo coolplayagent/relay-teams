@@ -3,7 +3,7 @@
  * Renders the left rail as a project tree grouped by workspace.
  */
 import { els } from '../utils/dom.js';
-import { showConfirmDialog } from '../utils/feedback.js';
+import { showConfirmDialog, showTextInputDialog } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 import {
     deleteWorkspace,
@@ -173,6 +173,23 @@ function syncProjectSortButton() {
                 <path d="M17 8l2-2 2 2M19 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
         `;
+}
+
+function isNativeDirectoryPickerUnavailable(error) {
+    return error?.status === 503 && error?.detail === 'Native directory picker is unavailable';
+}
+
+async function requestWorkspaceRootPath() {
+    const enteredPath = await showTextInputDialog({
+        title: 'Enter Project Path',
+        message: 'Native directory picker is unavailable. Enter an existing project directory path.',
+        tone: 'info',
+        confirmLabel: 'Add Project',
+        cancelLabel: 'Cancel',
+        placeholder: '/path/to/project',
+    });
+    const rootPath = String(enteredPath || '').trim();
+    return rootPath || null;
 }
 
 async function selectSessionById(sessionId) {
@@ -541,7 +558,19 @@ export function setRoundsMode() {
 
 export async function handleNewProjectClick() {
     try {
-        const response = await pickWorkspace();
+        let response = null;
+        try {
+            response = await pickWorkspace();
+        } catch (error) {
+            if (!isNativeDirectoryPickerUnavailable(error)) {
+                throw error;
+            }
+            const rootPath = await requestWorkspaceRootPath();
+            if (!rootPath) {
+                return;
+            }
+            response = await pickWorkspace(rootPath);
+        }
         const workspace = response?.workspace || null;
         if (!workspace) {
             return;

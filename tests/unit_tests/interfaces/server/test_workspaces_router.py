@@ -114,6 +114,24 @@ def test_pick_workspace_returns_null_when_cancelled(
     assert response.json() == {"workspace": None}
 
 
+def test_pick_workspace_creates_workspace_for_provided_root_path(
+    tmp_path: Path,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+    root_path = tmp_path / "provided-root"
+    root_path.mkdir()
+
+    response = client.post(
+        "/api/workspaces/pick",
+        json={"root_path": str(root_path)},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace"]["workspace_id"] == "provided-root"
+    assert payload["workspace"]["root_path"] == str(root_path.resolve())
+
+
 def test_delete_workspace(tmp_path: Path) -> None:
     client, service = _create_test_client(tmp_path)
     root_path = tmp_path / "workspace-root"

@@ -2153,6 +2153,26 @@
     white-space: pre-wrap;
 }
 
+.feedback-dialog-input-wrap {
+    padding: 0.85rem 1rem 0;
+}
+
+.feedback-dialog-input {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-surface-muted);
+    color: var(--text-primary);
+    padding: 0.72rem 0.8rem;
+    font: inherit;
+}
+
+.feedback-dialog-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
 .feedback-dialog-actions {
     display: flex;
     justify-content: flex-end;

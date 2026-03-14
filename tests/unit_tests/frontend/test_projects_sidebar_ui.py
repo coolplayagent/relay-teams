@@ -309,6 +309,10 @@ export async function flushTasks() {
 export async function showConfirmDialog() {
     return true;
 }
+
+export async function showTextInputDialog() {
+    return "/work/Gamma Project";
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -373,10 +377,16 @@ export async function startNewSession(workspaceId) {
     return session;
 }
 
-export async function pickWorkspace() {
+export async function pickWorkspace(rootPath = null) {
+    if (rootPath === null) {
+        const error = new Error("Native directory picker is unavailable");
+        error.status = 503;
+        error.detail = "Native directory picker is unavailable";
+        throw error;
+    }
     workspaces.push({
         workspace_id: "gamma-project",
-        root_path: "/work/Gamma Project",
+        root_path: rootPath,
         updated_at: "2026-03-14T12:00:00Z",
     });
     return {

@@ -8,12 +8,17 @@ export async function fetchWorkspaces() {
     return requestJson('/api/workspaces', undefined, 'Failed to fetch projects');
 }
 
-export async function pickWorkspace() {
+export async function pickWorkspace(rootPath = null) {
+    const options = {
+        method: 'POST',
+    };
+    if (typeof rootPath === 'string' && rootPath.trim()) {
+        options.headers = { 'Content-Type': 'application/json' };
+        options.body = JSON.stringify({ root_path: rootPath.trim() });
+    }
     return requestJson(
         '/api/workspaces/pick',
-        {
-            method: 'POST',
-        },
+        options,
         'Failed to choose project directory',
     );
 }

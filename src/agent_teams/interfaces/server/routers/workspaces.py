@@ -29,6 +29,12 @@ class PickWorkspaceResponse(BaseModel):
     workspace: WorkspaceRecord | None = None
 
 
+class PickWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root_path: str | None = Field(default=None, min_length=1)
+
+
 @router.post("", response_model=WorkspaceRecord)
 def create_workspace(
     req: CreateWorkspaceRequest,
@@ -45,12 +51,16 @@ def create_workspace(
 
 @router.post("/pick", response_model=PickWorkspaceResponse)
 def pick_workspace(
+    req: PickWorkspaceRequest | None = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> PickWorkspaceResponse:
-    try:
-        selected_root = pick_workspace_directory()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if req is not None and req.root_path is not None:
+        selected_root = Path(req.root_path)
+    else:
+        try:
+            selected_root = pick_workspace_directory()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if selected_root is None:
         return PickWorkspaceResponse(workspace=None)
