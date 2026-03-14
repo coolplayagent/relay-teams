@@ -5,6 +5,7 @@
 import { clearAllPanels } from '../components/agentPanel.js';
 import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
+import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import {
     clearSessionRecovery,
@@ -30,6 +31,7 @@ export async function selectSession(sessionId) {
     }
     if (isSameSession && (state.isGenerating || state.activeEventSource)) {
         await hydrateSessionView(sessionId, { includeRounds: false, quiet: true });
+        scheduleSessionTokenUsageRefresh({ immediate: true });
         sysLog(`Synced live session: ${sessionId}`);
         return;
     }
@@ -63,9 +65,11 @@ export async function selectSession(sessionId) {
     state.activeView = 'main';
     clearAllPanels();
     clearContextIndicators();
+    clearSessionTokenUsage();
     clearAllStreamState();
 
     await hydrateSessionView(sessionId, { includeRounds: true, quiet: true });
     scheduleCoordinatorContextPreview({ immediate: true });
+    scheduleSessionTokenUsageRefresh({ immediate: true });
     sysLog(`${isSameSession ? 'Reloaded' : 'Switched to'} session: ${sessionId}`);
 }

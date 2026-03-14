@@ -3,6 +3,7 @@
  * Event switchboard for SSE RunEventType payloads.
  */
 import { scheduleRecoveryContinuityRefresh } from '../../app/recovery.js';
+import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenUsage.js';
 import { state } from '../state.js';
 import { sysLog } from '../../utils/logger.js';
 import {
@@ -95,6 +96,8 @@ export function routeEvent(evType, payload, eventMeta) {
         handleSubagentResumed(payload);
     } else if (evType === 'gate_resolved') {
         handleGateResolved(payload, instanceId);
+    } else if (evType === 'token_usage') {
+        scheduleSessionTokenUsageRefresh({ immediate: true });
     } else {
         sysLog(`[evt] ${evType}`, 'log-info');
     }

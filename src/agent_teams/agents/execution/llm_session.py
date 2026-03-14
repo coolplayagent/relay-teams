@@ -302,7 +302,9 @@ class AgentLlmSession:
         restarted = False
         result: _AgentRunResult | None = None
         request_level_input_tokens = 0
+        request_level_cached_input_tokens = 0
         request_level_output_tokens = 0
+        request_level_reasoning_output_tokens = 0
         request_level_requests = 0
         saw_request_level_usage = False
 
@@ -353,10 +355,22 @@ class AgentLlmSession:
                                 before=usage_before,
                                 field_name="input_tokens",
                             )
+                            request_level_cached_input_tokens += self._usage_delta_int(
+                                after=usage_after,
+                                before=usage_before,
+                                field_name="cache_read_tokens",
+                            )
                             request_level_output_tokens += self._usage_delta_int(
                                 after=usage_after,
                                 before=usage_before,
                                 field_name="output_tokens",
+                            )
+                            request_level_reasoning_output_tokens += (
+                                self._usage_detail_delta_int(
+                                    after=usage_after,
+                                    before=usage_before,
+                                    detail_name="reasoning_tokens",
+                                )
                             )
                             request_level_requests += self._usage_delta_int(
                                 after=usage_after,
@@ -457,11 +471,19 @@ class AgentLlmSession:
                     # Record and publish token usage
                     usage = result.usage()
                     input_tokens = request_level_input_tokens
+                    cached_input_tokens = request_level_cached_input_tokens
                     output_tokens = request_level_output_tokens
+                    reasoning_output_tokens = request_level_reasoning_output_tokens
                     requests = request_level_requests
                     if not saw_request_level_usage:
                         input_tokens = self._usage_field_int(usage, "input_tokens")
+                        cached_input_tokens = self._usage_field_int(
+                            usage, "cache_read_tokens"
+                        )
                         output_tokens = self._usage_field_int(usage, "output_tokens")
+                        reasoning_output_tokens = self._usage_detail_int(
+                            usage, "reasoning_tokens"
+                        )
                         requests = self._usage_field_int(usage, "requests")
                     tool_calls = self._usage_field_int(usage, "tool_calls")
                     if self._token_usage_repo is not None:
@@ -471,7 +493,9 @@ class AgentLlmSession:
                             instance_id=request.instance_id,
                             role_id=request.role_id,
                             input_tokens=input_tokens,
+                            cached_input_tokens=cached_input_tokens,
                             output_tokens=output_tokens,
+                            reasoning_output_tokens=reasoning_output_tokens,
                             requests=requests,
                             tool_calls=tool_calls,
                         )
@@ -487,7 +511,9 @@ class AgentLlmSession:
                             payload_json=dumps(
                                 {
                                     "input_tokens": input_tokens,
+                                    "cached_input_tokens": cached_input_tokens,
                                     "output_tokens": output_tokens,
+                                    "reasoning_output_tokens": reasoning_output_tokens,
                                     "total_tokens": input_tokens + output_tokens,
                                     "requests": requests,
                                     "tool_calls": tool_calls,
@@ -504,7 +530,9 @@ class AgentLlmSession:
                         message="LLM token usage recorded",
                         payload={
                             "input_tokens": input_tokens,
+                            "cached_input_tokens": cached_input_tokens,
                             "output_tokens": output_tokens,
+                            "reasoning_output_tokens": reasoning_output_tokens,
                             "requests": requests,
                             "tool_calls": tool_calls,
                             "role_id": request.role_id,
@@ -604,6 +632,27 @@ class AgentLlmSession:
     ) -> int:
         after_value = self._usage_field_int(after, field_name)
         before_value = self._usage_field_int(before, field_name)
+        delta = after_value - before_value
+        return delta if delta > 0 else 0
+
+    def _usage_detail_int(self, usage_obj: object, detail_name: str) -> int:
+        details = getattr(usage_obj, "details", {})
+        if not isinstance(details, dict):
+            return 0
+        value = details.get(detail_name, 0)
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        return 0
+
+    def _usage_detail_delta_int(
+        self, *, after: object, before: object, detail_name: str
+    ) -> int:
+        after_value = self._usage_detail_int(after, detail_name)
+        before_value = self._usage_detail_int(before, detail_name)
         delta = after_value - before_value
         return delta if delta > 0 else 0
 

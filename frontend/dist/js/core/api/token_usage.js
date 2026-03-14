@@ -21,14 +21,19 @@ export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
     }
 }
 
-export async function fetchSessionTokenUsage(sessionId) {
+export async function fetchSessionTokenUsage(sessionId, options = {}) {
     try {
         return await requestJson(
             `/api/sessions/${sessionId}/token-usage`,
-            undefined,
+            {
+                signal: options.signal,
+            },
             'Failed to fetch session token usage',
         );
-    } catch {
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw error;
+        }
         return null;
     }
 }

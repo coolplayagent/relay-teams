@@ -218,23 +218,25 @@ Purpose: append-only LLM message history.
 
 ```sql
 CREATE TABLE IF NOT EXISTS token_usage (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id    TEXT NOT NULL,
-    run_id        TEXT NOT NULL,
-    instance_id   TEXT NOT NULL,
-    role_id       TEXT NOT NULL,
-    input_tokens  INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
-    requests      INTEGER DEFAULT 0,
-    tool_calls    INTEGER DEFAULT 0,
-    recorded_at   TEXT NOT NULL
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id              TEXT NOT NULL,
+    run_id                  TEXT NOT NULL,
+    instance_id             TEXT NOT NULL,
+    role_id                 TEXT NOT NULL,
+    input_tokens            INTEGER DEFAULT 0,
+    cached_input_tokens     INTEGER DEFAULT 0,
+    output_tokens           INTEGER DEFAULT 0,
+    reasoning_output_tokens INTEGER DEFAULT 0,
+    requests                INTEGER DEFAULT 0,
+    tool_calls              INTEGER DEFAULT 0,
+    recorded_at             TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
 ```
 
-Purpose: one row per `agent.iter()` completion cycle (coordinator or subagent). Multiple rows may exist for the same `instance_id` within a run if injection-restarts occurred. Rows are deleted when the owning session is deleted.
+Purpose: one row per `agent.iter()` completion cycle (coordinator or subagent). Multiple rows may exist for the same `instance_id` within a run if injection-restarts occurred. The table stores both the billed prompt/completion counts and the provider-reported cached-input / reasoning-output sub-counts used by the session usage UI. Rows are deleted when the owning session is deleted.
 
 ---
 

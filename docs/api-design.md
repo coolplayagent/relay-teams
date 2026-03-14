@@ -266,11 +266,11 @@ Lists delegated tasks in the session.
 
 ### `GET /sessions/{session_id}/token-usage`
 
-Returns aggregated token usage for the session, grouped by `role_id`. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
+Returns aggregated token usage for the entire session, grouped by `role_id`. The totals include the coordinator agent and every subagent run recorded under the same `session_id`. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
 
-Returns token usage for a single run, grouped by agent instance. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
+Returns token usage for a single run, grouped by agent instance. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
 ## Run APIs
 

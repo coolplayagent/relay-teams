@@ -332,10 +332,12 @@ class _FakeResultLargeUsage:
     def usage(self) -> SimpleNamespace:
         return SimpleNamespace(
             input_tokens=999_999,
+            cache_read_tokens=444_444,
             output_tokens=888_888,
             total_tokens=1_888_887,
             requests=9,
             tool_calls=5,
+            details={"reasoning_tokens": 222_222},
         )
 
 
@@ -405,10 +407,12 @@ class _FakeNodeStreamMutationContext:
 
     async def __aenter__(self) -> _FakeNodeStreamWithMutation:
         self._usage_obj.input_tokens = 130
+        self._usage_obj.cache_read_tokens = 21
         self._usage_obj.output_tokens = 19
         self._usage_obj.total_tokens = 149
         self._usage_obj.requests = 1
         self._usage_obj.tool_calls = 5
+        self._usage_obj.details = {"reasoning_tokens": 6}
         return _FakeNodeStreamWithMutation(self._usage_obj)
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -431,10 +435,12 @@ class _FakeAgentRunWithMutableUsage:
         self.ctx = object()
         self._usage = SimpleNamespace(
             input_tokens=100,
+            cache_read_tokens=8,
             output_tokens=10,
             total_tokens=110,
             requests=0,
             tool_calls=0,
+            details={"reasoning_tokens": 1},
         )
         self._node = _FakeModelRequestNodeMutatesUsage(self._usage)
         self.result = _FakeResultLargeUsage()
@@ -927,10 +933,12 @@ async def test_generate_token_usage_tracks_request_level_delta(
     provider, _ = _build_provider(tmp_path / "token_usage.db", fake_hub)
     usage_after_request = SimpleNamespace(
         input_tokens=130,
+        cache_read_tokens=21,
         output_tokens=19,
         total_tokens=149,
         requests=1,
         tool_calls=0,
+        details={"reasoning_tokens": 6},
     )
     fake_node = _FakeModelRequestNode(usage_after_request)
     fake_agent = _FakeAgentWithNode(fake_node)
@@ -964,7 +972,9 @@ async def test_generate_token_usage_tracks_request_level_delta(
     assert len(token_events) == 1
     payload = json.loads(token_events[0].payload_json)
     assert payload["input_tokens"] == 30
+    assert payload["cached_input_tokens"] == 21
     assert payload["output_tokens"] == 9
+    assert payload["reasoning_output_tokens"] == 6
     assert payload["total_tokens"] == 39
     assert payload["requests"] == 1
     assert payload["tool_calls"] == 5
@@ -1010,7 +1020,9 @@ async def test_generate_token_usage_delta_works_with_mutated_usage_object(
     assert len(token_events) == 1
     payload = json.loads(token_events[0].payload_json)
     assert payload["input_tokens"] == 30
+    assert payload["cached_input_tokens"] == 13
     assert payload["output_tokens"] == 9
+    assert payload["reasoning_output_tokens"] == 5
     assert payload["total_tokens"] == 39
     assert payload["requests"] == 1
     assert payload["tool_calls"] == 5

@@ -63,6 +63,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     context_indicator_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "contextIndicators.js"
     ).read_text(encoding="utf-8")
+    session_token_usage_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sessionTokenUsage.js"
+    ).read_text(encoding="utf-8")
     backend_status_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
     ).read_text(encoding="utf-8")
@@ -87,9 +90,12 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
     assert 'id="main-context-indicator"' in index_html
+    assert 'id="prompt-input-hint"' in index_html
+    assert 'id="session-token-usage"' in index_html
     assert "Latest provider context usage" in index_html
     assert "-- / --" in index_html
     assert "Checking backend..." in index_html
+    assert "Enter to send · Shift+Enter for new line" in index_html
     assert "No session selected" not in timeline_script
     assert "Start a session from the left sidebar" not in timeline_script
     assert "Sessions</p>" not in index_html
@@ -114,6 +120,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "showConfirmDialog" in feedback_script
     assert "requestAnimationFrame" in navbar_script
     assert "initBackendStatusMonitor" in bootstrap_script
+    assert "initializeSessionTokenUsage" in bootstrap_script
     assert "is-resizing-rails" in navbar_script
     assert "marked.setOptions" not in state_script
     assert "fetch('/api/system/health'" in backend_status_script
@@ -121,11 +128,16 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "fetchSessionContextPreview" not in context_indicator_script
     assert "main-context-indicator" in context_indicator_script
     assert "panel-context-indicator" in context_indicator_script
+    assert "fetchSessionTokenUsage" in session_token_usage_script
+    assert "Token usage: total=" in session_token_usage_script
+    assert "session-token-usage" in session_token_usage_script
     assert "markBackendOnline" in request_script
     assert "markBackendOffline" in request_script
     assert ".status-indicator > span:last-child" in components_css
     assert "flex: 1 1 auto;" in components_css
     assert "white-space: nowrap;" in components_css
+    assert ".input-footer-hint {" in components_css
+    assert ".session-token-usage {" in components_css
     assert ".status-indicator.online span {" not in components_css
     assert ".status-indicator.offline > span:first-child" in components_css
     assert ".status-indicator.checking > span:first-child" in components_css

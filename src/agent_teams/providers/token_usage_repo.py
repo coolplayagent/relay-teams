@@ -19,7 +19,9 @@ class TokenUsageRecord(BaseModel):
     instance_id: str
     role_id: str
     input_tokens: int
+    cached_input_tokens: int
     output_tokens: int
+    reasoning_output_tokens: int
     requests: int
     tool_calls: int
     recorded_at: datetime
@@ -31,7 +33,9 @@ class AgentTokenSummary(BaseModel):
     instance_id: str
     role_id: str
     input_tokens: int
+    cached_input_tokens: int
     output_tokens: int
+    reasoning_output_tokens: int
     total_tokens: int
     requests: int
     tool_calls: int
@@ -42,7 +46,9 @@ class RunTokenUsage(BaseModel):
 
     run_id: str
     total_input_tokens: int
+    total_cached_input_tokens: int
     total_output_tokens: int
+    total_reasoning_output_tokens: int
     total_tokens: int
     total_requests: int
     total_tool_calls: int
@@ -54,7 +60,9 @@ class SessionTokenUsage(BaseModel):
 
     session_id: str
     total_input_tokens: int
+    total_cached_input_tokens: int
     total_output_tokens: int
+    total_reasoning_output_tokens: int
     total_tokens: int
     total_requests: int
     total_tool_calls: int
@@ -64,7 +72,9 @@ class SessionTokenUsage(BaseModel):
 class TokenUsageRepository:
     _NUMERIC_COLUMNS: tuple[str, ...] = (
         "input_tokens",
+        "cached_input_tokens",
         "output_tokens",
+        "reasoning_output_tokens",
         "requests",
         "tool_calls",
     )
@@ -86,7 +96,9 @@ class TokenUsageRepository:
                     instance_id   TEXT NOT NULL,
                     role_id       TEXT NOT NULL,
                     input_tokens  INTEGER DEFAULT 0,
+                    cached_input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
+                    reasoning_output_tokens INTEGER DEFAULT 0,
                     requests      INTEGER DEFAULT 0,
                     tool_calls    INTEGER DEFAULT 0,
                     recorded_at   TEXT NOT NULL
@@ -107,6 +119,20 @@ class TokenUsageRepository:
                 self._conn.execute(
                     "ALTER TABLE token_usage ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0"
                 )
+            if "cached_input_tokens" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "reasoning_output_tokens" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN reasoning_output_tokens INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id)"
             )
@@ -123,10 +149,12 @@ class TokenUsageRepository:
         run_id: str,
         instance_id: str,
         role_id: str,
-        input_tokens: int,
-        output_tokens: int,
-        requests: int,
-        tool_calls: int,
+        input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        output_tokens: int = 0,
+        reasoning_output_tokens: int = 0,
+        requests: int = 0,
+        tool_calls: int = 0,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         with self._lock:
@@ -134,8 +162,9 @@ class TokenUsageRepository:
                 """
                 INSERT INTO token_usage
                   (session_id, run_id, instance_id, role_id,
-                   input_tokens, output_tokens, requests, tool_calls, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   input_tokens, cached_input_tokens, output_tokens,
+                   reasoning_output_tokens, requests, tool_calls, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -143,7 +172,9 @@ class TokenUsageRepository:
                     instance_id,
                     role_id,
                     self._coerce_non_negative_int(input_tokens),
+                    self._coerce_non_negative_int(cached_input_tokens),
                     self._coerce_non_negative_int(output_tokens),
+                    self._coerce_non_negative_int(reasoning_output_tokens),
                     self._coerce_non_negative_int(requests),
                     self._coerce_non_negative_int(tool_calls),
                     now,
@@ -162,7 +193,9 @@ class TokenUsageRepository:
         for row in rows:
             iid = str(row["instance_id"])
             input_tokens = self._row_int(row, "input_tokens")
+            cached_input_tokens = self._row_int(row, "cached_input_tokens")
             output_tokens = self._row_int(row, "output_tokens")
+            reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
             requests = self._row_int(row, "requests")
             tool_calls = self._row_int(row, "tool_calls")
             if iid in by_instance:
@@ -171,7 +204,13 @@ class TokenUsageRepository:
                     instance_id=iid,
                     role_id=existing.role_id,
                     input_tokens=existing.input_tokens + input_tokens,
+                    cached_input_tokens=(
+                        existing.cached_input_tokens + cached_input_tokens
+                    ),
                     output_tokens=existing.output_tokens + output_tokens,
+                    reasoning_output_tokens=(
+                        existing.reasoning_output_tokens + reasoning_output_tokens
+                    ),
                     total_tokens=existing.total_tokens + input_tokens + output_tokens,
                     requests=existing.requests + requests,
                     tool_calls=existing.tool_calls + tool_calls,
@@ -181,7 +220,9 @@ class TokenUsageRepository:
                     instance_id=iid,
                     role_id=str(row["role_id"]),
                     input_tokens=input_tokens,
+                    cached_input_tokens=cached_input_tokens,
                     output_tokens=output_tokens,
+                    reasoning_output_tokens=reasoning_output_tokens,
                     total_tokens=input_tokens + output_tokens,
                     requests=requests,
                     tool_calls=tool_calls,
@@ -190,10 +231,14 @@ class TokenUsageRepository:
         agents = list(by_instance.values())
         total_input = sum(agent.input_tokens for agent in agents)
         total_output = sum(agent.output_tokens for agent in agents)
+        total_cached_input = sum(agent.cached_input_tokens for agent in agents)
+        total_reasoning_output = sum(agent.reasoning_output_tokens for agent in agents)
         return RunTokenUsage(
             run_id=run_id,
             total_input_tokens=total_input,
+            total_cached_input_tokens=total_cached_input,
             total_output_tokens=total_output,
+            total_reasoning_output_tokens=total_reasoning_output,
             total_tokens=total_input + total_output,
             total_requests=sum(agent.requests for agent in agents),
             total_tool_calls=sum(agent.tool_calls for agent in agents),
@@ -211,7 +256,9 @@ class TokenUsageRepository:
         for row in rows:
             role_id = str(row["role_id"])
             input_tokens = self._row_int(row, "input_tokens")
+            cached_input_tokens = self._row_int(row, "cached_input_tokens")
             output_tokens = self._row_int(row, "output_tokens")
+            reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
             requests = self._row_int(row, "requests")
             tool_calls = self._row_int(row, "tool_calls")
             if role_id in by_role:
@@ -220,7 +267,13 @@ class TokenUsageRepository:
                     instance_id="",
                     role_id=role_id,
                     input_tokens=existing.input_tokens + input_tokens,
+                    cached_input_tokens=(
+                        existing.cached_input_tokens + cached_input_tokens
+                    ),
                     output_tokens=existing.output_tokens + output_tokens,
+                    reasoning_output_tokens=(
+                        existing.reasoning_output_tokens + reasoning_output_tokens
+                    ),
                     total_tokens=existing.total_tokens + input_tokens + output_tokens,
                     requests=existing.requests + requests,
                     tool_calls=existing.tool_calls + tool_calls,
@@ -230,7 +283,9 @@ class TokenUsageRepository:
                     instance_id="",
                     role_id=role_id,
                     input_tokens=input_tokens,
+                    cached_input_tokens=cached_input_tokens,
                     output_tokens=output_tokens,
+                    reasoning_output_tokens=reasoning_output_tokens,
                     total_tokens=input_tokens + output_tokens,
                     requests=requests,
                     tool_calls=tool_calls,
@@ -239,10 +294,14 @@ class TokenUsageRepository:
         roles = list(by_role.values())
         total_input = sum(role.input_tokens for role in roles)
         total_output = sum(role.output_tokens for role in roles)
+        total_cached_input = sum(role.cached_input_tokens for role in roles)
+        total_reasoning_output = sum(role.reasoning_output_tokens for role in roles)
         return SessionTokenUsage(
             session_id=session_id,
             total_input_tokens=total_input,
+            total_cached_input_tokens=total_cached_input,
             total_output_tokens=total_output,
+            total_reasoning_output_tokens=total_reasoning_output,
             total_tokens=total_input + total_output,
             total_requests=sum(role.requests for role in roles),
             total_tool_calls=sum(role.tool_calls for role in roles),

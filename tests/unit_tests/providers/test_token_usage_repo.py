@@ -40,7 +40,9 @@ def test_token_usage_repo_migrates_legacy_schema_before_recording(
         instance_id="inst-1",
         role_id="role-1",
         input_tokens=10,
+        cached_input_tokens=6,
         output_tokens=4,
+        reasoning_output_tokens=2,
         requests=2,
         tool_calls=1,
     )
@@ -51,7 +53,13 @@ def test_token_usage_repo_migrates_legacy_schema_before_recording(
     }
     row = repo._conn.execute(
         """
-        SELECT input_tokens, output_tokens, requests, tool_calls
+        SELECT
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            requests,
+            tool_calls
         FROM token_usage
         WHERE run_id=?
         """,
@@ -62,7 +70,9 @@ def test_token_usage_repo_migrates_legacy_schema_before_recording(
     assert "tool_calls" in columns
     assert row is not None
     assert int(row["input_tokens"]) == 10
+    assert int(row["cached_input_tokens"]) == 6
     assert int(row["output_tokens"]) == 4
+    assert int(row["reasoning_output_tokens"]) == 2
     assert int(row["requests"]) == 2
     assert int(row["tool_calls"]) == 1
 
@@ -80,7 +90,9 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
                 instance_id   TEXT NOT NULL,
                 role_id       TEXT NOT NULL,
                 input_tokens  INTEGER DEFAULT 0,
+                cached_input_tokens INTEGER DEFAULT 0,
                 output_tokens INTEGER DEFAULT 0,
+                reasoning_output_tokens INTEGER DEFAULT 0,
                 requests      INTEGER DEFAULT 0,
                 tool_calls    INTEGER DEFAULT 0,
                 recorded_at   TEXT NOT NULL
@@ -95,12 +107,14 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
                 instance_id,
                 role_id,
                 input_tokens,
+                cached_input_tokens,
                 output_tokens,
+                reasoning_output_tokens,
                 requests,
                 tool_calls,
                 recorded_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "session-1",
@@ -108,7 +122,9 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
                 "inst-1",
                 "role-1",
                 None,
+                None,
                 7,
+                None,
                 None,
                 None,
                 "2026-03-12T09:16:31+00:00",
@@ -124,22 +140,30 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
     session_usage = repo.get_by_session("session-1")
 
     assert run_usage.total_input_tokens == 0
+    assert run_usage.total_cached_input_tokens == 0
     assert run_usage.total_output_tokens == 7
+    assert run_usage.total_reasoning_output_tokens == 0
     assert run_usage.total_tokens == 7
     assert run_usage.total_requests == 0
     assert run_usage.total_tool_calls == 0
     assert run_usage.by_agent[0].input_tokens == 0
+    assert run_usage.by_agent[0].cached_input_tokens == 0
     assert run_usage.by_agent[0].output_tokens == 7
+    assert run_usage.by_agent[0].reasoning_output_tokens == 0
     assert run_usage.by_agent[0].requests == 0
     assert run_usage.by_agent[0].tool_calls == 0
 
     assert session_usage.total_input_tokens == 0
+    assert session_usage.total_cached_input_tokens == 0
     assert session_usage.total_output_tokens == 7
+    assert session_usage.total_reasoning_output_tokens == 0
     assert session_usage.total_tokens == 7
     assert session_usage.total_requests == 0
     assert session_usage.total_tool_calls == 0
     assert session_usage.by_role["role-1"].input_tokens == 0
+    assert session_usage.by_role["role-1"].cached_input_tokens == 0
     assert session_usage.by_role["role-1"].output_tokens == 7
+    assert session_usage.by_role["role-1"].reasoning_output_tokens == 0
     assert session_usage.by_role["role-1"].requests == 0
     assert session_usage.by_role["role-1"].tool_calls == 0
 
@@ -152,7 +176,9 @@ def test_token_usage_repo_serializes_concurrent_reads(tmp_path: Path) -> None:
         instance_id="inst-1",
         role_id="role-1",
         input_tokens=11,
+        cached_input_tokens=5,
         output_tokens=5,
+        reasoning_output_tokens=3,
         requests=2,
         tool_calls=1,
     )
@@ -177,3 +203,45 @@ def test_token_usage_repo_serializes_concurrent_reads(tmp_path: Path) -> None:
     assert errors == []
     assert totals
     assert all(total == 16 for total in totals)
+
+
+def test_token_usage_repo_aggregates_cached_and_reasoning_tokens(
+    tmp_path: Path,
+) -> None:
+    repo = TokenUsageRepository(tmp_path / "token_usage_aggregate.db")
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator",
+        input_tokens=120,
+        cached_input_tokens=70,
+        output_tokens=20,
+        reasoning_output_tokens=9,
+        requests=1,
+        tool_calls=2,
+    )
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-subagent",
+        role_id="researcher",
+        input_tokens=30,
+        cached_input_tokens=12,
+        output_tokens=11,
+        reasoning_output_tokens=4,
+        requests=1,
+        tool_calls=0,
+    )
+
+    run_usage = repo.get_by_run("run-1")
+    session_usage = repo.get_by_session("session-1")
+
+    assert run_usage.total_input_tokens == 150
+    assert run_usage.total_cached_input_tokens == 82
+    assert run_usage.total_output_tokens == 31
+    assert run_usage.total_reasoning_output_tokens == 13
+    assert session_usage.total_input_tokens == 150
+    assert session_usage.total_cached_input_tokens == 82
+    assert session_usage.total_output_tokens == 31
+    assert session_usage.total_reasoning_output_tokens == 13

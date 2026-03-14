@@ -4722,8 +4722,23 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 #prompt-input {
-    padding: 0.95rem 7.9rem 0.95rem 1rem;
+    padding: 0.95rem 7.9rem 2.2rem 1rem;
     font-size: 0.95rem;
+}
+
+.input-footer-hint {
+    position: absolute;
+    left: 1rem;
+    bottom: 0.72rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1;
+    pointer-events: none;
+    transition: opacity 0.14s ease;
+}
+
+#prompt-input:not(:placeholder-shown) ~ .input-footer-hint {
+    opacity: 0;
 }
 
 #send-btn,
@@ -4833,9 +4848,38 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     opacity: 0.6;
 }
 
-.sub-text {
-    margin-top: 0;
+.session-token-usage {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    min-height: 1.7rem;
+    margin-left: auto;
+    padding: 0.18rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
     color: var(--text-secondary);
+    font-size: 0.74rem;
+    white-space: nowrap;
+}
+
+.session-token-usage-label {
+    color: var(--text-secondary);
+}
+
+.session-token-usage-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+.session-token-usage[data-state="loading"] {
+    color: var(--text-secondary);
+}
+
+.session-token-usage[data-state="error"] {
+    border-color: color-mix(in srgb, var(--danger) 36%, var(--border-color) 64%);
+    color: color-mix(in srgb, var(--danger) 72%, var(--text-primary) 28%);
 }
 
 .round-detail-header,
@@ -4976,9 +5020,10 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
         align-items: flex-start;
     }
 
-    .sub-text {
+    .session-token-usage {
         width: 100%;
-        text-align: left;
+        justify-content: flex-start;
+        margin-left: 0;
     }
 }
 

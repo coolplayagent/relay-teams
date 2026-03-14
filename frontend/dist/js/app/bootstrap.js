@@ -4,6 +4,7 @@
  */
 import { initSettings, openSettings } from '../components/settings.js';
 import { initializeContextIndicators } from '../components/contextIndicators.js';
+import { initializeSessionTokenUsage } from '../components/sessionTokenUsage.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
 import {
     handleNewProjectClick,
@@ -97,6 +98,7 @@ export async function initApp(selectSession, handleSend) {
     setupNavbarBindings();
     initializeApprovalModeToggle();
     initializeContextIndicators();
+    initializeSessionTokenUsage();
     await hydrateCoordinatorRoleId();
     initializeSubagentRail();
     setupEventBindings(handleSend);
