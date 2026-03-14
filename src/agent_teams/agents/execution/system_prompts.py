@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import platform
+import shutil
+import sys
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -67,6 +72,73 @@ class SystemPromptBuildInput(BaseModel):
     skill_instructions: tuple[PromptSkillInstruction, ...] = ()
 
 
+def build_environment_info_prompt() -> str:
+    """Gather current runtime environment information for the system prompt.
+    Linked with shell tool implementation to ensure consistency.
+    """
+    system = platform.system()
+    release = platform.release()
+    machine = platform.machine()
+    python_version = (
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
+    cwd = os.getcwd()
+
+    # Link with shell tool implementation (lazy import to avoid circular dependency)
+    from agent_teams.tools.workspace_tools.shell_executor import resolve_bash_path
+
+    bash_path = "Unknown"
+    try:
+        bash_path = resolve_bash_path()
+    except Exception:
+        pass
+
+    # Detect Shell/Bash type accurately
+    shell_info = "Unknown"
+    if system == "Windows":
+        if "MSYSTEM" in os.environ:
+            shell_info = f"Git Bash ({os.environ['MSYSTEM']})"
+        elif "bash.exe" in bash_path.lower() and "git" in bash_path.lower():
+            shell_info = "Git Bash (Resolved)"
+        elif "PSModulePath" in os.environ:
+            shell_info = "PowerShell"
+        else:
+            shell_info = "Command Prompt (cmd.exe)"
+    elif system == "Linux":
+        if (
+            "microsoft" in platform.release().lower()
+            or "microsoft" in platform.version().lower()
+        ):
+            shell_info = "WSL (Linux Bash)"
+        else:
+            shell_info = "Native Linux Bash"
+    elif system == "Darwin":
+        shell_info = "macOS Terminal (zsh/bash)"
+
+    # Determine recommended python command
+    py_executable = sys.executable
+    py_command = "python"
+    if system != "Windows":
+        which_python3 = shutil.which("python3")
+        if (
+            which_python3
+            and Path(which_python3).resolve() == Path(py_executable).resolve()
+        ):
+            py_command = "python3"
+        elif not shutil.which("python") and which_python3:
+            py_command = "python3"
+
+    lines = [
+        "## Runtime Environment Information",
+        f"- Operating System: {system} ({release}) {machine}",
+        f"- Working Directory: {cwd}",
+        f"- Python: {python_version} (at {py_executable})",
+        f"- Python Command: `{py_command}`",
+        f"- Shell Type: {shell_info} (Path: {bash_path})",
+    ]
+    return "\n".join(lines)
+
+
 async def build_runtime_system_prompt(
     data: RuntimePromptBuildInput,
     *,
@@ -74,6 +146,11 @@ async def build_runtime_system_prompt(
     mcp_registry: McpRegistry | None = None,
 ) -> str:
     prompt = data.role.system_prompt
+
+    # Include environment information for all roles
+    env_prompt = build_environment_info_prompt()
+    prompt = f"{prompt}\n\n{env_prompt}"
+
     if not is_coordinator_role_definition(data.role):
         return prompt
     if role_registry is None or mcp_registry is None:

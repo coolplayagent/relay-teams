@@ -139,7 +139,9 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
         )
     )
 
-    assert prompt == "You are a focused agent."
+    assert prompt.startswith("You are a focused agent.")
+    assert "## Runtime Environment Information" in prompt
+    assert "- Operating System:" in prompt
 
 
 def test_system_prompt_renders_tools_and_skills() -> None:
