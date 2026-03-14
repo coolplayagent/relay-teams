@@ -24,7 +24,21 @@ class WorkspaceHandle(BaseModel):
         return self.locations.execution_root
 
     def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
-        candidate = (self.root_path / relative_path).resolve()
+        import sys
+        import re
+
+        # Convert MSYS2/Git Bash absolute paths to Windows paths
+        if sys.platform == "win32" and relative_path.startswith("/"):
+            m = re.match(r"^/([a-zA-Z])/(.*)", relative_path)
+            if m:
+                relative_path = f"{m.group(1)}:/{m.group(2)}"
+
+        p = Path(relative_path)
+        if p.is_absolute():
+            candidate = p.resolve()
+        else:
+            candidate = (self.root_path / relative_path).resolve()
+
         allowed_roots = (
             self.locations.writable_roots if write else self.locations.readable_roots
         )

@@ -159,6 +159,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         offset: int = 1,
         limit: int = DEFAULT_READ_LIMIT,
     ) -> dict[str, JsonValue]:
+        """Read a file or directory content.
+
+        Args:
+            ctx: Tool context.
+            path: Path to the file or directory, relative to the workspace root.
+            offset: Line offset for files, or entry offset for directories (1-based).
+            limit: Maximum number of lines or entries to return.
+        """
+
         async def _action() -> str:
             file_path = ctx.deps.workspace.resolve_path(path, write=False)
 

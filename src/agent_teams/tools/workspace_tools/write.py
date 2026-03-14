@@ -76,6 +76,14 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         path: str,
         content: str,
     ) -> dict[str, JsonValue]:
+        """Write content to a file.
+
+        Args:
+            ctx: Tool context.
+            path: Path to the file, relative to the workspace root.
+            content: Content to write.
+        """
+
         async def _action() -> str:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
 
