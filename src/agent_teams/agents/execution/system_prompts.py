@@ -12,22 +12,27 @@ from agent_teams.roles.registry import RoleRegistry, is_coordinator_role_definit
 
 ROLE_USAGE_PROMPT = (
     "## Role Usage\n"
-    "Use `create_tasks` to create tasks and bind to available roles."
-    "Use `dispatch_task` to dispatch tasks."
-    "Use `update_task` to update tasks."
+    "Use `create_tasks` to create a task for a specific role id from the list below. "
+    "Put the selected role id into `create_tasks.tasks[].role_id` and write a concrete objective for that role. "
+    "Use `dispatch_task` after the task is ready to run. "
+    "Use `update_task` to refine an existing task when the assigned role, objective, or title needs to change. "
     "Delegate only when another role is a better fit than answering directly. "
     "Choose the role whose description, tools, MCP tools, and skills best match the task, "
     "then give that role a concrete objective scoped to its responsibility. "
     "Assign work the way a manager briefs an employee: translate the user need into a clear task, "
-    "expected outcome, and constraints for that role instead of merely repeating the user's request verbatim."
+    "expected outcome, and constraints for that role instead of merely repeating the user's request verbatim. "
+    "Each role entry below is a dispatch target, not one of Coordinator's own capabilities. "
+    "`Description` explains what the role is for. "
+    "`Tools`, `MCP Tools`, and `Skills` describe the capabilities available to that role after delegation."
 )
 SKILL_USAGE_PROMPT = (
     "## Skill Usage\n"
-    "Use `load_skill` to Load a specific skill by name. "
-    "Use `read_skill_resource` to Read a resource file from a skill. "
-    "Use `run_skill_script` to Run a script associated with a skill. "
+    "The list below is a catalog of available skills in the form `skill_name: description`. "
+    "Use `load_skill` when a listed skill is relevant and you need its full instructions before acting. "
+    "Use `read_skill_resource` to open a file that belongs to a loaded skill when the skill instructions reference extra resources. "
+    "Use `run_skill_script` only when the loaded skill explicitly points you to a script-based workflow."
 )
-AVAILABLE_ROLES_HEADING = "## Available Roles and its tool/mcp/skill sets"
+AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
 ROLE_BLOCK_HEADING_PREFIX = "### "
 ROLE_BLOCK_DESCRIPTION_PREFIX = "- Description: "
@@ -150,7 +155,7 @@ async def _build_available_role_block(
     mcp_tools = await _list_role_mcp_tools(role=role, mcp_registry=mcp_registry)
     return "\n".join(
         (
-            ROLE_BLOCK_HEADING_PREFIX + role.name,
+            ROLE_BLOCK_HEADING_PREFIX + role.role_id,
             ROLE_BLOCK_DESCRIPTION_PREFIX + role.description,
             ROLE_BLOCK_TOOLS_PREFIX + _format_names(role.tools),
             ROLE_BLOCK_MCP_TOOLS_PREFIX + _format_names(mcp_tools),
