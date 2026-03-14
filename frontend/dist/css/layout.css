@@ -762,42 +762,50 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 .sidebar {
-    width: var(--sidebar-width, 248px);
+    width: var(--sidebar-width, 260px);
     min-width: 220px;
-    flex: 0 0 var(--sidebar-width, 248px);
+    flex: 0 0 var(--sidebar-width, 260px);
     background: var(--bg-surface);
     border-right: 1px solid var(--border-color);
     transition: width 0.18s ease, flex-basis 0.18s ease, border-color 0.18s ease;
 }
 
 .sidebar-header {
-    padding: 0.95rem 1rem;
+    padding: 0.9rem 1rem 0.8rem;
     display: flex;
-    flex-direction: column;
-    gap: 0.7rem;
+    align-items: center;
+    justify-content: space-between;
     background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
 }
 
 .sidebar-brand {
     display: flex;
-    flex-direction: column;
-    gap: 0;
+    align-items: center;
+    min-width: 0;
 }
 
 .sidebar-brand h2 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 600;
     letter-spacing: 0;
 }
 
-.sidebar-actions {
-    display: flex;
+.sidebar-toolbar {
+    padding: 0.35rem 0.6rem 0.55rem;
+    background: var(--bg-surface);
 }
 
 .sidebar-create-project-btn {
     width: 100%;
-    justify-content: center;
+    justify-content: flex-start;
+    min-height: 32px;
+    padding: 0.4rem 0.55rem;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
 }
 
 .sidebar-footer {

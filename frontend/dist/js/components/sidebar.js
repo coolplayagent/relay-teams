@@ -14,12 +14,10 @@ import {
 } from '../core/api.js';
 import { state } from '../core/state.js';
 
-const DEFAULT_VISIBLE_SESSION_COUNT = 6;
-
 let selectSessionHandler = null;
 let refreshTimer = null;
 const expandedProjectIds = new Set();
-const expandedProjectSessionIds = new Set();
+const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
 
 export function setSelectSessionHandler(handler) {
@@ -44,11 +42,18 @@ function formatProjectLabel(workspace) {
     return parts.at(-1) || String(workspace?.workspace_id || 'Project');
 }
 
-function formatTimestamp(value) {
-    if (!value) {
-        return '';
+function formatSessionLabel(session) {
+    const metadata = session?.metadata && typeof session.metadata === 'object'
+        ? session.metadata
+        : {};
+    const keys = ['title', 'name', 'label'];
+    for (const key of keys) {
+        const label = String(metadata[key] || '').trim();
+        if (label) {
+            return label;
+        }
     }
-    return new Date(value).toLocaleString();
+    return String(session?.session_id || 'Session');
 }
 
 function timestampValue(value) {
@@ -56,30 +61,38 @@ function timestampValue(value) {
     return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function sessionStatusLabel(session) {
-    const phase = String(session?.active_run_phase || '');
-    const status = String(session?.active_run_status || '');
-    if (phase === 'awaiting_tool_approval') return 'Awaiting Approval';
-    if (phase === 'awaiting_subagent_followup') return 'Awaiting Follow-up';
-    if (status === 'running' || phase === 'running') return 'Running';
-    if (status === 'queued' || phase === 'queued') return 'Queued';
-    if (status === 'stopped' || phase === 'stopped') return 'Stopped';
-    return '';
-}
+function formatRelativeTime(value) {
+    const timestamp = timestampValue(value);
+    if (!timestamp) {
+        return '';
+    }
 
-function sessionStatusTone(session) {
-    const phase = String(session?.active_run_phase || '');
-    const status = String(session?.active_run_status || '');
-    if (phase === 'awaiting_tool_approval' || phase === 'awaiting_subagent_followup') {
-        return 'warning';
+    const diffMs = Date.now() - timestamp;
+    const diffMinutes = Math.max(0, Math.round(diffMs / 60000));
+    if (diffMinutes < 1) {
+        return 'now';
     }
-    if (status === 'running' || phase === 'running' || status === 'queued' || phase === 'queued') {
-        return 'running';
+    if (diffMinutes < 60) {
+        return `${diffMinutes}m`;
     }
-    if (status === 'stopped' || phase === 'stopped') {
-        return 'stopped';
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) {
+        return `${diffHours}h`;
     }
-    return 'idle';
+    const diffDays = Math.round(diffHours / 24);
+    if (diffDays < 7) {
+        return `${diffDays}d`;
+    }
+    const diffWeeks = Math.round(diffDays / 7);
+    if (diffWeeks < 5) {
+        return `${diffWeeks}w`;
+    }
+    const diffMonths = Math.round(diffDays / 30);
+    if (diffMonths < 12) {
+        return `${diffMonths}mo`;
+    }
+    const diffYears = Math.round(diffDays / 365);
+    return `${diffYears}y`;
 }
 
 function buildProjectGroups(workspaces, sessions) {
@@ -103,8 +116,9 @@ function buildProjectGroups(workspaces, sessions) {
         const projectSessions = Array.from(sessionsByWorkspace.get(workspaceId) || []).sort(
             (left, right) => timestampValue(right.updated_at) - timestampValue(left.updated_at),
         );
-        if (!expandedProjectIds.has(workspaceId)) {
+        if (!initializedProjectIds.has(workspaceId)) {
             expandedProjectIds.add(workspaceId);
+            initializedProjectIds.add(workspaceId);
         }
         return {
             workspace,
@@ -136,7 +150,7 @@ function renderEmptyProjectsState() {
     els.projectsList.innerHTML = `
         <div class="projects-empty-state">
             <p class="projects-empty-title">No projects yet</p>
-            <p class="projects-empty-copy">Create a project to bind a workspace directory and start sessions inside it.</p>
+            <p class="projects-empty-copy">Add a project below to attach a workspace and start sessions.</p>
         </div>
     `;
 }
@@ -146,7 +160,6 @@ function bindProjectCard(card, group) {
     const workspaceId = workspace.workspace_id;
     const toggleBtn = card.querySelector('.project-toggle');
     const newSessionButtons = card.querySelectorAll('.project-new-session-btn');
-    const sessionToggleBtn = card.querySelector('.project-session-toggle-btn');
     const deleteButtons = card.querySelectorAll('.session-delete-btn');
     const sessionButtons = card.querySelectorAll('.session-item');
 
@@ -162,21 +175,11 @@ function bindProjectCard(card, group) {
     }
 
     newSessionButtons.forEach(button => {
-        button.onclick = () => {
+        button.onclick = event => {
+            event?.stopPropagation?.();
             void handleNewSessionClick(workspaceId, true);
         };
     });
-
-    if (sessionToggleBtn) {
-        sessionToggleBtn.onclick = () => {
-            if (expandedProjectSessionIds.has(workspaceId)) {
-                expandedProjectSessionIds.delete(workspaceId);
-            } else {
-                expandedProjectSessionIds.add(workspaceId);
-            }
-            void loadProjects();
-        };
-    }
 
     sessionButtons.forEach(button => {
         const selectTarget = () => {
@@ -245,40 +248,36 @@ function renderProjectCard(group) {
     const workspaceId = workspace.workspace_id;
     const workspaceLabel = formatProjectLabel(workspace);
     const expanded = expandedProjectIds.has(workspaceId);
-    const showAllSessions = expandedProjectSessionIds.has(workspaceId);
-    const hiddenSessionCount = Math.max(0, sessions.length - DEFAULT_VISIBLE_SESSION_COUNT);
-    const visibleSessions = showAllSessions
-        ? sessions
-        : sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
 
     const card = document.createElement('section');
     card.className = 'project-card';
     card.setAttribute('data-workspace-id', workspaceId);
     card.innerHTML = `
-        <div class="project-header">
+        <div class="project-row">
             <button class="project-toggle" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
-                <span class="project-toggle-icon" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
-                <span class="project-summary">
-                    <span class="project-title-row">
-                        <span class="project-title">${escapeHtml(workspaceLabel)}</span>
-                        <span class="project-count">${sessions.length}</span>
+                <span class="project-icon-stack" aria-hidden="true">
+                    <span class="project-folder-icon">
+                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                            <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                        </svg>
                     </span>
-                    <span class="project-path">${escapeHtml(workspace.root_path)}</span>
+                    <span class="project-toggle-icon" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
                 </span>
+                <span class="project-title">${escapeHtml(workspaceLabel)}</span>
             </button>
-            <button class="project-new-session-btn" type="button" title="Create session">
-                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                    <path d="M12 4V20M4 12H20" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                </svg>
-            </button>
+            <div class="project-actions">
+                <button class="project-new-session-btn project-action-btn" type="button" title="New session" aria-label="New session">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </div>
         </div>
         <div class="project-body${expanded ? '' : ' is-collapsed'}">
             <div class="project-session-list">
                 ${
-                    visibleSessions.length > 0
-                        ? visibleSessions.map(session => {
-                            const statusLabel = sessionStatusLabel(session);
-                            const approvalCount = Number(session.pending_tool_approval_count || 0);
+                    sessions.length > 0
+                        ? sessions.map(session => {
                             return `
                                 <div
                                     class="session-item${session.session_id === state.currentSessionId ? ' active' : ''}"
@@ -287,26 +286,14 @@ function renderProjectCard(group) {
                                     data-session-id="${escapeHtml(session.session_id)}"
                                     data-workspace-id="${escapeHtml(session.workspace_id)}"
                                 >
-                                    <span class="session-main-row">
-                                        <span class="session-id">${escapeHtml(session.session_id)}</span>
-                                        ${
-                                            statusLabel
-                                                ? `<span class="session-status-pill session-status-${sessionStatusTone(session)}">${escapeHtml(statusLabel)}</span>`
-                                                : ''
-                                        }
-                                    </span>
-                                    <span class="session-sub-row">
-                                        <span class="session-time">${escapeHtml(formatTimestamp(session.updated_at))}</span>
-                                        ${
-                                            approvalCount > 0
-                                                ? `<span class="session-side-note">${approvalCount} approval${approvalCount === 1 ? '' : 's'}</span>`
-                                                : ''
-                                        }
-                                    </span>
-                                    <span class="session-delete-btn" data-session-id="${escapeHtml(session.session_id)}" title="Delete session">
-                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
+                                    <span class="session-id">${escapeHtml(formatSessionLabel(session))}</span>
+                                    <span class="session-meta">
+                                        <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
+                                        <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="Delete session" aria-label="Delete session">
+                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        </button>
                                     </span>
                                 </div>
                             `;
@@ -314,20 +301,10 @@ function renderProjectCard(group) {
                         : `
                             <div class="project-empty-sessions">
                                 <p>No sessions yet</p>
-                                <button class="project-new-session-btn project-new-session-inline" type="button">New session</button>
                             </div>
                         `
                 }
             </div>
-            ${
-                hiddenSessionCount > 0
-                    ? `
-                        <button class="project-session-toggle-btn" type="button">
-                            ${showAllSessions ? 'Show less' : `Show ${hiddenSessionCount} more session${hiddenSessionCount === 1 ? '' : 's'}`}
-                        </button>
-                    `
-                    : ''
-            }
         </div>
     `;
 

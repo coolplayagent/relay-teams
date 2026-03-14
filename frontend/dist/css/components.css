@@ -4682,6 +4682,297 @@ body.light-theme .project-session-toggle-btn {
     color: var(--text-secondary);
 }
 
+.projects-list {
+    padding-top: 0.2rem;
+}
+
+.projects-list .project-card {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+}
+
+.projects-list .project-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 6px;
+}
+
+.projects-list .project-toggle {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.38rem;
+    min-height: 30px;
+    padding: 0.28rem 0.42rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.projects-list .project-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .project-icon-stack,
+.projects-list .project-folder-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.projects-list .project-icon-stack {
+    position: relative;
+    width: 0.95rem;
+    height: 0.95rem;
+    flex: 0 0 0.95rem;
+    color: var(--text-secondary);
+}
+
+.projects-list .project-folder-icon,
+.projects-list .project-toggle-icon {
+    position: absolute;
+    inset: 0;
+    transition: opacity 0.12s ease;
+}
+
+.projects-list .project-folder-icon {
+    transform: translateY(0.5px);
+}
+
+.projects-list .project-toggle-icon {
+    color: var(--text-secondary);
+    font-size: 0.64rem;
+    text-align: center;
+    opacity: 0;
+}
+
+.projects-list .project-row:hover .project-toggle-icon,
+.projects-list .project-row:focus-within .project-toggle-icon {
+    opacity: 1;
+}
+
+.projects-list .project-row:hover .project-folder-icon,
+.projects-list .project-row:focus-within .project-folder-icon {
+    opacity: 0;
+}
+
+.projects-list .project-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    font-weight: 450;
+}
+
+.projects-list .project-actions {
+    display: flex;
+    gap: 0.1rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .project-row:hover .project-actions,
+.projects-list .project-row:focus-within .project-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.projects-list .project-action-btn {
+    width: 24px;
+    height: 24px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.projects-list .project-action-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.projects-list .project-body {
+    padding: 0;
+    border-top: none;
+}
+
+.projects-list .project-body.is-collapsed {
+    display: none;
+}
+
+.projects-list .project-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.04rem;
+    margin-left: 1.52rem;
+    padding: 0.02rem 0 0.2rem;
+}
+
+.projects-list .session-item {
+    width: 100%;
+    margin: 0;
+    min-height: 26px;
+    padding: 0.18rem 0.4rem 0.18rem 0.56rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+    flex-wrap: nowrap;
+    text-align: left;
+}
+
+.projects-list .session-item:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .session-item:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    outline-offset: 0;
+}
+
+.projects-list .session-item.active {
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    border: none;
+    box-shadow: inset 1.5px 0 0 var(--primary);
+}
+
+.projects-list .session-id {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.77rem;
+    font-weight: 400;
+    line-height: 1.25;
+    text-align: left;
+}
+
+.projects-list .session-meta {
+    position: relative;
+    flex: 0 0 2.4rem;
+    width: 2.4rem;
+    min-height: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+}
+
+.projects-list .session-time {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .session-delete-btn {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+}
+
+.projects-list .session-item:hover .session-time,
+.projects-list .session-item:focus-within .session-time {
+    opacity: 0;
+}
+
+.projects-list .session-item:hover .session-delete-btn,
+.projects-list .session-item:focus-within .session-delete-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.projects-list .session-delete-btn:hover {
+    background: var(--bg-hover);
+    color: var(--danger);
+}
+
+.projects-list .project-empty-sessions {
+    margin-left: 1.52rem;
+    padding: 0.06rem 0.4rem 0.26rem 0.56rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+body.light-theme .projects-list .project-card {
+    background: transparent;
+}
+
+body.light-theme .projects-list .project-action-btn:hover,
+body.light-theme .projects-list .project-toggle:hover,
+body.light-theme .projects-list .session-item:hover,
+body.light-theme .projects-list .session-delete-btn:hover {
+    background: var(--bg-hover);
+}
+
+body.light-theme .projects-list .session-item {
+    background: transparent;
+    border-color: transparent;
+}
+
+body.light-theme .projects-list .session-item.active {
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+body.light-theme .projects-list .project-row {
+    background: transparent;
+}
+
+body.light-theme .projects-list .project-body,
+body.light-theme .projects-list .project-session-list {
+    background: transparent;
+}
+
+.sidebar-create-project-btn {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.sidebar-create-project-btn .icon {
+    width: 1rem;
+    height: 1rem;
+}
+
+.sidebar-create-project-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
 body.light-theme .session-round-section.round-section-emphasis .round-detail-header {
     background: color-mix(in srgb, var(--primary) 6%, var(--bg-surface) 94%);
     border-color: color-mix(in srgb, var(--primary) 20%, var(--border-color) 80%);
