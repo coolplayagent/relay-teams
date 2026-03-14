@@ -253,6 +253,10 @@ class ServerContainer:
             workspace_manager=self.workspace_manager,
             workspace_service=self.workspace_service,
             role_memory_service=self.role_memory_service,
+            role_registry=self.role_registry,
+            skill_registry=self.skill_registry,
+            mcp_registry=self.mcp_registry,
+            get_runtime=lambda: self.runtime,
         )
         self.config_status_service: ConfigStatusService = ConfigStatusService(
             get_runtime=lambda: self.runtime,

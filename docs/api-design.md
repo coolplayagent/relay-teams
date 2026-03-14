@@ -50,7 +50,7 @@ Returns raw `model.json`.
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, and `is_default` to mark the runtime fallback profile.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `PUT /system/configs/model/profiles/{name}`
@@ -59,6 +59,7 @@ Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
+Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
 
 ### `DELETE /system/configs/model/profiles/{name}`
 

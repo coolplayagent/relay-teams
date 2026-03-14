@@ -33,6 +33,7 @@ document.getElementById("profile-api-key").value = "test-api-key";
 document.getElementById("profile-temperature").value = "0.3";
 document.getElementById("profile-top-p").value = "0.8";
 document.getElementById("profile-max-tokens").value = "512";
+document.getElementById("profile-context-window").value = "128000";
 
 await document.getElementById("save-profile-btn").onclick();
 
@@ -64,6 +65,7 @@ console.log(JSON.stringify({
     assert "ui-regression-profile" in rendered_html
     assert saved_profile_body["provider"] == "openai_compatible"
     assert saved_profile_body["is_default"] is True
+    assert saved_profile_body["context_window"] == 128000
 
 
 def test_draft_probe_updates_inline_status_and_payload(tmp_path: Path) -> None:
@@ -563,6 +565,7 @@ export async function fetchModelProfiles() {
             temperature: 0.3,
             top_p: 0.8,
             max_tokens: 512,
+            context_window: 128000,
             connect_timeout_seconds: 15,
         },
         "ui-regression-profile": {
@@ -575,6 +578,7 @@ export async function fetchModelProfiles() {
             temperature: 0.3,
             top_p: 0.8,
             max_tokens: 512,
+            context_window: 64000,
             connect_timeout_seconds: 15,
         },
     };
@@ -742,6 +746,7 @@ function createElements() {{
             ["profile-temperature", createElement("block")],
             ["profile-top-p", createElement("block")],
             ["profile-max-tokens", createElement("block")],
+            ["profile-context-window", createElement("block")],
             ["profile-connect-timeout", createElement("block")],
             ["profile-ssl-verify", createElement("block")],
         ]);

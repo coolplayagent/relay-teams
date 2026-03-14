@@ -259,11 +259,12 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
 
     if (opts.preserveScroll) {
         container.scrollTop = oldScroll;
+        syncActiveRoundFromScroll();
     } else {
         container.scrollTop = container.scrollHeight;
+        activateLatestRound(rounds);
     }
-
-    syncActiveRoundFromScroll();
+    schedulePostLayoutRoundSync(container);
 }
 
 function bindScrollSync() {
@@ -371,6 +372,35 @@ function hasPendingSelectionExpired() {
 function clearPendingRoundSelection() {
     roundsState.pendingScrollTargetRunId = null;
     roundsState.pendingScrollUnlockAt = 0;
+}
+
+function activateLatestRound(rounds) {
+    const latestRound = Array.isArray(rounds) && rounds.length > 0
+        ? rounds[rounds.length - 1]
+        : null;
+    if (!latestRound?.run_id) {
+        return;
+    }
+    roundsState.activeRunId = latestRound.run_id;
+    roundsState.activeVisibility = Number.POSITIVE_INFINITY;
+    roundsState.currentRound = latestRound;
+    const pendingApprovals = latestRound.pending_tool_approvals || [];
+    setRoundPendingApprovals(latestRound.run_id, pendingApprovals);
+    syncExportedState();
+    setActiveRoundNav(latestRound.run_id);
+}
+
+function schedulePostLayoutRoundSync(container) {
+    if (!container || typeof window.requestAnimationFrame !== 'function') {
+        syncActiveRoundFromScroll();
+        return;
+    }
+    window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+            if (!container.isConnected) return;
+            syncActiveRoundFromScroll();
+        });
+    });
 }
 
 function emphasizeRoundSection(section) {

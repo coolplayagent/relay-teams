@@ -3,6 +3,7 @@
  * Creates a run via HTTP, then subscribes to run events over SSE.
  */
 import { sendUserPrompt, stopRun } from './api.js';
+import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { state } from './state.js';
 import { els } from '../utils/dom.js';
 import { markBackendOnline, refreshBackendStatus } from '../utils/backendStatus.js';
@@ -107,6 +108,7 @@ export function endStream() {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
+    refreshVisibleContextIndicators({ immediate: true });
 }
 
 export function resumeRunStream(runId, sessionId = state.currentSessionId, onCompleted = null, options = {}) {

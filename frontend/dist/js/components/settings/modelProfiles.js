@@ -154,6 +154,7 @@ function handleAddProfile() {
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
     document.getElementById('profile-max-tokens').value = '100000';
+    document.getElementById('profile-context-window').value = '';
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
 
@@ -188,6 +189,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
     document.getElementById('profile-max-tokens').value = profile.max_tokens || 100000;
+    document.getElementById('profile-context-window').value = profile.context_window || '';
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
 
@@ -219,6 +221,10 @@ async function handleSaveProfile() {
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 100000;
+    const contextWindowValue = String(
+        document.getElementById('profile-context-window').value || '',
+    ).trim();
+    const contextWindow = contextWindowValue ? parseInt(contextWindowValue) || null : null;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
@@ -250,6 +256,7 @@ async function handleSaveProfile() {
         temperature: temperature,
         top_p: topP,
         max_tokens: maxTokens,
+        context_window: contextWindow,
         connect_timeout_seconds: connectTimeoutSeconds,
     };
     if (sslVerify !== null) {

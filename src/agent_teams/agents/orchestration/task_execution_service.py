@@ -12,6 +12,7 @@ from agent_teams.agents.enums import InstanceStatus
 from agent_teams.logger import get_logger, log_event
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
+from agent_teams.roles.memory_injection import build_role_with_memory
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
@@ -383,21 +384,12 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         workspace_id: str,
     ) -> RoleDefinition:
-        if (
-            self.role_registry.is_coordinator_role(role_id)
-            or self.role_memory_service is None
-        ):
-            return role
-        memory_text = self.role_memory_service.build_injected_memory(
+        return build_role_with_memory(
+            role_registry=self.role_registry,
+            role_memory_service=self.role_memory_service,
+            role=role,
             role_id=role_id,
             workspace_id=workspace_id,
-        )
-        if not memory_text:
-            return role
-        return role.model_copy(
-            update={
-                "system_prompt": f"{role.system_prompt}\n\n## Role Memory\n{memory_text}",
-            }
         )
 
     def _record_memory_if_needed(

@@ -1026,6 +1026,47 @@
     color: var(--text-secondary);
 }
 
+.context-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 4.9rem;
+    height: 1.7rem;
+    padding: 0 0.55rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.context-indicator[data-state="ready"] {
+    color: var(--text-primary);
+}
+
+.context-indicator[data-state="estimated"] {
+    border-color: color-mix(in srgb, var(--warning) 36%, var(--border-color) 64%);
+    color: color-mix(in srgb, var(--warning) 78%, var(--text-primary) 22%);
+}
+
+.context-indicator[data-state="loading"] {
+    color: var(--text-muted);
+}
+
+.context-indicator[data-state="error"] {
+    border-color: color-mix(in srgb, var(--danger) 38%, var(--border-color) 62%);
+    color: color-mix(in srgb, var(--danger) 78%, var(--text-primary) 22%);
+}
+
+#main-context-indicator {
+    position: absolute;
+    right: 3.3rem;
+    bottom: 0.92rem;
+}
+
 #send-btn {
     position: absolute;
     right: 0.75rem;

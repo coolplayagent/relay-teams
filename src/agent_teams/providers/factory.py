@@ -63,7 +63,7 @@ def create_provider_factory(
     token_usage_repo: TokenUsageRepository | None = None,
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
-        config_to_use = _resolve_model_profile_config(
+        config_to_use = resolve_model_profile_config(
             runtime=runtime,
             profile_name=role.model_profile,
         )
@@ -106,7 +106,7 @@ def create_provider_factory(
     return provider_factory
 
 
-def _resolve_model_profile_config(
+def resolve_model_profile_config(
     *,
     runtime: RuntimeConfig,
     profile_name: str,

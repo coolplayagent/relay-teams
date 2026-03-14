@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Callable
 from typing import cast
 
 from agent_teams.agents.models import AgentRuntimeRecord
+from agent_teams.mcp.registry import McpRegistry
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
+from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 from agent_teams.sessions.rounds_projection import (
     approvals_to_projection,
     build_session_rounds,
@@ -16,6 +21,7 @@ from agent_teams.sessions.rounds_projection import (
     paginate_rounds,
 )
 from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
@@ -61,6 +67,10 @@ class SessionService:
         workspace_manager: WorkspaceManager | None = None,
         workspace_service: WorkspaceService | None = None,
         role_memory_service: RoleMemoryService | None = None,
+        role_registry: RoleRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
+        mcp_registry: McpRegistry | None = None,
+        get_runtime: Callable[[], RuntimeConfig] | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._task_repo = task_repo
@@ -76,6 +86,10 @@ class SessionService:
         self._workspace_manager = workspace_manager
         self._workspace_service = workspace_service
         self._role_memory_service = role_memory_service
+        self._role_registry = role_registry
+        self._skill_registry = skill_registry
+        self._mcp_registry = mcp_registry
+        self._get_runtime = get_runtime
 
     def create_session(
         self,
@@ -404,3 +418,19 @@ class SessionService:
         if runtime.status == RunRuntimeStatus.FAILED:
             return "failed"
         return runtime.phase.value
+
+    def _shared_state_snapshot(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        if self._shared_store is None:
+            return ()
+        scopes = (
+            ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id),
+            ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
+            ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
+        )
+        return self._shared_store.snapshot_many(scopes)

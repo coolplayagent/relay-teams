@@ -60,6 +60,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     request_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
     ).read_text(encoding="utf-8")
+    context_indicator_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "contextIndicators.js"
+    ).read_text(encoding="utf-8")
     backend_status_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
     ).read_text(encoding="utf-8")
@@ -83,6 +86,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert '<div class="workspace-title">agent-teams</div>' in index_html
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
+    assert 'id="main-context-indicator"' in index_html
+    assert "Latest provider context usage" in index_html
+    assert "-- / --" in index_html
     assert "Checking backend..." in index_html
     assert "No session selected" not in timeline_script
     assert "Start a session from the left sidebar" not in timeline_script
@@ -91,6 +97,8 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "Intent:" not in timeline_script
     assert "round-detail-token-host" in timeline_script
     assert "round-detail-meta" in timeline_script
+    assert "activateLatestRound" in timeline_script
+    assert "schedulePostLayoutRoundSync" in timeline_script
     assert "pendingScrollTargetRunId" in timeline_script
     assert "syncPendingRoundSelection" in timeline_script
     assert "clearPendingRoundSelection" in timeline_script
@@ -109,6 +117,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "is-resizing-rails" in navbar_script
     assert "marked.setOptions" not in state_script
     assert "fetch('/api/system/health'" in backend_status_script
+    assert "fetchRunTokenUsage" in context_indicator_script
+    assert "fetchSessionContextPreview" not in context_indicator_script
+    assert "main-context-indicator" in context_indicator_script
+    assert "panel-context-indicator" in context_indicator_script
     assert "markBackendOnline" in request_script
     assert "markBackendOffline" in request_script
     assert ".status-indicator > span:last-child" in components_css

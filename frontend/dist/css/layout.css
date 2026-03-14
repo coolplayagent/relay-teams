@@ -351,6 +351,11 @@
     color: var(--text-secondary);
 }
 
+.panel-context-indicator {
+    flex-shrink: 0;
+    align-self: center;
+}
+
 .panel-send-btn {
     background: var(--primary);
     color: white;

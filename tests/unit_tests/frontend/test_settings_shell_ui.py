@@ -250,6 +250,7 @@ console.log(JSON.stringify({
 
     modal_html = cast(str, payload["modalHtml"])
     assert "Max Output Tokens" in modal_html
+    assert "Context Window" in modal_html
     assert 'id="profile-name"' in modal_html
     assert 'id="profile-provider"' in modal_html
     assert 'id="profile-is-default"' in modal_html
@@ -273,6 +274,9 @@ console.log(JSON.stringify({
         'label for="profile-model"'
     )
     assert modal_html.index('id="profile-max-tokens"') < modal_html.index(
+        'id="profile-context-window"'
+    )
+    assert modal_html.index('id="profile-context-window"') < modal_html.index(
         'id="profile-is-default"'
     )
     assert "Model Selection" not in modal_html

@@ -47,6 +47,7 @@ class _FakeSystemService:
                 "api_key": "secret",
                 "has_api_key": True,
                 "is_default": True,
+                "context_window": 128000,
             }
         }
 
@@ -234,6 +235,7 @@ def test_save_model_profile_includes_connect_timeout_seconds() -> None:
             "temperature": 0.2,
             "top_p": 1.0,
             "max_tokens": 2048,
+            "context_window": 128000,
             "connect_timeout_seconds": 25.0,
         },
     )
@@ -243,6 +245,7 @@ def test_save_model_profile_includes_connect_timeout_seconds() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, source_name = service.saved_model_profile
     assert saved_profile["connect_timeout_seconds"] == 25.0
+    assert saved_profile["context_window"] == 128000
     assert source_name is None
 
 
@@ -290,6 +293,7 @@ def test_get_model_profiles_returns_api_key() -> None:
     assert payload["default"]["api_key"] == "secret"
     assert payload["default"]["has_api_key"] is True
     assert payload["default"]["is_default"] is True
+    assert payload["default"]["context_window"] == 128000
 
 
 def test_get_provider_models_with_filter() -> None:

@@ -4,14 +4,19 @@
  */
 import { requestJson } from './request.js';
 
-export async function fetchRunTokenUsage(sessionId, runId) {
+export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
     try {
         return await requestJson(
             `/api/sessions/${sessionId}/runs/${runId}/token-usage`,
-            undefined,
+            {
+                signal: options.signal,
+            },
             'Failed to fetch run token usage',
         );
-    } catch {
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw error;
+        }
         return null;
     }
 }

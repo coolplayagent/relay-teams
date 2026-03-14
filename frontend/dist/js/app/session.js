@@ -3,6 +3,7 @@
  * Session selection state and UI synchronization.
  */
 import { clearAllPanels } from '../components/agentPanel.js';
+import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import {
@@ -61,8 +62,10 @@ export async function selectSession(sessionId) {
     state.agentViews = { main: els.chatMessages };
     state.activeView = 'main';
     clearAllPanels();
+    clearContextIndicators();
     clearAllStreamState();
 
     await hydrateSessionView(sessionId, { includeRounds: true, quiet: true });
+    scheduleCoordinatorContextPreview({ immediate: true });
     sysLog(`${isSameSession ? 'Reloaded' : 'Switched to'} session: ${sessionId}`);
 }

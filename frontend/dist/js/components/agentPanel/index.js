@@ -6,6 +6,7 @@ import { resolveGate } from '../../core/api.js';
 import { state } from '../../core/state.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import { closeDrawerUi, getDrawer, openDrawerUi } from './dom.js';
+import { schedulePanelContextPreview } from '../contextIndicators.js';
 import { loadAgentHistory } from './history.js';
 import { createPanel } from './panelFactory.js';
 import {
@@ -69,6 +70,7 @@ export function openAgentPanel(
 
     panel.panelEl.style.display = 'flex';
     setActiveInstanceId(instanceId);
+    schedulePanelContextPreview(instanceId, { immediate: true });
     state.selectedRoleId = roleId || state.selectedRoleId;
     const roleSelect = document.getElementById('subagent-role-select');
     if (roleSelect && roleId) {

@@ -40,6 +40,7 @@ class ModelConfigManager:
                 "temperature": profile.get("temperature", 0.7),
                 "top_p": profile.get("top_p", 1.0),
                 "max_tokens": profile.get("max_tokens", 100000),
+                "context_window": profile.get("context_window"),
                 "is_default": name == default_profile_name,
                 "connect_timeout_seconds": profile.get(
                     "connect_timeout_seconds",

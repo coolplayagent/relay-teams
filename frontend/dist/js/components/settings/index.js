@@ -173,6 +173,10 @@ function createModal() {
                                                     <input type="number" id="profile-max-tokens" value="100000" min="1" autocomplete="off">
                                                 </div>
                                                 <div class="form-group">
+                                                    <label for="profile-context-window">Context Window</label>
+                                                    <input type="number" id="profile-context-window" value="" min="1" autocomplete="off" placeholder="Optional">
+                                                </div>
+                                                <div class="form-group">
                                                     <label for="profile-connect-timeout">Connect Timeout (s)</label>
                                                     <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300" autocomplete="off">
                                                 </div>

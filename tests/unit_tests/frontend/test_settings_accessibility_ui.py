@@ -18,6 +18,7 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     assert 'for="profile-temperature"' in settings_source
     assert 'for="profile-top-p"' in settings_source
     assert 'for="profile-max-tokens"' in settings_source
+    assert 'for="profile-context-window"' in settings_source
     assert 'for="profile-connect-timeout"' in settings_source
     assert 'for="proxy-http-proxy"' in settings_source
     assert 'for="proxy-https-proxy"' in settings_source

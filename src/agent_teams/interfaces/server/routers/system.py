@@ -84,6 +84,7 @@ class ModelProfileRequest(BaseModel):
     temperature: float = 0.7
     top_p: float = 1.0
     max_tokens: int = 100000
+    context_window: int | None = None
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
 
@@ -101,6 +102,7 @@ def save_model_profile(
             "temperature": req.temperature,
             "top_p": req.top_p,
             "max_tokens": req.max_tokens,
+            "context_window": req.context_window,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
         if req.is_default is not None:

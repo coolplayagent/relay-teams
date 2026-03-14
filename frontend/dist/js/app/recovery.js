@@ -3,6 +3,7 @@
  * Session recovery snapshot loading, banner rendering, and explicit resume actions.
  */
 import { focusSubagent, refreshSubagentRail } from '../components/subagentRail.js';
+import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import {
     loadSessionRounds,
     overlayRoundRecoveryState,
@@ -140,6 +141,7 @@ export function applyRecoverySnapshot(snapshot) {
         syncRecoveryRoundOverlay();
         renderRecoveryBanner();
         syncSessionContinuity();
+        refreshVisibleContextIndicators({ immediate: true });
         return previous || normalized;
     }
 
@@ -155,6 +157,7 @@ export function applyRecoverySnapshot(snapshot) {
     syncRecoveryRoundOverlay();
     renderRecoveryBanner();
     syncSessionContinuity();
+    refreshVisibleContextIndicators({ immediate: true });
     return normalized;
 }
 
@@ -170,6 +173,7 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
         if (state.currentSessionId !== safeSessionId) return null;
         const normalized = applyRecoverySnapshot(snapshot);
         syncSessionContinuity();
+        refreshVisibleContextIndicators({ immediate: true });
         return normalized;
     } catch (e) {
         if (!options.quiet) {

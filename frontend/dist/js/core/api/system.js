@@ -48,8 +48,14 @@ export async function fetchModelConfig() {
     return requestJson('/api/system/configs/model', undefined, 'Failed to fetch model config');
 }
 
-export async function fetchModelProfiles() {
-    return requestJson('/api/system/configs/model/profiles', undefined, 'Failed to fetch model profiles');
+export async function fetchModelProfiles(options = {}) {
+    return requestJson(
+        '/api/system/configs/model/profiles',
+        {
+            signal: options.signal,
+        },
+        'Failed to fetch model profiles',
+    );
 }
 
 export async function probeModelConnection(payload) {

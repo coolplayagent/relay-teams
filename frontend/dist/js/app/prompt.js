@@ -3,6 +3,7 @@
  * Prompt send flow: live round bootstrap and SSE stream start.
  */
 import { appendRoundUserMessage, createLiveRound } from '../components/rounds.js';
+import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import {
     hydrateSessionView,
@@ -62,6 +63,7 @@ export async function handleSend() {
         els.stopBtn.style.display = 'inline-flex';
         els.stopBtn.disabled = false;
     }
+    refreshVisibleContextIndicators({ immediate: true });
     clearAllStreamState();
 
     sysLog('Sending prompt');

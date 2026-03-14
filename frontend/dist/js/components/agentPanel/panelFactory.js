@@ -4,6 +4,7 @@
  */
 import { injectSubagentMessage, stopRun } from '../../core/api.js';
 import { refreshSessionRecovery, resumeRecoverableRun } from '../../app/recovery.js';
+import { bindPanelContextIndicator, schedulePanelContextPreview } from '../contextIndicators.js';
 import { state } from '../../core/state.js';
 import { sysLog } from '../../utils/logger.js';
 import { getDrawer } from './dom.js';
@@ -37,6 +38,7 @@ export function createPanel(instanceId, roleId, onClose) {
         <div class="agent-panel-input">
             <div class="panel-input-wrapper">
                 <textarea class="panel-inject-input" placeholder="Inject message to this agent..." rows="1"></textarea>
+                <div class="context-indicator panel-context-indicator" data-instance-id="${instanceId}" data-state="idle" title="Latest provider context usage">-- / --</div>
                 <button class="panel-send-btn" title="Send">
                     <svg viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
                 </button>
@@ -60,6 +62,7 @@ export function createPanel(instanceId, roleId, onClose) {
 
     const textarea = panelEl.querySelector('.panel-inject-input');
     const sendBtn = panelEl.querySelector('.panel-send-btn');
+    bindPanelContextIndicator(panelEl, instanceId);
     async function sendInject() {
         const text = textarea.value.trim();
         if (!text || !state.activeRunId) return;
@@ -83,6 +86,7 @@ export function createPanel(instanceId, roleId, onClose) {
             } else if (state.currentSessionId) {
                 await refreshSessionRecovery(state.currentSessionId, { quiet: true });
             }
+            schedulePanelContextPreview(instanceId, { immediate: true });
         } catch (e) {
             sysLog(`Failed to message subagent: ${e.message}`, 'log-error');
         }

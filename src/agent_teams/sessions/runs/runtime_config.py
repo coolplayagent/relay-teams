@@ -155,6 +155,7 @@ def load_llm_profile_state(
         top_p = cfg.get("top_p", 1.0)
         max_tokens = cfg.get("max_tokens", 1024)
         top_k = cfg.get("top_k")
+        context_window_raw = cfg.get("context_window")
         ssl_verify = _coerce_optional_ssl_verify(
             cfg.get("ssl_verify"),
             profile_name=name,
@@ -170,6 +171,11 @@ def load_llm_profile_state(
             base_url=base_url,
             api_key=api_key,
             ssl_verify=ssl_verify,
+            context_window=(
+                int(context_window_raw)
+                if isinstance(context_window_raw, int) and context_window_raw > 0
+                else None
+            ),
             connect_timeout_seconds=connect_timeout_seconds,
             sampling=SamplingConfig(
                 temperature=temperature,

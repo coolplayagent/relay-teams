@@ -31,6 +31,7 @@ class ModelEndpointConfig(BaseModel):
     base_url: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
     ssl_verify: bool | None = None
+    context_window: int | None = Field(default=None, ge=1)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,

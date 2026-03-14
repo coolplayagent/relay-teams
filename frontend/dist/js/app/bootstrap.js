@@ -3,6 +3,7 @@
  * UI bindings and application startup sequence.
  */
 import { initSettings, openSettings } from '../components/settings.js';
+import { initializeContextIndicators } from '../components/contextIndicators.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
 import {
     handleNewProjectClick,
@@ -95,6 +96,7 @@ export async function initApp(selectSession, handleSend) {
     initBackendStatusMonitor();
     setupNavbarBindings();
     initializeApprovalModeToggle();
+    initializeContextIndicators();
     await hydrateCoordinatorRoleId();
     initializeSubagentRail();
     setupEventBindings(handleSend);
