@@ -12,6 +12,7 @@ export {
     fetchSessions,
     fetchSessionTasks,
     startNewSession,
+    updateSession,
 } from './sessions.js';
 
 export {

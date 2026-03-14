@@ -4980,8 +4980,8 @@ body.light-theme .project-session-toggle-btn {
 
 .projects-list .session-meta {
     position: relative;
-    flex: 0 0 2.4rem;
-    width: 2.4rem;
+    flex: 0 0 3.1rem;
+    width: 3.1rem;
     min-height: 1rem;
     display: flex;
     align-items: center;
@@ -4996,23 +4996,41 @@ body.light-theme .project-session-toggle-btn {
     transition: opacity 0.14s ease;
 }
 
-.projects-list .session-delete-btn {
+.projects-list .session-actions {
     position: absolute;
     right: 0;
     top: 50%;
     transform: translateY(-50%);
+    min-width: calc(40px + 0.1rem);
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.1rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .session-rename-btn,
+.projects-list .session-delete-btn {
+    position: static;
+    right: auto;
+    top: auto;
+    transform: none;
+    flex: 0 0 20px;
     width: 20px;
     height: 20px;
     border: none;
     border-radius: 5px;
     background: transparent;
     color: var(--text-secondary);
+    padding: 0;
+    cursor: pointer;
+    opacity: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+    transition: color 0.14s ease, background-color 0.14s ease;
 }
 
 .projects-list .session-item:hover .session-time,
@@ -5020,14 +5038,22 @@ body.light-theme .project-session-toggle-btn {
     opacity: 0;
 }
 
-.projects-list .session-item:hover .session-delete-btn,
-.projects-list .session-item:focus-within .session-delete-btn {
+.projects-list .session-item:hover .session-actions,
+.projects-list .session-item:focus-within .session-actions {
     opacity: 1;
     pointer-events: auto;
 }
 
+.projects-list .session-rename-btn:hover,
 .projects-list .session-delete-btn:hover {
     background: var(--bg-hover);
+}
+
+.projects-list .session-rename-btn:hover {
+    color: var(--text-primary);
+}
+
+.projects-list .session-delete-btn:hover {
     color: var(--danger);
 }
 
@@ -5072,6 +5098,7 @@ body.light-theme .projects-list .project-menu {
 body.light-theme .projects-list .project-action-btn:hover,
 body.light-theme .projects-list .project-toggle:hover,
 body.light-theme .projects-list .session-item:hover,
+body.light-theme .projects-list .session-rename-btn:hover,
 body.light-theme .projects-list .session-delete-btn:hover {
     background: var(--bg-hover);
 }

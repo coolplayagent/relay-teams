@@ -72,7 +72,7 @@ class SessionRepository:
 
     def update_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             UPDATE sessions
             SET metadata=?, updated_at=?
@@ -81,6 +81,8 @@ class SessionRepository:
             (json.dumps(metadata), now, session_id),
         )
         self._conn.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def get(self, session_id: str) -> SessionRecord:
         row = self._conn.execute(

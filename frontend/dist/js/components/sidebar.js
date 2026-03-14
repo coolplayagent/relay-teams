@@ -12,6 +12,7 @@ import {
     fetchWorkspaces,
     pickWorkspace,
     startNewSession,
+    updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
 
@@ -276,6 +277,7 @@ function bindProjectCard(card, group) {
     const sessionVisibilityButtons = card.querySelectorAll('.project-session-visibility-btn');
     const optionsButtons = card.querySelectorAll('.project-options-btn');
     const removeButtons = card.querySelectorAll('.project-remove-btn');
+    const renameButtons = card.querySelectorAll('.session-rename-btn');
     const deleteButtons = card.querySelectorAll('.session-delete-btn');
     const sessionButtons = card.querySelectorAll('.session-item');
 
@@ -321,6 +323,57 @@ function bindProjectCard(card, group) {
         button.onclick = async event => {
             event?.stopPropagation?.();
             void handleRemoveWorkspaceClick(workspace);
+        };
+    });
+
+    renameButtons.forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            if (!sessionId) {
+                return;
+            }
+            const metadata = (() => {
+                try {
+                    return JSON.parse(String(button.getAttribute('data-session-metadata') || '{}'));
+                } catch (_) {
+                    return {};
+                }
+            })();
+            const currentTitle = String(metadata.title || '').trim();
+            const nextTitle = await showTextInputDialog({
+                title: 'Rename Session',
+                message: 'Enter a new session name. Leave empty to reset to the session id.',
+                tone: 'info',
+                confirmLabel: 'Save',
+                cancelLabel: 'Cancel',
+                placeholder: 'Session name',
+                value: currentTitle || sessionId,
+            });
+            if (nextTitle === null) {
+                return;
+            }
+
+            const normalizedTitle = String(nextTitle || '').trim();
+            if (normalizedTitle === sessionId && !currentTitle) {
+                return;
+            }
+            const nextMetadata = { ...metadata };
+            if (normalizedTitle) {
+                nextMetadata.title = normalizedTitle;
+            } else {
+                delete nextMetadata.title;
+            }
+            if (String(nextMetadata.title || '') === currentTitle) {
+                return;
+            }
+
+            try {
+                await updateSession(sessionId, nextMetadata);
+                await loadProjects();
+            } catch (error) {
+                sysLog(`Error renaming session: ${error.message}`, 'log-error');
+            }
         };
     });
 
@@ -447,6 +500,9 @@ function renderProjectCard(group) {
                 ${
                     visibleSessions.length > 0
                         ? visibleSessions.map(session => {
+                            const sessionMetadata = session?.metadata && typeof session.metadata === 'object'
+                                ? session.metadata
+                                : {};
                             return `
                                 <div
                                     class="session-item${session.session_id === state.currentSessionId ? ' active' : ''}"
@@ -458,11 +514,20 @@ function renderProjectCard(group) {
                                     <span class="session-id">${escapeHtml(formatSessionLabel(session))}</span>
                                     <span class="session-meta">
                                         <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
-                                        <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="Delete session" aria-label="Delete session">
-                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                                            </svg>
-                                        </button>
+                                        <span class="session-actions">
+                                            <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="Rename session" aria-label="Rename session">
+                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                    <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                                                    <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                                                    <path d="M12 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                                                </svg>
+                                            </button>
+                                            <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="Delete session" aria-label="Delete session">
+                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                    <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            </button>
+                                        </span>
                                     </span>
                                 </div>
                             `;

@@ -104,6 +104,43 @@ console.log(JSON.stringify({
     assert payload["sortedFirstProjectTitle"] == "Alpha Project"
 
 
+def test_projects_sidebar_renames_session_from_sidebar_action(tmp_path: Path) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const renameButton = firstProject.querySelectorAll(".session-rename-btn")[4];
+renameButton.onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+
+const refreshedFirstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const renamedLabel = refreshedFirstProject.querySelectorAll(".session-id")[4].textContent;
+
+console.log(JSON.stringify({
+    renameCalls: globalThis.__renameCalls,
+    renamedLabel,
+}));
+""".strip(),
+    )
+
+    assert payload["renameCalls"] == [
+        {
+            "sessionId": "session-7",
+            "metadata": {"title": "Renamed Session"},
+        }
+    ]
+    assert payload["renamedLabel"] == "Renamed Session"
+
+
 def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
@@ -117,19 +154,29 @@ def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
-        """
+        r"""
 export const els = {};
+
+function decodeHtmlAttribute(value) {
+    return String(value)
+        .replaceAll("&quot;", '"')
+        .replaceAll("&#39;", "'")
+        .replaceAll("&lt;", "<")
+        .replaceAll("&gt;", ">")
+        .replaceAll("&amp;", "&");
+}
 
 function parseElements(source, selector) {
     const results = [];
     const patterns = {
         ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
-        ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\\s\\S]*?)<\\/button>/g,
+        ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
+        ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
         ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
-        ".project-title": /class="project-title"[^>]*>([\\s\\S]*?)<\\/span>/g,
-        ".session-id": /class="session-id"[^>]*>([\\s\\S]*?)<\\/span>/g,
+        ".project-title": /class="project-title"[^>]*>([\s\S]*?)<\/span>/g,
+        ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>/g,
     };
     const pattern = patterns[selector];
     if (!pattern) {
@@ -143,6 +190,13 @@ function parseElements(source, selector) {
             results.push(createNode({ className: match[1] }));
         } else if (selector === ".project-session-visibility-btn") {
             results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
+        } else if (selector === ".session-rename-btn") {
+            results.push(createNode({
+                attributes: {
+                    "data-session-id": match[1],
+                    "data-session-metadata": decodeHtmlAttribute(match[2]),
+                },
+            }));
         } else if (selector === ".session-delete-btn") {
             results.push(createNode({ attributes: { "data-session-id": match[1] } }));
         } else if (selector === ".session-item") {
@@ -310,7 +364,10 @@ export async function showConfirmDialog() {
     return true;
 }
 
-export async function showTextInputDialog() {
+export async function showTextInputDialog(options = {}) {
+    if (options.title === "Rename Session") {
+        return "Renamed Session";
+    }
     return "/work/Gamma Project";
 }
 """.strip(),
@@ -377,6 +434,15 @@ export async function startNewSession(workspaceId) {
     return session;
 }
 
+export async function updateSession(sessionId, metadata) {
+    globalThis.__renameCalls.push({ sessionId, metadata });
+    const session = sessions.find(item => item.session_id === sessionId);
+    if (session) {
+        session.metadata = metadata;
+    }
+    return { status: "ok" };
+}
+
 export async function pickWorkspace(rootPath = null) {
     if (rootPath === null) {
         const error = new Error("Native directory picker is unavailable");
@@ -431,6 +497,7 @@ import {{ createDomEnvironment, flushTasks, installGlobals }} from "./mockDom.mj
 
 globalThis.__logs = [];
 globalThis.__createdSessionWorkspaceIds = [];
+globalThis.__renameCalls = [];
 globalThis.__selectedSessionIds = [];
 installGlobals(createDomEnvironment());
 

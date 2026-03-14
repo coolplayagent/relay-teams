@@ -11,6 +11,7 @@ export {
     fetchSessionAgents,
     fetchSessionTasks,
     fetchAgentMessages,
+    updateSession,
     sendUserPrompt,
     resolveGate,
     resolveToolApproval,

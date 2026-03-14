@@ -24,6 +24,18 @@ export async function fetchSessionHistory(sessionId) {
     return requestJson(`/api/sessions/${sessionId}`, undefined, 'Failed to fetch session history');
 }
 
+export async function updateSession(sessionId, metadata) {
+    return requestJson(
+        `/api/sessions/${sessionId}`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ metadata }),
+        },
+        'Failed to update session',
+    );
+}
+
 export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null } = {}) {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
