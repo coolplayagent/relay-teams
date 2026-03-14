@@ -108,3 +108,6 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert captured["ssl_verify"] is None
     assert fake_tool_registry.required == ("dispatch_task",)
     assert agent is captured["agent"]
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["instructions"] == "system"
+    assert "system_prompt" not in built_agent.kwargs

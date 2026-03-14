@@ -189,6 +189,7 @@ function applyRoleRecord(record) {
 
     setInputValue('role-id-input', record.role_id || '');
     setInputValue('role-name-input', record.name || '');
+    setInputValue('role-description-input', record.description || '');
     setInputValue('role-version-input', record.version || '');
     renderModelProfileSelect(record.model_profile || 'default');
     renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, 'No tools loaded.');
@@ -333,6 +334,7 @@ function handleAddRole() {
         source_role_id: null,
         role_id: '',
         name: '',
+        description: '',
         version: '1.0.0',
         tools: [],
         mcp_servers: [],
@@ -402,6 +404,10 @@ function buildDraftFromForm() {
     if (!systemPrompt) {
         throw new Error('System prompt is required.');
     }
+    const description = String(getInputValue('role-description-input')).trim();
+    if (!description) {
+        throw new Error('Description is required.');
+    }
 
     const selectedModelProfile = resolveSelectedModelProfile();
     const memoryProfile = {
@@ -414,6 +420,7 @@ function buildDraftFromForm() {
         source_role_id: selectedSourceRoleId || null,
         role_id: roleId,
         name: String(getInputValue('role-name-input')).trim(),
+        description,
         version: String(getInputValue('role-version-input')).trim(),
         model_profile: selectedModelProfile,
         tools: [...currentSelections.tools],

@@ -31,6 +31,7 @@ class _FakeRoleSettingsService:
             RoleDocumentSummary(
                 role_id="writer",
                 name="Writer",
+                description="Drafts user-facing content.",
                 version="1.0.0",
                 model_profile="default",
                 source=RoleConfigSource.APP,
@@ -44,8 +45,9 @@ class _FakeRoleSettingsService:
             source_role_id=None,
             role_id="writer",
             name="Writer",
+            description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("list_available_roles",),
+            tools=("dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -77,7 +79,7 @@ class _FakeRoleSettingsService:
 
 class _FakeToolRegistry:
     def list_names(self) -> tuple[str, ...]:
-        return ("dispatch_task", "list_available_roles")
+        return ("create_tasks", "dispatch_task")
 
 
 class _FakeMcpService:
@@ -104,6 +106,7 @@ def _create_test_client() -> TestClient:
         RoleDefinition(
             role_id="Coordinator",
             name="Coordinator",
+            description="Coordinates the run.",
             version="1.0.0",
             tools=("dispatch_task",),
             model_profile="default",
@@ -114,8 +117,9 @@ def _create_test_client() -> TestClient:
         RoleDefinition(
             role_id="writer",
             name="Writer",
+            description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("list_available_roles",),
+            tools=("dispatch_task",),
             model_profile="default",
             system_prompt="Write clearly.",
         )
@@ -141,6 +145,7 @@ def test_list_role_configs() -> None:
         {
             "role_id": "writer",
             "name": "Writer",
+            "description": "Drafts user-facing content.",
             "version": "1.0.0",
             "model_profile": "default",
             "source": "app",
@@ -167,8 +172,9 @@ def test_validate_role_config() -> None:
         json={
             "role_id": "writer",
             "name": "Writer",
+            "description": "Drafts user-facing content.",
             "version": "1.0.0",
-            "tools": ["list_available_roles"],
+            "tools": ["dispatch_task"],
             "mcp_servers": [],
             "skills": [],
             "model_profile": "default",
@@ -191,7 +197,7 @@ def test_get_role_config_options() -> None:
     assert response.status_code == 200
     assert response.json() == RoleConfigOptions(
         coordinator_role_id="Coordinator",
-        tools=("dispatch_task", "list_available_roles"),
+        tools=("create_tasks", "dispatch_task"),
         mcp_servers=("docs",),
         skills=("diff", "time"),
     ).model_dump(mode="json")

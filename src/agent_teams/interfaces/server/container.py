@@ -25,7 +25,7 @@ from agent_teams.mcp.registry import McpRegistry
 from agent_teams.mcp.service import McpService
 from agent_teams.notifications import NotificationConfigManager, NotificationService
 from agent_teams.notifications.settings_service import NotificationSettingsService
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.providers.contracts import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
@@ -207,7 +207,10 @@ class ServerContainer:
             shared_store=self.shared_store,
             event_bus=self.event_log,
             agent_repo=self.agent_repo,
-            prompt_builder=RuntimePromptBuilder(),
+            prompt_builder=RuntimePromptBuilder(
+                role_registry=self.role_registry,
+                mcp_registry=self.mcp_registry,
+            ),
             provider_factory=self._provider_factory,
             task_execution_service=self.task_execution_service,
             run_runtime_repo=self.run_runtime_repo,
@@ -334,6 +337,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             workspace_manager=self.workspace_manager,
             provider_factory=self._provider_factory,
+            mcp_registry=self.mcp_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
@@ -356,6 +360,10 @@ class ServerContainer:
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
         self.meta_agent.coordinator.role_registry = self.role_registry
+        self.meta_agent.coordinator.prompt_builder = RuntimePromptBuilder(
+            role_registry=self.role_registry,
+            mcp_registry=self.mcp_registry,
+        )
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service
 

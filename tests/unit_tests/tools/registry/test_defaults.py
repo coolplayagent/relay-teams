@@ -19,7 +19,6 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "dispatch_task",
         "glob",
         "grep",
-        "list_available_roles",
         "list_run_tasks",
         "read",
         "read_stage_input",

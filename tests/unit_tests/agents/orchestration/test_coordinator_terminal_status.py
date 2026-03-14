@@ -8,7 +8,8 @@ import pytest
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import create_subagent_instance
 from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
@@ -78,9 +79,9 @@ def _build_coordinator(
         RoleDefinition(
             role_id=coordinator_role_id,
             name="Coordinator Agent",
+            description="Coordinates delegated work.",
             version="1",
             tools=(
-                "list_available_roles",
                 "create_tasks",
                 "update_task",
                 "list_run_tasks",
@@ -93,6 +94,7 @@ def _build_coordinator(
         RoleDefinition(
             role_id="time",
             name="time",
+            description="Reports the current time.",
             version="1",
             system_prompt="Tell the current time.",
         )
@@ -115,7 +117,10 @@ def _build_coordinator(
         shared_store=SharedStateRepository(db_path),
         event_bus=event_log,
         agent_repo=agent_repo,
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
         provider_factory=lambda _: None,
         task_execution_service=task_execution_service,
         run_runtime_repo=run_runtime_repo,

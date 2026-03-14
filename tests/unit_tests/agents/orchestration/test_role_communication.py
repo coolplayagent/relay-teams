@@ -63,6 +63,7 @@ def test_bind_role_to_agent_instance_builds_role_binding() -> None:
     role = RoleDefinition(
         role_id="reviewer",
         name="reviewer",
+        description="Reviews completed changes.",
         version="1",
         tools=(),
         system_prompt="review",
@@ -94,6 +95,7 @@ def test_bind_role_to_agent_instance_rejects_role_mismatch() -> None:
     role = RoleDefinition(
         role_id="planner",
         name="planner",
+        description="Plans implementation work.",
         version="1",
         tools=(),
         system_prompt="plan",

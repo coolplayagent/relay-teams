@@ -15,7 +15,7 @@ from agent_teams.agents.orchestration.task_execution_service import (
 )
 from agent_teams.agents.orchestration.verification import verify_task
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.providers.contracts import LLMProvider
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.roles.models import RoleDefinition

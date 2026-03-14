@@ -57,6 +57,7 @@ def _build_role_registry() -> RoleRegistry:
         RoleDefinition(
             role_id="coordinator_agent",
             name="Coordinator",
+            description="Coordinates delegated work.",
             version="1.0.0",
             tools=(),
             system_prompt="Coordinate tasks.",
@@ -66,6 +67,7 @@ def _build_role_registry() -> RoleRegistry:
         RoleDefinition(
             role_id="spec_coder",
             name="Spec Coder",
+            description="Implements requested changes.",
             version="1.0.0",
             tools=(),
             system_prompt="Implement code.",
@@ -75,6 +77,7 @@ def _build_role_registry() -> RoleRegistry:
         RoleDefinition(
             role_id="reviewer",
             name="Reviewer",
+            description="Reviews completed changes.",
             version="1.0.0",
             tools=(),
             system_prompt="Review code.",

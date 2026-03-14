@@ -23,7 +23,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.mcp.registry import McpRegistry
-from agent_teams.agents.execution.provider_prompts import PromptSkillInstruction
+from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
 from agent_teams.providers.contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
@@ -489,6 +489,7 @@ def _build_provider(
         RoleDefinition(
             role_id="coordinator_agent",
             name="coordinator",
+            description="Coordinates delegated work.",
             version="1",
             tools=(),
             system_prompt="Coordinate work.",
@@ -498,6 +499,7 @@ def _build_provider(
         RoleDefinition(
             role_id="time",
             name="time",
+            description="Reports the current time.",
             version="1",
             tools=(),
             system_prompt="Tell time.",
@@ -722,7 +724,7 @@ async def test_generate_builds_augmented_system_prompt(
         (
             PromptSkillInstruction(
                 name="time",
-                instructions="Normalize all times to UTC.",
+                description="Normalize all times to UTC.",
             ),
         )
     )
@@ -734,12 +736,18 @@ async def test_generate_builds_augmented_system_prompt(
         skill_registry=fake_skill_registry,
     )
     captured_kwargs: dict[str, object] = {}
+    captured_events: list[dict[str, object]] = []
 
     def _fake_builder(**kwargs: object) -> _FakeAgent:
         captured_kwargs.update(kwargs)
         return fake_agent
 
+    def _fake_log_event(*args: object, **kwargs: object) -> None:
+        _ = args
+        captured_events.append(dict(kwargs))
+
     monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+    monkeypatch.setattr(llm_module, "log_event", _fake_log_event)
 
     request = LLMRequest(
         run_id="run-augment",
@@ -757,12 +765,155 @@ async def test_generate_builds_augmented_system_prompt(
 
     system_prompt_obj = captured_kwargs.get("system_prompt")
     assert isinstance(system_prompt_obj, str)
-    assert "## Tool Rules" in system_prompt_obj
-    assert "dispatch_task" in system_prompt_obj
-    assert "## Skill Instructions" in system_prompt_obj
-    assert "### Skill: time" in system_prompt_obj
-    assert "Normalize all times to UTC." in system_prompt_obj
+    assert system_prompt_obj.startswith("## Role\nBase system prompt.")
+    assert "## Available Skills" in system_prompt_obj
+    assert "- time: Normalize all times to UTC." in system_prompt_obj
     assert fake_skill_registry.requested == [("time",)]
+    prepared_events = [
+        event
+        for event in captured_events
+        if event.get("event") == "llm.system_prompt.prepared"
+    ]
+    assert len(prepared_events) == 1
+    assert "## Role\nBase system prompt." in str(prepared_events[0].get("message", ""))
+    assert prepared_events[0].get("payload") == {
+        "role_id": "coordinator_agent",
+        "instance_id": "inst-augment",
+        "task_id": "task-augment",
+        "length": len(system_prompt_obj),
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_persist_duplicate_leading_user_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "dedupe_prompt.db", fake_hub)
+    _seed_request(
+        message_repo,
+        session_id="session-dedupe",
+        instance_id="inst-dedupe",
+        task_id="task-dedupe",
+        trace_id="run-dedupe",
+        content="你好",
+        role_id="coordinator_agent",
+    )
+    duplicated_request = ModelRequest(parts=[UserPromptPart(content="你好")])
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="ok")]),
+                    messages=[
+                        duplicated_request,
+                        ModelResponse(parts=[TextPart(content="ok")]),
+                    ],
+                ),
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-dedupe",
+        trace_id="run-dedupe",
+        task_id="task-dedupe",
+        session_id="session-dedupe",
+        workspace_id="default",
+        instance_id="inst-dedupe",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt=None,
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "ok"
+    history = message_repo.get_history("inst-dedupe")
+    user_prompts = [
+        message
+        for message in history
+        if isinstance(message, ModelRequest)
+        and all(isinstance(part, UserPromptPart) for part in message.parts)
+    ]
+    assert len(user_prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_persist_duplicate_response_after_dropping_leading_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "dedupe_response.db", fake_hub)
+    _seed_request(
+        message_repo,
+        session_id="session-dedupe",
+        instance_id="inst-dedupe",
+        task_id="task-dedupe",
+        trace_id="run-dedupe",
+        content="浣犲ソ",
+        role_id="coordinator_agent",
+    )
+    duplicated_request = ModelRequest(parts=[UserPromptPart(content="浣犲ソ")])
+    final_response = ModelResponse(parts=[TextPart(content="ok")])
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=0,
+                        )
+                    )
+                ],
+                messages_by_step=[[duplicated_request, final_response]],
+                result=_ScriptedResult(
+                    response=final_response,
+                    messages=[duplicated_request, final_response],
+                ),
+            )
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-dedupe",
+        trace_id="run-dedupe",
+        task_id="task-dedupe",
+        session_id="session-dedupe",
+        workspace_id="default",
+        instance_id="inst-dedupe",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt=None,
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "ok"
+    history = message_repo.get_history("inst-dedupe")
+    responses = [message for message in history if isinstance(message, ModelResponse)]
+    assert len(responses) == 1
 
 
 @pytest.mark.asyncio

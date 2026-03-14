@@ -85,6 +85,7 @@ class _FakeDeps:
             RoleDefinition(
                 role_id="spec_coder",
                 name="Spec Coder",
+                description="Implements requested changes.",
                 version="1",
                 tools=(),
                 system_prompt="Implement tasks.",

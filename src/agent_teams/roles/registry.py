@@ -11,7 +11,6 @@ from agent_teams.roles.models import RoleDefinition
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
-        "list_available_roles",
         "create_tasks",
         "update_task",
         "list_run_tasks",
@@ -95,6 +94,7 @@ class RoleLoader:
     REQUIRED_FIELDS = (
         "role_id",
         "name",
+        "description",
         "version",
         "tools",
     )
@@ -184,6 +184,7 @@ class RoleLoader:
         return RoleDefinition(
             role_id=str(parsed["role_id"]),
             name=str(parsed["name"]),
+            description=str(parsed["description"]),
             version=str(parsed["version"]),
             tools=tuple(str(item) for item in parsed["tools"]),
             mcp_servers=tuple(str(item) for item in mcp_servers),

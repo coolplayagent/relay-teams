@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.providers.contracts import LLMProvider
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
@@ -33,6 +34,7 @@ def create_task_execution_service(
     run_runtime_repo: RunRuntimeRepository,
     workspace_manager: WorkspaceManager,
     provider_factory: Callable[[RoleDefinition], LLMProvider],
+    mcp_registry: McpRegistry,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
     role_memory_service: RoleMemoryService | None = None,
@@ -47,7 +49,10 @@ def create_task_execution_service(
         approval_ticket_repo=approval_ticket_repo,
         run_runtime_repo=run_runtime_repo,
         workspace_manager=workspace_manager,
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=mcp_registry,
+        ),
         provider_factory=provider_factory,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,

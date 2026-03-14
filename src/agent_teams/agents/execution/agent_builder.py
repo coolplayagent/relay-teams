@@ -59,7 +59,7 @@ def build_coordination_agent(
         model=model,
         deps_type=ToolDeps,
         output_type=str,
-        system_prompt=system_prompt,
+        instructions=system_prompt,
         model_settings=model_settings,
         toolsets=toolsets,
         tools=skill_tools,

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from agent_teams.agents.subagent import SubAgentRequest, SubAgentRunner
-from agent_teams.agents.execution.runtime_prompts import (
+from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,
 )
@@ -23,9 +23,11 @@ class _CapturingProvider:
 
 
 class _FixedPromptBuilder(RuntimePromptBuilder):
-    def build(self, data: PromptBuildInput) -> str:
+    async def build(self, data: PromptBuildInput) -> str:
+        task = data.task
+        assert task is not None
         return (
-            f"role={data.role.role_id};task={data.task.task_id};"
+            f"role={data.role.role_id};task={task.task_id};"
             f"shared={data.shared_state_snapshot[0][0]}"
         )
 
@@ -37,6 +39,7 @@ async def test_subagent_runner_builds_runtime_request() -> None:
         role=RoleDefinition(
             role_id="researcher",
             name="Researcher",
+            description="Researches implementation details.",
             version="1",
             system_prompt="You are a researcher.",
         ),

@@ -23,8 +23,9 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
         roles_dir / "writer.md",
         role_id="writer",
         name="Writer",
+        description="Drafts user-facing content.",
         version="1.0.0",
-        tools=("list_available_roles",),
+        tools=("dispatch_task",),
         system_prompt="Write clearly.",
     )
     skills_dir = tmp_path / "skills"
@@ -47,8 +48,9 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
             source_role_id="writer",
             role_id="writer_v2",
             name="Writer V2",
+            description="Drafts user-facing content with more detail.",
             version="2.0.0",
-            tools=("list_available_roles",),
+            tools=("dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -85,6 +87,7 @@ def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:
             RoleDocumentDraft(
                 role_id="broken",
                 name="Broken",
+                description="Broken role.",
                 version="1.0.0",
                 tools=("missing_tool",),
                 mcp_servers=(),
@@ -108,8 +111,9 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
         path,
         role_id="reviewer",
         name="Reviewer",
+        description="Reviews delivered work.",
         version="1.1.0",
-        tools=("list_available_roles",),
+        tools=("dispatch_task",),
         system_prompt="Review carefully.",
     )
     skills_dir = tmp_path / "skills"
@@ -155,8 +159,9 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
         draft=RoleDocumentDraft(
             role_id="new_role",
             name="New Role",
+            description="Starts from a blank role.",
             version="1.0.0",
-            tools=("list_available_roles",),
+            tools=("dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -176,6 +181,7 @@ def _write_role(
     *,
     role_id: str,
     name: str,
+    description: str,
     version: str,
     tools: tuple[str, ...],
     system_prompt: str,
@@ -184,6 +190,7 @@ def _write_role(
         "---\n"
         f"role_id: {role_id}\n"
         f"name: {name}\n"
+        f"description: {description}\n"
         "model_profile: default\n"
         f"version: {version}\n"
         "tools:\n"

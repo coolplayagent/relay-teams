@@ -23,6 +23,7 @@ def test_role_loader_rejects_depends_on_in_role_front_matter(tmp_path: Path) -> 
         "---\n"
         "role_id: bad_role\n"
         "name: Bad Role\n"
+        "description: Broken role\n"
         "version: 1.0.0\n"
         "tools: []\n"
         "depends_on: []\n"
@@ -41,9 +42,9 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
         RoleDefinition(
             role_id="Coordinator",
             name="Coordinator",
+            description="Coordinates delegated work.",
             version="1.0.0",
             tools=(
-                "list_available_roles",
                 "create_tasks",
                 "update_task",
                 "list_run_tasks",
@@ -56,6 +57,7 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
         RoleDefinition(
             role_id="Crafter",
             name="Crafter",
+            description="Implements requested changes.",
             version="1.0.0",
             tools=("read",),
             system_prompt="Implement tasks.",

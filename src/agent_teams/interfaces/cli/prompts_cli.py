@@ -153,12 +153,10 @@ def _select_prompt_sections(
         return {
             **base,
             "tools": payload.get("tools", []),
-            "tool_prompt": payload.get("tool_prompt", ""),
         }
     return {
         **base,
         "skills": payload.get("skills", []),
-        "skill_prompt": payload.get("skill_prompt", ""),
     }
 
 
@@ -171,8 +169,8 @@ def _render_prompt_text(payload: dict[str, object]) -> None:
         "runtime_system_prompt",
         "provider_system_prompt",
         "user_prompt",
-        "tool_prompt",
-        "skill_prompt",
+        "tools",
+        "skills",
     )
 
     rendered_prompt = False
@@ -180,12 +178,18 @@ def _render_prompt_text(payload: dict[str, object]) -> None:
         if key not in payload:
             continue
         value = payload[key]
-        if not isinstance(value, str):
+        if isinstance(value, str):
+            if rendered_prompt:
+                typer.echo("")
+            typer.echo(value)
+            rendered_prompt = True
             continue
-        if rendered_prompt:
-            typer.echo("")
-        typer.echo(value)
-        rendered_prompt = True
+        if isinstance(value, list):
+            if rendered_prompt:
+                typer.echo("")
+            for item in value:
+                typer.echo(str(item))
+            rendered_prompt = True
 
 
 def _require_object_response(

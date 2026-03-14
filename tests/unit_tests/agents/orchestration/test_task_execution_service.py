@@ -10,7 +10,8 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.agents.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition
@@ -70,6 +71,7 @@ def _build_service(
     role = RoleDefinition(
         role_id="time",
         name="time",
+        description="Reports the current time.",
         version="1",
         tools=(),
         system_prompt="You are the time role.",
@@ -94,7 +96,10 @@ def _build_service(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
         provider_factory=lambda _: provider,
     )
     return service, task_repo, agent_repo, message_repo
@@ -114,6 +119,7 @@ def _build_service_with_control(
     role = RoleDefinition(
         role_id="time",
         name="time",
+        description="Reports the current time.",
         version="1",
         tools=(),
         system_prompt="You are the time role.",
@@ -150,7 +156,10 @@ def _build_service_with_control(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
         provider_factory=lambda _: provider,
         run_control_manager=run_control_manager,
     )
@@ -409,9 +418,22 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         RoleDefinition(
             role_id="coordinator_agent",
             name="Coordinator Agent",
+            description="Coordinates delegated work.",
             version="1",
-            tools=(),
+            tools=("create_tasks", "update_task", "list_run_tasks", "dispatch_task"),
             system_prompt="Coordinate tasks.",
+        )
+    )
+    role_registry.register(
+        RoleDefinition(
+            role_id="writer_agent",
+            name="Writer Agent",
+            description="Writes implementation changes.",
+            version="1",
+            tools=("read", "write"),
+            mcp_servers=(),
+            skills=(),
+            system_prompt="Write tasks.",
         )
     )
     db_path = tmp_path / "task_execution_service_coordinator.db"
@@ -457,7 +479,10 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
         provider_factory=lambda _: provider,
     )
 
@@ -469,10 +494,10 @@ async def test_execute_coordinator_receives_task_runtime_contract(
 
     assert result == "ok"
     assert provider.system_prompts
-    assert "Use list_run_tasks and dispatch_task results" in provider.system_prompts[0]
-    assert (
-        "Create tasks only when delegation is necessary" in provider.system_prompts[0]
-    )
+    assert "Coordinate tasks." in provider.system_prompts[0]
+    assert "## Role Usage" in provider.system_prompts[0]
+    assert "## Available Roles" in provider.system_prompts[0]
+    assert "### Writer Agent" in provider.system_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -483,6 +508,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     role = RoleDefinition(
         role_id="time",
         name="time",
+        description="Reports the current time.",
         version="1",
         tools=(),
         system_prompt="You are the time role.",
@@ -515,7 +541,10 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
         workspace_manager=WorkspaceManager(
             project_root=project_root, shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
         provider_factory=lambda _: provider,
         role_memory_service=role_memory_service,
     )

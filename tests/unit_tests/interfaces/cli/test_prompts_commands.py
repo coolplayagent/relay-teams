@@ -8,7 +8,7 @@ from agent_teams.interfaces.cli import app as cli_app
 runner = CliRunner()
 
 
-def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
+def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -34,8 +34,6 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
             "runtime_system_prompt": "runtime",
             "provider_system_prompt": "provider",
             "user_prompt": "user",
-            "tool_prompt": "tool",
-            "skill_prompt": "skill",
         }
 
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
@@ -44,8 +42,8 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
     result = runner.invoke(
         cli_app.app,
         [
-            "prompts",
-            "get",
+            "roles",
+            "prompt",
             "--role-id",
             "coordinator_agent",
             "--objective",
@@ -78,7 +76,7 @@ def test_prompts_get_builds_preview_payload(monkeypatch) -> None:
     assert '"provider_system_prompt": "provider"' in result.output
 
 
-def test_prompts_get_without_role_id_shows_available_roles(monkeypatch) -> None:
+def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None:
     captured: list[str] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -101,16 +99,16 @@ def test_prompts_get_without_role_id_shows_available_roles(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
 
-    result = runner.invoke(cli_app.app, ["prompts", "get"])
+    result = runner.invoke(cli_app.app, ["roles", "prompt"])
 
     assert result.exit_code == 2
     assert captured == ["/api/roles"]
     assert "Missing required option: --role-id" in result.output
     assert "coordinator_agent" in result.output
-    assert "Usage: agent-teams prompts get --role-id <role_id>" in result.output
+    assert "Usage: agent-teams roles prompt --role-id <role_id>" in result.output
 
 
-def test_prompts_get_default_output_prints_raw_prompt_sections(monkeypatch) -> None:
+def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:
     def fake_autostart(base_url: str, autostart: bool) -> None:
         _ = (base_url, autostart)
 
@@ -127,11 +125,9 @@ def test_prompts_get_default_output_prints_raw_prompt_sections(monkeypatch) -> N
             "objective": "Draft release note",
             "tools": ["dispatch_task"],
             "skills": ["time"],
-            "runtime_system_prompt": "## Role\nruntime line",
-            "provider_system_prompt": "## Tool Rules\nprovider line",
+            "runtime_system_prompt": "runtime line",
+            "provider_system_prompt": "provider line",
             "user_prompt": "user line",
-            "tool_prompt": "## Tool Rules\ntool line",
-            "skill_prompt": "## Skill Instructions\nskill line",
         }
 
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
@@ -140,17 +136,17 @@ def test_prompts_get_default_output_prints_raw_prompt_sections(monkeypatch) -> N
     result = runner.invoke(
         cli_app.app,
         [
-            "prompts",
-            "get",
+            "roles",
+            "prompt",
             "--role-id",
             "coordinator_agent",
         ],
     )
 
     assert result.exit_code == 0
-    assert "## Tool Rules\nprovider line" in result.output
+    assert "provider line" in result.output
+    assert result.output.count("provider line") == 1
     assert "runtime line" not in result.output
-    assert "tool line" not in result.output
-    assert "skill line" not in result.output
+    assert "user line" in result.output
     assert "role_id:" not in result.output
     assert "+-" not in result.output

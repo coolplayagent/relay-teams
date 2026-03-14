@@ -11,6 +11,7 @@ from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.mcp.service import McpService
 from agent_teams.notifications.settings_service import NotificationSettingsService
 from agent_teams.providers.model_config_service import ModelConfigService
@@ -68,6 +69,10 @@ def get_skills_config_reload_service(request: Request) -> SkillsConfigReloadServ
 
 def get_mcp_service(request: Request) -> McpService:
     return get_container(request).mcp_service
+
+
+def get_mcp_registry(request: Request) -> McpRegistry:
+    return get_container(request).mcp_registry
 
 
 def get_proxy_config_service(request: Request) -> ProxyConfigService:

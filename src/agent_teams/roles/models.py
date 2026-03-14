@@ -18,6 +18,7 @@ class RoleDefinition(BaseModel):
 
     role_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     version: str = Field(min_length=1)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
@@ -32,6 +33,7 @@ class RoleDocumentSummary(BaseModel):
 
     role_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     version: str = Field(min_length=1)
     model_profile: str = Field(min_length=1)
     source: RoleConfigSource = RoleConfigSource.APP
@@ -43,6 +45,7 @@ class RoleDocumentDraft(BaseModel):
     source_role_id: str | None = None
     role_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     version: str = Field(min_length=1)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()

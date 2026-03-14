@@ -95,11 +95,6 @@ class SkillRegistry(BaseModel):
         _ = skill_names
         tools: list[Tool[ToolDeps]] = [
             Tool(
-                self.list_skills,
-                name="list_skills",
-                description="List all discovered skills.",
-            ),
-            Tool(
                 self.load_skill,
                 name="load_skill",
                 description="Load a specific skill by name.",
@@ -134,7 +129,7 @@ class SkillRegistry(BaseModel):
 
     def get_instructions(self, skill_names: tuple[str, ...]) -> str:
         entries = self.get_instruction_entries(skill_names)
-        return "\n\n".join(entry.instructions for entry in entries)
+        return "\n\n".join(entry.description for entry in entries)
 
     def get_instruction_entries(
         self, skill_names: tuple[str, ...]
@@ -152,12 +147,12 @@ class SkillRegistry(BaseModel):
                 skill = skill_map.get(name)
                 if skill is None:
                     continue
-                instructions = skill.metadata.instructions.strip()
-                if instructions:
+                description = skill.metadata.description.strip()
+                if description:
                     entries.append(
                         SkillInstructionEntry(
                             name=skill.metadata.name,
-                            instructions=instructions,
+                            description=description,
                         )
                     )
             return tuple(entries)

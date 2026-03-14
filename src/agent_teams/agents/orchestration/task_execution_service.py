@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.logger import get_logger, log_event
-from agent_teams.agents.execution.runtime_prompts import RuntimePromptBuilder
+from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.models import RoleDefinition

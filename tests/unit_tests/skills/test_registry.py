@@ -26,7 +26,6 @@ def test_get_toolset_tools_builds_skill_tools_without_annotation_errors() -> Non
 
     names = {tool.name for tool in tools}
     assert names == {
-        "list_skills",
         "load_skill",
         "read_skill_resource",
         "run_skill_script",
@@ -50,7 +49,7 @@ def test_get_instruction_entries_returns_structured_data(tmp_path: Path) -> None
 
     assert len(entries) == 1
     assert entries[0].name == "time"
-    assert entries[0].instructions == "Use UTC for all timestamps."
+    assert entries[0].description == "timezone helper"
 
 
 def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
@@ -89,7 +88,7 @@ def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
     assert skill is not None
     assert skill.scope == SkillScope.APP
     assert skill.metadata.description == "app timezone helper"
-    assert entries[0].instructions == "Use UTC for all app timestamps."
+    assert entries[0].description == "app timezone helper"
 
 
 def test_registry_from_skill_dirs_loads_user_skill_when_project_skill_missing(
@@ -315,6 +314,7 @@ class _FakeDeps:
             RoleDefinition(
                 role_id="spec_coder",
                 name="Spec Coder",
+                description="Implements requested changes.",
                 version="1",
                 tools=(),
                 system_prompt="Implement tasks.",

@@ -30,6 +30,7 @@ console.log(JSON.stringify({
     initialListHtml,
     selectedRoleId: document.getElementById("role-id-input").value,
     selectedRoleName: document.getElementById("role-name-input").value,
+    selectedRoleDescription: document.getElementById("role-description-input").value,
     memoryEnabled: document.getElementById("role-memory-enabled-input").value,
     dailyMemoryEnabled: document.getElementById("role-memory-daily-enabled-input").value,
     listDisplay: document.getElementById("roles-list").style.display,
@@ -49,6 +50,7 @@ console.log(JSON.stringify({
     assert "Reviewer" in cast(str, payload["initialListHtml"])
     assert payload["selectedRoleId"] == "reviewer"
     assert payload["selectedRoleName"] == "Reviewer"
+    assert payload["selectedRoleDescription"] == "Reviews delivered work."
     assert payload["memoryEnabled"] == "true"
     assert payload["dailyMemoryEnabled"] == "false"
     assert payload["listDisplay"] == "none"
@@ -86,6 +88,7 @@ toolOptions[1].checked = true;
 toolOptions[1].onchange();
 
 document.getElementById("role-model-profile-input").value = "editor";
+document.getElementById("role-description-input").value = "Drafts user-facing content with structure.";
 document.getElementById("role-memory-enabled-input").value = "false";
 document.getElementById("role-memory-daily-enabled-input").value = "true";
 document.getElementById("role-system-prompt-input").value = "Write the first draft with structure.";
@@ -96,6 +99,7 @@ await document.getElementById("save-role-btn").onclick();
 await document.getElementById("add-role-btn").onclick();
 document.getElementById("role-id-input").value = "new_role";
 document.getElementById("role-name-input").value = "New Role";
+document.getElementById("role-description-input").value = "Starts from a blank role.";
 document.getElementById("role-version-input").value = "1.0.0";
 document.getElementById("role-model-profile-input").value = "default";
 document.getElementById("role-system-prompt-input").value = "Start from a blank role.";
@@ -126,6 +130,9 @@ console.log(JSON.stringify({
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert validate_payload["source_role_id"] == "writer"
     assert validate_payload["role_id"] == "writer"
+    assert (
+        validate_payload["description"] == "Drafts user-facing content with structure."
+    )
     assert validate_payload["tools"] == ["read_file", "write_file"]
     assert validate_payload["memory_profile"] == {
         "enabled": False,
@@ -137,6 +144,7 @@ console.log(JSON.stringify({
     assert payload["secondSavedRoleId"] == "new_role"
     assert second_saved_payload["source_role_id"] is None
     assert second_saved_payload["role_id"] == "new_role"
+    assert second_saved_payload["description"] == "Starts from a blank role."
     assert second_saved_payload["tools"] == ["read_file"]
     assert second_saved_payload["memory_profile"] == {
         "enabled": True,
@@ -190,6 +198,7 @@ const roleRecords = {
         source_role_id: "writer",
         role_id: "writer",
         name: "Writer",
+        description: "Drafts user-facing content.",
         version: "1.0.0",
         tools: ["read_file"],
         mcp_servers: [],
@@ -204,6 +213,7 @@ const roleRecords = {
         source_role_id: "reviewer",
         role_id: "reviewer",
         name: "Reviewer",
+        description: "Reviews delivered work.",
         version: "1.0.0",
         tools: ["read_file", "write_file"],
         mcp_servers: ["docs"],
@@ -221,6 +231,7 @@ export async function fetchRoleConfigs() {
     return Object.values(roleRecords).map(record => ({
         role_id: record.role_id,
         name: record.name,
+        description: record.description,
         version: record.version,
         model_profile: record.model_profile,
     }));
@@ -460,6 +471,7 @@ function createElements() {{
         ["role-editor-form", createElement("none")],
         ["role-id-input", createElement("block")],
         ["role-name-input", createElement("block")],
+        ["role-description-input", createElement("block")],
         ["role-version-input", createElement("block")],
         ["role-model-profile-input", createElement("block")],
         ["role-tools-picker", createElement("block")],

@@ -442,6 +442,7 @@ Lists editable role document summaries for the settings UI.
 Response fields:
 - `role_id`
 - `name`
+- `description`
 - `version`
 - `model_profile`
 - `source`
@@ -454,6 +455,7 @@ Response fields:
 - `source_role_id`
 - `role_id`
 - `name`
+- `description`
 - `version`
 - `tools`
 - `mcp_servers`
@@ -476,6 +478,7 @@ Request:
   "source_role_id": "spec_coder",
   "role_id": "spec_coder",
   "name": "Spec Coder",
+  "description": "Implements requested changes.",
   "version": "1.0.0",
   "tools": ["read_file", "write_file"],
   "mcp_servers": [],
@@ -604,6 +607,10 @@ Request:
 }
 ```
 
+Notes:
+- `objective` is optional.
+- When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
+
 Response:
 
 ```json
@@ -614,9 +621,7 @@ Response:
   "skills": ["time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",
-  "user_prompt": "...",
-  "tool_prompt": "...",
-  "skill_prompt": "..."
+  "user_prompt": "..."
 }
 ```
 

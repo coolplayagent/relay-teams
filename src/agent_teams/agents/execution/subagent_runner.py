@@ -6,7 +6,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.agents.execution.runtime_prompts import (
+from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,
 )
@@ -44,7 +44,7 @@ class SubAgentRunner(BaseModel):
         conversation_id: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
     ) -> str:
-        system_prompt = self.prompt_builder.build(
+        system_prompt = await self.prompt_builder.build(
             PromptBuildInput(
                 role=self.role,
                 task=task,

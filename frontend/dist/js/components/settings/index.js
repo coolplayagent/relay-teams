@@ -108,6 +108,7 @@ function createModal() {
                                                 <span id="profile-editor-title-prefix">Add Profile</span>
                                                 <span id="profile-editor-title-value" class="profile-editor-title-value"></span>
                                             </h4>
+                                            <label for="profile-name" class="sr-only">Profile Name</label>
                                             <input type="text" id="edit-profile-name-input" class="profile-editor-title-input" placeholder="e.g., default, kimi" autocomplete="off" style="display:none;">
                                             <button class="secure-input-btn profile-editor-title-btn" id="edit-profile-name-btn" type="button" title="Edit Profile Name" aria-label="Edit Profile Name">
                                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
@@ -220,6 +221,10 @@ function createModal() {
                                                     <div class="form-group">
                                                         <label for="role-name-input">Name</label>
                                                         <input type="text" id="role-name-input" placeholder="e.g. Spec Coder">
+                                                    </div>
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="role-description-input">Description</label>
+                                                        <input type="text" id="role-description-input" placeholder="Short summary used in coordinator prompts">
                                                     </div>
                                                     <div class="form-group">
                                                         <label for="role-version-input">Version</label>

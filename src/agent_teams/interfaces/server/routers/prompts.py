@@ -8,34 +8,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.interfaces.server.deps import (
+    get_mcp_registry,
     get_role_registry,
     get_skill_registry,
     get_tool_registry,
 )
-from agent_teams.agents.execution.provider_prompts import (
+from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
-    ProviderPromptAugmentInput,
-    build_provider_augmented_system_prompt,
-    build_skill_instructions_prompt,
-    build_tool_rules_prompt,
-)
-from agent_teams.agents.execution.runtime_prompts import (
     RuntimePromptBuildInput,
-    build_runtime_system_prompt,
+    RuntimePromptBuilder,
+    SystemPromptBuildInput,
+    build_system_prompt,
 )
 from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     build_user_prompt,
 )
+from agent_teams.mcp.registry import McpRegistry
 from agent_teams.roles.registry import RoleRegistry
 
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
-
-DEFAULT_PREVIEW_OBJECTIVE = "Preview objective placeholder"
 
 
 class PromptPreviewRequest(BaseModel):
@@ -58,15 +53,14 @@ class PromptPreviewResponse(BaseModel):
     runtime_system_prompt: str
     provider_system_prompt: str
     user_prompt: str
-    tool_prompt: str
-    skill_prompt: str
 
 
 @router.post(":preview", response_model=PromptPreviewResponse)
-def preview_prompts(
+async def preview_prompts(
     req: PromptPreviewRequest,
     role_registry: Annotated[RoleRegistry, Depends(get_role_registry)],
     tool_registry: Annotated[ToolRegistry, Depends(get_tool_registry)],
+    mcp_registry: Annotated[McpRegistry, Depends(get_mcp_registry)],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
 ) -> PromptPreviewResponse:
     try:
@@ -76,9 +70,7 @@ def preview_prompts(
 
     resolved_tools = req.tools if req.tools is not None else role.tools
     resolved_skills = req.skills if req.skills is not None else role.skills
-    objective = req.objective.strip() if req.objective else DEFAULT_PREVIEW_OBJECTIVE
-    if not objective:
-        objective = DEFAULT_PREVIEW_OBJECTIVE
+    objective = req.objective.strip() if req.objective else ""
 
     try:
         tool_registry.validate_known(resolved_tools)
@@ -90,27 +82,31 @@ def preview_prompts(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    runtime_system_prompt = build_runtime_system_prompt(
+    runtime_system_prompt = await RuntimePromptBuilder(
+        role_registry=role_registry,
+        mcp_registry=mcp_registry,
+    ).build(
         RuntimePromptBuildInput(
             role=role,
-            task=_build_preview_task(objective=objective),
             shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
         )
     )
     skill_instructions = tuple(
-        PromptSkillInstruction(name=entry.name, instructions=entry.instructions)
+        PromptSkillInstruction(name=entry.name, description=entry.description)
         for entry in skill_registry.get_instruction_entries(resolved_skills)
     )
-    tool_prompt = build_tool_rules_prompt(resolved_tools)
-    skill_prompt = build_skill_instructions_prompt(skill_instructions)
-    provider_system_prompt = build_provider_augmented_system_prompt(
-        ProviderPromptAugmentInput(
+    provider_system_prompt = build_system_prompt(
+        SystemPromptBuildInput(
             system_prompt=runtime_system_prompt,
             allowed_tools=resolved_tools,
             skill_instructions=skill_instructions,
         )
     )
-    user_prompt = build_user_prompt(UserPromptBuildInput(objective=objective))
+    user_prompt = (
+        build_user_prompt(UserPromptBuildInput(objective=objective))
+        if objective
+        else ""
+    )
 
     return PromptPreviewResponse(
         role_id=role.role_id,
@@ -120,19 +116,6 @@ def preview_prompts(
         runtime_system_prompt=runtime_system_prompt,
         provider_system_prompt=provider_system_prompt,
         user_prompt=user_prompt,
-        tool_prompt=tool_prompt,
-        skill_prompt=skill_prompt,
-    )
-
-
-def _build_preview_task(*, objective: str) -> TaskEnvelope:
-    return TaskEnvelope(
-        task_id="prompt-preview-task",
-        session_id="prompt-preview-session",
-        parent_task_id=None,
-        trace_id="prompt-preview-trace",
-        objective=objective,
-        verification=VerificationPlan(checklist=("prompt_preview",)),
     )
 
 

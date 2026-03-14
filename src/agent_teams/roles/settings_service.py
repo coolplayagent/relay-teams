@@ -130,6 +130,7 @@ class RoleSettingsService:
         return RoleDocumentSummary(
             role_id=definition.role_id,
             name=definition.name,
+            description=definition.description,
             version=definition.version,
             model_profile=definition.model_profile,
             source=self._resolve_role_source(definition.role_id),
@@ -148,6 +149,7 @@ class RoleSettingsService:
             source_role_id=source_role_id,
             role_id=definition.role_id,
             name=definition.name,
+            description=definition.description,
             version=definition.version,
             tools=definition.tools,
             mcp_servers=definition.mcp_servers,
@@ -165,6 +167,7 @@ class RoleSettingsService:
             update={
                 "role_id": draft.role_id.strip(),
                 "name": draft.name.strip(),
+                "description": draft.description.strip(),
                 "version": draft.version.strip(),
                 "model_profile": draft.model_profile.strip(),
                 "system_prompt": draft.system_prompt.strip(),
@@ -180,6 +183,7 @@ class RoleSettingsService:
         front_matter: dict[str, object] = {
             "role_id": draft.role_id,
             "name": draft.name,
+            "description": draft.description,
             "model_profile": draft.model_profile,
             "version": draft.version,
             "tools": list(draft.tools),

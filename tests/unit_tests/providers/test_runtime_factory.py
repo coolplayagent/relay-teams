@@ -61,6 +61,7 @@ def _build_role(*, model_profile: str) -> RoleDefinition:
     return RoleDefinition(
         role_id="spec_coder",
         name="Spec Coder",
+        description="Implements requested changes.",
         version="1.0.0",
         tools=(),
         mcp_servers=(),

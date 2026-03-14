@@ -48,10 +48,10 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.agents.execution.agent_builder import build_coordination_agent
-from agent_teams.agents.execution.provider_prompts import (
+from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
-    ProviderPromptAugmentInput,
-    build_provider_augmented_system_prompt,
+    SystemPromptBuildInput,
+    build_system_prompt,
 )
 from agent_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
@@ -161,7 +161,7 @@ class AgentLlmSession:
             tuple(
                 PromptSkillInstruction(
                     name=entry.name,
-                    instructions=entry.instructions,
+                    description=entry.description,
                 )
                 for entry in self._skill_registry.get_instruction_entries(
                     self._allowed_skills
@@ -170,12 +170,24 @@ class AgentLlmSession:
             if self._allowed_skills
             else ()
         )
-        agent_system_prompt = build_provider_augmented_system_prompt(
-            ProviderPromptAugmentInput(
+        agent_system_prompt = build_system_prompt(
+            SystemPromptBuildInput(
                 system_prompt=request.system_prompt,
                 allowed_tools=self._allowed_tools,
                 skill_instructions=skill_instructions,
             )
+        )
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="llm.system_prompt.prepared",
+            message=f"LLM system prompt prepared\n{agent_system_prompt}",
+            payload={
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "task_id": request.task_id,
+                "length": len(agent_system_prompt),
+            },
         )
         log_event(
             LOGGER,
@@ -353,7 +365,11 @@ class AgentLlmSession:
                         # After each node (ModelRequestNode or others like CallToolsNode),
                         # scan for new messages to emit tool call/result events
                         all_new = agent_run.new_messages()
-                        new_to_process = list(all_new)[seen_count:]
+                        new_batch = list(all_new)[seen_count:]
+                        new_to_process = self._drop_duplicate_leading_request(
+                            history=history,
+                            new_messages=new_batch,
+                        )
                         if new_to_process:
                             self._publish_tool_call_events_from_messages(
                                 request=request,
@@ -365,7 +381,7 @@ class AgentLlmSession:
                                 history=history,
                                 pending_messages=buffered_messages,
                             )
-                            seen_count += len(new_to_process)
+                        seen_count += len(new_batch)
 
                         # Drain pending user injections at this boundary (already handled in previous version, check if needed here)
                         injections = self._injection_manager.drain_at_boundary(
@@ -420,7 +436,10 @@ class AgentLlmSession:
                     result = maybe_result
                     # Flush any remaining messages (e.g. final tool results)
                     all_new = result.new_messages()
-                    to_save = list(all_new)[seen_count:]
+                    to_save = self._drop_duplicate_leading_request(
+                        history=history,
+                        new_messages=list(all_new)[seen_count:],
+                    )
                     if to_save:
                         self._publish_tool_call_events_from_messages(
                             request=request,
@@ -757,6 +776,48 @@ class AgentLlmSession:
             "\n".join(str(part.content or "").strip() for part in parts).strip()
             == target
         )
+
+    def _drop_duplicate_leading_request(
+        self,
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+        new_messages: list[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        if not history or not new_messages:
+            return new_messages
+        last_history = history[-1]
+        first_new = new_messages[0]
+        if not isinstance(last_history, ModelRequest):
+            return new_messages
+        if not isinstance(first_new, ModelRequest):
+            return new_messages
+        if not self._model_requests_match_user_prompt(last_history, first_new):
+            return new_messages
+        return new_messages[1:]
+
+    def _model_requests_match_user_prompt(
+        self,
+        left: ModelRequest,
+        right: ModelRequest,
+    ) -> bool:
+        left_prompt = self._extract_user_prompt_text(left)
+        if left_prompt is None:
+            return False
+        right_prompt = self._extract_user_prompt_text(right)
+        if right_prompt is None:
+            return False
+        return left_prompt == right_prompt
+
+    def _extract_user_prompt_text(self, message: ModelRequest) -> str | None:
+        prompt_parts = [
+            part for part in message.parts if isinstance(part, UserPromptPart)
+        ]
+        if len(prompt_parts) != len(message.parts):
+            return None
+        combined = "\n".join(
+            str(part.content or "").strip() for part in prompt_parts
+        ).strip()
+        return combined or None
 
     def _commit_ready_messages(
         self,

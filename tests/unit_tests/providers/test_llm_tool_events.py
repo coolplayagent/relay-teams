@@ -82,6 +82,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         RoleDefinition(
             role_id="coordinator_agent",
             name="coordinator",
+            description="Coordinates delegated work.",
             version="1",
             tools=(),
             system_prompt="Coordinate work.",
