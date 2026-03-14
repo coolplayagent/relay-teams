@@ -21,6 +21,7 @@ let roleConfigOptions = {
     skills: [],
 };
 let availableModelProfiles = [];
+let defaultModelProfileName = '';
 let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
@@ -58,7 +59,9 @@ export async function loadRoleSettingsPanel(preferredRoleId = '') {
         ]);
         roleSummaries = Array.isArray(summaries) ? summaries : [];
         roleConfigOptions = normalizeRoleConfigOptions(options);
-        availableModelProfiles = normalizeModelProfileNames(modelProfiles);
+        const normalizedModelProfiles = normalizeModelProfiles(modelProfiles);
+        availableModelProfiles = normalizedModelProfiles.names;
+        defaultModelProfileName = normalizedModelProfiles.defaultName;
         renderRolesList();
         if (roleSummaries.length === 0) {
             showRolesList();
@@ -96,19 +99,32 @@ function normalizeRoleConfigOptions(options) {
     };
 }
 
-function normalizeModelProfileNames(modelProfiles) {
+function normalizeModelProfiles(modelProfiles) {
     if (!modelProfiles || typeof modelProfiles !== 'object') {
-        return [];
+        return {
+            names: [],
+            defaultName: '',
+        };
     }
-    return Object.keys(modelProfiles)
-        .map(name => String(name).trim())
-        .filter(Boolean)
-        .sort((left, right) => {
-            if (left === right) return 0;
-            if (left === 'default') return -1;
-            if (right === 'default') return 1;
-            return left.localeCompare(right);
-        });
+    const entries = Object.entries(modelProfiles)
+        .map(([name, profile]) => ({
+            name: String(name).trim(),
+            isDefault: profile?.is_default === true,
+        }))
+        .filter(entry => Boolean(entry.name));
+    const defaultName = entries.find(entry => entry.isDefault)?.name
+        || (entries.some(entry => entry.name === 'default') ? 'default' : entries[0]?.name || '');
+    return {
+        names: entries
+            .map(entry => entry.name)
+            .sort((left, right) => {
+                if (left === right) return 0;
+                if (left === defaultName) return -1;
+                if (right === defaultName) return 1;
+                return left.localeCompare(right);
+            }),
+        defaultName,
+    };
 }
 
 function renderRolesList() {
@@ -284,23 +300,42 @@ function renderModelProfileSelect(selectedProfile) {
     if (!selectEl) return;
 
     const selectedValue = String(selectedProfile || '').trim() || 'default';
-    const availableProfiles = Array.isArray(availableModelProfiles)
-        ? [...availableModelProfiles]
-        : [];
-    const hasSelectedValue = availableProfiles.includes(selectedValue);
-    const optionValues = hasSelectedValue ? availableProfiles : [...availableProfiles, selectedValue];
+    const availableProfiles = Array.isArray(availableModelProfiles) ? [...availableModelProfiles] : [];
+    const filteredProfiles = availableProfiles.filter(profileName => {
+        if (profileName !== 'default') {
+            return true;
+        }
+        return !defaultModelProfileName || defaultModelProfileName === 'default';
+    });
+    const hasSelectedValue = selectedValue === 'default' || filteredProfiles.includes(selectedValue);
+    const optionValues = hasSelectedValue ? filteredProfiles : [...filteredProfiles, selectedValue];
 
     if (optionValues.length === 0) {
-        selectEl.innerHTML = '';
-        selectEl.value = '';
-        return;
+        optionValues.push('default');
     }
 
-    selectEl.innerHTML = optionValues
-        .map(profileName => {
-            const suffix = availableProfiles.includes(profileName) ? '' : ' (Unavailable)';
-            const selected = profileName === selectedValue ? ' selected' : '';
-            return `<option value="${escapeHtml(profileName)}"${selected}>${escapeHtml(profileName + suffix)}</option>`;
+    const options = [];
+    options.push({
+        value: 'default',
+        label: formatDefaultProfileOptionLabel(),
+        unavailable: false,
+    });
+    optionValues.forEach(profileName => {
+        if (profileName === 'default') {
+            return;
+        }
+        options.push({
+            value: profileName,
+            label: profileName,
+            unavailable: !filteredProfiles.includes(profileName),
+        });
+    });
+
+    selectEl.innerHTML = options
+        .map(option => {
+            const suffix = option.unavailable ? ' (Unavailable)' : '';
+            const selected = option.value === selectedValue ? ' selected' : '';
+            return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(option.label + suffix)}</option>`;
         })
         .join('');
 }
@@ -523,10 +558,7 @@ function resolveSelectedModelProfile() {
     if (selectedValue) {
         return selectedValue;
     }
-    if (availableModelProfiles.includes('default')) {
-        return 'default';
-    }
-    return availableModelProfiles[0] || 'default';
+    return 'default';
 }
 
 function getBooleanSelectValue(id, defaultValue) {
@@ -553,6 +585,13 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function formatDefaultProfileOptionLabel() {
+    if (!defaultModelProfileName || defaultModelProfileName === 'default') {
+        return 'default';
+    }
+    return `default (current: ${defaultModelProfileName})`;
 }
 
 function toggleRoleActions(visibility) {

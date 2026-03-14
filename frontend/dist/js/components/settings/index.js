@@ -103,24 +103,22 @@ function createModal() {
                                 <div class="profiles-list" id="profiles-list"></div>
                                 <div class="profile-editor" id="profile-editor" style="display:none;">
                                     <div class="profile-editor-header">
-                                        <div class="profile-editor-title-row">
-                                            <h4 id="profile-editor-title">
-                                                <span id="profile-editor-title-prefix">Add Profile</span>
-                                                <span id="profile-editor-title-value" class="profile-editor-title-value"></span>
-                                            </h4>
-                                            <label for="profile-name" class="sr-only">Profile Name</label>
-                                            <input type="text" id="edit-profile-name-input" class="profile-editor-title-input" placeholder="e.g., default, kimi" autocomplete="off" style="display:none;">
-                                            <button class="secure-input-btn profile-editor-title-btn" id="edit-profile-name-btn" type="button" title="Edit Profile Name" aria-label="Edit Profile Name">
-                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                    <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path>
-                                                    <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
-                                                </svg>
-                                            </button>
-                                        </div>
+                                        <h4 id="profile-editor-title">Add Profile</h4>
                                         <p>Configure the endpoint, model, request limits, and sampling defaults.</p>
                                     </div>
                                     <form class="profile-editor-form" id="profile-editor-form" autocomplete="off">
                                         <div class="profile-editor-grid">
+                                            <div class="form-group">
+                                                <label for="profile-name">Profile Name</label>
+                                                <input type="text" id="profile-name" placeholder="e.g., default, kimi" autocomplete="off">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="profile-provider">Provider</label>
+                                                <input type="text" id="profile-provider" list="profile-provider-options" autocomplete="off" spellcheck="false">
+                                                <datalist id="profile-provider-options">
+                                                    <option value="openai_compatible"></option>
+                                                </datalist>
+                                            </div>
                                             <div class="form-group form-group-span-2">
                                                 <label for="profile-base-url">Base URL</label>
                                                 <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" autocomplete="url">
@@ -140,16 +138,20 @@ function createModal() {
                                                 </div>
                                                 <div class="form-group form-group-inline-action">
                                                     <label for="profile-model">Model</label>
-                                                    <div class="secure-input-row">
-                                                        <select id="profile-model">
-                                                            <option value="">Select a model</option>
-                                                        </select>
+                                                    <div class="secure-input-row profile-model-input-row">
+                                                        <input type="text" id="profile-model" autocomplete="off" spellcheck="false">
+                                                        <button class="secure-input-btn profile-model-menu-btn" id="open-profile-model-menu-btn" type="button" title="Show Models" aria-label="Show Models">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                            </svg>
+                                                        </button>
                                                         <button class="secure-input-btn profile-discovery-btn" id="fetch-profile-models-btn" type="button" title="Fetch Models" aria-label="Fetch Models">
                                                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                                 <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
                                                                 <path d="M20 4v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
                                                             </svg>
                                                         </button>
+                                                        <div class="profile-model-menu" id="profile-model-menu" style="display:none;"></div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -168,7 +170,7 @@ function createModal() {
                                                 </div>
                                                 <div class="form-group">
                                                     <label for="profile-max-tokens">Max Output Tokens</label>
-                                                    <input type="number" id="profile-max-tokens" value="4096" min="1" autocomplete="off">
+                                                    <input type="number" id="profile-max-tokens" value="100000" min="1" autocomplete="off">
                                                 </div>
                                                 <div class="form-group">
                                                     <label for="profile-connect-timeout">Connect Timeout (s)</label>
@@ -183,6 +185,10 @@ function createModal() {
                                                     </select>
                                                 </div>
                                             </div>
+                                        </div>
+                                        <div class="profile-default-row">
+                                            <input type="checkbox" id="profile-is-default">
+                                            <label for="profile-is-default">Set as default profile</label>
                                         </div>
                                         <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
                                     </form>

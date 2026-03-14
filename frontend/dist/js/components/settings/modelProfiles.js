@@ -20,8 +20,7 @@ let draftProbeState = null;
 let draftDiscoveredModels = [];
 let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftApiKeyState();
-let draftProfileName = '';
-let isEditingProfileName = false;
+let isModelMenuOpen = false;
 
 export function bindModelProfileHandlers() {
     const addProfileBtn = document.getElementById('add-profile-btn');
@@ -44,25 +43,25 @@ export function bindModelProfileHandlers() {
         fetchModelsBtn.onclick = handleDiscoverDraftModels;
     }
 
+    const openModelMenuBtn = document.getElementById('open-profile-model-menu-btn');
+    if (openModelMenuBtn) {
+        openModelMenuBtn.onclick = toggleDiscoveredModelMenu;
+    }
+
     const cancelProfileBtn = document.getElementById('cancel-profile-btn');
     if (cancelProfileBtn) {
         cancelProfileBtn.onclick = handleCancelProfile;
     }
 
-    const editProfileNameBtn = document.getElementById('edit-profile-name-btn');
-    if (editProfileNameBtn) {
-        editProfileNameBtn.onclick = startEditingProfileName;
-    }
-
-    const editProfileNameInput = document.getElementById('edit-profile-name-input');
-    if (editProfileNameInput) {
-        editProfileNameInput.onblur = finishEditingProfileName;
-        editProfileNameInput.onkeydown = handleProfileNameInputKeydown;
-    }
-
     const baseUrlInput = document.getElementById('profile-base-url');
     if (baseUrlInput) {
         baseUrlInput.oninput = handleDraftEndpointChanged;
+    }
+
+    const providerInput = document.getElementById('profile-provider');
+    if (providerInput) {
+        providerInput.oninput = handleDraftEndpointChanged;
+        providerInput.onchange = handleDraftEndpointChanged;
     }
 
     const apiKeyInput = document.getElementById('profile-api-key');
@@ -80,9 +79,12 @@ export function bindModelProfileHandlers() {
         sslVerifyInput.onchange = handleDraftEndpointChanged;
     }
 
-    const modelSelect = document.getElementById('profile-model');
-    if (modelSelect) {
-        modelSelect.onchange = syncDraftModelSelection;
+    const modelInput = document.getElementById('profile-model');
+    if (modelInput) {
+        modelInput.onfocus = openDiscoveredModelMenu;
+        modelInput.onclick = openDiscoveredModelMenu;
+        modelInput.oninput = syncDraftModelSelection;
+        modelInput.onchange = syncDraftModelSelection;
     }
 }
 
@@ -114,8 +116,15 @@ function renderProfiles() {
         return;
     }
 
+    const profileEntries = Object.entries(profiles).sort(([leftName, leftProfile], [rightName, rightProfile]) => {
+        if (leftProfile?.is_default === rightProfile?.is_default) {
+            return leftName.localeCompare(rightName);
+        }
+        return leftProfile?.is_default === true ? -1 : 1;
+    });
+
     let html = '<div class="profile-records">';
-    Object.entries(profiles).forEach(([name, profile], index) => {
+    profileEntries.forEach(([name, profile], index) => {
         html += renderProfileCard(name, profile, index);
     });
     html += '</div>';
@@ -135,15 +144,16 @@ function renderProfiles() {
 function handleAddProfile() {
     editingProfile = null;
     resetDraftEditorState();
-    draftProfileName = '';
-    isEditingProfileName = false;
     renderProfileEditorTitle();
+    document.getElementById('profile-name').value = '';
+    document.getElementById('profile-provider').value = 'openai_compatible';
     setDraftModelValue('');
     document.getElementById('profile-base-url').value = '';
     draftApiKeyState = createDraftApiKeyState();
+    document.getElementById('profile-is-default').checked = Object.keys(profiles).length === 0;
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
-    document.getElementById('profile-max-tokens').value = '4096';
+    document.getElementById('profile-max-tokens').value = '100000';
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
 
@@ -152,7 +162,8 @@ function handleAddProfile() {
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
-    document.getElementById('profile-base-url').focus();
+    setModelMenuOpen(false);
+    document.getElementById('profile-name').focus();
 }
 
 function handleEditProfile(name) {
@@ -161,9 +172,9 @@ function handleEditProfile(name) {
 
     editingProfile = name;
     resetDraftEditorState();
-    draftProfileName = name;
-    isEditingProfileName = false;
     renderProfileEditorTitle();
+    document.getElementById('profile-name').value = name;
+    document.getElementById('profile-provider').value = profile.provider || 'openai_compatible';
     setDraftModelValue(profile.model || '');
     document.getElementById('profile-base-url').value = profile.base_url || '';
     draftApiKeyState = {
@@ -173,9 +184,10 @@ function handleEditProfile(name) {
         isDirty: false,
         revealed: false,
     };
+    document.getElementById('profile-is-default').checked = profile.is_default === true;
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
-    document.getElementById('profile-max-tokens').value = profile.max_tokens || 4096;
+    document.getElementById('profile-max-tokens').value = profile.max_tokens || 100000;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
 
@@ -184,66 +196,29 @@ function handleEditProfile(name) {
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
+    setModelMenuOpen(false);
 }
 
 function handleCancelProfile() {
     showProfilesList();
     editingProfile = null;
     resetDraftEditorState();
-    draftProfileName = '';
-    isEditingProfileName = false;
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
-}
-
-function startEditingProfileName() {
-    isEditingProfileName = true;
-    renderProfileEditorTitle();
-    const inputEl = document.getElementById('edit-profile-name-input');
-    if (inputEl) {
-        inputEl.focus();
-    }
-}
-
-function finishEditingProfileName() {
-    if (!isEditingProfileName) {
-        return;
-    }
-
-    const inputEl = document.getElementById('edit-profile-name-input');
-    const normalizedName = String(inputEl?.value || '').trim();
-    if (normalizedName) {
-        draftProfileName = normalizedName;
-    }
-    isEditingProfileName = false;
-    renderProfileEditorTitle();
-}
-
-function handleProfileNameInputKeydown(event) {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        finishEditingProfileName();
-        return;
-    }
-    if (event.key === 'Escape') {
-        event.preventDefault();
-        isEditingProfileName = false;
-        renderProfileEditorTitle();
-    }
+    setModelMenuOpen(false);
 }
 
 async function handleSaveProfile() {
-    if (isEditingProfileName) {
-        finishEditingProfileName();
-    }
-    const name = draftProfileName.trim();
+    const name = document.getElementById('profile-name').value.trim();
+    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
     const model = document.getElementById('profile-model').value.trim();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
+    const isDefault = document.getElementById('profile-is-default').checked;
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
-    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
+    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 100000;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
@@ -268,8 +243,10 @@ async function handleSaveProfile() {
     }
 
     const profile = {
+        provider: provider,
         model: model,
         base_url: baseUrl,
+        is_default: isDefault,
         temperature: temperature,
         top_p: topP,
         max_tokens: maxTokens,
@@ -293,6 +270,7 @@ async function handleSaveProfile() {
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
         renderDiscoveredModels();
+        setModelMenuOpen(false);
         showToast({ title: 'Profile Saved', message: 'Profile saved and reloaded.', tone: 'success' });
         await loadModelProfilesPanel();
     } catch (e) {
@@ -402,6 +380,7 @@ async function handleDiscoverDraftModels() {
                 message: buildDiscoveredModelsMessage(result),
             };
             applyDiscoveredModelSelection();
+            setModelMenuOpen(draftDiscoveredModels.length > 0);
         }
     } catch (e) {
         draftDiscoveredModels = [];
@@ -416,12 +395,13 @@ async function handleDiscoverDraftModels() {
 }
 
 function buildDraftProbePayload() {
+    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
     const model = document.getElementById('profile-model').value.trim();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
-    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 4096;
+    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 100000;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
@@ -435,6 +415,7 @@ function buildDraftProbePayload() {
     }
 
     const override = {
+        provider: provider,
         model: model,
         base_url: baseUrl,
         temperature: temperature,
@@ -460,6 +441,7 @@ function buildDraftProbePayload() {
 }
 
 function buildDraftModelDiscoveryPayload() {
+    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
@@ -477,6 +459,7 @@ function buildDraftModelDiscoveryPayload() {
     }
 
     const override = {
+        provider: provider,
         base_url: baseUrl,
     };
     if (sslVerify !== null) {
@@ -575,22 +558,49 @@ function renderDraftModelDiscoveryState() {
 }
 
 function renderDiscoveredModels() {
-    const modelSelect = document.getElementById('profile-model');
-    if (!modelSelect) {
+    const modelInput = document.getElementById('profile-model');
+    const modelMenu = document.getElementById('profile-model-menu');
+    const openModelMenuBtn = document.getElementById('open-profile-model-menu-btn');
+    if (!modelInput || !modelMenu || !openModelMenuBtn) {
         return;
     }
 
-    const currentValue = String(modelSelect.dataset.currentValue || modelSelect.value || '').trim();
-    const options = ['<option value="">Select a model</option>'];
+    const currentValue = String(modelInput.dataset.currentValue || modelInput.value || '').trim();
+    const seenValues = new Set();
+    const menuOptions = [];
     if (currentValue && !draftDiscoveredModels.includes(currentValue)) {
-        options.push(`<option value="${escapeHtml(currentValue)}" selected>${escapeHtml(currentValue)}</option>`);
+        seenValues.add(currentValue);
     }
     draftDiscoveredModels.forEach(modelName => {
-        const selected = currentValue === modelName ? ' selected' : '';
-        options.push(`<option value="${escapeHtml(modelName)}"${selected}>${escapeHtml(modelName)}</option>`);
+        if (seenValues.has(modelName)) {
+            return;
+        }
+        seenValues.add(modelName);
+        const activeClass = currentValue === modelName ? ' is-active' : '';
+        menuOptions.push(
+            `<button class="profile-model-menu-item${activeClass}" data-model-name="${escapeHtml(modelName)}" type="button">${escapeHtml(modelName)}</button>`,
+        );
     });
-    modelSelect.innerHTML = options.join('');
-    modelSelect.value = currentValue;
+    modelMenu.innerHTML = menuOptions.join('');
+    modelInput.value = currentValue;
+
+    modelMenu.querySelectorAll('.profile-model-menu-item').forEach(button => {
+        button.onclick = () => handleDiscoveredModelPicked(button.dataset.modelName);
+    });
+    openModelMenuBtn.disabled = draftDiscoveredModels.length === 0;
+    openModelMenuBtn.title = draftDiscoveredModels.length === 0 ? 'No Models Loaded' : 'Show Models';
+    if (typeof openModelMenuBtn.setAttribute === 'function') {
+        openModelMenuBtn.setAttribute('aria-label', openModelMenuBtn.title);
+    } else {
+        openModelMenuBtn.ariaLabel = openModelMenuBtn.title;
+    }
+    if (draftDiscoveredModels.length === 0) {
+        setModelMenuOpen(false);
+        return;
+    }
+    if (isModelMenuOpen) {
+        setModelMenuOpen(true);
+    }
 }
 
 function handleDraftEndpointChanged() {
@@ -598,6 +608,7 @@ function handleDraftEndpointChanged() {
     draftModelDiscoveryState = null;
     renderDiscoveredModels();
     renderDraftModelDiscoveryState();
+    setModelMenuOpen(false);
 }
 
 function handleDraftApiKeyInput() {
@@ -621,11 +632,11 @@ function toggleDraftApiKeyVisibility() {
 }
 
 function applyDiscoveredModelSelection() {
-    const modelSelect = document.getElementById('profile-model');
-    if (!modelSelect) {
+    const modelInput = document.getElementById('profile-model');
+    if (!modelInput) {
         return;
     }
-    const currentModel = String(modelSelect.dataset.currentValue || modelSelect.value || '').trim();
+    const currentModel = String(modelInput.dataset.currentValue || modelInput.value || '').trim();
     if (currentModel && draftDiscoveredModels.includes(currentModel)) {
         renderDiscoveredModels();
         return;
@@ -637,21 +648,55 @@ function applyDiscoveredModelSelection() {
 }
 
 function setDraftModelValue(value) {
-    const modelSelect = document.getElementById('profile-model');
-    if (!modelSelect) {
+    const modelInput = document.getElementById('profile-model');
+    if (!modelInput) {
         return;
     }
     const normalized = String(value || '').trim();
-    modelSelect.dataset.currentValue = normalized;
-    modelSelect.value = normalized;
+    modelInput.dataset.currentValue = normalized;
+    modelInput.value = normalized;
 }
 
 function syncDraftModelSelection() {
-    const modelSelect = document.getElementById('profile-model');
-    if (!modelSelect) {
+    const modelInput = document.getElementById('profile-model');
+    if (!modelInput) {
         return;
     }
-    modelSelect.dataset.currentValue = String(modelSelect.value || '').trim();
+    const normalized = String(modelInput.value || '').trim();
+    modelInput.dataset.currentValue = normalized;
+    renderDiscoveredModels();
+    if (draftDiscoveredModels.length > 0) {
+        setModelMenuOpen(true);
+    }
+}
+
+function handleDiscoveredModelPicked(modelName) {
+    setDraftModelValue(modelName || '');
+    renderDiscoveredModels();
+    setModelMenuOpen(false);
+}
+
+function openDiscoveredModelMenu() {
+    if (draftDiscoveredModels.length === 0) {
+        return;
+    }
+    setModelMenuOpen(true);
+}
+
+function toggleDiscoveredModelMenu() {
+    if (draftDiscoveredModels.length === 0) {
+        return;
+    }
+    setModelMenuOpen(!isModelMenuOpen);
+}
+
+function setModelMenuOpen(open) {
+    const modelMenu = document.getElementById('profile-model-menu');
+    if (!modelMenu) {
+        return;
+    }
+    isModelMenuOpen = open === true && draftDiscoveredModels.length > 0;
+    modelMenu.style.display = isModelMenuOpen ? 'block' : 'none';
 }
 
 function buildDiscoveredModelsMessage(result) {
@@ -668,31 +713,15 @@ function resetDraftEditorState() {
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
     draftApiKeyState = createDraftApiKeyState();
-    isEditingProfileName = false;
+    isModelMenuOpen = false;
 }
 
 function renderProfileEditorTitle() {
     const titleEl = document.getElementById('profile-editor-title');
-    const titlePrefixEl = document.getElementById('profile-editor-title-prefix');
-    const titleValueEl = document.getElementById('profile-editor-title-value');
-    const inputEl = document.getElementById('edit-profile-name-input');
-    if (!titleEl || !titlePrefixEl || !titleValueEl || !inputEl) {
+    if (!titleEl) {
         return;
     }
-
-    inputEl.value = draftProfileName;
-    inputEl.style.display = isEditingProfileName ? 'block' : 'none';
-    titleEl.style.display = 'block';
-    titleValueEl.style.display = isEditingProfileName ? 'none' : 'inline';
-
-    if (editingProfile) {
-        titlePrefixEl.textContent = 'Edit Profile:';
-        titleValueEl.textContent = draftProfileName || editingProfile;
-        return;
-    }
-
-    titlePrefixEl.textContent = 'Add Profile';
-    titleValueEl.textContent = draftProfileName ? `: ${draftProfileName}` : '';
+    titleEl.textContent = editingProfile ? 'Edit Profile' : 'Add Profile';
 }
 
 function createDraftApiKeyState() {
@@ -815,7 +844,7 @@ function renderProfileCard(name, profile, index) {
     const probeState = profileProbeStates[name] || null;
     const testButtonLabel = probeState?.status === 'probing' ? 'Testing...' : 'Test';
     const providerLabel = formatProviderLabel(profile.provider);
-    const defaultChip = name === 'default'
+    const defaultChip = profile.is_default === true
         ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
         : '';
     const modelLabel = profile.model || 'No model';

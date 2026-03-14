@@ -172,6 +172,39 @@ console.log(JSON.stringify({
     ]
 
 
+def test_role_settings_render_default_alias_with_current_profile_name(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__modelProfilesOverride = {
+    moonshot: { model: "kimi-k2.5", is_default: true },
+    default: { model: "legacy-default" },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    modelProfileHtml: document.getElementById("role-model-profile-input").innerHTML,
+}));
+""".strip(),
+    )
+
+    model_profile_html = cast(str, payload["modelProfileHtml"])
+    assert (
+        'value="default" selected>default (current: moonshot)</option>'
+        in model_profile_html
+    )
+    assert 'value="moonshot">moonshot</option>' in model_profile_html
+
+
 def _run_roles_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -246,7 +279,7 @@ export async function fetchRoleConfigOptions() {
 }
 
 export async function fetchModelProfiles() {
-    return {
+    return globalThis.__modelProfilesOverride || {
         default: { model: "gpt-4o-mini" },
         editor: { model: "gpt-4.1" },
     };

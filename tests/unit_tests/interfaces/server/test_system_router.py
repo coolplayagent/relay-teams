@@ -46,6 +46,7 @@ class _FakeSystemService:
                 "base_url": "https://example.test/v1",
                 "api_key": "secret",
                 "has_api_key": True,
+                "is_default": True,
             }
         }
 
@@ -288,6 +289,7 @@ def test_get_model_profiles_returns_api_key() -> None:
     payload = response.json()
     assert payload["default"]["api_key"] == "secret"
     assert payload["default"]["has_api_key"] is True
+    assert payload["default"]["is_default"] is True
 
 
 def test_get_provider_models_with_filter() -> None:
@@ -501,6 +503,30 @@ def test_save_model_profile_accepts_source_name_for_rename() -> None:
     assert saved_name == "renamed"
     assert saved_profile["model"] == "kimi-k2.5"
     assert source_name == "default"
+
+
+def test_save_model_profile_includes_default_flag_when_present() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/kimi",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "api_key": "secret",
+            "is_default": True,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["is_default"] is True
 
 
 class _FakeEnvironmentVariableService:

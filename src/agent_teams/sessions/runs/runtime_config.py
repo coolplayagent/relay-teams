@@ -42,7 +42,15 @@ class RuntimeConfig(BaseModel):
 
     paths: RuntimePaths
     llm_profiles: dict[str, ModelEndpointConfig]
+    default_model_profile: str | None = None
     model_status: ModelConfigStatus = ModelConfigStatus(loaded=True)
+
+
+class LoadedLlmProfiles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profiles: dict[str, ModelEndpointConfig]
+    default_profile_name: str
 
 
 def load_runtime_config(
@@ -71,18 +79,22 @@ def load_runtime_config(
         else resolved_config_dir / "agent_teams.db"
     )
     try:
-        llm_profiles = load_llm_configs(resolved_config_dir, merged_env)
+        loaded_profiles = load_llm_profile_state(resolved_config_dir, merged_env)
+        llm_profiles = loaded_profiles.profiles
         model_status = ModelConfigStatus(
             loaded=True,
             profiles=tuple(sorted(llm_profiles.keys())),
         )
     except (FileNotFoundError, ValueError) as exc:
         llm_profiles = {}
+        default_model_profile = None
         model_status = ModelConfigStatus(
             loaded=False,
             profiles=(),
             error=str(exc),
         )
+    else:
+        default_model_profile = loaded_profiles.default_profile_name
 
     return RuntimeConfig(
         paths=RuntimePaths(
@@ -92,6 +104,7 @@ def load_runtime_config(
             roles_dir=resolved_roles_dir,
         ),
         llm_profiles=llm_profiles,
+        default_model_profile=default_model_profile,
         model_status=model_status,
     )
 
@@ -100,20 +113,22 @@ def load_llm_configs(
     config_dir: Path,
     env_values: Mapping[str, str],
 ) -> dict[str, ModelEndpointConfig]:
+    return load_llm_profile_state(config_dir, env_values).profiles
+
+
+def load_llm_profile_state(
+    config_dir: Path,
+    env_values: Mapping[str, str],
+) -> LoadedLlmProfiles:
     model_file = config_dir / "model.json"
     if not model_file.exists():
         raise FileNotFoundError(
             f"model.json not found in {config_dir}. "
-            "Please create model.json with a 'default' profile."
+            "Please create model.json with at least one profile."
         )
 
-    try:
-        data = loads(model_file.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise ValueError(f"Failed to parse model.json: {e}")
-
-    if "default" not in data:
-        raise ValueError("model.json must contain a 'default' profile.")
+    data = _load_model_payload(model_file)
+    default_profile_name = _resolve_default_profile_name(data)
 
     profiles: dict[str, ModelEndpointConfig] = {}
     for name, cfg in data.items():
@@ -164,7 +179,54 @@ def load_llm_configs(
             ),
         )
 
-    return profiles
+    return LoadedLlmProfiles(
+        profiles=profiles,
+        default_profile_name=default_profile_name,
+    )
+
+
+def _load_model_payload(model_file: Path) -> dict[str, object]:
+    try:
+        raw = loads(model_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Failed to parse model.json: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("model.json must be a JSON object.")
+    return {str(name): value for name, value in raw.items()}
+
+
+def _resolve_default_profile_name(profile_payloads: Mapping[str, object]) -> str:
+    profile_names: list[str] = []
+    explicit_defaults: list[str] = []
+
+    for name, cfg in profile_payloads.items():
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Invalid profile '{name}': expected an object.")
+        profile_names.append(name)
+        is_default = cfg.get("is_default")
+        if is_default is True:
+            explicit_defaults.append(name)
+            continue
+        if is_default not in (False, None):
+            raise ValueError(
+                f"Invalid profile '{name}': is_default must be true, false, or omitted."
+            )
+
+    if not profile_names:
+        raise ValueError("model.json must contain at least one profile.")
+    if len(explicit_defaults) > 1:
+        joined_names = ", ".join(sorted(explicit_defaults))
+        raise ValueError(
+            "model.json must not mark more than one default profile. "
+            f"Found: {joined_names}."
+        )
+    if explicit_defaults:
+        return explicit_defaults[0]
+    if "default" in profile_payloads:
+        return "default"
+    if len(profile_names) == 1:
+        return profile_names[0]
+    return sorted(profile_names)[0]
 
 
 def _resolve_required_config_value(

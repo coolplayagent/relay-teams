@@ -363,7 +363,36 @@ def test_discover_models_requires_source_config() -> None:
         service.discover_models(ModelDiscoveryRequest())
 
 
-def _runtime_config() -> RuntimeConfig:
+def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            profile_name="kimi",
+            default_model_profile="kimi",
+        )
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured, response=httpx.Response(200, json={"usage": {}})
+            )
+        ),
+    )
+
+    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert captured["url"] == "https://example.test/v1/chat/completions"
+
+
+def _runtime_config(
+    *,
+    profile_name: str = "default",
+    default_model_profile: str | None = None,
+) -> RuntimeConfig:
     config = ModelEndpointConfig(
         provider=ProviderType.OPENAI_COMPATIBLE,
         model="saved-model",
@@ -384,5 +413,6 @@ def _runtime_config() -> RuntimeConfig:
             db_path=Path("D:/tmp/.agent_teams/agent_teams.db"),
             roles_dir=Path("D:/tmp/.agent_teams/roles"),
         ),
-        llm_profiles={"default": config},
+        llm_profiles={profile_name: config},
+        default_model_profile=default_model_profile or profile_name,
     )

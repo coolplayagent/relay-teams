@@ -50,17 +50,20 @@ Returns raw `model.json`.
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key` and the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, and `is_default` to mark the runtime fallback profile.
+When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
+Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 
 ### `DELETE /system/configs/model/profiles/{name}`
 
 Deletes a model profile.
+If the deleted profile was the current default and other profiles remain, the backend promotes the first remaining profile by name to stay default.
 
 ### `PUT /system/configs/model`
 

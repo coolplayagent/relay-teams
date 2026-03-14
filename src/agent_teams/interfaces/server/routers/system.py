@@ -76,13 +76,14 @@ class ModelProfileRequest(BaseModel):
 
     source_name: str | None = None
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
+    is_default: bool | None = None
     model: str
     base_url: str
     api_key: str | None = None
     ssl_verify: bool | None = None
     temperature: float = 0.7
     top_p: float = 1.0
-    max_tokens: int = 4096
+    max_tokens: int = 100000
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
 
@@ -102,6 +103,8 @@ def save_model_profile(
             "max_tokens": req.max_tokens,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
+        if req.is_default is not None:
+            profile["is_default"] = req.is_default
         if req.ssl_verify is not None:
             profile["ssl_verify"] = req.ssl_verify
         if req.api_key is not None and req.api_key.strip():

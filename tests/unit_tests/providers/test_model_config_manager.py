@@ -39,6 +39,7 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     assert profiles["default"]["provider"] == "openai_compatible"
     assert profiles["default"]["api_key"] == "secret-key"
     assert profiles["default"]["has_api_key"] is True
+    assert profiles["default"]["is_default"] is True
     assert profiles["default"]["temperature"] == 0.25
     assert profiles["default"]["max_tokens"] == 2000
     assert profiles["default"]["connect_timeout_seconds"] == 45.0
@@ -99,6 +100,8 @@ def test_delete_model_profile_removes_entry(tmp_path: Path) -> None:
 
     assert "default" not in config
     assert "secondary" in config
+    saved_secondary = cast(dict[str, JsonValue], config["secondary"])
+    assert saved_secondary["is_default"] is True
 
 
 def test_save_model_profile_preserves_existing_api_key_when_blank(
@@ -184,3 +187,45 @@ def test_save_model_profile_renames_and_preserves_existing_api_key(
     assert "default" not in config
     assert saved_profile["model"] == "kimi-k2.5"
     assert saved_profile["api_key"] == "secret-key"
+    assert saved_profile["is_default"] is True
+
+
+def test_save_model_profile_can_switch_default_profile(tmp_path: Path) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret-key",
+                    "is_default": True,
+                },
+                "kimi": {
+                    "provider": "openai_compatible",
+                    "model": "kimi-k2.5",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "api_key": "kimi-key",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager.save_model_profile(
+        "kimi",
+        {
+            "provider": "openai_compatible",
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "api_key": "kimi-key",
+            "is_default": True,
+        },
+    )
+
+    config = manager.get_model_config()
+
+    assert cast(dict[str, JsonValue], config["default"])["is_default"] is False
+    assert cast(dict[str, JsonValue], config["kimi"])["is_default"] is True

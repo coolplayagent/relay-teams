@@ -62,7 +62,7 @@ def create_provider_factory(
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
         config_to_use = _resolve_model_profile_config(
-            llm_profiles=runtime.llm_profiles,
+            runtime=runtime,
             profile_name=role.model_profile,
         )
         if config_to_use is None:
@@ -105,9 +105,17 @@ def create_provider_factory(
 
 def _resolve_model_profile_config(
     *,
-    llm_profiles: dict[str, ModelEndpointConfig],
+    runtime: RuntimeConfig,
     profile_name: str,
 ) -> ModelEndpointConfig | None:
-    if profile_name in llm_profiles:
-        return llm_profiles[profile_name]
-    return llm_profiles.get("default")
+    normalized_name = profile_name.strip()
+    if normalized_name == "default":
+        default_profile_name = runtime.default_model_profile
+        if default_profile_name is None:
+            return None
+        return runtime.llm_profiles.get(default_profile_name)
+    if normalized_name in runtime.llm_profiles:
+        return runtime.llm_profiles[normalized_name]
+    if runtime.default_model_profile is None:
+        return None
+    return runtime.llm_profiles.get(runtime.default_model_profile)

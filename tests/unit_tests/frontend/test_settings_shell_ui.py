@@ -250,22 +250,37 @@ console.log(JSON.stringify({
 
     modal_html = cast(str, payload["modalHtml"])
     assert "Max Output Tokens" in modal_html
-    assert '<select id="profile-model">' in modal_html
+    assert 'id="profile-name"' in modal_html
+    assert 'id="profile-provider"' in modal_html
+    assert 'id="profile-is-default"' in modal_html
+    assert 'list="profile-provider-options"' in modal_html
+    assert 'value="openai_compatible"' in modal_html
+    assert 'value="echo"' not in modal_html
+    assert (
+        '<input type="text" id="profile-model" autocomplete="off" spellcheck="false">'
+        in modal_html
+    )
+    assert 'id="open-profile-model-menu-btn"' in modal_html
+    assert 'id="profile-model-options"' not in modal_html
+    assert 'id="profile-model-menu"' in modal_html
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
-    assert 'id="edit-profile-name-btn"' in modal_html
-    assert 'id="edit-profile-name-input"' in modal_html
-    assert 'id="profile-name"' not in modal_html
+    assert 'id="edit-profile-name-btn"' not in modal_html
+    assert 'id="edit-profile-name-input"' not in modal_html
     assert ">Fetch</button>" not in modal_html
     assert modal_html.index('label for="profile-api-key"') < modal_html.index(
         'label for="profile-model"'
+    )
+    assert modal_html.index('id="profile-max-tokens"') < modal_html.index(
+        'id="profile-is-default"'
     )
     assert "Model Selection" not in modal_html
     assert (
         "Fetch the endpoint catalog for quick selection, or enter a model name manually."
         not in modal_html
     )
+    assert 'value="100000"' in modal_html
     assert "Max Tokens</label>" not in modal_html
     assert ">Test</button>" in modal_html
     assert ">Test URL</button>" in modal_html

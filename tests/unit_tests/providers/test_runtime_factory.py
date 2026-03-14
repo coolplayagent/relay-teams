@@ -45,7 +45,11 @@ class _CapturingProviderRegistry:
         return EchoProvider()
 
 
-def _build_runtime(*, profiles: dict[str, ModelEndpointConfig]) -> RuntimeConfig:
+def _build_runtime(
+    *,
+    profiles: dict[str, ModelEndpointConfig],
+    default_model_profile: str | None = None,
+) -> RuntimeConfig:
     return RuntimeConfig(
         paths=RuntimePaths(
             config_dir=Path(".agent_teams"),
@@ -54,6 +58,7 @@ def _build_runtime(*, profiles: dict[str, ModelEndpointConfig]) -> RuntimeConfig
             roles_dir=Path(".agent_teams/roles"),
         ),
         llm_profiles=profiles,
+        default_model_profile=default_model_profile,
     )
 
 
@@ -131,6 +136,7 @@ def test_create_provider_factory_uses_role_model_profile_when_present(
                 "default": default_config,
                 "kimi": kimi_config,
             },
+            default_model_profile="default",
         ),
         provider_registry=provider_registry,
     )
@@ -153,7 +159,10 @@ def test_create_provider_factory_falls_back_to_default_when_profile_missing(
     )
     factory = _build_factory(
         monkeypatch=monkeypatch,
-        runtime=_build_runtime(profiles={"default": default_config}),
+        runtime=_build_runtime(
+            profiles={"default": default_config},
+            default_model_profile="default",
+        ),
         provider_registry=provider_registry,
     )
 
@@ -161,3 +170,37 @@ def test_create_provider_factory_falls_back_to_default_when_profile_missing(
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is default_config
+
+
+def test_create_provider_factory_resolves_default_alias_to_explicit_default_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_registry = _CapturingProviderRegistry()
+    alpha_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="alpha-model",
+        base_url="https://alpha.example/v1",
+        api_key="alpha-key",
+    )
+    kimi_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="kimi-model",
+        base_url="https://kimi.example/v1",
+        api_key="kimi-key",
+    )
+    factory = _build_factory(
+        monkeypatch=monkeypatch,
+        runtime=_build_runtime(
+            profiles={
+                "default": alpha_config,
+                "kimi": kimi_config,
+            },
+            default_model_profile="kimi",
+        ),
+        provider_registry=provider_registry,
+    )
+
+    provider = factory(_build_role(model_profile="default"))
+
+    assert isinstance(provider, EchoProvider)
+    assert provider_registry.created_config is kimi_config

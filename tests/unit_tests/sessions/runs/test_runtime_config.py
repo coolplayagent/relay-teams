@@ -87,7 +87,7 @@ def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None
     with pytest.raises(FileNotFoundError) as exc_info:
         runtime_config.load_llm_configs(tmp_path, {})
 
-    assert "Please create model.json with a 'default' profile." in str(exc_info.value)
+    assert "Please create model.json with at least one profile." in str(exc_info.value)
 
 
 def test_load_llm_configs_reads_provider_field(tmp_path: Path) -> None:
@@ -109,6 +109,95 @@ def test_load_llm_configs_reads_provider_field(tmp_path: Path) -> None:
     profiles = runtime_config.load_llm_configs(tmp_path, {})
 
     assert profiles["default"].provider.value == "openai_compatible"
+
+
+def test_load_runtime_config_reads_explicit_default_profile_name(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "backup": {
+                    "model": "backup-model",
+                    "base_url": "https://backup.example/v1",
+                    "api_key": "backup-key",
+                    "is_default": True,
+                },
+                "primary": {
+                    "model": "primary-model",
+                    "base_url": "https://primary.example/v1",
+                    "api_key": "primary-key",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.default_model_profile == "backup"
+
+
+def test_load_runtime_config_uses_first_profile_when_no_default_is_marked(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "zeta": {
+                    "model": "zeta-model",
+                    "base_url": "https://zeta.example/v1",
+                    "api_key": "zeta-key",
+                },
+                "alpha": {
+                    "model": "alpha-model",
+                    "base_url": "https://alpha.example/v1",
+                    "api_key": "alpha-key",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.default_model_profile == "alpha"
+
+
+def test_load_runtime_config_rejects_multiple_explicit_default_profiles(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "alpha": {
+                    "model": "alpha-model",
+                    "base_url": "https://alpha.example/v1",
+                    "api_key": "alpha-key",
+                    "is_default": True,
+                },
+                "beta": {
+                    "model": "beta-model",
+                    "base_url": "https://beta.example/v1",
+                    "api_key": "beta-key",
+                    "is_default": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.model_status.loaded is False
+    assert resolved.model_status.error is not None
+    assert "more than one default profile" in resolved.model_status.error
 
 
 def test_load_llm_configs_uses_default_connect_timeout_when_not_configured(

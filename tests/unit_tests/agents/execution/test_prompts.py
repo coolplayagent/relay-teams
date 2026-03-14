@@ -182,4 +182,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     )
 
     assert "### Writer" in prompt
-    assert "dispatch_task" not in prompt.split("## Available Roles", 1)[0]
+    assert "## Role Usage" in prompt
+    assert "Use `create_tasks` to create tasks and bind to available roles." in prompt
+    assert "Use `dispatch_task` to dispatch tasks." in prompt
+    assert "Use `update_task` to update tasks." in prompt

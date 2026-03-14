@@ -171,7 +171,16 @@ class ModelConnectivityProbeService:
     ) -> ModelEndpointConfig:
         base_config: ModelEndpointConfig | None = None
         if request.profile_name is not None:
-            base_config = self._get_runtime().llm_profiles.get(request.profile_name)
+            runtime = self._get_runtime()
+            resolved_profile_name = _resolve_runtime_profile_name(
+                runtime=runtime,
+                requested_profile_name=request.profile_name,
+            )
+            base_config = (
+                runtime.llm_profiles.get(resolved_profile_name)
+                if resolved_profile_name is not None
+                else None
+            )
             if base_config is None:
                 raise ValueError(
                     f"Model profile '{request.profile_name}' was not found in runtime config."
@@ -228,7 +237,16 @@ class ModelConnectivityProbeService:
     ) -> ModelDiscoveryResolvedConfig:
         base_config: ModelEndpointConfig | None = None
         if request.profile_name is not None:
-            base_config = self._get_runtime().llm_profiles.get(request.profile_name)
+            runtime = self._get_runtime()
+            resolved_profile_name = _resolve_runtime_profile_name(
+                runtime=runtime,
+                requested_profile_name=request.profile_name,
+            )
+            base_config = (
+                runtime.llm_profiles.get(resolved_profile_name)
+                if resolved_profile_name is not None
+                else None
+            )
             if base_config is None:
                 raise ValueError(
                     f"Model profile '{request.profile_name}' was not found in runtime config."
@@ -771,3 +789,16 @@ class ModelConnectivityProbeService:
         if isinstance(value, float):
             return max(0, int(value))
         return 0
+
+
+def _resolve_runtime_profile_name(
+    *,
+    runtime: RuntimeConfig,
+    requested_profile_name: str,
+) -> str | None:
+    normalized_name = requested_profile_name.strip()
+    if normalized_name == "default":
+        return runtime.default_model_profile
+    if normalized_name in runtime.llm_profiles:
+        return normalized_name
+    return None

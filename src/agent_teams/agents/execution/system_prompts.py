@@ -12,13 +12,22 @@ from agent_teams.roles.registry import RoleRegistry, is_coordinator_role_definit
 
 ROLE_USAGE_PROMPT = (
     "## Role Usage\n"
+    "Use `create_tasks` to create tasks and bind to available roles."
+    "Use `dispatch_task` to dispatch tasks."
+    "Use `update_task` to update tasks."
     "Delegate only when another role is a better fit than answering directly. "
     "Choose the role whose description, tools, MCP tools, and skills best match the task, "
     "then give that role a concrete objective scoped to its responsibility. "
     "Assign work the way a manager briefs an employee: translate the user need into a clear task, "
     "expected outcome, and constraints for that role instead of merely repeating the user's request verbatim."
 )
-AVAILABLE_ROLES_HEADING = "## Available Roles"
+SKILL_USAGE_PROMPT = (
+    "## Skill Usage\n"
+    "Use `load_skill` to Load a specific skill by name. "
+    "Use `read_skill_resource` to Read a resource file from a skill. "
+    "Use `run_skill_script` to Run a script associated with a skill. "
+)
+AVAILABLE_ROLES_HEADING = "## Available Roles and its tool/mcp/skill sets"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
 ROLE_BLOCK_HEADING_PREFIX = "### "
 ROLE_BLOCK_DESCRIPTION_PREFIX = "- Description: "
@@ -115,7 +124,13 @@ def build_skill_instructions_prompt(
         AVAILABLE_SKILL_ITEM_PREFIX + entry.name + ": " + entry.description
         for entry in skill_instructions
     ]
-    return AVAILABLE_SKILLS_HEADING + "\n" + "\n".join(skill_blocks)
+    return (
+        SKILL_USAGE_PROMPT
+        + "\n\n"
+        + AVAILABLE_SKILLS_HEADING
+        + "\n"
+        + "\n".join(skill_blocks)
+    )
 
 
 def build_system_prompt(data: SystemPromptBuildInput) -> str:
