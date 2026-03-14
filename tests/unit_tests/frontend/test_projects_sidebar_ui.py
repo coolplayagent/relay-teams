@@ -27,18 +27,31 @@ setSelectSessionHandler(async (sessionId) => {
 
 await loadProjects();
 const projectsList = document.getElementById("projects-list");
-const firstProject = projectsList.children[0];
-const secondProject = projectsList.children[1];
+const projectCards = projectsList.children.filter(child => child.className === "project-card");
+const firstProject = projectCards[0];
+const secondProject = projectCards[1];
 
 const initialSessionCount = firstProject.querySelectorAll(".session-item").length;
 const initialProjectExpanded = firstProject.querySelector(".project-toggle").getAttribute("aria-expanded");
 const initialFirstProjectTitle = firstProject.querySelector(".project-title").textContent;
 const initialSecondProjectTitle = secondProject.querySelector(".project-title").textContent;
 const initialFirstSessionLabel = firstProject.querySelectorAll(".session-id")[0].textContent;
+const initialVisibilityLabel = firstProject.querySelector(".project-session-visibility-btn").textContent;
 
-firstProject.querySelector(".project-toggle").onclick();
+firstProject.querySelector(".project-session-visibility-btn").onclick();
 await flushTasks();
-const collapsedProject = projectsList.children[0];
+const expandedSessionProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const expandedSessionCount = expandedSessionProject.querySelectorAll(".session-item").length;
+const expandedVisibilityLabel = expandedSessionProject.querySelector(".project-session-visibility-btn").textContent;
+
+expandedSessionProject.querySelector(".project-session-visibility-btn").onclick();
+await flushTasks();
+const recollapsedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const recollapsedSessionCount = recollapsedProject.querySelectorAll(".session-item").length;
+
+recollapsedProject.querySelector(".project-toggle").onclick();
+await flushTasks();
+const collapsedProject = projectsList.children.filter(child => child.className === "project-card")[0];
 const collapsedProjectExpanded = collapsedProject.querySelector(".project-toggle").getAttribute("aria-expanded");
 
 collapsedProject.querySelectorAll(".project-new-session-btn")[0].onclick();
@@ -46,20 +59,24 @@ await flushTasks();
 
 await handleNewProjectClick();
 await flushTasks();
-const finalFirstProjectTitle = projectsList.children[0].querySelector(".project-title").textContent;
+const finalFirstProjectTitle = projectsList.children.filter(child => child.className === "project-card")[0].querySelector(".project-title").textContent;
 
 toggleProjectSortMode();
 await flushTasks();
-const sortedFirstProjectTitle = projectsList.children[0].querySelector(".project-title").textContent;
+const sortedFirstProjectTitle = projectsList.children.filter(child => child.className === "project-card")[0].querySelector(".project-title").textContent;
 
 console.log(JSON.stringify({
     initialProjectCount: 2,
     initialSessionCount,
     initialProjectExpanded,
     collapsedProjectExpanded,
+    initialVisibilityLabel,
+    expandedSessionCount,
+    expandedVisibilityLabel,
+    recollapsedSessionCount,
     createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
     selectedSessionIds: globalThis.__selectedSessionIds,
-    finalProjectCount: projectsList.children.length,
+    finalProjectCount: projectsList.children.filter(child => child.className === "project-card").length,
     initialFirstProjectTitle,
     initialSecondProjectTitle,
     initialFirstSessionLabel,
@@ -70,15 +87,19 @@ console.log(JSON.stringify({
     )
 
     assert payload["initialProjectCount"] == 2
-    assert payload["initialSessionCount"] == 7
+    assert payload["initialSessionCount"] == 10
     assert payload["initialProjectExpanded"] == "true"
     assert payload["collapsedProjectExpanded"] == "false"
+    assert payload["initialVisibilityLabel"] == "Show all (11)"
+    assert payload["expandedSessionCount"] == 11
+    assert payload["expandedVisibilityLabel"] == "Collapse"
+    assert payload["recollapsedSessionCount"] == 10
     assert payload["createdSessionWorkspaceIds"] == ["alpha-project", "gamma-project"]
     assert payload["selectedSessionIds"] == ["session-new-1", "session-new-2"]
     assert payload["finalProjectCount"] == 3
     assert payload["initialFirstProjectTitle"] == "Alpha Project"
     assert payload["initialSecondProjectTitle"] == "Beta Project"
-    assert payload["initialFirstSessionLabel"] == "Reply to greeting"
+    assert payload["initialFirstSessionLabel"] == "session-11"
     assert payload["finalFirstProjectTitle"] == "Gamma Project"
     assert payload["sortedFirstProjectTitle"] == "Alpha Project"
 
@@ -104,6 +125,7 @@ function parseElements(source, selector) {
     const patterns = {
         ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
+        ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\\s\\S]*?)<\\/button>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
         ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
         ".project-title": /class="project-title"[^>]*>([\\s\\S]*?)<\\/span>/g,
@@ -119,6 +141,8 @@ function parseElements(source, selector) {
             results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
         } else if (selector === ".project-new-session-btn") {
             results.push(createNode({ className: match[1] }));
+        } else if (selector === ".project-session-visibility-btn") {
+            results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
         } else if (selector === ".session-delete-btn") {
             results.push(createNode({ attributes: { "data-session-id": match[1] } }));
         } else if (selector === ".session-item") {
@@ -203,6 +227,19 @@ function createContainerElement() {
         appendChild(child) {
             this.children.push(child);
             return child;
+        },
+        querySelector(selector) {
+            return this.querySelectorAll(selector)[0] || null;
+        },
+        querySelectorAll(selector) {
+            if (!selector.startsWith(".")) {
+                return [];
+            }
+            const className = selector.slice(1);
+            return this.children.filter(child => {
+                const childClassName = String(child.className || "");
+                return childClassName.split(/\s+/).includes(className);
+            });
         },
     };
 }
@@ -301,6 +338,10 @@ const workspaces = [
 ];
 
 const sessions = [
+    { session_id: "session-11", workspace_id: "alpha-project", updated_at: "2026-03-14T10:11:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-10", workspace_id: "alpha-project", updated_at: "2026-03-14T10:10:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-9", workspace_id: "alpha-project", updated_at: "2026-03-14T10:09:00Z", pending_tool_approval_count: 0 },
+    { session_id: "session-8", workspace_id: "alpha-project", updated_at: "2026-03-14T10:08:00Z", pending_tool_approval_count: 0 },
     { session_id: "session-7", workspace_id: "alpha-project", updated_at: "2026-03-14T10:07:00Z", pending_tool_approval_count: 0, metadata: { title: "Reply to greeting" } },
     { session_id: "session-6", workspace_id: "alpha-project", updated_at: "2026-03-14T10:06:00Z", pending_tool_approval_count: 0 },
     { session_id: "session-5", workspace_id: "alpha-project", updated_at: "2026-03-14T10:05:00Z", pending_tool_approval_count: 0 },

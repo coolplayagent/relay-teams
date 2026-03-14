@@ -54,16 +54,6 @@ export function setupEventBindings(handleSend) {
             }
         };
     }
-    if (els.newProjectBtn) {
-        els.newProjectBtn.onclick = () => {
-            void handleNewProjectClick();
-        };
-    }
-    if (els.projectSortBtn) {
-        els.projectSortBtn.onclick = () => {
-            toggleProjectSortMode();
-        };
-    }
     document.addEventListener('run-approval-resolved', (event) => {
         const runId = event?.detail?.runId;
         if (!runId || typeof runId !== 'string') return;

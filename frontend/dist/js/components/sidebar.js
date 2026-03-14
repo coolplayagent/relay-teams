@@ -15,9 +15,12 @@ import {
 } from '../core/api.js';
 import { state } from '../core/state.js';
 
+const DEFAULT_VISIBLE_SESSION_COUNT = 10;
+
 let selectSessionHandler = null;
 let refreshTimer = null;
 const expandedProjectIds = new Set();
+const expandedProjectSessionIds = new Set();
 const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
 let projectSortMode = 'recent';
@@ -149,14 +152,15 @@ function buildProjectGroups(workspaces, sessions) {
 }
 
 function syncProjectSortButton() {
-    if (!els.projectSortBtn) {
+    const projectSortBtn = els.projectsList?.querySelector('.projects-toolbar-sort-btn');
+    if (!projectSortBtn) {
         return;
     }
     const sortLabel = projectSortMode === 'name' ? 'Sort by name' : 'Sort by recent';
-    els.projectSortBtn.title = sortLabel;
-    els.projectSortBtn.setAttribute('aria-label', sortLabel);
-    els.projectSortBtn.dataset.sortMode = projectSortMode;
-    els.projectSortBtn.innerHTML = projectSortMode === 'name'
+    projectSortBtn.title = sortLabel;
+    projectSortBtn.setAttribute('aria-label', sortLabel);
+    projectSortBtn.dataset.sortMode = projectSortMode;
+    projectSortBtn.innerHTML = projectSortMode === 'name'
         ? `
             <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                 <path d="M6 7h8M6 12h6M6 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -183,15 +187,47 @@ async function selectSessionById(sessionId) {
 }
 
 function renderEmptyProjectsState() {
-    if (!els.projectsList) {
-        return;
-    }
-    els.projectsList.innerHTML = `
-        <div class="projects-empty-state">
-            <p class="projects-empty-title">No projects yet</p>
-            <p class="projects-empty-copy">Add a project below to attach a workspace and start sessions.</p>
+    const emptyState = document.createElement('div');
+    emptyState.className = 'projects-empty-state';
+    emptyState.innerHTML = `
+        <p class="projects-empty-title">No projects yet</p>
+        <p class="projects-empty-copy">Add a project below to attach a workspace and start sessions.</p>
+    `;
+    return emptyState;
+}
+
+function renderProjectsToolbar() {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'projects-toolbar';
+    toolbar.innerHTML = `
+        <div class="projects-toolbar-title">Workspace</div>
+        <div class="projects-toolbar-actions">
+            <button class="sidebar-header-btn projects-toolbar-new-btn" type="button" title="New project" aria-label="New project">
+                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+            </button>
+            <button class="sidebar-header-btn projects-toolbar-sort-btn" type="button" title="Sort by recent" aria-label="Sort by recent">
+                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                    <path d="M7 6h10M7 12h7M7 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <path d="M17 8l2-2 2 2M19 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </button>
         </div>
     `;
+    const newProjectBtn = toolbar.querySelector('.projects-toolbar-new-btn');
+    const projectSortBtn = toolbar.querySelector('.projects-toolbar-sort-btn');
+    if (newProjectBtn) {
+        newProjectBtn.onclick = () => {
+            void handleNewProjectClick();
+        };
+    }
+    if (projectSortBtn) {
+        projectSortBtn.onclick = () => {
+            toggleProjectSortMode();
+        };
+    }
+    return toolbar;
 }
 
 function ensureProjectMenuDismissBinding() {
@@ -220,6 +256,7 @@ function bindProjectCard(card, group) {
     const workspaceId = workspace.workspace_id;
     const toggleBtn = card.querySelector('.project-toggle');
     const newSessionButtons = card.querySelectorAll('.project-new-session-btn');
+    const sessionVisibilityButtons = card.querySelectorAll('.project-session-visibility-btn');
     const optionsButtons = card.querySelectorAll('.project-options-btn');
     const removeButtons = card.querySelectorAll('.project-remove-btn');
     const deleteButtons = card.querySelectorAll('.session-delete-btn');
@@ -240,6 +277,18 @@ function bindProjectCard(card, group) {
         button.onclick = event => {
             event?.stopPropagation?.();
             void handleNewSessionClick(workspaceId, true);
+        };
+    });
+
+    sessionVisibilityButtons.forEach(button => {
+        button.onclick = event => {
+            event?.stopPropagation?.();
+            if (expandedProjectSessionIds.has(workspaceId)) {
+                expandedProjectSessionIds.delete(workspaceId);
+            } else {
+                expandedProjectSessionIds.add(workspaceId);
+            }
+            void loadProjects();
         };
     });
 
@@ -326,6 +375,11 @@ function renderProjectCard(group) {
     const workspaceLabel = formatProjectLabel(workspace);
     const expanded = expandedProjectIds.has(workspaceId);
     const menuOpen = openProjectMenuId === workspaceId;
+    const sessionsExpanded = expandedProjectSessionIds.has(workspaceId);
+    const visibleSessions = sessionsExpanded
+        ? sessions
+        : sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
+    const hasHiddenSessions = sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
 
     const card = document.createElement('section');
     card.className = 'project-card';
@@ -374,8 +428,8 @@ function renderProjectCard(group) {
         <div class="project-body${expanded ? '' : ' is-collapsed'}">
             <div class="project-session-list">
                 ${
-                    sessions.length > 0
-                        ? sessions.map(session => {
+                    visibleSessions.length > 0
+                        ? visibleSessions.map(session => {
                             return `
                                 <div
                                     class="session-item${session.session_id === state.currentSessionId ? ' active' : ''}"
@@ -403,6 +457,15 @@ function renderProjectCard(group) {
                         `
                 }
             </div>
+            ${
+                hasHiddenSessions
+                    ? `
+                        <button class="project-session-visibility-btn" type="button">
+                            ${sessionsExpanded ? 'Collapse' : `Show all (${sessions.length})`}
+                        </button>
+                    `
+                    : ''
+            }
         </div>
     `;
 
@@ -417,17 +480,18 @@ export async function loadProjects() {
 
     try {
         ensureProjectMenuDismissBinding();
-        syncProjectSortButton();
         const [workspaces, sessions] = await Promise.all([
             fetchWorkspaces(),
             fetchSessions(),
         ]);
 
         els.projectsList.innerHTML = '';
+        els.projectsList.appendChild(renderProjectsToolbar());
+        syncProjectSortButton();
 
         if (!Array.isArray(workspaces) || workspaces.length === 0) {
             openProjectMenuId = null;
-            renderEmptyProjectsState();
+            els.projectsList.appendChild(renderEmptyProjectsState());
             return;
         }
 
@@ -524,6 +588,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         await deleteWorkspace(workspaceId);
 
         expandedProjectIds.delete(workspaceId);
+        expandedProjectSessionIds.delete(workspaceId);
         initializedProjectIds.delete(workspaceId);
         sessionWorkspaceMap.forEach((value, key) => {
             if (value === workspaceId) {
@@ -564,6 +629,7 @@ export async function handleNewSessionClick(workspaceId, manualClick = true) {
         return;
     }
     try {
+        expandedProjectSessionIds.add(targetWorkspaceId);
         const data = await startNewSession(targetWorkspaceId);
         state.currentWorkspaceId = targetWorkspaceId;
         sysLog(`Created new session: ${data.session_id}`);

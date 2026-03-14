@@ -4686,6 +4686,29 @@ body.light-theme .project-session-toggle-btn {
     padding-top: 0.2rem;
 }
 
+.projects-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 30px;
+    margin-bottom: 0.1rem;
+    padding: 0.08rem 0.65rem 0.18rem 0.78rem;
+}
+
+.projects-toolbar-title {
+    min-width: 0;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-secondary) 84%, transparent);
+}
+
+.projects-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+}
+
 .projects-list .project-card {
     margin: 0;
     border: none;
@@ -4809,23 +4832,26 @@ body.light-theme .project-session-toggle-btn {
 .projects-list .project-path-hint {
     position: absolute;
     left: 1.72rem;
-    top: 1.72rem;
-    max-width: calc(100% - 4.2rem);
+    top: 0.16rem;
+    width: fit-content;
+    min-width: 12rem;
+    max-width: calc(100% - 1rem);
     padding: 0.14rem 0.38rem;
-    overflow: hidden;
+    overflow: visible;
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 0.66rem;
     line-height: 1.35;
     opacity: 0;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
     border-radius: 6px;
     background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
     box-shadow: 0 3px 10px rgba(17, 19, 18, 0.045);
-    transform: translateY(-1px);
+    transform: translateY(calc(-100% - 4px));
     z-index: 7;
     transition: opacity 0.14s ease, transform 0.14s ease;
 }
@@ -4833,7 +4859,7 @@ body.light-theme .project-session-toggle-btn {
 .projects-list .project-row:hover + .project-path-hint,
 .projects-list .project-row:focus-within + .project-path-hint {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(calc(-100% - 2px));
 }
 
 .projects-list .project-menu {
@@ -4883,7 +4909,7 @@ body.light-theme .project-session-toggle-btn {
     flex-direction: column;
     gap: 0.04rem;
     margin-left: 1.52rem;
-    padding: 0.02rem 0 0.2rem;
+    padding: 0.02rem 0 0.04rem;
 }
 
 .projects-list .session-item {
@@ -4990,6 +5016,22 @@ body.light-theme .project-session-toggle-btn {
     padding: 0.06rem 0.4rem 0.26rem 0.56rem;
     color: var(--text-secondary);
     font-size: 0.72rem;
+}
+
+.projects-list .project-session-visibility-btn {
+    margin-left: 1.86rem;
+    margin-top: -0.02rem;
+    padding: 0.08rem 0.4rem 0.22rem 0.56rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.71rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.projects-list .project-session-visibility-btn:hover {
+    color: var(--text-primary);
 }
 
 body.light-theme .projects-list .project-card {

@@ -791,34 +791,6 @@ body.is-resizing-rails .right-rail-resizer {
     letter-spacing: 0;
 }
 
-.sidebar-section-bar {
-    padding: 0.15rem 0.65rem 0.38rem 0.78rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    background: transparent;
-}
-
-.sidebar-section-title {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-}
-
-.sidebar-section-title h2 {
-    margin: 0;
-    font-size: 0.8rem;
-    font-weight: 500;
-    color: color-mix(in srgb, var(--text-secondary) 84%, transparent);
-}
-
-.sidebar-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.1rem;
-}
-
 .sidebar-header-btn {
     width: 26px;
     height: 26px;
@@ -1004,7 +976,6 @@ body.light-theme .sidebar-footer {
 }
 
 body.light-theme .sidebar-header,
-body.light-theme .sidebar-section-bar,
 body.light-theme .projects-list,
 body.light-theme .sessions-list,
 body.light-theme .sidebar-footer {
