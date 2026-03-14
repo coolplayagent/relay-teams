@@ -7,27 +7,28 @@ from urllib.request import Request, urlopen
 
 import typer
 
-from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
 
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
 type AutoStartCallable = Callable[[str, bool], None]
 type StreamEventsCallable = Callable[[str, str, bool], None]
-type RunSinglePromptCallable = Callable[[str], None]
+type RunSinglePromptCallable = Callable[[str, ApprovalMode], None]
 type ExecutePromptCallable = Callable[..., None]
 
 
 def root_command(
     ctx: typer.Context,
     message: str | None,
+    approval_mode: ApprovalMode,
     *,
     run_single_prompt: RunSinglePromptCallable,
 ) -> None:
     if message is not None:
         if ctx.invoked_subcommand is not None:
             raise typer.BadParameter("Cannot combine --message with subcommands")
-        run_single_prompt(message)
+        run_single_prompt(message, approval_mode)
         return
 
     if ctx.invoked_subcommand is None:
@@ -36,6 +37,7 @@ def root_command(
 
 def run_single_prompt(
     message: str,
+    approval_mode: ApprovalMode,
     *,
     default_base_url: str,
     execute_prompt: ExecutePromptCallable,
@@ -48,6 +50,7 @@ def run_single_prompt(
         session_id=None,
         base_url=default_base_url,
         execution_mode="ai",
+        approval_mode=approval_mode.value,
         autostart=True,
         debug=False,
     )
@@ -58,6 +61,7 @@ def execute_prompt(
     session_id: str | None,
     base_url: str,
     execution_mode: str,
+    approval_mode: str,
     autostart: bool,
     debug: bool,
     *,
@@ -86,6 +90,7 @@ def execute_prompt(
             "session_id": resolved_session_id,
             "intent": message,
             "execution_mode": execution_mode,
+            "approval_mode": approval_mode,
         },
     )
     run = _require_object_response(run_response, "/api/runs")

@@ -5,7 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource, RunEventType
+from agent_teams.sessions.runs.enums import (
+    ApprovalMode,
+    ExecutionMode,
+    InjectionSource,
+    RunEventType,
+)
 
 
 class IntentInput(BaseModel):
@@ -14,6 +19,7 @@ class IntentInput(BaseModel):
     session_id: str = Field(min_length=1)
     intent: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
+    approval_mode: ApprovalMode = ApprovalMode.STANDARD
 
 
 class RunResult(BaseModel):

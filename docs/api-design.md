@@ -283,9 +283,16 @@ Request:
 {
   "intent": "Implement endpoint X",
   "session_id": "session-1",
-  "execution_mode": "ai"
+  "execution_mode": "ai",
+  "approval_mode": "standard"
 }
 ```
+
+Notes:
+
+- `approval_mode` is optional.
+- `standard` preserves the existing tool approval flow.
+- `yolo` skips tool approval for all tools in that run, including resumed recoverable runs.
 
 Response:
 

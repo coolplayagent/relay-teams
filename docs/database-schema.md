@@ -345,6 +345,26 @@ Primary query keys used by repositories:
 
 ---
 
+### 2.9 `run_intents`
+
+```sql
+CREATE TABLE IF NOT EXISTS run_intents (
+    run_id         TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    intent         TEXT NOT NULL,
+    execution_mode TEXT NOT NULL,
+    approval_mode  TEXT NOT NULL DEFAULT 'standard',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
+```
+
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `approval_mode` controls whether tool approvals run in `standard` mode or are skipped entirely in `yolo` mode.
+
+---
+
 ### 2.10 `role_memories`
 
 ```sql

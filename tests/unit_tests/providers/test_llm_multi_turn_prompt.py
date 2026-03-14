@@ -40,6 +40,7 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
@@ -523,6 +524,7 @@ def _build_provider(
         agent_repo=AgentInstanceRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
+        run_intent_repo=RunIntentRepository(db_path),
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
@@ -542,7 +544,7 @@ def _build_provider(
             cast(object, run_control_manager or _FakeRunControlManager()),
         ),
         tool_approval_manager=cast(ToolApprovalManager, object()),
-        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        tool_approval_policy=ToolApprovalPolicy(),
     )
     return provider, message_repo
 

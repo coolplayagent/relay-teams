@@ -4717,9 +4717,79 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 .input-controls {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: 1rem;
     margin-top: 0.7rem;
+}
+
+.composer-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.composer-mode-toggle input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.composer-mode-check {
+    position: relative;
+    width: 2.2rem;
+    height: 1.3rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.3);
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.composer-mode-check::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: calc(1.3rem - 4px);
+    height: calc(1.3rem - 4px);
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.24);
+    transition: transform 0.16s ease;
+}
+
+.composer-mode-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.08rem;
+}
+
+.composer-mode-title {
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.composer-mode-text {
+    font-size: 0.76rem;
+    line-height: 1.2;
+}
+
+.composer-mode-toggle input[type="checkbox"]:checked + .composer-mode-check {
+    background: rgba(37, 99, 235, 0.9);
+    border-color: rgba(37, 99, 235, 0.95);
+}
+
+.composer-mode-toggle input[type="checkbox"]:checked + .composer-mode-check::after {
+    transform: translateX(0.9rem);
+}
+
+.composer-mode-toggle input[type="checkbox"]:disabled + .composer-mode-check {
+    opacity: 0.6;
 }
 
 .sub-text {

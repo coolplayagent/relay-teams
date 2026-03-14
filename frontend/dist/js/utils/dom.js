@@ -31,6 +31,7 @@ export const els = {
     subagentStatusSummary: qs('#subagent-status-summary'),
     subagentRoleMeta: qs('#subagent-role-meta'),
     promptInput: qs('#prompt-input'),
+    yoloModeToggle: qs('#yolo-mode-toggle'),
     sendBtn: qs('#send-btn'),
     stopBtn: qs('#stop-btn'),
     chatForm: qs('#chat-form')

@@ -10,7 +10,7 @@ from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.enums import InstanceStatus
 from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.control import RunControlManager
-from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.manager import RunManager
@@ -191,6 +191,88 @@ def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:
     assert run_id == "run-existing"
     assert session_id == "session-1"
     assert "run-existing" in manager._resume_requested_runs
+
+
+def test_create_run_updates_pending_run_approval_mode(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_pending_mode.db"
+    manager = _build_manager(db_path)
+    pending_intent = IntentInput(
+        session_id="session-1",
+        intent="initial",
+        approval_mode=ApprovalMode.STANDARD,
+    )
+    manager._pending_runs["run-existing"] = pending_intent
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        status=RunRuntimeStatus.QUEUED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    RunIntentRepository(db_path).upsert(
+        run_id="run-existing",
+        session_id="session-1",
+        intent=pending_intent,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    run_id, _ = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            intent="follow up",
+            approval_mode=ApprovalMode.YOLO,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get("run-existing")
+    assert run_id == "run-existing"
+    assert pending_intent.approval_mode == ApprovalMode.YOLO
+    assert persisted.approval_mode == ApprovalMode.YOLO
+
+
+def test_create_run_updates_recoverable_run_approval_mode(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_recoverable_mode.db"
+    manager = _build_manager(db_path)
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+    existing_intent = IntentInput(
+        session_id="session-1",
+        intent="existing",
+        approval_mode=ApprovalMode.STANDARD,
+    )
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    RunRuntimeRepository(db_path).update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    RunIntentRepository(db_path).upsert(
+        run_id="run-existing",
+        session_id="session-1",
+        intent=existing_intent,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    run_id, _ = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            intent="resume with yolo",
+            approval_mode=ApprovalMode.YOLO,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get("run-existing")
+    assert run_id == "run-existing"
+    assert persisted.approval_mode == ApprovalMode.YOLO
 
 
 def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:

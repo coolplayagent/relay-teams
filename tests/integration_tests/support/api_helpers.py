@@ -31,6 +31,7 @@ def create_run(
     session_id: str,
     intent: str,
     execution_mode: str,
+    approval_mode: str = "standard",
 ) -> str:
     response = client.post(
         "/api/runs",
@@ -38,6 +39,7 @@ def create_run(
             "session_id": session_id,
             "intent": intent,
             "execution_mode": execution_mode,
+            "approval_mode": approval_mode,
         },
     )
     response.raise_for_status()

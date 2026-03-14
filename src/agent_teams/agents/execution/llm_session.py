@@ -24,7 +24,7 @@ from pydantic_ai.messages import (
 )
 
 from agent_teams.providers.model_config import ModelEndpointConfig
-from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.logger import (
     close_model_stream,
@@ -41,6 +41,7 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.agents.execution.message_repo import MessageRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
@@ -103,6 +104,7 @@ class AgentLlmSession:
         agent_repo: AgentInstanceRepository,
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
+        run_intent_repo: RunIntentRepository,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
@@ -130,6 +132,7 @@ class AgentLlmSession:
         self._agent_repo = agent_repo
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
+        self._run_intent_repo = run_intent_repo
         self._workspace_manager = workspace_manager
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
@@ -270,7 +273,7 @@ class AgentLlmSession:
             task_execution_service=self._task_execution_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
-            tool_approval_policy=self._tool_approval_policy,
+            tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
             notification_service=self._notification_service,
         )
         control_ctx = self._run_control_manager.context(
@@ -1019,3 +1022,10 @@ class AgentLlmSession:
             request.session_id,
             request.role_id,
         )
+
+    def _resolve_tool_approval_policy(self, run_id: str) -> ToolApprovalPolicy:
+        try:
+            approval_mode = self._run_intent_repo.get(run_id).approval_mode
+        except KeyError:
+            approval_mode = ApprovalMode.STANDARD
+        return self._tool_approval_policy.with_mode(approval_mode)

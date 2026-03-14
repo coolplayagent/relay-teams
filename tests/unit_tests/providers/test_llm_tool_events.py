@@ -29,6 +29,7 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
@@ -99,6 +100,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         agent_repo=cast(AgentInstanceRepository, object()),
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
+        run_intent_repo=cast(RunIntentRepository, object()),
         workspace_manager=WorkspaceManager(
             project_root=Path("."),
             shared_store=shared_store,
@@ -118,7 +120,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             RunControlManager, cast(object, _FakeRunControlManager())
         ),
         tool_approval_manager=cast(ToolApprovalManager, object()),
-        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        tool_approval_policy=ToolApprovalPolicy(),
     )
 
 

@@ -497,7 +497,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     assert "Coordinate tasks." in provider.system_prompts[0]
     assert "## Role Usage" in provider.system_prompts[0]
     assert "## Available Roles" in provider.system_prompts[0]
-    assert "### Writer Agent" in provider.system_prompts[0]
+    assert "### writer_agent" in provider.system_prompts[0]
 
 
 @pytest.mark.asyncio

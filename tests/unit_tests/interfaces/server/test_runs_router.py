@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.interfaces.server.routers import runs
+from agent_teams.sessions.runs.models import IntentInput
 
 
 class _FakeRunService:
@@ -13,6 +14,11 @@ class _FakeRunService:
         self.resumed_run_ids: list[str] = []
         self.ensure_called = False
         self.raise_on_tool_approval = False
+        self.created_run_inputs: list[IntentInput] = []
+
+    def create_run(self, intent_input) -> tuple[str, str]:
+        self.created_run_inputs.append(intent_input)
+        return ("run-1", "session-1")
 
     def resume_run(self, run_id: str) -> str:
         self.resumed_run_ids.append(run_id)
@@ -56,6 +62,26 @@ def test_resume_route_marks_run_for_resume_without_starting_worker() -> None:
     }
     assert fake_service.resumed_run_ids == ["run-1"]
     assert fake_service.ensure_called is False
+
+
+def test_create_run_route_accepts_approval_mode() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+            "approval_mode": "yolo",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": "run-1", "session_id": "session-1"}
+    created = fake_service.created_run_inputs[0]
+    assert created.approval_mode.value == "yolo"
 
 
 def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:

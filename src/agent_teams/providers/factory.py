@@ -25,6 +25,7 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
@@ -45,6 +46,7 @@ def create_provider_factory(
     agent_repo: AgentInstanceRepository,
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
+    run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
     role_memory_service: RoleMemoryService | None = None,
     tool_registry: ToolRegistry,
@@ -79,6 +81,7 @@ def create_provider_factory(
                 agent_repo=agent_repo,
                 approval_ticket_repo=approval_ticket_repo,
                 run_runtime_repo=run_runtime_repo,
+                run_intent_repo=run_intent_repo,
                 workspace_manager=workspace_manager,
                 role_memory_service=role_memory_service,
                 tool_registry=tool_registry,

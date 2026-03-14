@@ -127,11 +127,13 @@ class AgentTeamsClient:
         intent: str,
         session_id: str,
         execution_mode: str = "ai",
+        approval_mode: str = "standard",
     ) -> RunHandle:
         payload: dict[str, JsonValue] = {
             "session_id": session_id,
             "intent": intent,
             "execution_mode": execution_mode,
+            "approval_mode": approval_mode,
         }
         data = self._request_json("POST", "/api/runs", payload)
         return RunHandle(

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.manager import RunManager
-from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource
+from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode, InjectionSource
 from agent_teams.sessions.runs.models import IntentInput
 from agent_teams.trace import bind_trace_context
 
@@ -26,6 +26,7 @@ class CreateRunRequest(BaseModel):
     intent: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
+    approval_mode: ApprovalMode = ApprovalMode.STANDARD
 
 
 class CreateRunResponse(BaseModel):
@@ -74,6 +75,7 @@ def create_run(
                 session_id=req.session_id,
                 intent=req.intent,
                 execution_mode=req.execution_mode,
+                approval_mode=req.approval_mode,
             )
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -84,7 +86,10 @@ def create_run(
                 event="run.created",
                 message="Run created",
                 duration_ms=elapsed_ms,
-                payload={"execution_mode": req.execution_mode.value},
+                payload={
+                    "execution_mode": req.execution_mode.value,
+                    "approval_mode": req.approval_mode.value,
+                },
             )
         return CreateRunResponse(run_id=run_id, session_id=session_id)
     except ValueError as exc:

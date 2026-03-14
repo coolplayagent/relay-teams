@@ -8,6 +8,11 @@ class ExecutionMode(str, Enum):
     MANUAL = "manual"
 
 
+class ApprovalMode(str, Enum):
+    STANDARD = "standard"
+    YOLO = "yolo"
+
+
 class InjectionSource(str, Enum):
     SYSTEM = "system"
     USER = "user"

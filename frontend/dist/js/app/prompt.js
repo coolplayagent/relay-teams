@@ -13,6 +13,19 @@ import { startIntentStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 
+const APPROVAL_MODE_STORAGE_KEY = 'agent_teams_approval_mode';
+
+export function initializeApprovalModeToggle() {
+    const savedMode = readSavedApprovalMode();
+    applyApprovalMode(savedMode, { persist: false });
+    if (!els.yoloModeToggle) return;
+    els.yoloModeToggle.checked = savedMode === 'yolo';
+    els.yoloModeToggle.addEventListener('change', () => {
+        const nextMode = els.yoloModeToggle.checked ? 'yolo' : 'standard';
+        applyApprovalMode(nextMode);
+    });
+}
+
 export async function handleSend() {
     const text = els.promptInput.value.trim();
     if (!text) return;
@@ -58,10 +71,34 @@ export async function handleSend() {
         state.currentSessionId,
         async sid => hydrateSessionView(sid, { includeRounds: true, quiet: true }),
         {
+            approvalMode: state.approvalMode,
             onRunCreated: (run) => {
                 createLiveRound(run.run_id, text);
                 appendRoundUserMessage(run.run_id, text);
             },
         },
     );
+}
+
+function readSavedApprovalMode() {
+    try {
+        const stored = localStorage.getItem(APPROVAL_MODE_STORAGE_KEY);
+        return stored === 'standard' ? 'standard' : 'yolo';
+    } catch (_error) {
+        return 'yolo';
+    }
+}
+
+function applyApprovalMode(mode, { persist = true } = {}) {
+    const safeMode = mode === 'standard' ? 'standard' : 'yolo';
+    state.approvalMode = safeMode;
+    if (els.yoloModeToggle) {
+        els.yoloModeToggle.checked = safeMode === 'yolo';
+    }
+    if (!persist) return;
+    try {
+        localStorage.setItem(APPROVAL_MODE_STORAGE_KEY, safeMode);
+    } catch (_error) {
+        return;
+    }
 }

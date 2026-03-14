@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
+from agent_teams.sessions.runs.enums import ApprovalMode
 from agent_teams.notifications import NotificationService, default_notification_config
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
@@ -24,7 +25,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.tools.runtime import ToolContext, execute_tool
+from agent_teams.tools.runtime import ToolApprovalPolicy, ToolContext, execute_tool
 
 
 class _FakeRunEventHub:
@@ -72,7 +73,12 @@ class _FakePolicy:
 
 
 class _FakeDeps:
-    def __init__(self, *, manager: _FakeApprovalManager, policy: _FakePolicy) -> None:
+    def __init__(
+        self,
+        *,
+        manager: _FakeApprovalManager,
+        policy: _FakePolicy | ToolApprovalPolicy,
+    ) -> None:
         db_path = Path(mkdtemp()) / "runtime.db"
         self.run_id = "run-1"
         self.trace_id = "trace-1"
@@ -165,6 +171,39 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.RUNNING
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
+
+
+def test_execute_tool_skips_approval_flow_in_yolo_mode() -> None:
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=ToolApprovalPolicy(
+            approval_mode=ApprovalMode.YOLO,
+            timeout_seconds=0.01,
+        ),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-model-yolo"
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "pwd"},
+            action=lambda: {"stdout": "/tmp"},
+        )
+    )
+
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is True
+    assert result["data"] == {"stdout": "/tmp"}
+    assert meta["approval_required"] is False
+    assert meta["approval_status"] == "not_required"
+    assert deps.approval_ticket_repo.get("call-model-yolo") is None
+    assert manager.last_open is None
+    assert not any(
+        event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+        for event in deps.run_event_hub.events
+    )
 
 
 def test_execute_tool_returns_denied_error_when_approval_rejected() -> None:

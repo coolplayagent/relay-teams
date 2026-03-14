@@ -19,6 +19,7 @@ export const state = {
     currentRecoverySnapshot: null,
     sessionAgents: [],
     sessionTasks: [],
+    approvalMode: 'yolo',
     selectedRoleId: null,
     coordinatorRoleId: null,
     rightRailExpanded: true,

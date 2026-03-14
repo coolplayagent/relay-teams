@@ -52,6 +52,7 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
                 "session_id": "session-1",
                 "intent": "hello",
                 "execution_mode": "ai",
+                "approval_mode": "yolo",
             },
         ),
     ]
@@ -62,6 +63,52 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
         "run_id": "run-1",
         "debug": False,
     }
+
+
+def test_root_message_allows_standard_approval_mode_override(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/sessions":
+            return {"session_id": "session-1"}
+        if path == "/api/runs":
+            return {"run_id": "run-1"}
+        raise AssertionError(f"unexpected path: {path}")
+
+    def fake_stream(base_url: str, run_id: str, debug: bool) -> None:
+        _ = (base_url, run_id, debug)
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["-m", "hello", "--approval-mode", "standard"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[-1] == (
+        "POST",
+        "/api/runs",
+        {
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+            "approval_mode": "standard",
+        },
+    )
 
 
 def test_run_module_removed() -> None:

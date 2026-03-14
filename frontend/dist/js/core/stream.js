@@ -20,11 +20,13 @@ let pendingStopRequest = false;
 let creatingRun = false;
 
 export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
+    const approvalMode = options.approvalMode === 'standard' ? 'standard' : 'yolo';
     creatingRun = true;
     state.activeRunId = null;
     state.isGenerating = true;
     if (els.sendBtn) els.sendBtn.disabled = true;
     if (els.promptInput) els.promptInput.disabled = true;
+    if (els.yoloModeToggle) els.yoloModeToggle.disabled = true;
     if (els.stopBtn) {
         els.stopBtn.style.display = 'inline-flex';
         els.stopBtn.disabled = false;
@@ -37,12 +39,13 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
 
     let runId = null;
     try {
-        const run = await sendUserPrompt(sessionId, promptText);
+        const run = await sendUserPrompt(sessionId, promptText, approvalMode);
         runId = run.run_id;
         state.activeRunId = runId;
         logInfo('frontend.run.created', 'Frontend run created', {
             run_id: runId,
             session_id: sessionId,
+            approval_mode: approvalMode,
         });
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
@@ -96,6 +99,9 @@ export function endStream() {
     if (els.stopBtn) {
         els.stopBtn.disabled = true;
         els.stopBtn.style.display = 'none';
+    }
+    if (els.yoloModeToggle) {
+        els.yoloModeToggle.disabled = false;
     }
     if (els.promptInput) {
         els.promptInput.disabled = false;
