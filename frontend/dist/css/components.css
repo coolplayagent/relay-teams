@@ -722,7 +722,7 @@
     border-radius: 999px;
     vertical-align: 0.02em;
     background: color-mix(in srgb, var(--primary) 72%, var(--text-msg-content) 28%);
-    animation: streamingCaretPulse 1.05s steps(1, end) infinite;
+    animation: streamingCaretPulse 0.9s ease-in-out infinite alternate;
 }
 
 .msg-content blockquote,

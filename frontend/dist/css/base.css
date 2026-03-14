@@ -197,14 +197,11 @@ body.light-theme {
 }
 
 @keyframes streamingCaretPulse {
-
-    0%,
-    46% {
-        opacity: 1;
+    0% {
+        opacity: 0.26;
     }
 
-    54%,
     100% {
-        opacity: 0.18;
+        opacity: 1;
     }
 }

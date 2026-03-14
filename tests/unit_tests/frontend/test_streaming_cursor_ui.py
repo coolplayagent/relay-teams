@@ -74,10 +74,13 @@ def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
     ).read_text(encoding="utf-8")
 
     assert "@keyframes streamingCaretPulse" in base_css
+    assert "opacity: 0.26;" in base_css
+    assert "opacity: 1;" in base_css
     assert ".streaming-cursor {" in components_css
     assert "border-radius: 999px;" in components_css
     assert (
-        "animation: streamingCaretPulse 1.05s steps(1, end) infinite;" in components_css
+        "animation: streamingCaretPulse 0.9s ease-in-out infinite alternate;"
+        in components_css
     )
     assert (
         "background: color-mix(in srgb, var(--primary) 72%, var(--text-msg-content) 28%);"

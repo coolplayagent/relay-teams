@@ -164,6 +164,9 @@ export function appendToolCallBlock(
         streamState.set(streamKey, st);
     }
 
+    if (st.activeTextEl) {
+        syncStreamingCursor(st.activeTextEl, false);
+    }
     st.activeTextEl = null;
     st.raw = '';
 
