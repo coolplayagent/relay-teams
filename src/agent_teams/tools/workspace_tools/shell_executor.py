@@ -15,27 +15,84 @@ from agent_teams.tools.workspace_tools.shell_policy import (
     MAX_TIMEOUT_SECONDS,
 )
 
+WINDOWS_GIT_BASH_CANDIDATES = (
+    Path(r"C:\Program Files\Git\bin\bash.exe"),
+    Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+    Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+    Path(r"C:\Program Files (x86)\Git\usr\bin\bash.exe"),
+)
+
 
 def resolve_bash_path() -> str:
     """Resolve the bash executable path for shell commands."""
     env_path = get_env_var("GIT_BASH_PATH")
-    if env_path and Path(env_path).exists():
-        return env_path
+    if env_path:
+        resolved_env_path = Path(env_path).expanduser()
+        if resolved_env_path.is_file():
+            return str(resolved_env_path)
+
+    if _is_windows():
+        return _resolve_windows_bash_path()
+    return _resolve_posix_bash_path()
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _resolve_windows_bash_path() -> str:
+    for candidate in _iter_windows_git_bash_candidates():
+        if candidate.is_file():
+            return str(candidate)
 
     which_bash = shutil.which("bash")
     if which_bash:
-        return which_bash
+        bash_path = Path(which_bash)
+        if bash_path.is_file() and not _is_wsl_bash_launcher(bash_path):
+            return str(bash_path)
 
-    candidates = (
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    raise FileNotFoundError(
+        "Git Bash executable not found on Windows; install Git for Windows or set GIT_BASH_PATH"
     )
-    for item in candidates:
-        if Path(item).exists():
-            return item
 
-    raise FileNotFoundError("Git Bash executable not found; set GIT_BASH_PATH")
+
+def _resolve_posix_bash_path() -> str:
+    which_bash = shutil.which("bash")
+    if which_bash:
+        return which_bash
+    raise FileNotFoundError("bash executable not found")
+
+
+def _iter_windows_git_bash_candidates() -> tuple[Path, ...]:
+    candidates = list(WINDOWS_GIT_BASH_CANDIDATES)
+    git_path = shutil.which("git")
+    if git_path:
+        git_root = Path(git_path).parent.parent
+        candidates.extend(
+            (
+                git_root / "bin" / "bash.exe",
+                git_root / "usr" / "bin" / "bash.exe",
+            )
+        )
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = str(candidate).lower()
+        if normalized in seen:
+            continue
+        deduped.append(candidate)
+        seen.add(normalized)
+    return tuple(deduped)
+
+
+def _is_wsl_bash_launcher(path: Path) -> bool:
+    windows_dir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    launcher_paths = {
+        (windows_dir / "System32" / "bash.exe").resolve(),
+        (windows_dir / "Sysnative" / "bash.exe").resolve(),
+    }
+    return path.resolve() in launcher_paths
 
 
 def normalize_timeout(timeout_ms: int | None) -> int:
@@ -147,11 +204,15 @@ async def spawn_shell(
 
     try:
         while True:
-            if stream_eof >= 2 and proc.returncode is not None:
-                break
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise asyncio.TimeoutError
+            if stream_eof >= 2:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=remaining)
+                except asyncio.TimeoutError as exc:
+                    raise asyncio.TimeoutError from exc
+                break
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=remaining)
             except asyncio.TimeoutError as exc:

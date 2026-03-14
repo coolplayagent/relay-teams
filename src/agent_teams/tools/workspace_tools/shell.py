@@ -17,6 +17,14 @@ MAX_OUTPUT_CHARS = 64_000
 MAX_METADATA_LENGTH = 30_000
 
 
+def _format_timeout_metadata(timeout_ms: int) -> str:
+    return (
+        "\n\n<bash_metadata>\n"
+        f"Command terminated after {timeout_ms}ms timeout\n"
+        "</bash_metadata>"
+    )
+
+
 def register(Agent: Agent[ToolDeps, str]) -> None:
     @Agent.tool
     async def shell(
@@ -66,7 +74,7 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
                 output += "\n\n[stderr]:\n" + stderr[:MAX_OUTPUT_CHARS]
 
             if timed_out:
-                output += f"\n\n<bash_metadata>\nCommand terminated after {timeout_ms}ms timeout\n</bash_metadata>"
+                output += _format_timeout_metadata(timeout)
 
             return {
                 "ok": exit_code == 0,
