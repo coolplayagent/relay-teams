@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+import io
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+import zipfile
 
 import pytest
 
@@ -53,6 +56,38 @@ class TestRipgrepFilepath:
 
                 assert first == rg
                 assert second == rg
+
+    @pytest.mark.asyncio
+    async def test_get_rg_path_downloads_once_for_parallel_calls(
+        self, tmp_path: Path
+    ) -> None:
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        rg_name = "rg.exe" if os.name == "nt" else "rg"
+        rg = cache_dir / rg_name
+
+        with patch("shutil.which", return_value=None):
+            with patch("agent_teams.tools.workspace_tools.ripgrep.BIN_DIR", cache_dir):
+                from agent_teams.tools.workspace_tools import ripgrep
+
+                async def fake_download(target: Path) -> None:
+                    await asyncio.sleep(0.01)
+                    target.write_bytes(b"fake")
+
+                ripgrep.clear_rg_path_cache()
+                with patch(
+                    "agent_teams.tools.workspace_tools.ripgrep._download_rg",
+                    new=AsyncMock(side_effect=fake_download),
+                ) as mock_download:
+                    first, second = await asyncio.gather(
+                        ripgrep.get_rg_path(),
+                        ripgrep.get_rg_path(),
+                    )
+
+                assert first == rg
+                assert second == rg
+                assert mock_download.await_count == 1
 
 
 class TestRipgrepDownload:
@@ -111,6 +146,20 @@ class TestRipgrepDownload:
                     await ripgrep._download_rg(target)
 
         assert exc.value.status == 404
+
+    def test_extract_zip_replaces_existing_target(self, tmp_path: Path) -> None:
+        from agent_teams.tools.workspace_tools import ripgrep
+
+        target = tmp_path / "rg.exe"
+        target.write_bytes(b"old")
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("ripgrep-14.1.1-x86_64-pc-windows-msvc/rg.exe", b"new")
+
+        ripgrep._extract_zip(buffer.getvalue(), target)
+
+        assert target.read_bytes() == b"new"
 
 
 class TestGrepSearch:

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import shutil
@@ -20,6 +21,7 @@ from agent_teams.tools.workspace_tools.ripgrep_types import GrepMatch, GrepResul
 VERSION = "14.1.1"
 BIN_DIR = Path.home() / ".agent-teams" / "bin"
 _rg_path_cache: Path | None = None
+_rg_path_lock = asyncio.Lock()
 
 PLATFORM_MAP = {
     "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
@@ -83,9 +85,15 @@ async def get_rg_path() -> Path:
         _rg_path_cache = local_path
         return local_path
 
-    await _download_rg(local_path)
-    _rg_path_cache = local_path
-    return local_path
+    async with _rg_path_lock:
+        if _rg_path_cache and _rg_path_cache.is_file():
+            return _rg_path_cache
+        if local_path.is_file():
+            _rg_path_cache = local_path
+            return local_path
+        await _download_rg(local_path)
+        _rg_path_cache = local_path
+        return local_path
 
 
 def clear_rg_path_cache() -> None:
@@ -135,7 +143,7 @@ def _extract_zip(content: bytes, target: Path) -> None:
             if name.endswith("rg.exe"):
                 archive.extract(name, target.parent)
                 extracted = target.parent / name
-                extracted.rename(target)
+                extracted.replace(target)
                 return
         raise ExtractionFailedError("rg.exe not found in zip")
 
