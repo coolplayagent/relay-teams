@@ -13,6 +13,7 @@ from agent_teams.providers.model_config import (
     SamplingConfig,
 )
 from agent_teams.providers.model_connectivity import (
+    ModelDiscoveryRequest,
     ModelConnectivityProbeOverride,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeService,
@@ -48,6 +49,19 @@ class _FakeHttpClient:
         self._captured["url"] = url
         self._captured["headers"] = dict(headers)
         self._captured["json"] = json
+        if self._error is not None:
+            raise self._error
+        assert self._response is not None
+        return self._response
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        self._captured["url"] = url
+        self._captured["headers"] = dict(headers)
         if self._error is not None:
             raise self._error
         assert self._response is not None
@@ -247,11 +261,106 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     assert captured["timeout_seconds"] == pytest.approx(15.0)
 
 
+def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json={
+                        "object": "list",
+                        "data": [
+                            {"id": "reasoning-model"},
+                            {"id": "fake-chat-model"},
+                            {"id": "fake-chat-model"},
+                        ],
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(profile_name="default", timeout_ms=2800)
+    )
+
+    assert result.ok is True
+    assert result.provider == ProviderType.OPENAI_COMPATIBLE
+    assert result.models == ("fake-chat-model", "reasoning-model")
+    assert captured["url"] == "https://example.test/v1/models"
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["Authorization"] == "Bearer saved-api-key"
+    assert captured["timeout_seconds"] == pytest.approx(2.8)
+    assert captured["connect_timeout_seconds"] == pytest.approx(2.8)
+
+
+def test_discover_models_allows_saved_api_key_with_override_base_url(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"data": [{"id": "draft-model"}]}),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            profile_name="default",
+            override=ModelConnectivityProbeOverride(base_url="https://draft.test/v1"),
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("draft-model",)
+    assert captured["url"] == "https://draft.test/v1/models"
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["Authorization"] == "Bearer saved-api-key"
+    assert captured["timeout_seconds"] == pytest.approx(17.5)
+
+
+def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(200, json={"items": [{"id": "missing-data"}]})
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.retryable is False
+
+
 def test_probe_requires_source_config() -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
         service.probe(ModelConnectivityProbeRequest())
+
+
+def test_discover_models_requires_source_config() -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
+        service.discover_models(ModelDiscoveryRequest())
 
 
 def _runtime_config() -> RuntimeConfig:

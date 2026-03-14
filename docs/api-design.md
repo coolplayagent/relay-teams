@@ -50,6 +50,7 @@ Returns raw `model.json`.
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
+Each profile includes `has_api_key` and the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
@@ -70,6 +71,14 @@ Replaces the full model config object.
 Tests model connectivity for a saved profile and/or draft override.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `true`.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
+
+### `POST /system/configs/model:discover`
+
+Fetches the available model catalog for a saved profile and/or draft override.
+Draft overrides may omit `model`, but must provide `base_url` and `api_key` when `profile_name` is omitted.
+When `profile_name` is provided, the request may override `base_url`, `api_key`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
+If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
+OpenAI-compatible providers map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
 
 ### `POST /system/configs/model:reload`
 

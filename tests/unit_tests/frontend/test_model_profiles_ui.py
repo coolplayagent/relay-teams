@@ -24,7 +24,9 @@ installGlobals(elements, notifications);
 bindModelProfileHandlers();
 
 document.getElementById("add-profile-btn").onclick();
-document.getElementById("profile-name").value = "ui-regression-profile";
+document.getElementById("edit-profile-name-btn").onclick();
+document.getElementById("edit-profile-name-input").value = "ui-regression-profile";
+document.getElementById("edit-profile-name-input").onblur();
 document.getElementById("profile-model").value = "fake-chat-model";
 document.getElementById("profile-base-url").value = "http://127.0.0.1:8001/v1";
 document.getElementById("profile-api-key").value = "test-api-key";
@@ -107,6 +109,79 @@ console.log(JSON.stringify({
     assert probe_override["ssl_verify"] is False
 
 
+def test_discover_models_populates_model_select_and_prefills_value(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    discoverPayload: globalThis.__discoverPayload,
+    modelValue: document.getElementById("profile-model").value,
+    modelSelectHtml: document.getElementById("profile-model").innerHTML,
+    discoveryStatusText: document.getElementById("profile-model-discovery-status").textContent,
+}));
+""".strip(),
+    )
+
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+    model_select_html = cast(str, payload["modelSelectHtml"])
+    assert discover_payload["timeout_ms"] == 15000
+    assert discover_override["base_url"] == "https://draft.test/v1"
+    assert discover_override["api_key"] == "draft-api-key"
+    assert payload["modelValue"] == "fake-chat-model"
+    assert 'value="fake-chat-model"' in model_select_html
+    assert 'value="reasoning-model"' in model_select_html
+    assert payload["discoveryStatusText"] == "Fetched 2 models in 37ms."
+
+
+def test_fetching_models_preserves_manually_entered_matching_model(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-model").value = "reasoning-model";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    modelValue: document.getElementById("profile-model").value,
+    modelSelectHtml: document.getElementById("profile-model").innerHTML,
+}));
+""".strip(),
+    )
+
+    assert payload["modelValue"] == "reasoning-model"
+    assert 'value="reasoning-model"' in cast(str, payload["modelSelectHtml"])
+
+
 def test_edit_profile_preserves_existing_api_key_when_left_blank(
     tmp_path: Path,
 ) -> None:
@@ -130,6 +205,8 @@ await document.getElementById("save-profile-btn").onclick();
 console.log(JSON.stringify({
     notifications,
     apiKeyPlaceholder: document.getElementById("profile-api-key").placeholder,
+    apiKeyType: document.getElementById("profile-api-key").type,
+    toggleDisplay: document.getElementById("toggle-profile-api-key-btn").style.display,
     savedProfile: globalThis.__savedProfile,
 }));
 """.strip(),
@@ -145,10 +222,41 @@ console.log(JSON.stringify({
             "tone": "success",
         }
     ]
-    assert payload["apiKeyPlaceholder"] == "Leave blank to keep current API key"
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["apiKeyType"] == "password"
+    assert payload["toggleDisplay"] == "inline-flex"
     assert saved_profile["name"] == "default"
     assert "api_key" not in saved_profile_body
     assert saved_profile_body["top_p"] == 0.95
+
+
+def test_edit_profile_api_key_toggle_reveals_saved_value(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("toggle-profile-api-key-btn").onclick();
+
+console.log(JSON.stringify({
+    apiKeyValue: document.getElementById("profile-api-key").value,
+    apiKeyType: document.getElementById("profile-api-key").type,
+    toggleTitle: document.getElementById("toggle-profile-api-key-btn").title,
+}));
+""".strip(),
+    )
+
+    assert payload["apiKeyValue"] == "saved-secret-key"
+    assert payload["apiKeyType"] == "text"
+    assert payload["toggleTitle"] == "Hide API key"
 
 
 def test_edit_profile_allows_renaming_and_sends_source_name(tmp_path: Path) -> None:
@@ -165,12 +273,15 @@ bindModelProfileHandlers();
 await loadModelProfilesPanel();
 
 document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
-document.getElementById("profile-name").value = "renamed-profile";
+document.getElementById("edit-profile-name-btn").onclick();
+document.getElementById("edit-profile-name-input").value = "renamed-profile";
+document.getElementById("edit-profile-name-input").onblur();
 
 await document.getElementById("save-profile-btn").onclick();
 
 console.log(JSON.stringify({
-    nameDisabled: document.getElementById("profile-name").disabled,
+    titlePrefix: document.getElementById("profile-editor-title-prefix").textContent,
+    titleValue: document.getElementById("profile-editor-title-value").textContent,
     savedProfile: globalThis.__savedProfile,
 }));
 """.strip(),
@@ -178,9 +289,43 @@ console.log(JSON.stringify({
 
     saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
     saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
-    assert payload["nameDisabled"] is False
+    assert payload["titlePrefix"] == "Edit Profile:"
+    assert payload["titleValue"] == "renamed-profile"
     assert saved_profile["name"] == "renamed-profile"
     assert saved_profile_body["source_name"] == "default"
+
+
+def test_edit_profile_name_button_switches_title_to_inline_input(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("edit-profile-name-btn").onclick();
+
+console.log(JSON.stringify({
+    titleDisplay: document.getElementById("profile-editor-title").style.display,
+    titleValueDisplay: document.getElementById("profile-editor-title-value").style.display,
+    inputDisplay: document.getElementById("edit-profile-name-input").style.display,
+    inputValue: document.getElementById("edit-profile-name-input").value,
+}));
+""".strip(),
+    )
+
+    assert payload["titleDisplay"] == "block"
+    assert payload["titleValueDisplay"] == "none"
+    assert payload["inputDisplay"] == "block"
+    assert payload["inputValue"] == "default"
 
 
 def test_saved_profile_probe_uses_profile_connect_timeout(tmp_path: Path) -> None:
@@ -309,6 +454,7 @@ export async function fetchModelProfiles() {
             provider: "openai_compatible",
             model: "fake-chat-model",
             base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
             has_api_key: true,
             temperature: 0.3,
             top_p: 0.8,
@@ -319,6 +465,7 @@ export async function fetchModelProfiles() {
             provider: "openai_compatible",
             model: "fake-chat-model",
             base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
             has_api_key: true,
             temperature: 0.3,
             top_p: 0.8,
@@ -336,6 +483,15 @@ export async function probeModelConnection(payload) {
         token_usage: {
             total_tokens: 9,
         },
+    };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        models: ["fake-chat-model", "reasoning-model"],
     };
 }
 
@@ -424,11 +580,17 @@ function createElement(initialDisplay = "block") {{
         value: "",
         disabled: false,
         placeholder: "",
+        type: "text",
+        title: "",
+        ariaLabel: "",
         textContent: "",
         innerHTML: "",
         className: "",
         dataset: {{}},
         onclick: null,
+        oninput: null,
+        onblur: null,
+        onkeydown: null,
         focused: false,
         focus() {{
             this.focused = true;
@@ -453,13 +615,19 @@ function createElements() {{
             ["add-profile-btn", createElement("block")],
             ["save-profile-btn", createElement("block")],
         ["test-profile-btn", createElement("block")],
+        ["fetch-profile-models-btn", createElement("block")],
         ["cancel-profile-btn", createElement("block")],
         ["profile-probe-status", createElement("none")],
+        ["profile-model-discovery-status", createElement("none")],
         ["profile-editor-title", createElement("block")],
-        ["profile-name", createElement("block")],
+        ["profile-editor-title-prefix", createElement("block")],
+        ["profile-editor-title-value", createElement("block")],
+        ["edit-profile-name-input", createElement("none")],
+        ["edit-profile-name-btn", createElement("block")],
         ["profile-model", createElement("block")],
         ["profile-base-url", createElement("block")],
         ["profile-api-key", createElement("block")],
+        ["toggle-profile-api-key-btn", createElement("none")],
             ["profile-temperature", createElement("block")],
             ["profile-top-p", createElement("block")],
             ["profile-max-tokens", createElement("block")],

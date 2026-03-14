@@ -250,6 +250,22 @@ console.log(JSON.stringify({
 
     modal_html = cast(str, payload["modalHtml"])
     assert "Max Output Tokens" in modal_html
+    assert '<select id="profile-model">' in modal_html
+    assert 'id="fetch-profile-models-btn"' in modal_html
+    assert 'title="Fetch Models"' in modal_html
+    assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert 'id="edit-profile-name-btn"' in modal_html
+    assert 'id="edit-profile-name-input"' in modal_html
+    assert 'id="profile-name"' not in modal_html
+    assert ">Fetch</button>" not in modal_html
+    assert modal_html.index('label for="profile-api-key"') < modal_html.index(
+        'label for="profile-model"'
+    )
+    assert "Model Selection" not in modal_html
+    assert (
+        "Fetch the endpoint catalog for quick selection, or enter a model name manually."
+        not in modal_html
+    )
     assert "Max Tokens</label>" not in modal_html
     assert ">Test</button>" in modal_html
     assert ">Test URL</button>" in modal_html

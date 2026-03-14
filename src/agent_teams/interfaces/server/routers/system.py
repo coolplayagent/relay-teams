@@ -35,6 +35,8 @@ from agent_teams.providers.model_config import (
 )
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.providers.model_connectivity import (
+    ModelDiscoveryRequest,
+    ModelDiscoveryResult,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
 )
@@ -158,6 +160,17 @@ def probe_model_connectivity(
 ) -> ModelConnectivityProbeResult:
     try:
         return service.probe_connectivity(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/configs/model:discover")
+def discover_model_catalog(
+    req: ModelDiscoveryRequest,
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> ModelDiscoveryResult:
+    try:
+        return service.discover_models(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

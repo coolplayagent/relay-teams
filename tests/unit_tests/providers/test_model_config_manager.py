@@ -37,6 +37,7 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     profiles = manager.get_model_profiles()
 
     assert profiles["default"]["provider"] == "openai_compatible"
+    assert profiles["default"]["api_key"] == "secret-key"
     assert profiles["default"]["has_api_key"] is True
     assert profiles["default"]["temperature"] == 0.25
     assert profiles["default"]["max_tokens"] == 2000

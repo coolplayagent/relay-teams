@@ -8,6 +8,8 @@ from pathlib import Path
 
 from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
 from agent_teams.providers.model_connectivity import (
+    ModelDiscoveryRequest,
+    ModelDiscoveryResult,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelConnectivityProbeService,
@@ -82,6 +84,12 @@ class ModelConfigService:
         request: ModelConnectivityProbeRequest,
     ) -> ModelConnectivityProbeResult:
         return self._model_connectivity_probe_service.probe(request)
+
+    def discover_models(
+        self,
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        return self._model_connectivity_probe_service.discover_models(request)
 
     def reload_model_config(self) -> None:
         runtime = load_runtime_config(

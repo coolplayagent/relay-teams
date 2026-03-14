@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.env.proxy_http_client import create_proxy_http_client
 from agent_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
     ProviderType,
     SamplingConfig,
@@ -36,6 +37,14 @@ class ModelConnectivityProbeOverride(BaseModel):
 
 
 class ModelConnectivityProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_name: str | None = Field(default=None, min_length=1)
+    override: ModelConnectivityProbeOverride | None = None
+    timeout_ms: int | None = Field(default=None, ge=1000, le=_MAX_PROBE_TIMEOUT_MS)
+
+
+class ModelDiscoveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profile_name: str | None = Field(default=None, min_length=1)
@@ -74,6 +83,31 @@ class ModelConnectivityProbeResult(BaseModel):
     retryable: bool = False
 
 
+class ModelDiscoveryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    provider: ProviderType
+    base_url: str = Field(min_length=1)
+    latency_ms: int = Field(ge=0)
+    checked_at: datetime
+    diagnostics: ModelConnectivityDiagnostics
+    models: tuple[str, ...] = ()
+    error_code: str | None = None
+    error_message: str | None = None
+    retryable: bool = False
+
+
+class ModelDiscoveryResolvedConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderType
+    base_url: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+    ssl_verify: bool | None = None
+    connect_timeout_seconds: float = Field(gt=0.0, le=300.0)
+
+
 class ModelConnectivityProbeService:
     def __init__(
         self,
@@ -97,6 +131,38 @@ class ModelConnectivityProbeService:
             )
         raise ValueError(
             f"Connectivity probe is not supported for provider '{resolved_config.provider.value}'."
+        )
+
+    def discover_models(
+        self,
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        resolved_config = self._resolve_model_discovery_config(request)
+        timeout_ms = self._resolve_model_discovery_timeout_ms(
+            request=request,
+            config=resolved_config,
+        )
+        if resolved_config.provider == ProviderType.ECHO:
+            return ModelDiscoveryResult(
+                ok=True,
+                provider=resolved_config.provider,
+                base_url=resolved_config.base_url,
+                latency_ms=0,
+                checked_at=datetime.now(timezone.utc),
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                models=("echo",),
+            )
+        if resolved_config.provider == ProviderType.OPENAI_COMPATIBLE:
+            return self._discover_openai_compatible_models(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
+            )
+        raise ValueError(
+            f"Model discovery is not supported for provider '{resolved_config.provider.value}'."
         )
 
     def _resolve_endpoint_config(
@@ -156,6 +222,58 @@ class ModelConnectivityProbeService:
 
         return self._merge_config(base_config=base_config, override=request.override)
 
+    def _resolve_model_discovery_config(
+        self,
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResolvedConfig:
+        base_config: ModelEndpointConfig | None = None
+        if request.profile_name is not None:
+            base_config = self._get_runtime().llm_profiles.get(request.profile_name)
+            if base_config is None:
+                raise ValueError(
+                    f"Model profile '{request.profile_name}' was not found in runtime config."
+                )
+
+        if base_config is None and request.override is None:
+            raise ValueError("Provide profile_name, override, or both.")
+
+        override = request.override
+        if base_config is None:
+            if override is None:
+                raise ValueError(
+                    "Override config is required when profile_name is omitted."
+                )
+            missing_fields: list[str] = []
+            if override.base_url is None:
+                missing_fields.append("base_url")
+            if override.api_key is None:
+                missing_fields.append("api_key")
+            if missing_fields:
+                joined_fields = ", ".join(missing_fields)
+                raise ValueError(
+                    f"Override config is missing required fields: {joined_fields}."
+                )
+            return ModelDiscoveryResolvedConfig(
+                provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
+                base_url=cast(str, override.base_url),
+                api_key=cast(str, override.api_key),
+                ssl_verify=override.ssl_verify,
+                connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+            )
+
+        resolved_override = override or ModelConnectivityProbeOverride()
+        return ModelDiscoveryResolvedConfig(
+            provider=resolved_override.provider or base_config.provider,
+            base_url=resolved_override.base_url or base_config.base_url,
+            api_key=resolved_override.api_key or base_config.api_key,
+            ssl_verify=(
+                resolved_override.ssl_verify
+                if resolved_override.ssl_verify is not None
+                else base_config.ssl_verify
+            ),
+            connect_timeout_seconds=base_config.connect_timeout_seconds,
+        )
+
     def _merge_config(
         self,
         *,
@@ -199,6 +317,16 @@ class ModelConnectivityProbeService:
         *,
         request: ModelConnectivityProbeRequest,
         config: ModelEndpointConfig,
+    ) -> int:
+        if request.timeout_ms is not None:
+            return request.timeout_ms
+        return int(config.connect_timeout_seconds * 1000)
+
+    def _resolve_model_discovery_timeout_ms(
+        self,
+        *,
+        request: ModelDiscoveryRequest,
+        config: ModelDiscoveryResolvedConfig,
     ) -> int:
         if request.timeout_ms is not None:
             return request.timeout_ms
@@ -338,6 +466,126 @@ class ModelConnectivityProbeService:
             token_usage=token_usage,
         )
 
+    def _discover_openai_compatible_models(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        timeout_ms: int,
+    ) -> ModelDiscoveryResult:
+        endpoint = f"{config.base_url.rstrip('/')}/models"
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        }
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        try:
+            with create_proxy_http_client(
+                timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
+                ssl_verify=config.ssl_verify,
+            ) as client:
+                response = client.get(
+                    endpoint,
+                    headers=headers,
+                )
+        except httpx.TimeoutException as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+
+        latency_ms = self._latency_ms(started)
+        response_payload = self._response_payload(response)
+        if response.status_code >= 400:
+            error_message = (
+                self._extract_error_message(response_payload) or response.text
+            )
+            return self._build_model_discovery_http_error_result(
+                config=config,
+                checked_at=checked_at,
+                latency_ms=latency_ms,
+                status_code=response.status_code,
+                error_message=error_message or "Model discovery failed.",
+            )
+
+        if response_payload is _INVALID_RESPONSE_PAYLOAD:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned invalid JSON.",
+                retryable=False,
+            )
+
+        if not isinstance(response_payload, dict):
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned a non-object JSON payload.",
+                retryable=False,
+            )
+
+        models = self._extract_model_ids(response_payload)
+        if models is None:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned an invalid model catalog payload.",
+                retryable=False,
+            )
+
+        return ModelDiscoveryResult(
+            ok=True,
+            provider=config.provider,
+            base_url=config.base_url,
+            latency_ms=latency_ms,
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=True,
+                rate_limited=False,
+            ),
+            models=models,
+        )
+
     def _build_transport_error_result(
         self,
         *,
@@ -351,6 +599,31 @@ class ModelConnectivityProbeService:
             ok=False,
             provider=config.provider,
             model=config.model,
+            latency_ms=self._latency_ms(started),
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=False,
+                auth_valid=True,
+                rate_limited=False,
+            ),
+            error_code=error_code,
+            error_message=error_message,
+            retryable=True,
+        )
+
+    def _build_model_discovery_transport_error_result(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+        error_code: str,
+        error_message: str,
+    ) -> ModelDiscoveryResult:
+        return ModelDiscoveryResult(
+            ok=False,
+            provider=config.provider,
+            base_url=config.base_url,
             latency_ms=self._latency_ms(started),
             checked_at=checked_at,
             diagnostics=ModelConnectivityDiagnostics(
@@ -380,6 +653,35 @@ class ModelConnectivityProbeService:
             ok=False,
             provider=config.provider,
             model=config.model,
+            latency_ms=latency_ms,
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=auth_valid,
+                rate_limited=rate_limited,
+            ),
+            error_code=error_code,
+            error_message=error_message,
+            retryable=retryable,
+        )
+
+    def _build_model_discovery_http_error_result(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        latency_ms: int,
+        status_code: int,
+        error_message: str,
+    ) -> ModelDiscoveryResult:
+        auth_valid = status_code not in {401, 403}
+        rate_limited = status_code == 429
+        retryable = rate_limited or status_code >= 500
+        error_code = self._http_error_code(status_code)
+        return ModelDiscoveryResult(
+            ok=False,
+            provider=config.provider,
+            base_url=config.base_url,
             latency_ms=latency_ms,
             checked_at=checked_at,
             diagnostics=ModelConnectivityDiagnostics(
@@ -424,6 +726,22 @@ class ModelConnectivityProbeService:
         if isinstance(detail, str) and detail.strip():
             return detail.strip()
         return None
+
+    def _extract_model_ids(self, payload: dict[str, object]) -> tuple[str, ...] | None:
+        data = payload.get("data")
+        if not isinstance(data, list):
+            return None
+        model_ids: list[str] = []
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            model_id = entry.get("id")
+            if not isinstance(model_id, str):
+                continue
+            normalized = model_id.strip()
+            if normalized:
+                model_ids.append(normalized)
+        return tuple(sorted(set(model_ids)))
 
     def _response_payload(self, response: httpx.Response) -> object:
         try:

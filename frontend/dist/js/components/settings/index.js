@@ -103,28 +103,57 @@ function createModal() {
                                 <div class="profiles-list" id="profiles-list"></div>
                                 <div class="profile-editor" id="profile-editor" style="display:none;">
                                     <div class="profile-editor-header">
-                                        <h4 id="profile-editor-title">Add Profile</h4>
-                                        <p>Update the endpoint first, then tune runtime sampling and request limits.</p>
+                                        <div class="profile-editor-title-row">
+                                            <h4 id="profile-editor-title">
+                                                <span id="profile-editor-title-prefix">Add Profile</span>
+                                                <span id="profile-editor-title-value" class="profile-editor-title-value"></span>
+                                            </h4>
+                                            <input type="text" id="edit-profile-name-input" class="profile-editor-title-input" placeholder="e.g., default, kimi" autocomplete="off" style="display:none;">
+                                            <button class="secure-input-btn profile-editor-title-btn" id="edit-profile-name-btn" type="button" title="Edit Profile Name" aria-label="Edit Profile Name">
+                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                    <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path>
+                                                    <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                        <p>Configure the endpoint, model, request limits, and sampling defaults.</p>
                                     </div>
                                     <form class="profile-editor-form" id="profile-editor-form" autocomplete="off">
                                         <div class="profile-editor-grid">
-                                            <div class="form-group">
-                                                <label for="profile-name">Profile Name</label>
-                                                <input type="text" id="profile-name" placeholder="e.g., default, kimi" autocomplete="off">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="profile-model">Model</label>
-                                                <input type="text" id="profile-model" placeholder="e.g., gpt-4o, kimi-k2.5" autocomplete="off">
-                                            </div>
                                             <div class="form-group form-group-span-2">
                                                 <label for="profile-base-url">Base URL</label>
                                                 <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" autocomplete="url">
                                             </div>
-                                            <div class="form-group form-group-span-2">
-                                                <label for="profile-api-key">API Key</label>
-                                                <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
+                                            <div class="profile-credentials-row form-group-span-2">
+                                                <div class="form-group">
+                                                    <label for="profile-api-key">API Key</label>
+                                                    <div class="secure-input-row">
+                                                        <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
+                                                        <button class="secure-input-btn" id="toggle-profile-api-key-btn" type="button" title="Show API key" aria-label="Show API key" style="display:none;">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="form-group form-group-inline-action">
+                                                    <label for="profile-model">Model</label>
+                                                    <div class="secure-input-row">
+                                                        <select id="profile-model">
+                                                            <option value="">Select a model</option>
+                                                        </select>
+                                                        <button class="secure-input-btn profile-discovery-btn" id="fetch-profile-models-btn" type="button" title="Fetch Models" aria-label="Fetch Models">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                                <path d="M20 4v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
+                                        <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
                                         <div class="profile-editor-subsection">
                                             <h5>Request Controls</h5>
                                             <div class="form-row">

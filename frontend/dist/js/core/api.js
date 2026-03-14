@@ -32,6 +32,7 @@ export {
     fetchNotificationConfig,
     fetchProxyConfig,
     probeModelConnection,
+    discoverModelCatalog,
     probeWebConnectivity,
     saveEnvironmentVariable,
     saveModelProfile,

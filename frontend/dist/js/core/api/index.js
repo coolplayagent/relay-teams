@@ -45,6 +45,7 @@ export {
     fetchNotificationConfig,
     fetchProxyConfig,
     fetchSystemHealth,
+    discoverModelCatalog,
     probeModelConnection,
     probeWebConnectivity,
     reloadMcpConfig,

@@ -16,7 +16,10 @@ from agent_teams.interfaces.server.deps import (
     get_skills_config_reload_service,
 )
 from agent_teams.interfaces.server.routers import system
-from agent_teams.providers.model_connectivity import ModelConnectivityProbeResult
+from agent_teams.providers.model_connectivity import (
+    ModelConnectivityProbeResult,
+    ModelDiscoveryResult,
+)
 from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
 
 
@@ -36,7 +39,15 @@ class _FakeSystemService:
         return {}
 
     def get_model_profiles(self) -> dict[str, object]:
-        return {}
+        return {
+            "default": {
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "has_api_key": True,
+            }
+        }
 
     def save_model_profile(
         self,
@@ -139,6 +150,27 @@ class _FakeSystemService:
                     "completion_tokens": 1,
                     "total_tokens": 9,
                 },
+                "retryable": False,
+            }
+        )
+
+    def discover_models(
+        self,
+        _request: object,
+    ) -> ModelDiscoveryResult:
+        return ModelDiscoveryResult.model_validate(
+            {
+                "ok": True,
+                "provider": ProviderType.OPENAI_COMPATIBLE.value,
+                "base_url": "https://example.test/v1",
+                "latency_ms": 37,
+                "checked_at": "2026-03-10T00:00:00Z",
+                "diagnostics": {
+                    "endpoint_reachable": True,
+                    "auth_valid": True,
+                    "rate_limited": False,
+                },
+                "models": ["fake-chat-model", "reasoning-model"],
                 "retryable": False,
             }
         )
@@ -247,6 +279,17 @@ def test_get_provider_models() -> None:
     assert payload[0]["profile"] == "default"
 
 
+def test_get_model_profiles_returns_api_key() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/model/profiles")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default"]["api_key"] == "secret"
+    assert payload["default"]["has_api_key"] is True
+
+
 def test_get_provider_models_with_filter() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -274,6 +317,26 @@ def test_probe_model_connectivity() -> None:
     assert payload["ok"] is True
     assert payload["latency_ms"] == 123
     assert payload["token_usage"]["total_tokens"] == 9
+
+
+def test_discover_model_catalog() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model:discover",
+        json={
+            "override": {
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["latency_ms"] == 37
+    assert payload["models"] == ["fake-chat-model", "reasoning-model"]
 
 
 def test_reload_proxy_config() -> None:

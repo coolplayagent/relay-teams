@@ -3309,10 +3309,43 @@
     margin-bottom: 1rem;
 }
 
+.profile-editor-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.profile-editor-title-row h4 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.profile-editor-title-value {
+    min-width: 0;
+    word-break: break-word;
+}
+
+.profile-editor-title-input {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 140px;
+    min-height: 36px;
+    padding: 0.45rem 0.7rem;
+}
+
 .profile-editor h4 {
     margin: 0;
     color: var(--text-primary);
     font-size: 1rem;
+}
+
+.profile-editor-title-btn {
+    width: 36px;
+    min-width: 36px;
+    min-height: 36px;
 }
 
 .profile-editor-header p {
@@ -3331,10 +3364,28 @@
     grid-column: span 2;
 }
 
+.profile-credentials-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.95fr);
+    gap: 1rem;
+}
+
+.profile-credentials-row .form-group {
+    margin-bottom: 0;
+}
+
 .profile-editor-subsection {
     margin-top: 1.15rem;
     padding-top: 1rem;
     border-top: 1px solid var(--settings-divider);
+}
+
+.profile-editor-subsection-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
 }
 
 .profile-editor-subsection h5 {
@@ -3342,6 +3393,56 @@
     color: var(--text-primary);
     font-size: 0.875rem;
     font-weight: 600;
+}
+
+.profile-editor-subsection-header h5 {
+    margin-bottom: 0.15rem;
+}
+
+.profile-editor-subsection-header p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.form-group-inline-action {
+    margin-bottom: 0;
+}
+
+.form-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.form-label-row label {
+    margin-bottom: 0;
+}
+
+.profile-discovery-btn {
+    flex: 0 0 auto;
+    min-height: 42px;
+}
+
+.profile-discovery-btn:disabled {
+    cursor: wait;
+    opacity: 0.72;
+}
+
+.profile-discovery-btn.is-loading svg {
+    animation: spin 1s linear infinite;
+}
+
+.profile-discovery-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1rem;
+}
+
+.profile-model-discovery-status {
+    margin-top: 0.8rem;
 }
 
 .form-group {
@@ -3369,6 +3470,49 @@
     outline: none;
     box-sizing: border-box;
     transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.secure-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.secure-input-row input {
+    flex: 1 1 auto;
+}
+
+.secure-input-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    padding: 0;
+    border: 1px solid var(--settings-border-strong);
+    border-radius: 6px;
+    background: var(--settings-input-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.secure-input-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+}
+
+.secure-input-btn:focus-visible {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.secure-input-btn.is-active {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--settings-input-bg));
 }
 
 .form-group input:focus,
@@ -3986,6 +4130,14 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
         grid-template-columns: 1fr;
     }
 
+    .profile-credentials-row {
+        grid-template-columns: 1fr;
+    }
+
+    .profile-discovery-grid {
+        grid-template-columns: 1fr;
+    }
+
     .roles-panel-shell {
         grid-template-columns: 1fr;
     }
@@ -4011,6 +4163,11 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
     .form-group-span-2 {
         grid-column: auto;
+    }
+
+    .profile-editor-subsection-header {
+        flex-direction: column;
+        align-items: stretch;
     }
 
     .role-option-picker,

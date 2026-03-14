@@ -64,6 +64,18 @@ export async function probeModelConnection(payload) {
     );
 }
 
+export async function discoverModelCatalog(payload) {
+    return requestJson(
+        '/api/system/configs/model:discover',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to fetch available models',
+    );
+}
+
 export async function saveModelProfile(name, profile) {
     return requestJson(
         `/api/system/configs/model/profiles/${name}`,

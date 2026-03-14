@@ -33,6 +33,7 @@ class ModelConfigManager:
                 "provider": profile.get("provider", "openai_compatible"),
                 "model": profile.get("model", ""),
                 "base_url": profile.get("base_url", ""),
+                "api_key": profile.get("api_key", ""),
                 "has_api_key": bool(profile.get("api_key")),
                 "ssl_verify": profile.get("ssl_verify"),
                 "temperature": profile.get("temperature", 0.7),
