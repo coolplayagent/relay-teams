@@ -12,73 +12,69 @@
 </head>
 
 <body>
-    <div class="app-container">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <header class="sidebar-header">
-                <div class="sidebar-brand">
-                    <h2>agent-teams</h2>
-                </div>
-            </header>
-
-            <button id="back-btn" class="back-btn" style="display: none;">
-                <svg viewBox="0 0 24 24" fill="none" class="icon">
-                    <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                        stroke-linejoin="round" />
-                </svg>
-                Back
-            </button>
-
-            <div class="rounds-list" id="rounds-list" style="display: none;"></div>
-            <div class="projects-list sessions-list" id="projects-list"></div>
-
-            <div class="sidebar-footer">
-                <div id="backend-status" class="status-indicator checking">
-                    <span></span>
-                    <span id="backend-status-label">Checking backend...</span>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="topbar-section topbar-section-left">
+                <button id="toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                        <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" />
+                    </svg>
+                </button>
+                <div class="workspace-heading">
+                    <div class="workspace-title">agent-teams</div>
                 </div>
             </div>
-        </aside>
-        <div class="sidebar-resizer" id="sidebar-resizer" title="Drag to resize sidebar"></div>
+            <div class="topbar-section topbar-section-right">
+                <button id="settings-btn" class="icon-btn" title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                        <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2" />
+                        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2" />
+                    </svg>
+                </button>
+                <button id="toggle-theme" class="icon-btn" title="Toggle Theme">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <button id="toggle-subagents" class="subagent-toggle-btn" title="Toggle Subagents">
+                    <span class="subagent-toggle-label">Subagents</span>
+                    <span class="subagent-toggle-summary">idle / 0 roles</span>
+                </button>
+            </div>
+        </header>
 
-        <!-- Main Workspace -->
-        <main class="workspace">
-            <header class="topbar">
-                <div class="topbar-section topbar-section-left">
-                    <button id="toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
-                        <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                            <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" />
-                        </svg>
-                    </button>
-                    <div class="workspace-heading">
-                        <div class="workspace-title">Workspace</div>
+        <div class="app-container">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+
+                <button id="back-btn" class="back-btn" style="display: none;">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon">
+                        <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    Back
+                </button>
+
+                <div class="rounds-list" id="rounds-list" style="display: none;"></div>
+                <div class="projects-list sessions-list" id="projects-list"></div>
+
+                <div class="sidebar-footer">
+                    <div id="backend-status" class="status-indicator checking">
+                        <span></span>
+                        <span id="backend-status-label">Checking backend...</span>
                     </div>
                 </div>
-                <div class="topbar-section topbar-section-right">
-                    <button id="settings-btn" class="icon-btn" title="Settings">
-                        <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/>
-                            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                    </button>
-                    <button id="toggle-theme" class="icon-btn" title="Toggle Theme">
-                        <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2"
-                                stroke-linecap="round" stroke-linejoin="round" />
-                        </svg>
-                    </button>
-                    <button id="toggle-subagents" class="subagent-toggle-btn" title="Toggle Subagents">
-                        <span class="subagent-toggle-label">Subagents</span>
-                        <span class="subagent-toggle-summary">idle / 0 roles</span>
-                    </button>
-                </div>
-            </header>
+            </aside>
+            <div class="sidebar-resizer" id="sidebar-resizer" title="Drag to resize sidebar"></div>
 
-            <!-- Chat Area -->
-            <div class="chat-container">
-                <!-- Coordinator chat messages -->
-                <div class="chat-scroll" id="chat-messages"></div>
+            <!-- Main Workspace -->
+            <main class="workspace">
+                <!-- Chat Area -->
+                <div class="chat-container">
+                    <!-- Coordinator chat messages -->
+                    <div class="chat-scroll" id="chat-messages"></div>
 
                 <!-- Input Area -->
                 <div class="input-container">
@@ -105,41 +101,42 @@
                         <div class="sub-text">Enter to send · Shift+Enter for new line</div>
                     </div>
                 </div>
-            </div>
-        </main>
-        <div class="right-rail-resizer" id="right-rail-resizer" title="Drag to resize right rail"></div>
+                </div>
+            </main>
+            <div class="right-rail-resizer" id="right-rail-resizer" title="Drag to resize right rail"></div>
 
-        <aside class="right-rail" id="right-rail">
-            <section class="rail-subagent-card">
-                <div class="subagent-rail-header">
-                    <div class="subagent-rail-title">
-                        <h4>Subagents</h4>
-                        <span id="subagent-status-summary" class="subagent-status-summary">idle / 0 roles</span>
+            <aside class="right-rail" id="right-rail">
+                <section class="rail-subagent-card">
+                    <div class="subagent-rail-header">
+                        <div class="subagent-rail-title">
+                            <h4>Subagents</h4>
+                            <span id="subagent-status-summary" class="subagent-status-summary">idle / 0 roles</span>
+                        </div>
+                        <select id="subagent-role-select" class="subagent-role-select" disabled>
+                            <option value="">No subagents</option>
+                        </select>
                     </div>
-                    <select id="subagent-role-select" class="subagent-role-select" disabled>
-                        <option value="">No subagents</option>
-                    </select>
-                </div>
-                <div id="subagent-role-meta" class="subagent-role-meta">
-                    <div class="subagent-meta-empty">No delegated subagent instances in this session.</div>
-                </div>
-                <aside class="agent-drawer open" id="agent-drawer"></aside>
-            </section>
+                    <div id="subagent-role-meta" class="subagent-role-meta">
+                        <div class="subagent-meta-empty">No delegated subagent instances in this session.</div>
+                    </div>
+                    <aside class="agent-drawer open" id="agent-drawer"></aside>
+                </section>
 
-            <section class="rail-inspector-card" id="rail-inspector">
-                <div id="inspector-panel" class="inspector-panel">
-                    <div class="inspector-header">
-                        <h4>System Logs</h4>
-                        <button id="toggle-inspector" class="icon-btn" title="Toggle Logs">
-                            <svg viewBox="0 0 24 24" fill="none" class="icon">
-                                <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                            </svg>
-                        </button>
+                <section class="rail-inspector-card" id="rail-inspector">
+                    <div id="inspector-panel" class="inspector-panel">
+                        <div class="inspector-header">
+                            <h4>System Logs</h4>
+                            <button id="toggle-inspector" class="icon-btn" title="Toggle Logs">
+                                <svg viewBox="0 0 24 24" fill="none" class="icon">
+                                    <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="inspector-canvas" id="system-logs"></div>
                     </div>
-                    <div class="inspector-canvas" id="system-logs"></div>
-                </div>
-            </section>
-        </aside>
+                </section>
+            </aside>
+        </div>
     </div>
 
     <script type="module" src="/js/app.js"></script>

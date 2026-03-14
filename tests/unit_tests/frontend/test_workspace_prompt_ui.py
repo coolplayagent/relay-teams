@@ -77,8 +77,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "execution-mode-select" not in prompt_script
     assert "No session selected" not in index_html
     assert "Start a session from the left sidebar" not in index_html
+    assert 'class="app-shell"' in index_html
     assert 'id="projects-list"' in index_html
-    assert "<h2>agent-teams</h2>" in index_html
+    assert "<h2>agent-teams</h2>" not in index_html
+    assert '<div class="workspace-title">agent-teams</div>' in index_html
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
     assert "Checking backend..." in index_html
