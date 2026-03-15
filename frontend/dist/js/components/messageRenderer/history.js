@@ -116,13 +116,13 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
     overlayParts.forEach(part => {
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
-            combinedText = String(part.content || '');
+            combinedText += String(part.content || '');
             return;
         }
         if (part.kind === 'thinking') {
             flushText(false);
             appendThinkingText(contentEl, String(part.content || ''), {
-                partIndex: part.part_index ?? '',
+                partIndex: part._key ?? part.part_index ?? '',
                 streaming: part.finished !== true,
             });
             return;

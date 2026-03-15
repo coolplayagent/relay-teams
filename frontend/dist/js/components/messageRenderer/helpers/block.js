@@ -140,6 +140,7 @@ export function updateThinkingText(textEl, text, options = {}) {
             liveEl.style.display = options.streaming === true ? 'inline-flex' : 'none';
         }
         thinkingBlock.dataset.streaming = options.streaming === true ? 'true' : 'false';
+        thinkingBlock.open = options.streaming === true;
     }
     return textEl;
 }
@@ -181,6 +182,7 @@ function ensureThinkingBlock(contentEl, options = {}) {
     const detailsEl = document.createElement('details');
     detailsEl.className = 'thinking-block';
     detailsEl.dataset.streaming = options.streaming === true ? 'true' : 'false';
+    detailsEl.open = options.streaming === true;
     if (safePartIndex) {
         detailsEl.dataset.partIndex = safePartIndex;
     }

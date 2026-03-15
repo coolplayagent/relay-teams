@@ -95,8 +95,9 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
 
     if (isCoordinator) {
         const container = coordinatorContainerFor(eventMeta);
-        getOrCreateStreamBlock(container, instanceId || 'coordinator', coordinatorRoleId, label, runId);
-        startThinkingBlock(instanceId || 'coordinator', partIndex, {
+        const streamKey = 'coordinator';
+        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
+        startThinkingBlock(streamKey, partIndex, {
             container,
             runId,
             roleId: coordinatorRoleId,
@@ -128,8 +129,9 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
 
     if (isCoordinator) {
         const container = coordinatorContainerFor(eventMeta);
-        getOrCreateStreamBlock(container, instanceId || 'coordinator', coordinatorRoleId, label, runId);
-        appendThinkingChunk(instanceId || 'coordinator', partIndex, text, {
+        const streamKey = 'coordinator';
+        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
+        appendThinkingChunk(streamKey, partIndex, text, {
             container,
             runId,
             roleId: coordinatorRoleId,
@@ -157,7 +159,8 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const partIndex = payload?.part_index ?? 0;
 
-    finalizeThinking(instanceId || (isCoordinator ? 'coordinator' : ''), partIndex, {
+    const streamKey = isCoordinator ? 'coordinator' : instanceId;
+    finalizeThinking(streamKey, partIndex, {
         runId,
         roleId: isCoordinator ? coordinatorRoleId : roleId,
     });

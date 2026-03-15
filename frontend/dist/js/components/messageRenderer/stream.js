@@ -37,13 +37,21 @@ export function getOrCreateStreamBlock(
             contentEl,
             activeTextEl: null,
             raw: '',
+            activeRaw: '',
             thinkingParts: new Map(),
+            thinkingActiveByPart: new Map(),
+            thinkingSequence: 0,
             roleId,
             label,
             runId: String(runId || ''),
             instanceId: String(instanceId || ''),
         };
         streamState.set(streamKey, st);
+    } else {
+        if (!st.thinkingParts) st.thinkingParts = new Map();
+        if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
+        if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
     ensureOverlayEntry(st.runId, st.instanceId, roleId, label);
     return st;
@@ -58,12 +66,13 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
         st.activeTextEl = document.createElement('div');
         st.activeTextEl.className = 'msg-text';
         st.contentEl.appendChild(st.activeTextEl);
-        st.raw = '';
+        st.activeRaw = '';
     }
 
     st.raw += text;
-    updateMessageText(st.activeTextEl, st.raw, { streaming: true });
-    updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, st.raw);
+    st.activeRaw += text;
+    updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
+    updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, text);
     scrollBottom(st.container);
 }
 
@@ -71,12 +80,16 @@ export function finalizeStream(instanceId, roleId = '') {
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
     if (st && st.activeTextEl) {
-        updateMessageText(st.activeTextEl, st.raw, { streaming: false });
+        updateMessageText(st.activeTextEl, st.activeRaw, { streaming: false });
     }
     if (st?.thinkingParts instanceof Map) {
         st.thinkingParts.forEach(entry => {
             updateThinkingText(entry.textEl, entry.raw, { streaming: false });
+            entry.finished = true;
         });
+        if (st.thinkingActiveByPart) {
+            st.thinkingActiveByPart.clear();
+        }
     }
     streamState.delete(streamKey);
 }
@@ -164,20 +177,24 @@ export function appendToolCallBlock(
             contentEl,
             activeTextEl: null,
             raw: '',
+            activeRaw: '',
             thinkingParts: new Map(),
+            thinkingActiveByPart: new Map(),
+            thinkingSequence: 0,
             roleId,
             label: actorLabel,
             runId,
             instanceId: String(instanceId || ''),
         };
         streamState.set(streamKey, st);
+    } else {
+        if (!st.thinkingParts) st.thinkingParts = new Map();
+        if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
+        if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
 
-    if (st.activeTextEl) {
-        syncStreamingCursor(st.activeTextEl, false);
-    }
-    st.activeTextEl = null;
-    st.raw = '';
+    endActiveText(st);
 
     let argsStr = '';
     try {
@@ -280,16 +297,25 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
             contentEl,
             activeTextEl: null,
             raw: '',
+            activeRaw: '',
             thinkingParts: new Map(),
+            thinkingActiveByPart: new Map(),
+            thinkingSequence: 0,
             roleId,
             label: actorLabel,
             runId,
             instanceId: String(instanceId || ''),
         };
         streamState.set(streamKey, st);
+    } else if (st) {
+        if (!st.thinkingParts) st.thinkingParts = new Map();
+        if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
+        if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
     if (!st) return false;
-    ensureThinkingEntry(st, partIndex);
+    endActiveText(st);
+    ensureThinkingEntry(st, partIndex, { forceNew: true });
     startOverlayThinking(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label || label, partIndex);
     scrollBottom(st.container || container);
     return true;
@@ -306,7 +332,7 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
         updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text);
         return false;
     }
-    const entry = ensureThinkingEntry(st, partIndex);
+    const entry = resolveThinkingEntry(st, partIndex);
     entry.raw += String(text || '');
     updateThinkingText(entry.textEl, entry.raw, { streaming: true });
     updateOverlayThinkingText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label || label, partIndex, entry.raw);
@@ -319,12 +345,16 @@ export function finalizeThinking(instanceId, partIndex, options = {}) {
     const roleId = String(options.roleId || '');
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
-    if (!st?.thinkingParts?.has(String(partIndex))) {
+    const entry = resolveThinkingEntry(st, partIndex, { allowCreate: false });
+    if (!entry) {
         finishOverlayThinking(runId, instanceId, roleId, partIndex);
         return false;
     }
-    const entry = st.thinkingParts.get(String(partIndex));
     updateThinkingText(entry.textEl, entry.raw, { streaming: false });
+    entry.finished = true;
+    if (st?.thinkingActiveByPart) {
+        st.thinkingActiveByPart.delete(String(partIndex));
+    }
     finishOverlayThinking((st && st.runId) || runId, (st && st.instanceId) || instanceId, (st && st.roleId) || roleId, partIndex);
     return true;
 }
@@ -426,6 +456,15 @@ function resolveStreamKey(instanceId, roleId) {
         : `role:${String(roleId || '').trim()}`;
 }
 
+function endActiveText(st) {
+    if (!st) return;
+    if (st.activeTextEl) {
+        syncStreamingCursor(st.activeTextEl, false);
+    }
+    st.activeTextEl = null;
+    st.activeRaw = '';
+}
+
 function resolveToolBlockTarget(st, container, toolName, toolCallId) {
     if (st) {
         const byStreamState = findToolBlock(st.contentEl, toolName, toolCallId);
@@ -451,12 +490,16 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
             roleId: String(roleId || ''),
             label: String(label || ''),
             parts: [],
+            thinkingActiveByPart: new Map(),
+            thinkingSequence: 0,
         };
         runOverlay.entries.set(key, entry);
     } else {
         if (instanceId) entry.instanceId = String(instanceId);
         if (roleId) entry.roleId = String(roleId);
         if (label) entry.label = String(label);
+        if (!entry.thinkingActiveByPart) entry.thinkingActiveByPart = new Map();
+        if (typeof entry.thinkingSequence !== 'number') entry.thinkingSequence = 0;
     }
     return entry;
 }
@@ -465,9 +508,10 @@ function updateOverlayText(runId, instanceId, roleId, label, text) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     const nextText = String(text || '');
+    if (!nextText) return;
     const lastPart = entry.parts[entry.parts.length - 1];
     if (lastPart && lastPart.kind === 'text') {
-        lastPart.content = nextText;
+        lastPart.content = String(lastPart.content || '') + nextText;
         return;
     }
     entry.parts.push({ kind: 'text', content: nextText });
@@ -477,16 +521,20 @@ function startOverlayThinking(runId, instanceId, roleId, label, partIndex) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     const safePartIndex = Number(partIndex);
-    const existing = findOverlayThinkingPart(entry, safePartIndex);
-    if (existing) {
-        existing.finished = false;
+    const activeKey = entry.thinkingActiveByPart?.get(String(safePartIndex));
+    const activePart = activeKey ? findOverlayThinkingPartByKey(entry, activeKey) : null;
+    if (activePart && activePart.finished === false) {
+        activePart.finished = false;
         return;
     }
+    const nextKey = `${safePartIndex}:${entry.thinkingSequence++}`;
+    entry.thinkingActiveByPart?.set(String(safePartIndex), nextKey);
     entry.parts.push({
         kind: 'thinking',
         part_index: safePartIndex,
         content: '',
         finished: false,
+        _key: nextKey,
     });
 }
 
@@ -494,10 +542,10 @@ function updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, 
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     const safePartIndex = Number(partIndex);
-    let part = findOverlayThinkingPart(entry, safePartIndex);
+    let part = resolveOverlayThinkingPart(entry, safePartIndex);
     if (!part) {
         startOverlayThinking(runId, instanceId, roleId, label, safePartIndex);
-        part = findOverlayThinkingPart(entry, safePartIndex);
+        part = resolveOverlayThinkingPart(entry, safePartIndex);
     }
     if (!part) return;
     part.content = String(text || '');
@@ -507,9 +555,13 @@ function updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, 
 function finishOverlayThinking(runId, instanceId, roleId, partIndex) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, '');
     if (!entry) return;
-    const part = findOverlayThinkingPart(entry, Number(partIndex));
+    const safePartIndex = Number(partIndex);
+    const part = resolveOverlayThinkingPart(entry, safePartIndex);
     if (!part) return;
     part.finished = true;
+    if (entry.thinkingActiveByPart) {
+        entry.thinkingActiveByPart.delete(String(safePartIndex));
+    }
 }
 
 function updateOverlayToolCall(runId, instanceId, roleId, label, toolPart) {
@@ -554,15 +606,38 @@ function updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload,
     part.approvalStatus = approvalStatus;
 }
 
-function findOverlayThinkingPart(entry, partIndex) {
+function findOverlayThinkingPartByKey(entry, key) {
+    if (!key) return null;
     for (let index = entry.parts.length - 1; index >= 0; index -= 1) {
         const part = entry.parts[index];
         if (part.kind !== 'thinking') continue;
-        if (Number(part.part_index) === Number(partIndex)) {
-            return part;
-        }
+        if (part._key === key) return part;
     }
     return null;
+}
+
+function resolveOverlayThinkingPart(entry, partIndex) {
+    const activeKey = entry.thinkingActiveByPart?.get(String(partIndex));
+    if (activeKey) {
+        const active = findOverlayThinkingPartByKey(entry, activeKey);
+        if (active) return active;
+    }
+    return findOverlayThinkingPart(entry, partIndex, { preferUnfinished: true });
+}
+
+function findOverlayThinkingPart(entry, partIndex, options = {}) {
+    let fallback = null;
+    for (let index = entry.parts.length - 1; index >= 0; index -= 1) {
+        const part = entry.parts[index];
+        if (part.kind !== 'thinking') continue;
+        if (Number(part.part_index) !== Number(partIndex)) continue;
+        if (options.preferUnfinished && part.finished) {
+            if (!fallback) fallback = part;
+            continue;
+        }
+        return part;
+    }
+    return fallback;
 }
 
 function findOverlayToolPart(entry, toolName, toolCallId) {
@@ -588,19 +663,46 @@ function findOverlayToolPart(entry, toolName, toolCallId) {
     return null;
 }
 
-function ensureThinkingEntry(st, partIndex) {
-    const safePartKey = String(partIndex);
-    let entry = st.thinkingParts.get(safePartKey);
-    if (entry) return entry;
+function resolveThinkingEntry(st, partIndex, options = {}) {
+    if (!st) return null;
+    const safePartIndex = String(partIndex);
+    const activeKey = st.thinkingActiveByPart?.get(safePartIndex);
+    if (activeKey) {
+        const activeEntry = st.thinkingParts.get(activeKey);
+        if (activeEntry) return activeEntry;
+    }
+    if (options.allowCreate === false) return null;
+    return ensureThinkingEntry(st, partIndex);
+}
+
+function ensureThinkingEntry(st, partIndex, options = {}) {
+    const safePartIndex = String(partIndex);
+    if (typeof st.thinkingSequence !== 'number') {
+        st.thinkingSequence = 0;
+    }
+    const activeKey = !options.forceNew
+        ? st.thinkingActiveByPart?.get(safePartIndex)
+        : null;
+    if (activeKey) {
+        const existing = st.thinkingParts.get(activeKey);
+        if (existing && existing.finished !== true) {
+            return existing;
+        }
+    }
+    const nextKey = String(options.partKey || `${safePartIndex}:${st.thinkingSequence++}`);
     const textEl = appendThinkingText(st.contentEl, '', {
-        partIndex: safePartKey,
+        partIndex: nextKey,
         streaming: true,
     });
-    entry = {
+    const entry = {
         textEl,
         raw: '',
+        finished: false,
+        partIndex: safePartIndex,
+        key: nextKey,
     };
-    st.thinkingParts.set(safePartKey, entry);
+    st.thinkingParts.set(nextKey, entry);
+    st.thinkingActiveByPart?.set(safePartIndex, nextKey);
     st.activeTextEl = null;
     return entry;
 }
