@@ -59,6 +59,9 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
 
         if (kind === 'text' || kind === 'user-prompt') {
             combinedText += (part.content || '') + '\n\n';
+        } else if (kind === 'thinking') {
+            flushText();
+            appendThinkingText(contentEl, part.content || '', { streaming: false });
         } else if (kind === 'tool-call' || (part.tool_name && part.args !== undefined)) {
             flushText();
             const tb = buildToolBlock(part.tool_name, part.args, part.tool_call_id);
@@ -116,9 +119,28 @@ export function appendMessageText(contentEl, text, options = {}) {
     return textEl;
 }
 
+export function appendThinkingText(contentEl, text, options = {}) {
+    const { textEl } = ensureThinkingBlock(contentEl, options);
+    updateThinkingText(textEl, text, options);
+    return textEl;
+}
+
 export function updateMessageText(textEl, text, options = {}) {
     textEl.innerHTML = parseMarkdown(String(text || ''));
     syncStreamingCursor(textEl, options.streaming === true);
+    return textEl;
+}
+
+export function updateThinkingText(textEl, text, options = {}) {
+    updateMessageText(textEl, text, options);
+    const thinkingBlock = textEl?.closest?.('.thinking-block');
+    if (thinkingBlock) {
+        const liveEl = thinkingBlock.querySelector('.thinking-live');
+        if (liveEl) {
+            liveEl.style.display = options.streaming === true ? 'inline-flex' : 'none';
+        }
+        thinkingBlock.dataset.streaming = options.streaming === true ? 'true' : 'false';
+    }
     return textEl;
 }
 
@@ -140,6 +162,42 @@ function roleClassName(role, label) {
     if (label?.toLowerCase().includes('coordinator')) return 'role-coordinator';
     if (role === 'user') return 'role-user';
     return 'role-agent';
+}
+
+function ensureThinkingBlock(contentEl, options = {}) {
+    const safePartIndex = String(options.partIndex ?? '').trim();
+    if (safePartIndex) {
+        const existing = contentEl.querySelector(
+            `.thinking-block[data-part-index="${safePartIndex}"]`
+        );
+        if (existing) {
+            const textEl = existing.querySelector('.thinking-text');
+            if (textEl) {
+                return { blockEl: existing, textEl };
+            }
+        }
+    }
+
+    const detailsEl = document.createElement('details');
+    detailsEl.className = 'thinking-block';
+    detailsEl.dataset.streaming = options.streaming === true ? 'true' : 'false';
+    if (safePartIndex) {
+        detailsEl.dataset.partIndex = safePartIndex;
+    }
+    detailsEl.innerHTML = `
+        <summary class="thinking-summary">
+            <span class="thinking-label">Thinking</span>
+            <span class="thinking-live" style="display:${options.streaming === true ? 'inline-flex' : 'none'};">Live</span>
+        </summary>
+        <div class="thinking-body">
+            <div class="msg-text thinking-text"></div>
+        </div>
+    `;
+    contentEl.appendChild(detailsEl);
+    return {
+        blockEl: detailsEl,
+        textEl: detailsEl.querySelector('.thinking-text'),
+    };
 }
 
 function resolveStreamingCursorHost(root) {

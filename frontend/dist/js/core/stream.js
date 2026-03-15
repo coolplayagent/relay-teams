@@ -22,12 +22,20 @@ let creatingRun = false;
 
 export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
     const approvalMode = options.approvalMode === 'standard' ? 'standard' : 'yolo';
+    const thinking = options.thinking && typeof options.thinking === 'object'
+        ? {
+            enabled: options.thinking.enabled === true,
+            effort: String(options.thinking.effort || 'medium'),
+        }
+        : { enabled: false, effort: null };
     creatingRun = true;
     state.activeRunId = null;
     state.isGenerating = true;
     if (els.sendBtn) els.sendBtn.disabled = true;
     if (els.promptInput) els.promptInput.disabled = true;
     if (els.yoloModeToggle) els.yoloModeToggle.disabled = true;
+    if (els.thinkingModeToggle) els.thinkingModeToggle.disabled = true;
+    if (els.thinkingEffortSelect) els.thinkingEffortSelect.disabled = true;
     if (els.stopBtn) {
         els.stopBtn.style.display = 'inline-flex';
         els.stopBtn.disabled = false;
@@ -40,13 +48,15 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
 
     let runId = null;
     try {
-        const run = await sendUserPrompt(sessionId, promptText, approvalMode);
+        const run = await sendUserPrompt(sessionId, promptText, approvalMode, thinking);
         runId = run.run_id;
         state.activeRunId = runId;
         logInfo('frontend.run.created', 'Frontend run created', {
             run_id: runId,
             session_id: sessionId,
             approval_mode: approvalMode,
+            thinking_enabled: thinking.enabled,
+            thinking_effort: thinking.effort,
         });
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
@@ -104,6 +114,12 @@ export function endStream() {
     if (els.yoloModeToggle) {
         els.yoloModeToggle.disabled = false;
     }
+    if (els.thinkingModeToggle) {
+        els.thinkingModeToggle.disabled = false;
+    }
+    if (els.thinkingEffortSelect) {
+        els.thinkingEffortSelect.disabled = false;
+    }
     if (els.promptInput) {
         els.promptInput.disabled = false;
         els.promptInput.focus();
@@ -125,6 +141,8 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
         state.isGenerating = true;
         if (els.sendBtn) els.sendBtn.disabled = true;
         if (els.promptInput) els.promptInput.disabled = true;
+        if (els.thinkingModeToggle) els.thinkingModeToggle.disabled = true;
+        if (els.thinkingEffortSelect) els.thinkingEffortSelect.disabled = true;
         if (els.stopBtn) {
             els.stopBtn.style.display = 'inline-flex';
             els.stopBtn.disabled = false;

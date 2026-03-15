@@ -8,7 +8,9 @@ export {
     labelFromRole,
     scrollBottom,
     appendMessageText,
+    appendThinkingText,
     updateMessageText,
+    updateThinkingText,
     syncStreamingCursor,
 } from './helpers/block.js';
 

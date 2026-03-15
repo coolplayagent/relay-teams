@@ -285,7 +285,11 @@ Request:
   "intent": "Implement endpoint X",
   "session_id": "session-1",
   "execution_mode": "ai",
-  "approval_mode": "standard"
+  "approval_mode": "standard",
+  "thinking": {
+    "enabled": false,
+    "effort": null
+  }
 }
 ```
 
@@ -294,6 +298,9 @@ Notes:
 - `approval_mode` is optional.
 - `standard` preserves the existing tool approval flow.
 - `yolo` skips tool approval for all tools in that run, including resumed recoverable runs.
+- `thinking` is optional.
+- `thinking.enabled` enables model thinking streams for providers that emit thinking parts.
+- `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
 
 Response:
 
@@ -304,6 +311,11 @@ Response:
 ### `GET /runs/{run_id}/events`
 
 Streams run events via SSE.
+
+Thinking events:
+- `thinking_started`: payload includes `part_index`, `role_id`, `instance_id`.
+- `thinking_delta`: payload includes `part_index`, `text`, `role_id`, `instance_id`.
+- `thinking_finished`: payload includes `part_index`, `role_id`, `instance_id`.
 
 ### `POST /runs/{run_id}/inject`
 

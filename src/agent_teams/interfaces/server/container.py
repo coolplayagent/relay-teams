@@ -340,6 +340,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
+            run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             provider_factory=self._provider_factory,
             mcp_registry=self.mcp_registry,

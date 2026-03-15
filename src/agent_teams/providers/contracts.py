@@ -4,6 +4,8 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 from typing import override
 
+from agent_teams.sessions.runs.models import RunThinkingConfig
+
 
 class LLMRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -18,6 +20,7 @@ class LLMRequest(BaseModel):
     role_id: str
     system_prompt: str
     user_prompt: str | None
+    thinking: RunThinkingConfig = RunThinkingConfig()
 
 
 class LLMProvider:

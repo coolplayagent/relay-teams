@@ -17,13 +17,23 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
     RetryPromptPart,
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
 
 from agent_teams.providers.model_config import ModelEndpointConfig
+from agent_teams.providers.openai_model_profiles import (
+    resolve_openai_chat_model_profile,
+)
 from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.logger import (
@@ -227,6 +237,8 @@ class AgentLlmSession:
             "top_p": self._config.sampling.top_p,
             "max_tokens": self._config.sampling.max_tokens,
         }
+        if request.thinking.enabled and request.thinking.effort is not None:
+            model_settings["openai_reasoning_effort"] = request.thinking.effort
         agent = build_coordination_agent(
             model_name=self._config.model,
             base_url=self._config.base_url,
@@ -234,6 +246,10 @@ class AgentLlmSession:
             system_prompt=agent_system_prompt,
             allowed_tools=self._allowed_tools,
             model_settings=model_settings,
+            model_profile=resolve_openai_chat_model_profile(
+                base_url=self._config.base_url,
+                model_name=self._config.model,
+            ),
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
             allowed_mcp_servers=self._allowed_mcp_servers,
@@ -323,32 +339,38 @@ class AgentLlmSession:
                             usage_before = deepcopy(agent_run.usage())
                             # Stream text chunks from this model response in real-time
                             async with node.stream(agent_run.ctx) as stream:
-                                async for text_delta in stream.stream_text(delta=True):
-                                    control_ctx.raise_if_cancelled()
-                                    if text_delta:
-                                        log_model_stream_chunk(
-                                            request.role_id, text_delta
+                                stream_iter = getattr(stream, "__aiter__", None)
+                                if callable(stream_iter):
+                                    text_lengths: dict[int, int] = {}
+                                    thinking_lengths: dict[int, int] = {}
+                                    started_thinking_parts: set[int] = set()
+                                    async for stream_event in stream:
+                                        control_ctx.raise_if_cancelled()
+                                        text_emitted = self._handle_model_stream_event(
+                                            request=request,
+                                            stream_event=stream_event,
+                                            emitted_text_chunks=emitted_text_chunks,
+                                            text_lengths=text_lengths,
+                                            thinking_lengths=thinking_lengths,
+                                            started_thinking_parts=started_thinking_parts,
                                         )
-                                        printed_any = True
-                                        emitted_text_chunks.append(text_delta)
-                                        self._run_event_hub.publish(
-                                            RunEvent(
-                                                session_id=request.session_id,
-                                                run_id=request.run_id,
-                                                trace_id=request.trace_id,
-                                                task_id=request.task_id,
-                                                instance_id=request.instance_id,
-                                                role_id=request.role_id,
-                                                event_type=RunEventType.TEXT_DELTA,
-                                                payload_json=dumps(
-                                                    {
-                                                        "text": text_delta,
-                                                        "role_id": request.role_id,
-                                                        "instance_id": request.instance_id,
-                                                    }
-                                                ),
+                                        if text_emitted:
+                                            printed_any = True
+                                else:
+                                    async for text_delta in stream.stream_text(
+                                        delta=True
+                                    ):
+                                        control_ctx.raise_if_cancelled()
+                                        if text_delta:
+                                            log_model_stream_chunk(
+                                                request.role_id, text_delta
                                             )
-                                        )
+                                            printed_any = True
+                                            emitted_text_chunks.append(text_delta)
+                                            self._publish_text_delta_event(
+                                                request=request,
+                                                text=text_delta,
+                                            )
                             usage_after = stream.usage()
                             request_level_input_tokens += self._usage_delta_int(
                                 after=usage_after,
@@ -731,12 +753,307 @@ class AgentLlmSession:
         if isinstance(parts, list):
             texts: list[str] = []
             for part in cast(list[object], parts):
-                content = getattr(part, "content", None)
-                if isinstance(content, str) and content:
-                    texts.append(content)
+                if isinstance(part, TextPart) and part.content:
+                    texts.append(part.content)
             if texts:
                 return "".join(texts)
+            return ""
         return str(response)
+
+    def _handle_model_stream_event(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+    ) -> bool:
+        if isinstance(stream_event, PartStartEvent):
+            return self._handle_part_start_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+            )
+        if isinstance(stream_event, PartDeltaEvent):
+            return self._handle_part_delta_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+            )
+        if isinstance(stream_event, PartEndEvent):
+            return self._handle_part_end_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+            )
+        return False
+
+    def _handle_part_start_event(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartStartEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+    ) -> bool:
+        part = event.part
+        if isinstance(part, TextPart):
+            text_lengths.setdefault(event.index, 0)
+            return self._emit_text_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                emitted_lengths=text_lengths,
+            )
+        if isinstance(part, ThinkingPart):
+            if event.index not in started_thinking_parts:
+                self._publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            thinking_lengths.setdefault(event.index, 0)
+            return self._emit_thinking_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_lengths=thinking_lengths,
+            )
+        return False
+
+    def _handle_part_delta_event(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartDeltaEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+    ) -> bool:
+        delta = event.delta
+        if isinstance(delta, TextPartDelta):
+            text = str(delta.content_delta or "")
+            if not text:
+                return False
+            text_lengths[event.index] = text_lengths.get(event.index, 0) + len(text)
+            emitted_text_chunks.append(text)
+            log_model_stream_chunk(request.role_id, text)
+            self._publish_text_delta_event(request=request, text=text)
+            return True
+        if isinstance(delta, ThinkingPartDelta):
+            if event.index not in started_thinking_parts:
+                self._publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            text = str(delta.content_delta or "")
+            if not text:
+                return False
+            thinking_lengths[event.index] = thinking_lengths.get(event.index, 0) + len(
+                text
+            )
+            self._publish_thinking_delta_event(
+                request=request,
+                part_index=event.index,
+                text=text,
+            )
+            return False
+        return False
+
+    def _handle_part_end_event(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartEndEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+    ) -> bool:
+        part = event.part
+        if isinstance(part, TextPart):
+            return self._emit_text_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                emitted_lengths=text_lengths,
+            )
+        if isinstance(part, ThinkingPart):
+            if event.index not in started_thinking_parts:
+                self._publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            _ = self._emit_thinking_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_lengths=thinking_lengths,
+            )
+            self._publish_thinking_finished_event(
+                request=request,
+                part_index=event.index,
+            )
+        return False
+
+    def _emit_text_suffix_for_part(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_text_chunks: list[str],
+        emitted_lengths: dict[int, int],
+    ) -> bool:
+        previous_length = emitted_lengths.get(part_index, 0)
+        suffix = content[previous_length:]
+        emitted_lengths[part_index] = len(content)
+        if not suffix:
+            return False
+        emitted_text_chunks.append(suffix)
+        log_model_stream_chunk(request.role_id, suffix)
+        self._publish_text_delta_event(request=request, text=suffix)
+        return True
+
+    def _emit_thinking_suffix_for_part(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_lengths: dict[int, int],
+    ) -> bool:
+        previous_length = emitted_lengths.get(part_index, 0)
+        suffix = content[previous_length:]
+        emitted_lengths[part_index] = len(content)
+        if not suffix:
+            return False
+        self._publish_thinking_delta_event(
+            request=request,
+            part_index=part_index,
+            text=suffix,
+        )
+        return False
+
+    def _publish_text_delta_event(
+        self,
+        *,
+        request: LLMRequest,
+        text: str,
+    ) -> None:
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.TEXT_DELTA,
+                payload_json=dumps(
+                    {
+                        "text": text,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    }
+                ),
+            )
+        )
+
+    def _publish_thinking_started_event(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+    ) -> None:
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.THINKING_STARTED,
+                payload_json=dumps(
+                    {
+                        "part_index": part_index,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    }
+                ),
+            )
+        )
+
+    def _publish_thinking_delta_event(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        text: str,
+    ) -> None:
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.THINKING_DELTA,
+                payload_json=dumps(
+                    {
+                        "part_index": part_index,
+                        "text": text,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    }
+                ),
+            )
+        )
+
+    def _publish_thinking_finished_event(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+    ) -> None:
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.THINKING_FINISHED,
+                payload_json=dumps(
+                    {
+                        "part_index": part_index,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    }
+                ),
+            )
+        )
 
     def _to_json(self, obj: object) -> str:
         try:

@@ -13,6 +13,9 @@ import {
     handleRunFailed,
     handleRunStopped,
     handleRunStarted,
+    handleThinkingDelta,
+    handleThinkingFinished,
+    handleThinkingStarted,
     handleTextDelta,
 } from './runEvents.js';
 import {
@@ -64,6 +67,12 @@ export function routeEvent(evType, payload, eventMeta) {
         handleModelStepStarted(instanceId, roleId);
     } else if (evType === 'text_delta') {
         handleTextDelta(payload, eventMeta, instanceId, roleId);
+    } else if (evType === 'thinking_started') {
+        handleThinkingStarted(payload, eventMeta, instanceId, roleId);
+    } else if (evType === 'thinking_delta') {
+        handleThinkingDelta(payload, eventMeta, instanceId, roleId);
+    } else if (evType === 'thinking_finished') {
+        handleThinkingFinished(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'model_step_finished') {
         handleModelStepFinished(instanceId);
     } else if (evType === 'run_completed') {

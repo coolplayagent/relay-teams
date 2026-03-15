@@ -3,10 +3,13 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode
-from agent_teams.sessions.runs.models import IntentInput
+from agent_teams.sessions.runs.models import IntentInput, RunThinkingConfig
 from agent_teams.persistence.db import open_sqlite
+
+type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 
 
 class RunIntentRepository:
@@ -24,6 +27,8 @@ class RunIntentRepository:
                 intent         TEXT NOT NULL,
                 execution_mode TEXT NOT NULL,
                 approval_mode  TEXT NOT NULL DEFAULT 'standard',
+                thinking_enabled TEXT NOT NULL DEFAULT 'false',
+                thinking_effort TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL
             )
@@ -36,6 +41,14 @@ class RunIntentRepository:
         if "approval_mode" not in columns:
             self._conn.execute(
                 "ALTER TABLE run_intents ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'standard'"
+            )
+        if "thinking_enabled" not in columns:
+            self._conn.execute(
+                "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"
+            )
+        if "thinking_effort" not in columns:
+            self._conn.execute(
+                "ALTER TABLE run_intents ADD COLUMN thinking_effort TEXT"
             )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
@@ -52,16 +65,20 @@ class RunIntentRepository:
                 intent,
                 execution_mode,
                 approval_mode,
+                thinking_enabled,
+                thinking_effort,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
                 intent=excluded.intent,
                 execution_mode=excluded.execution_mode,
                 approval_mode=excluded.approval_mode,
+                thinking_enabled=excluded.thinking_enabled,
+                thinking_effort=excluded.thinking_effort,
                 updated_at=excluded.updated_at
             """,
             (
@@ -70,6 +87,8 @@ class RunIntentRepository:
                 intent.intent,
                 intent.execution_mode.value,
                 intent.approval_mode.value,
+                "true" if intent.thinking.enabled else "false",
+                intent.thinking.effort,
                 now,
                 now,
             ),
@@ -98,7 +117,7 @@ class RunIntentRepository:
     def get(self, run_id: str) -> IntentInput:
         row = self._conn.execute(
             """
-            SELECT session_id, intent, execution_mode, approval_mode
+            SELECT session_id, intent, execution_mode, approval_mode, thinking_enabled, thinking_effort
             FROM run_intents
             WHERE run_id=?
             """,
@@ -111,4 +130,25 @@ class RunIntentRepository:
             intent=str(row["intent"]),
             execution_mode=ExecutionMode(str(row["execution_mode"])),
             approval_mode=ApprovalMode(str(row["approval_mode"])),
+            thinking=RunThinkingConfig(
+                enabled=str(row["thinking_enabled"]).strip().lower() == "true",
+                effort=_coerce_thinking_effort(row["thinking_effort"]),
+            ),
         )
+
+
+def _coerce_thinking_effort(
+    value: object,
+) -> _ThinkingEffort:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized == "minimal":
+        return "minimal"
+    if normalized == "low":
+        return "low"
+    if normalized == "medium":
+        return "medium"
+    if normalized == "high":
+        return "high"
+    return None

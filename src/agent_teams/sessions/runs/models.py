@@ -13,6 +13,13 @@ from agent_teams.sessions.runs.enums import (
 )
 
 
+class RunThinkingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+    effort: Literal["minimal", "low", "medium", "high"] | None = None
+
+
 class IntentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -20,6 +27,7 @@ class IntentInput(BaseModel):
     intent: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
     approval_mode: ApprovalMode = ApprovalMode.STANDARD
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
 
 class RunResult(BaseModel):

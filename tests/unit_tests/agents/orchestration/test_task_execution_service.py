@@ -23,6 +23,8 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -42,14 +44,19 @@ class _CapturingProvider:
     def __init__(self) -> None:
         self.prompts: list[str | None] = []
         self.system_prompts: list[str] = []
+        self.thinking_enabled: list[bool] = []
+        self.thinking_efforts: list[str | None] = []
 
     async def generate(self, request: object) -> str:
         prompt = getattr(request, "user_prompt", None)
         system_prompt = getattr(request, "system_prompt", "")
+        thinking = getattr(request, "thinking", None)
         assert prompt is None or isinstance(prompt, str)
         assert isinstance(system_prompt, str)
         self.prompts.append(prompt)
         self.system_prompts.append(system_prompt)
+        self.thinking_enabled.append(getattr(thinking, "enabled", False) is True)
+        self.thinking_efforts.append(getattr(thinking, "effort", None))
         return "ok"
 
 
@@ -101,6 +108,7 @@ def _build_service(
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _: provider,
+        run_intent_repo=RunIntentRepository(db_path),
     )
     return service, task_repo, agent_repo, message_repo
 
@@ -162,6 +170,7 @@ def _build_service_with_control(
         ),
         provider_factory=lambda _: provider,
         run_control_manager=run_control_manager,
+        run_intent_repo=RunIntentRepository(db_path),
     )
     return (
         service,
@@ -321,6 +330,39 @@ async def test_execute_persists_followup_prompt_before_turn(
     assert len(history) == 2
     assert isinstance(history[-1], ModelRequest)
     assert history[-1].parts[0].content == "Follow up: query time again."
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_run_thinking_config_to_provider(tmp_path: Path) -> None:
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_thinking.db",
+        provider,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    assert service.run_intent_repo is not None
+    service.run_intent_repo.upsert(
+        run_id=task.trace_id,
+        session_id=task.session_id,
+        intent=IntentInput(
+            session_id=task.session_id,
+            intent="query time",
+            thinking=RunThinkingConfig(enabled=True, effort="high"),
+        ),
+    )
+
+    _ = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert provider.thinking_enabled == [True]
+    assert provider.thinking_efforts == ["high"]
 
 
 @pytest.mark.asyncio

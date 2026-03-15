@@ -11,7 +11,13 @@ import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
+    TextPartDelta,
     TextPart,
+    ThinkingPart,
+    ThinkingPartDelta,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -35,6 +41,7 @@ from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.models import RunEvent
+from agent_teams.sessions.runs.models import RunThinkingConfig
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -476,6 +483,61 @@ class _FakeAgentWithMutableUsageNode:
         return _FakeAgentRunWithMutableUsage()
 
 
+class _PartEventStream:
+    def __init__(
+        self,
+        events: list[object],
+        usage_snapshot: SimpleNamespace,
+    ) -> None:
+        self._events = list(events)
+        self._usage_snapshot = usage_snapshot
+        self._index = 0
+
+    def __aiter__(self) -> _PartEventStream:
+        return self
+
+    async def __anext__(self) -> object:
+        if self._index >= len(self._events):
+            raise StopAsyncIteration
+        event = self._events[self._index]
+        self._index += 1
+        return event
+
+    def usage(self) -> SimpleNamespace:
+        return self._usage_snapshot
+
+
+class _PartEventStreamContext:
+    def __init__(
+        self,
+        events: list[object],
+        usage_snapshot: SimpleNamespace,
+    ) -> None:
+        self._events = events
+        self._usage_snapshot = usage_snapshot
+
+    async def __aenter__(self) -> _PartEventStream:
+        return _PartEventStream(self._events, self._usage_snapshot)
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
+
+
+class _PartEventNode:
+    def __init__(
+        self,
+        events: list[object],
+        usage_snapshot: SimpleNamespace,
+    ) -> None:
+        self._events = events
+        self._usage_snapshot = usage_snapshot
+
+    def stream(self, ctx: object) -> _PartEventStreamContext:
+        _ = ctx
+        return _PartEventStreamContext(self._events, self._usage_snapshot)
+
+
 def _build_provider(
     db_path: Path,
     hub: _FakeRunEventHub,
@@ -719,6 +781,42 @@ async def test_generate_enables_continuous_stream_usage_stats(
     assert settings_obj.get("temperature") == provider._config.sampling.temperature
     assert settings_obj.get("top_p") == provider._config.sampling.top_p
     assert settings_obj.get("max_tokens") == provider._config.sampling.max_tokens
+
+
+@pytest.mark.asyncio
+async def test_generate_passes_reasoning_effort_when_thinking_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    fake_hub = _FakeRunEventHub()
+    provider, _ = _build_provider(tmp_path / "thinking_settings.db", fake_hub)
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_builder(**kwargs: object) -> _FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-thinking-settings",
+        trace_id="run-thinking-settings",
+        task_id="task-thinking-settings",
+        session_id="session-thinking-settings",
+        workspace_id="default",
+        instance_id="inst-thinking-settings",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="current turn",
+        thinking=RunThinkingConfig(enabled=True, effort="high"),
+    )
+
+    _ = await provider.generate(request)
+
+    settings_obj = captured_kwargs.get("model_settings")
+    assert isinstance(settings_obj, dict)
+    assert settings_obj.get("openai_reasoning_effort") == "high"
 
 
 @pytest.mark.asyncio
@@ -1026,6 +1124,87 @@ async def test_generate_token_usage_delta_works_with_mutated_usage_object(
     assert payload["total_tokens"] == 39
     assert payload["requests"] == 1
     assert payload["tool_calls"] == 5
+
+
+@pytest.mark.asyncio
+async def test_generate_streams_thinking_events_and_excludes_thinking_from_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "thinking_stream.db", fake_hub)
+    final_response = ModelResponse(
+        parts=[
+            ThinkingPart(content="draft trace"),
+            TextPart(content="answer done"),
+        ]
+    )
+    usage_after_request = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        requests=1,
+        tool_calls=0,
+        details={"reasoning_tokens": 0},
+    )
+    part_events = [
+        PartStartEvent(index=0, part=ThinkingPart(content="draft ")),
+        PartDeltaEvent(index=0, delta=ThinkingPartDelta(content_delta="trace")),
+        PartEndEvent(index=0, part=ThinkingPart(content="draft trace")),
+        PartStartEvent(index=1, part=TextPart(content="answer ")),
+        PartDeltaEvent(index=1, delta=TextPartDelta(content_delta="done")),
+        PartEndEvent(index=1, part=TextPart(content="answer done")),
+    ]
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_PartEventNode(part_events, usage_after_request)],
+                messages_by_step=[[final_response]],
+                result=_ScriptedResult(
+                    response=final_response,
+                    messages=[final_response],
+                ),
+            )
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _PartEventNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-thinking-stream",
+        trace_id="run-thinking-stream",
+        task_id="task-thinking-stream",
+        session_id="session-thinking-stream",
+        workspace_id="default",
+        instance_id="inst-thinking-stream",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="show work",
+        thinking=RunThinkingConfig(enabled=True, effort="medium"),
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "answer done"
+    history = message_repo.get_history("inst-thinking-stream")
+    assert isinstance(history[-1], ModelResponse)
+    assert isinstance(history[-1].parts[0], ThinkingPart)
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.THINKING_STARTED in event_types
+    assert RunEventType.THINKING_DELTA in event_types
+    assert RunEventType.THINKING_FINISHED in event_types
+    text_payloads = [
+        json.loads(event.payload_json)
+        for event in fake_hub.events
+        if event.event_type == RunEventType.TEXT_DELTA
+    ]
+    assert "".join(str(payload["text"]) for payload in text_payloads) == "answer done"
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.providers.http_client_factory import build_llm_http_client
@@ -21,6 +22,7 @@ def build_coordination_agent(
     system_prompt: str,
     allowed_tools: tuple[str, ...],
     model_settings: OpenAIChatModelSettings | None = None,
+    model_profile: OpenAIModelProfile | None = None,
     ssl_verify: bool | None = None,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     allowed_mcp_servers: tuple[str, ...] = (),
@@ -54,6 +56,7 @@ def build_coordination_agent(
             api_key=api_key,
             http_client=llm_http_client,
         ),
+        profile=model_profile,
     )
     agent: Agent[ToolDeps, str] = Agent(
         model=model,

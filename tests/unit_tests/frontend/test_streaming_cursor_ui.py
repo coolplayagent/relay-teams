@@ -58,6 +58,11 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         in stream_script
     )
     assert "syncStreamingCursor(entry.activeTextEl, false);" in stream_script
+    assert (
+        "updateThinkingText(entry.textEl, entry.raw, { streaming: false });"
+        in stream_script
+    )
+    assert "appendThinkingText(contentEl, String(part.content || '')," in history_script
     assert "const flushText = (streaming = false) => {" in history_script
     assert (
         "appendMessageText(contentEl, safeText.trim(), { streaming });"
@@ -80,6 +85,8 @@ def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
     assert "opacity: 0.26;" in base_css
     assert "opacity: 1;" in base_css
     assert ".streaming-cursor {" in components_css
+    assert ".thinking-block {" in components_css
+    assert ".thinking-live {" in components_css
     assert "border-radius: 999px;" in components_css
     assert (
         "animation: streamingCaretPulse 0.9s ease-in-out infinite alternate;"

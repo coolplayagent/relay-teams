@@ -22,6 +22,8 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.sessions.runs.models import RunThinkingConfig
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -54,6 +56,7 @@ class TaskExecutionService(BaseModel):
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
+    run_intent_repo: RunIntentRepository | None = None
 
     async def execute(
         self,
@@ -186,6 +189,7 @@ class TaskExecutionService(BaseModel):
                 workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
+                thinking=self._thinking_for_run(task.trace_id),
             )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
@@ -376,6 +380,14 @@ class TaskExecutionService(BaseModel):
                 exc_info=exc,
             )
             raise
+
+    def _thinking_for_run(self, run_id: str) -> RunThinkingConfig:
+        if self.run_intent_repo is None:
+            return RunThinkingConfig()
+        try:
+            return self.run_intent_repo.get(run_id).thinking
+        except KeyError:
+            return RunThinkingConfig()
 
     def _role_with_memory(
         self,

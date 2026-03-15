@@ -18,9 +18,12 @@ import {
 import { els } from '../../utils/dom.js';
 import { sysLog } from '../../utils/logger.js';
 import {
+    appendThinkingChunk,
     appendStreamChunk,
+    finalizeThinking,
     finalizeStream,
     getOrCreateStreamBlock,
+    startThinkingBlock,
 } from '../../components/messageRenderer.js';
 import {
     getActiveInstanceId,
@@ -81,6 +84,83 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
         getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
         appendStreamChunk(streamKey, payload.text || '', runId, roleId, label);
     }
+}
+
+export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
+    const coordinatorRoleId = getCoordinatorRoleId();
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
+    const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const partIndex = payload?.part_index ?? 0;
+
+    if (isCoordinator) {
+        const container = coordinatorContainerFor(eventMeta);
+        getOrCreateStreamBlock(container, instanceId || 'coordinator', coordinatorRoleId, label, runId);
+        startThinkingBlock(instanceId || 'coordinator', partIndex, {
+            container,
+            runId,
+            roleId: coordinatorRoleId,
+            label,
+        });
+        return;
+    }
+
+    const container = getPanelScrollContainer(instanceId, roleId);
+    if (!getActiveInstanceId()) {
+        openAgentPanel(instanceId, roleId);
+    }
+    getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
+    startThinkingBlock(instanceId, partIndex, {
+        container,
+        runId,
+        roleId,
+        label,
+    });
+}
+
+export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
+    const coordinatorRoleId = getCoordinatorRoleId();
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
+    const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const partIndex = payload?.part_index ?? 0;
+    const text = payload?.text || '';
+
+    if (isCoordinator) {
+        const container = coordinatorContainerFor(eventMeta);
+        getOrCreateStreamBlock(container, instanceId || 'coordinator', coordinatorRoleId, label, runId);
+        appendThinkingChunk(instanceId || 'coordinator', partIndex, text, {
+            container,
+            runId,
+            roleId: coordinatorRoleId,
+            label,
+        });
+        return;
+    }
+
+    const container = getPanelScrollContainer(instanceId, roleId);
+    if (!getActiveInstanceId()) {
+        openAgentPanel(instanceId, roleId);
+    }
+    getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
+    appendThinkingChunk(instanceId, partIndex, text, {
+        container,
+        runId,
+        roleId,
+        label,
+    });
+}
+
+export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
+    const coordinatorRoleId = getCoordinatorRoleId();
+    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const partIndex = payload?.part_index ?? 0;
+
+    finalizeThinking(instanceId || (isCoordinator ? 'coordinator' : ''), partIndex, {
+        runId,
+        roleId: isCoordinator ? coordinatorRoleId : roleId,
+    });
 }
 
 export function handleModelStepFinished(instanceId) {

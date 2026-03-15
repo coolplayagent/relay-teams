@@ -84,6 +84,27 @@ def test_create_run_route_accepts_approval_mode() -> None:
     assert created.approval_mode.value == "yolo"
 
 
+def test_create_run_route_accepts_thinking_config() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+            "approval_mode": "standard",
+            "thinking": {"enabled": True, "effort": "high"},
+        },
+    )
+
+    assert response.status_code == 200
+    created = fake_service.created_run_inputs[0]
+    assert created.thinking.enabled is True
+    assert created.thinking.effort == "high"
+
+
 def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:
     fake_service = _FakeRunService()
     fake_service.raise_on_tool_approval = True

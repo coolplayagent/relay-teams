@@ -5,6 +5,7 @@
 import {
     applyToolReturn,
     appendMessageText,
+    appendThinkingText,
     buildToolBlock,
     decoratePendingApprovalBlock,
     findToolBlockInContainer,
@@ -116,6 +117,14 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
             combinedText = String(part.content || '');
+            return;
+        }
+        if (part.kind === 'thinking') {
+            flushText(false);
+            appendThinkingText(contentEl, String(part.content || ''), {
+                partIndex: part.part_index ?? '',
+                streaming: part.finished !== true,
+            });
             return;
         }
         if (part.kind !== 'tool') return;

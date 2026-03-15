@@ -33,6 +33,8 @@ export const els = {
     promptInput: qs('#prompt-input'),
     promptInputHint: qs('#prompt-input-hint'),
     yoloModeToggle: qs('#yolo-mode-toggle'),
+    thinkingModeToggle: qs('#thinking-mode-toggle'),
+    thinkingEffortSelect: qs('#thinking-effort-select'),
     sessionTokenUsage: qs('#session-token-usage'),
     sendBtn: qs('#send-btn'),
     stopBtn: qs('#stop-btn'),

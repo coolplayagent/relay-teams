@@ -106,12 +106,27 @@
                         </div>
                     </form>
                     <div class="input-controls">
-                        <label class="composer-mode-toggle" for="yolo-mode-toggle">
+                        <label class="composer-mode-toggle" for="yolo-mode-toggle" title="开启后所有工具调用都不需审核">
                             <input type="checkbox" id="yolo-mode-toggle" checked>
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
                                 <span class="composer-mode-title">YOLO 模式</span>
-                                <span class="composer-mode-text">开启后所有工具调用都不需要审批</span>
+                            </span>
+                        </label>
+                        <label class="composer-mode-toggle has-inline-select" for="thinking-mode-toggle" title="关掉后是否仍思考由后端决定；Effort 生效取决于后端支持">
+                            <input type="checkbox" id="thinking-mode-toggle">
+                            <span class="composer-mode-check" aria-hidden="true"></span>
+                            <span class="composer-mode-copy">
+                                <span class="composer-mode-title">Thinking</span>
+                                <span class="composer-mode-inline">
+                                    <span class="composer-mode-inline-label">Effort</span>
+                                    <select id="thinking-effort-select" class="composer-mode-inline-select">
+                                        <option value="minimal">Minimal</option>
+                                        <option value="low">Low</option>
+                                        <option value="medium" selected>Medium</option>
+                                        <option value="high">High</option>
+                                    </select>
+                                </span>
                             </span>
                         </label>
                         <div id="session-token-usage" class="session-token-usage" title="Session token usage">Tokens --</div>

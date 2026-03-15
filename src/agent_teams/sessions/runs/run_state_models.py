@@ -165,6 +165,9 @@ def apply_run_event_to_state(
     elif event_type in {
         RunEventType.MODEL_STEP_STARTED,
         RunEventType.TEXT_DELTA,
+        RunEventType.THINKING_STARTED,
+        RunEventType.THINKING_DELTA,
+        RunEventType.THINKING_FINISHED,
         RunEventType.MODEL_STEP_FINISHED,
     }:
         if status not in _TERMINAL_STATES and status != _STOPPED_STATE:

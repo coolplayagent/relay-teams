@@ -356,6 +356,8 @@ CREATE TABLE IF NOT EXISTS run_intents (
     intent         TEXT NOT NULL,
     execution_mode TEXT NOT NULL,
     approval_mode  TEXT NOT NULL DEFAULT 'standard',
+    thinking_enabled TEXT NOT NULL DEFAULT 'false',
+    thinking_effort TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
@@ -363,7 +365,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `approval_mode` controls whether tool approvals run in `standard` mode or are skipped entirely in `yolo` mode.
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `approval_mode` controls whether tool approvals run in `standard` mode or are skipped entirely in `yolo` mode. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
 
 ---
 

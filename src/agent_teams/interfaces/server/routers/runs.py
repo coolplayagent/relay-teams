@@ -13,7 +13,7 @@ from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.manager import RunManager
 from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode, InjectionSource
-from agent_teams.sessions.runs.models import IntentInput
+from agent_teams.sessions.runs.models import IntentInput, RunThinkingConfig
 from agent_teams.trace import bind_trace_context
 
 logger = get_logger(__name__)
@@ -27,6 +27,7 @@ class CreateRunRequest(BaseModel):
     session_id: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
     approval_mode: ApprovalMode = ApprovalMode.STANDARD
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
 
 class CreateRunResponse(BaseModel):
@@ -76,6 +77,7 @@ def create_run(
                 intent=req.intent,
                 execution_mode=req.execution_mode,
                 approval_mode=req.approval_mode,
+                thinking=req.thinking,
             )
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)

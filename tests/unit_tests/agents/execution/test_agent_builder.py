@@ -58,9 +58,11 @@ def test_build_coordination_agent_passes_proxy_http_client(
     def _fake_openai_chat_model(
         model_name: str,
         provider: object,
+        profile: object | None = None,
     ) -> _FakeOpenAIChatModel:
         model = _FakeOpenAIChatModel(model_name, provider)
         captured["model"] = model
+        captured["profile"] = profile
         return model
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:

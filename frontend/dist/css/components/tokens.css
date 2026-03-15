@@ -409,6 +409,12 @@
     gap: 0.08rem;
 }
 
+.composer-mode-toggle.has-inline-select .composer-mode-copy {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.6rem;
+}
+
 .composer-mode-title {
     color: var(--text-primary);
     font-size: 0.84rem;
@@ -421,6 +427,35 @@
     line-height: 1.2;
 }
 
+.composer-mode-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--text-secondary);
+}
+
+.composer-mode-inline-label {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.composer-mode-inline-select {
+    min-width: 5.6rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+}
+
+.composer-mode-inline-select:disabled {
+    opacity: 0.6;
+}
+
 .composer-mode-toggle input[type="checkbox"]:checked + .composer-mode-check {
     background: rgba(37, 99, 235, 0.9);
     border-color: rgba(37, 99, 235, 0.95);
@@ -431,6 +466,37 @@
 }
 
 .composer-mode-toggle input[type="checkbox"]:disabled + .composer-mode-check {
+    opacity: 0.6;
+}
+
+.composer-select-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-height: 1.9rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.composer-select-label {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.composer-select-field select {
+    min-width: 6.25rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+
+.composer-select-field select:disabled {
     opacity: 0.6;
 }
 
@@ -1181,6 +1247,8 @@ body.light-theme .system-intro {
 
 body.light-theme .subagent-role-select,
 body.light-theme .gate-feedback-input,
-body.light-theme .panel-inject-input {
+body.light-theme .panel-inject-input,
+body.light-theme .composer-select-field select,
+body.light-theme .composer-mode-inline-select {
     background: var(--bg-surface);
 }

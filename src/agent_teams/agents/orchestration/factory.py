@@ -17,6 +17,7 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repo import TaskRepository
 from agent_teams.workspace import WorkspaceManager
@@ -32,6 +33,7 @@ def create_task_execution_service(
     message_repo: MessageRepository,
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
+    run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
     provider_factory: Callable[[RoleDefinition], LLMProvider],
     mcp_registry: McpRegistry,
@@ -57,4 +59,5 @@ def create_task_execution_service(
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,
+        run_intent_repo=run_intent_repo,
     )

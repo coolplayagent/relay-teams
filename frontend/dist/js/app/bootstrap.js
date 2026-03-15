@@ -17,7 +17,7 @@ import { setupNavbarBindings } from '../components/navbar.js';
 import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
 import { resumeRecoverableRun } from './recovery.js';
-import { initializeApprovalModeToggle } from './prompt.js';
+import { initializeApprovalModeToggle, initializeThinkingControls } from './prompt.js';
 import { requestStopCurrentRun } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import {
@@ -97,6 +97,7 @@ export async function initApp(selectSession, handleSend) {
     initBackendStatusMonitor();
     setupNavbarBindings();
     initializeApprovalModeToggle();
+    initializeThinkingControls();
     initializeContextIndicators();
     initializeSessionTokenUsage();
     await hydrateCoordinatorRoleId();

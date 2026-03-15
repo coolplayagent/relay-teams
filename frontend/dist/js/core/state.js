@@ -20,6 +20,10 @@ export const state = {
     sessionAgents: [],
     sessionTasks: [],
     approvalMode: 'yolo',
+    thinking: {
+        enabled: false,
+        effort: 'medium',
+    },
     selectedRoleId: null,
     coordinatorRoleId: null,
     rightRailExpanded: true,

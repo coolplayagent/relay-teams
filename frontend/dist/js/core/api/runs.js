@@ -4,7 +4,7 @@
  */
 import { requestJson } from './request.js';
 
-export async function sendUserPrompt(sessionId, prompt, approvalMode = 'standard') {
+export async function sendUserPrompt(sessionId, prompt, approvalMode = 'standard', thinking = null) {
     return requestJson(
         '/api/runs',
         {
@@ -15,6 +15,7 @@ export async function sendUserPrompt(sessionId, prompt, approvalMode = 'standard
                 session_id: sessionId,
                 execution_mode: 'ai',
                 approval_mode: approvalMode,
+                thinking: thinking || { enabled: false, effort: null },
             }),
         },
         'Failed to create run',
