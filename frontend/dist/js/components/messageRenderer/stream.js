@@ -91,6 +91,9 @@ export function finalizeStream(instanceId, roleId = '') {
             st.thinkingActiveByPart.clear();
         }
     }
+    if (st?.runId) {
+        clearOverlayEntry(st.runId, st.instanceId, st.roleId);
+    }
     streamState.delete(streamKey);
 }
 
@@ -472,6 +475,18 @@ function resolveToolBlockTarget(st, container, toolName, toolCallId) {
     }
     if (!container) return null;
     return findToolBlockInContainer(container, toolName, toolCallId);
+}
+
+function clearOverlayEntry(runId, instanceId, roleId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) return;
+    const runOverlay = overlayState.get(safeRunId);
+    if (!runOverlay) return;
+    const key = resolveStreamKey(instanceId, roleId);
+    runOverlay.entries.delete(key);
+    if (runOverlay.entries.size === 0) {
+        overlayState.delete(safeRunId);
+    }
 }
 
 function ensureOverlayEntry(runId, instanceId, roleId, label) {
