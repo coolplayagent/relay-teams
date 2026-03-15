@@ -44,9 +44,9 @@ export function parseMarkdown(source = '') {
     rendered = rendered.replace(/::THINK_START::/g, () => {
         thinkBlockCount++;
         const isOpen = isStreamingThink && thinkBlockCount === totalThinkBlocks;
-        return `<details class="think-block"${isOpen ? ' open' : ''}><summary>Thinking</summary><div class="think-content">`;
+        return `<details class="thinking-block"${isOpen ? ' open' : ''}><summary class="thinking-summary"><span class="thinking-label">Thinking</span><span class="thinking-live" style="display:${isOpen ? 'inline-flex' : 'none'};">Live</span></summary><div class="thinking-body"><div class="msg-text thinking-text">`;
     });
-    rendered = rendered.replace(/::THINK_END::/g, '</div></details>');
+    rendered = rendered.replace(/::THINK_END::/g, '</div></div></details>');
 
     const template = document.createElement('template');
     template.innerHTML = rendered;
