@@ -1,0 +1,310 @@
+/* Chat Messages */
+.message {
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease backwards;
+}
+
+.msg-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.msg-role {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+}
+
+.role-user {
+    background-color: var(--bg-hover-strong);
+    color: var(--text-primary);
+}
+
+.role-agent {
+    background-color: color-mix(in srgb, var(--primary) 18%, transparent);
+    color: var(--primary-hover);
+}
+
+.role-coordinator {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: var(--warning);
+}
+
+.msg-content {
+    font-size: 0.9375rem;
+    line-height: 1.72;
+    color: var(--text-msg-content);
+}
+
+/* Markdown styling inside message content */
+.msg-content,
+.msg-text {
+    color: var(--text-msg-content);
+}
+
+.msg-content > :first-child,
+.msg-text > :first-child {
+    margin-top: 0;
+}
+
+.msg-content > :last-child,
+.msg-text > :last-child {
+    margin-bottom: 0;
+}
+
+.msg-content :is(p, ul, ol, pre, blockquote, hr),
+.msg-text :is(p, ul, ol, pre, blockquote, hr) {
+    margin: 0 0 0.95rem;
+}
+
+.msg-content :is(h1, h2, h3, h4),
+.msg-text :is(h1, h2, h3, h4) {
+    margin: 1.35rem 0 0.7rem;
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.28;
+    letter-spacing: -0.01em;
+}
+
+.msg-content h1,
+.msg-text h1 {
+    font-size: 1.2rem;
+}
+
+.msg-content h2,
+.msg-text h2 {
+    font-size: 1.08rem;
+}
+
+.msg-content h3,
+.msg-text h3 {
+    font-size: 1rem;
+}
+
+.msg-content h4,
+.msg-text h4 {
+    font-size: 0.94rem;
+}
+
+.msg-content :is(strong, b),
+.msg-text :is(strong, b) {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.msg-content :is(em, i),
+.msg-text :is(em, i) {
+    color: color-mix(in srgb, var(--text-msg-content) 88%, var(--text-secondary) 12%);
+}
+
+.msg-content a,
+.msg-text a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    text-underline-offset: 0.16em;
+}
+
+.msg-content a:hover,
+.msg-text a:hover {
+    color: var(--primary-hover);
+    text-decoration-color: currentcolor;
+}
+
+.msg-content :is(ul, ol),
+.msg-text :is(ul, ol) {
+    padding-left: 1.25rem;
+}
+
+.msg-content li,
+.msg-text li {
+    margin: 0.28rem 0;
+}
+
+.msg-content li > :last-child,
+.msg-text li > :last-child {
+    margin-bottom: 0;
+}
+
+.streaming-cursor {
+    display: inline-block;
+    width: 0.48em;
+    height: 0.48em;
+    margin-left: 0.2em;
+    border-radius: 999px;
+    vertical-align: 0.02em;
+    background: color-mix(in srgb, var(--primary) 72%, var(--text-msg-content) 28%);
+    animation: streamingCaretPulse 0.9s ease-in-out infinite alternate;
+}
+
+.msg-content blockquote,
+.msg-text blockquote {
+    padding: 0.85rem 1rem;
+    border-left: 3px solid color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    background: color-mix(in srgb, var(--bg-surface-muted) 82%, transparent);
+    color: color-mix(in srgb, var(--text-msg-content) 90%, var(--text-secondary) 10%);
+}
+
+.msg-content hr,
+.msg-text hr {
+    height: 1px;
+    border: none;
+    background: var(--border-color);
+}
+
+.markdown-table-wrap {
+    margin: 0 0 0.95rem;
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+}
+
+.msg-content table,
+.msg-text table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+    min-width: 28rem;
+    background: transparent;
+}
+
+.msg-content :is(th, td),
+.msg-text :is(th, td) {
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: top;
+}
+
+.msg-content th,
+.msg-text th {
+    color: var(--text-primary);
+    font-weight: 600;
+    background: color-mix(in srgb, var(--bg-surface-muted) 78%, transparent);
+}
+
+.msg-content tr:last-child td,
+.msg-text tr:last-child td {
+    border-bottom: none;
+}
+
+.msg-content .markdown-table-wrap > :last-child,
+.msg-text .markdown-table-wrap > :last-child {
+    margin-bottom: 0;
+}
+
+.markdown-code-block {
+    margin: 0 0 0.95rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-surface);
+}
+
+.markdown-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 2rem;
+    padding: 0.45rem 0.8rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-muted) 82%, transparent);
+}
+
+.markdown-code-language {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-transform: none;
+}
+
+.markdown-code-copy {
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 0.74rem;
+    font-weight: 500;
+    line-height: 1;
+    padding: 0.32rem 0.55rem;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.markdown-code-copy:hover {
+    background: color-mix(in srgb, var(--bg-hover-strong) 72%, transparent);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.markdown-code-copy.is-copied {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 45%, var(--border-color) 55%);
+    background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.msg-content .markdown-code-block > pre,
+.msg-text .markdown-code-block > pre {
+    margin: 0;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0.95rem 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.65;
+}
+
+.msg-content > pre,
+.msg-text > pre {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.95rem 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.65;
+}
+
+.msg-content code,
+.msg-text code {
+    font-family: var(--font-mono);
+    background-color: var(--code-bg);
+    padding: 0.12rem 0.34rem;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    font-size: 0.86rem;
+}
+
+.msg-content pre code,
+.msg-text pre code {
+    background: none;
+    padding: 0;
+    border: none;
+    display: block;
+    white-space: pre;
+}
+
+.msg-content pre code .hljs,
+.msg-text pre code .hljs,
+.msg-content .hljs,
+.msg-text .hljs {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+

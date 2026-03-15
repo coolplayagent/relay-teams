@@ -1,0 +1,383 @@
+/* ── Orchestration Controls (Mode Selector + Confirmation Gate) ─────────── */
+
+.input-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 0.4rem 1.25rem 0;
+    flex-wrap: wrap;
+}
+
+.gate-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gate-label input[type="checkbox"] {
+    accent-color: var(--primary);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+}
+
+.gate-label:hover {
+    color: var(--text-primary);
+}
+
+/* ── Human Dispatch Panel ─────────────────────────────────────────────────── */
+
+.human-dispatch-panel {
+    margin: 0.75rem 0;
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.06), rgba(245, 158, 11, 0.02));
+    padding: 1rem;
+    animation: slideUp 0.3s ease;
+}
+
+.dispatch-header {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--warning);
+    margin-bottom: 0.75rem;
+}
+
+.dispatch-task-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dispatch-task-row:last-child {
+    border-bottom: none;
+}
+
+.dispatch-task-obj {
+    flex: 1;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+.dispatch-task-role {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    padding: 0.125rem 0.4rem;
+    background: var(--bg-hover-strong);
+    border-radius: 4px;
+}
+
+.dispatch-btn {
+    background-color: var(--warning);
+    color: #000;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    white-space: nowrap;
+}
+
+.dispatch-btn:hover {
+    opacity: 0.85;
+}
+
+.dispatch-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.dispatch-empty {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 0.5rem 0;
+}
+
+/* ── Subagent Gate Confirmation Card ─────────────────────────────────────── */
+
+.gate-card {
+    margin: 0.75rem 0;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-md);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.02));
+    padding: 1rem;
+    animation: slideUp 0.3s ease;
+}
+
+.gate-header {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--primary-hover);
+    margin-bottom: 0.5rem;
+}
+
+.gate-summary {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.gate-role {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.gate-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.gate-approve-btn {
+    background-color: var(--success);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gate-revise-btn {
+    background: none;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.gate-revise-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.gate-approve-btn:hover {
+    opacity: 0.85;
+}
+
+.gate-approve-btn:disabled,
+.gate-revise-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.gate-feedback-area {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.gate-feedback-input {
+    width: 100%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: var(--radius-md);
+    padding: 0.5rem;
+    font-family: var(--font-ui);
+    font-size: 0.875rem;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.gate-feedback-input:focus {
+    border-color: var(--primary);
+}
+
+.gate-submit-revise-btn {
+    align-self: flex-start;
+    background-color: var(--primary);
+    color: var(--text-on-primary);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.35rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.gate-submit-revise-btn:hover {
+    opacity: 0.85;
+}
+
+/* Unified Feedback */
+.feedback-toast-stack {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 1250;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    width: min(360px, calc(100vw - 2rem));
+    pointer-events: none;
+}
+
+.feedback-toast {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.9rem;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+    pointer-events: auto;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.feedback-toast.is-leaving {
+    opacity: 0;
+    transform: translateY(6px);
+}
+
+.feedback-toast-body {
+    min-width: 0;
+}
+
+.feedback-toast-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.feedback-toast-message {
+    margin-top: 0.15rem;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.feedback-toast-close {
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface-muted);
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.feedback-toast-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.feedback-dialog-root {
+    position: fixed;
+    inset: 0;
+    z-index: 1300;
+    display: none;
+}
+
+.feedback-dialog-root.active {
+    display: block;
+}
+
+.feedback-dialog-backdrop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(18, 20, 22, 0.34);
+}
+
+.feedback-dialog {
+    width: min(420px, 100%);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-surface);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+}
+
+.feedback-dialog-header {
+    padding: 1rem 1rem 0;
+}
+
+.feedback-dialog-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.feedback-dialog-body {
+    padding: 0.55rem 1rem 0;
+    font-size: 0.875rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.feedback-dialog-input-wrap {
+    padding: 0.85rem 1rem 0;
+}
+
+.feedback-dialog-input {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-surface-muted);
+    color: var(--text-primary);
+    padding: 0.72rem 0.8rem;
+    font: inherit;
+}
+
+.feedback-dialog-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.feedback-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.65rem;
+    padding: 1rem;
+}
+
+.feedback-action-btn {
+    width: auto;
+    min-width: 88px;
+}
+
+.feedback-tone-success {
+    border-color: color-mix(in srgb, var(--success) 35%, var(--border-color));
+}
+
+.feedback-tone-warning {
+    border-color: color-mix(in srgb, var(--warning) 35%, var(--border-color));
+}
+
+.feedback-tone-danger {
+    border-color: color-mix(in srgb, var(--danger) 40%, var(--border-color));
+}
+
