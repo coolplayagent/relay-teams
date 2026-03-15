@@ -601,6 +601,7 @@ function ensureThinkingEntry(st, partIndex) {
         raw: '',
     };
     st.thinkingParts.set(safePartKey, entry);
+    st.activeTextEl = null;
     return entry;
 }
 
