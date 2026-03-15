@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agent_teams.agents.subagent import SubAgentRequest, SubAgentRunner
@@ -26,6 +28,7 @@ class _FixedPromptBuilder(RuntimePromptBuilder):
     async def build(self, data: PromptBuildInput) -> str:
         task = data.task
         assert task is not None
+        assert data.working_directory == Path("/tmp/workspace-root")
         return (
             f"role={data.role.role_id};task={task.task_id};"
             f"shared={data.shared_state_snapshot[0][0]}"
@@ -59,6 +62,7 @@ async def test_subagent_runner_builds_runtime_request() -> None:
         task=task,
         instance_id="instance-1",
         workspace_id="workspace-1",
+        working_directory=Path("/tmp/workspace-root"),
         conversation_id="conversation-1",
         shared_state_snapshot=(("context", "available"),),
     )

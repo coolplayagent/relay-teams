@@ -12,6 +12,8 @@ from agent_teams.interfaces.server.deps import (
     get_role_registry,
     get_skill_registry,
     get_tool_registry,
+    get_workspace_manager,
+    get_workspace_service,
 )
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
@@ -29,6 +31,7 @@ from agent_teams.roles.registry import RoleRegistry
 
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
+from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
@@ -37,6 +40,7 @@ class PromptPreviewRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     role_id: str = Field(min_length=1)
+    workspace_id: str | None = Field(default=None, min_length=1)
     objective: str | None = None
     shared_state: dict[str, JsonValue] = Field(default_factory=dict)
     tools: tuple[str, ...] | None = None
@@ -62,6 +66,8 @@ async def preview_prompts(
     tool_registry: Annotated[ToolRegistry, Depends(get_tool_registry)],
     mcp_registry: Annotated[McpRegistry, Depends(get_mcp_registry)],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
+    workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+    workspace_manager: Annotated[WorkspaceManager, Depends(get_workspace_manager)],
 ) -> PromptPreviewResponse:
     try:
         role = role_registry.get(req.role_id)
@@ -82,6 +88,20 @@ async def preview_prompts(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    working_directory = None
+    if req.workspace_id is not None:
+        try:
+            workspace_service.require_workspace(req.workspace_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Workspace not found") from exc
+        working_directory = workspace_manager.resolve(
+            session_id="prompt-preview",
+            role_id=role.role_id,
+            instance_id=None,
+            workspace_id=req.workspace_id,
+            conversation_id="prompt-preview",
+        ).resolve_workdir()
+
     runtime_system_prompt = await RuntimePromptBuilder(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
@@ -89,6 +109,7 @@ async def preview_prompts(
         RuntimePromptBuildInput(
             role=role,
             shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
+            working_directory=working_directory,
         )
     )
     skill_instructions = tuple(

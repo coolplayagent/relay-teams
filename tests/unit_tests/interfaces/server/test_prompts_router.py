@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -9,6 +11,8 @@ from agent_teams.interfaces.server.deps import (
     get_role_registry,
     get_skill_registry,
     get_tool_registry,
+    get_workspace_manager,
+    get_workspace_service,
 )
 from agent_teams.interfaces.server.routers import prompts
 from agent_teams.mcp.models import McpConfigScope, McpServerSpec, McpToolInfo
@@ -17,6 +21,40 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.models import SkillInstructionEntry
 from agent_teams.tools.registry import ToolRegistry
+
+
+class _FakeWorkspaceService:
+    def __init__(self, known_workspace_ids: set[str]) -> None:
+        self._known_workspace_ids = known_workspace_ids
+
+    def require_workspace(self, workspace_id: str) -> None:
+        if workspace_id not in self._known_workspace_ids:
+            raise KeyError(workspace_id)
+
+
+class _FakeWorkspaceHandle:
+    def __init__(self, workdir: Path) -> None:
+        self._workdir = workdir
+
+    def resolve_workdir(self) -> Path:
+        return self._workdir
+
+
+class _FakeWorkspaceManager:
+    def resolve(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        instance_id: str | None,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        profile: object | None = None,
+    ) -> _FakeWorkspaceHandle:
+        _ = (session_id, role_id, instance_id, conversation_id, profile)
+        return _FakeWorkspaceHandle(
+            Path("/tmp") / workspace_id / "execution-root" / "preview"
+        )
 
 
 class _FakeSkillRegistry:
@@ -108,6 +146,10 @@ def _create_client() -> TestClient:
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
+    app.dependency_overrides[get_workspace_service] = lambda: _FakeWorkspaceService(
+        {"preview-workspace"}
+    )
+    app.dependency_overrides[get_workspace_manager] = _FakeWorkspaceManager
     return TestClient(app)
 
 
@@ -151,6 +193,27 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert "## Available Roles" in payload["provider_system_prompt"]
 
 
+def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provided() -> (
+    None
+):
+    client = _create_client()
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "writer_agent",
+            "workspace_id": "preview-workspace",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        "- Working Directory: /tmp/preview-workspace/execution-root/preview"
+        in payload["runtime_system_prompt"]
+    )
+
+
 def test_prompts_preview_skill_override_replaces_role_default() -> None:
     client = _create_client()
 
@@ -185,6 +248,21 @@ def test_prompts_preview_returns_404_for_unknown_role() -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_prompts_preview_returns_404_for_unknown_workspace() -> None:
+    client = _create_client()
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "coordinator_agent",
+            "workspace_id": "missing-workspace",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Workspace not found"}
 
 
 def test_prompts_preview_returns_400_for_unknown_tool_override() -> None:

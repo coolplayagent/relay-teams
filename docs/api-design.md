@@ -623,6 +623,7 @@ Request:
 ```json
 {
   "role_id": "Coordinator",
+  "workspace_id": "default",
   "objective": "Draft release note",
   "shared_state": {"lang": "zh-CN", "priority": 1},
   "tools": ["dispatch_task"],
@@ -632,6 +633,9 @@ Request:
 
 Notes:
 - `objective` is optional.
+- `workspace_id` is optional.
+- When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
+- When `workspace_id` does not exist, the endpoint returns `404`.
 - When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
 
 Response:

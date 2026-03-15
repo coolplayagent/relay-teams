@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
@@ -129,12 +130,14 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
 
 
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
+    working_directory = Path("/tmp/workspace-root")
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 task=_task(),
                 shared_state_snapshot=(),
+                working_directory=working_directory,
             )
         )
     )
@@ -142,6 +145,7 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert prompt.startswith("You are a focused agent.")
     assert "## Runtime Environment Information" in prompt
     assert "- Operating System:" in prompt
+    assert f"- Working Directory: {working_directory}" in prompt
 
 
 def test_system_prompt_renders_tools_and_skills() -> None:

@@ -187,6 +187,7 @@ class TaskExecutionService(BaseModel):
                 task=task,
                 instance_id=instance_id,
                 workspace_id=workspace.ref.workspace_id,
+                working_directory=workspace.resolve_workdir(),
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
                 thinking=self._thinking_for_run(task.trace_id),

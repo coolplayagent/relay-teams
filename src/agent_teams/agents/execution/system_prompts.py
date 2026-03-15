@@ -55,6 +55,7 @@ class RuntimePromptBuildInput(BaseModel):
     role: RoleDefinition
     task: TaskEnvelope | None = None
     shared_state_snapshot: tuple[tuple[str, str], ...]
+    working_directory: Path | None = None
 
 
 class PromptSkillInstruction(BaseModel):
@@ -72,7 +73,7 @@ class SystemPromptBuildInput(BaseModel):
     skill_instructions: tuple[PromptSkillInstruction, ...] = ()
 
 
-def build_environment_info_prompt() -> str:
+def build_environment_info_prompt(*, working_directory: Path | None = None) -> str:
     """Gather current runtime environment information for the system prompt.
     Linked with shell tool implementation to ensure consistency.
     """
@@ -82,7 +83,11 @@ def build_environment_info_prompt() -> str:
     python_version = (
         f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     )
-    cwd = os.getcwd()
+    cwd = (
+        str(working_directory.resolve())
+        if working_directory is not None
+        else os.getcwd()
+    )
 
     # Link with shell tool implementation (lazy import to avoid circular dependency)
     from agent_teams.tools.workspace_tools.shell_executor import resolve_bash_path
@@ -148,7 +153,7 @@ async def build_runtime_system_prompt(
     prompt = data.role.system_prompt
 
     # Include environment information for all roles
-    env_prompt = build_environment_info_prompt()
+    env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
     prompt = f"{prompt}\n\n{env_prompt}"
 
     if not is_coordinator_role_definition(data.role):

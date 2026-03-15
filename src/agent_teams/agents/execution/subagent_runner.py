@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict
@@ -43,6 +44,7 @@ class SubAgentRunner(BaseModel):
         task: TaskEnvelope,
         instance_id: str,
         workspace_id: str,
+        working_directory: Path | None,
         conversation_id: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         thinking: RunThinkingConfig | None = None,
@@ -52,6 +54,7 @@ class SubAgentRunner(BaseModel):
                 role=self.role,
                 task=task,
                 shared_state_snapshot=shared_state_snapshot,
+                working_directory=working_directory,
             )
         )
         generate = cast(
