@@ -135,7 +135,9 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
         state.activeEventSource.close();
         state.activeEventSource = null;
     }
-    clearRunStreamState(safeRunId);
+    if (reason !== 'start') {
+        clearRunStreamState(safeRunId);
+    }
 
     const url = `/api/runs/${safeRunId}/events`;
     logInfo('frontend.sse.opened', 'Run event stream opened', {

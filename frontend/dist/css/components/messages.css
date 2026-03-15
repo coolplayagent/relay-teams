@@ -308,3 +308,72 @@
     padding: 0;
 }
 
+
+/* Think Block Styling */
+.think-block {
+    margin: 0.5rem 0 1rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--bg-surface-muted) 40%, transparent);
+    overflow: hidden;
+}
+
+.think-block > summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    padding: 0.5rem 0.8rem;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    list-style: none;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.think-block > summary::-webkit-details-marker {
+    display: none;
+}
+
+.think-block > summary::before {
+    content: '';
+    display: inline-block;
+    width: 0.8em;
+    height: 0.8em;
+    margin-right: 0.4rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'%3E%3Cpolyline points='9 18 15 12 9 6'%3E%3C/polyline%3E%3C/svg%3E");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    transition: transform 0.2s ease;
+    opacity: 0.7;
+}
+
+.think-block[open] > summary {
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-muted) 80%, transparent);
+    color: var(--text-primary);
+}
+
+.think-block[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.think-block > summary:hover {
+    background: color-mix(in srgb, var(--bg-surface-muted) 80%, transparent);
+    color: var(--text-primary);
+}
+
+.think-content {
+    padding: 0.8rem;
+    font-size: 0.9rem;
+    color: color-mix(in srgb, var(--text-msg-content) 85%, var(--text-secondary) 15%);
+    background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
+}
+
+.think-content > :first-child {
+    margin-top: 0;
+}
+.think-content > :last-child {
+    margin-bottom: 0;
+}

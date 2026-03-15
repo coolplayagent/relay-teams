@@ -3,13 +3,15 @@
  * Session timeline rendering, scroll-sync, and paging orchestration.
  */
 import { els } from '../../utils/dom.js';
-import { isCoordinatorRoleId, state } from '../../core/state.js';
+import { isCoordinatorRoleId, getCoordinatorRoleId, state } from '../../core/state.js';
 import { fetchRunTokenUsage } from '../../core/api.js';
 import { setRoundPendingApprovals } from '../agentPanel.js';
 import {
     clearAllStreamState,
     getCoordinatorStreamOverlay,
     renderHistoricalMessageList,
+    getOrCreateStreamBlock,
+    appendStreamChunk,
 } from '../messageRenderer.js';
 import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
@@ -97,14 +99,10 @@ export function appendRoundUserMessage(runId, text) {
     const empty = section.querySelector('.panel-empty');
     if (empty) empty.remove();
 
-    const messageEl = document.createElement('div');
-    messageEl.className = 'message';
-    messageEl.dataset.role = 'user';
-    messageEl.innerHTML = `
-        <div class="msg-header"><span class="msg-role role-user">YOU</span></div>
-        <div class="msg-content"><div class="msg-text">${esc(text || '')}</div></div>
-    `;
-    section.appendChild(messageEl);
+    const coordinatorRoleId = getCoordinatorRoleId();
+    getOrCreateStreamBlock(section, 'coordinator', coordinatorRoleId, 'Coordinator', safeRunId);
+    appendStreamChunk('coordinator', '', safeRunId, coordinatorRoleId, 'Coordinator');
+
     els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
 }
 

@@ -19,7 +19,35 @@ export function renderMarkdownToHtml(source = '') {
 
 export function parseMarkdown(source = '') {
     ensureMarkdownInteractions();
-    const rendered = renderMarkdownToHtml(source);
+    
+    let processedSource = String(source || '');
+    
+    const lastThinkOpen = processedSource.lastIndexOf('<think>');
+    const lastThinkClose = processedSource.lastIndexOf('</think>');
+    const isStreamingThink = lastThinkOpen > lastThinkClose;
+    
+    if (isStreamingThink) {
+        processedSource += '\n</think>';
+    }
+
+    processedSource = processedSource
+        .replace(/<think>/g, '\n::THINK_START::\n')
+        .replace(/<\/think>/g, '\n::THINK_END::\n');
+
+    let rendered = renderMarkdownToHtml(processedSource);
+    
+    rendered = rendered.replace(/<p>\s*::THINK_START::\s*<\/p>/g, '::THINK_START::');
+    rendered = rendered.replace(/<p>\s*::THINK_END::\s*<\/p>/g, '::THINK_END::');
+    
+    const totalThinkBlocks = (processedSource.match(/::THINK_START::/g) || []).length;
+    let thinkBlockCount = 0;
+    rendered = rendered.replace(/::THINK_START::/g, () => {
+        thinkBlockCount++;
+        const isOpen = isStreamingThink && thinkBlockCount === totalThinkBlocks;
+        return `<details class="think-block"${isOpen ? ' open' : ''}><summary>Thinking</summary><div class="think-content">`;
+    });
+    rendered = rendered.replace(/::THINK_END::/g, '</div></details>');
+
     const template = document.createElement('template');
     template.innerHTML = rendered;
 

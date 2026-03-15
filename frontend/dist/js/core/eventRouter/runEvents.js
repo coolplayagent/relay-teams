@@ -65,7 +65,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
     const coordinatorRoleId = getCoordinatorRoleId();
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
-    const streamKey = instanceId || (isCoordinator ? 'coordinator' : roleId);
+    const streamKey = isCoordinator ? 'coordinator' : (instanceId || roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
 
     if (isCoordinator) {
@@ -78,15 +78,17 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
         if (!getActiveInstanceId()) {
             openAgentPanel(instanceId, roleId);
         }
-        getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
-        appendStreamChunk(instanceId, payload.text || '', runId, roleId, label);
+        getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
+        appendStreamChunk(streamKey, payload.text || '', runId, roleId, label);
     }
 }
 
 export function handleModelStepFinished(instanceId) {
-    const key = instanceId || 'coordinator';
-    finalizeStream(key, instanceId ? '' : getCoordinatorRoleId());
-    if (instanceId) {
+    const roleId = state.instanceRoleMap?.[instanceId] || '';
+    const isCoordinator = !instanceId || (!roleId && instanceId === 'coordinator') || isCoordinatorRoleId(roleId);
+    const key = isCoordinator ? 'coordinator' : instanceId;
+    finalizeStream(key, isCoordinator ? getCoordinatorRoleId() : roleId);
+    if (instanceId && !isCoordinator) {
         markSubagentStatus(instanceId, 'completed');
     }
     if (!instanceId || state.activeAgentInstanceId === instanceId) {
