@@ -58,10 +58,13 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         in stream_script
     )
     assert "syncStreamingCursor(entry.activeTextEl, false);" in stream_script
+    assert "const flushText = (streaming = false) => {" in history_script
     assert (
-        "appendMessageText(contentEl, safeText.trim(), { streaming: true });"
+        "appendMessageText(contentEl, safeText.trim(), { streaming });"
         in history_script
     )
+    assert "flushText(false);" in history_script
+    assert "flushText(trailingTextPart?.kind === 'text');" in history_script
 
 
 def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
@@ -70,7 +73,7 @@ def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
         encoding="utf-8"
     )
     components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
+        repo_root / "frontend" / "dist" / "css" / "components" / "messages.css"
     ).read_text(encoding="utf-8")
 
     assert "@keyframes streamingCaretPulse" in base_css

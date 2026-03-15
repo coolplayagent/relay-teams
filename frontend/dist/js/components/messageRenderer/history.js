@@ -103,21 +103,23 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
         || labelFromRole('assistant', streamOverlayEntry.roleId, streamOverlayEntry.instanceId);
     const { contentEl } = renderMessageBlock(container, 'assistant', label, []);
     let combinedText = '';
-    const flushText = () => {
+    const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
+    const trailingTextPart = [...overlayParts].reverse().find(part => part && typeof part === 'object');
+    const flushText = (streaming = false) => {
         const safeText = String(combinedText || '');
         if (!safeText.trim()) return;
-        appendMessageText(contentEl, safeText.trim(), { streaming: true });
+        appendMessageText(contentEl, safeText.trim(), { streaming });
         combinedText = '';
     };
 
-    streamOverlayEntry.parts.forEach(part => {
+    overlayParts.forEach(part => {
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
             combinedText = String(part.content || '');
             return;
         }
         if (part.kind !== 'tool') return;
-        flushText();
+        flushText(false);
         const toolBlock = buildToolBlock(
             part.tool_name || 'unknown_tool',
             part.args || {},
@@ -133,7 +135,7 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
         applyOverlayToolState(toolBlock, part);
     });
 
-    flushText();
+    flushText(trailingTextPart?.kind === 'text');
 }
 
 function applyOverlayToolState(toolBlock, part) {
