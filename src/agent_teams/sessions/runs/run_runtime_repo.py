@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from threading import RLock
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,82 +60,85 @@ class RunRuntimeRepository:
     def __init__(self, db_path: Path) -> None:
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS run_runtime (
-                run_id                     TEXT PRIMARY KEY,
-                session_id                 TEXT NOT NULL,
-                root_task_id               TEXT,
-                status                     TEXT NOT NULL,
-                phase                      TEXT NOT NULL,
-                active_instance_id         TEXT,
-                active_task_id             TEXT,
-                active_role_id             TEXT,
-                active_subagent_instance_id TEXT,
-                last_error                 TEXT,
-                created_at                 TEXT NOT NULL,
-                updated_at                 TEXT NOT NULL
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_runtime (
+                    run_id                     TEXT PRIMARY KEY,
+                    session_id                 TEXT NOT NULL,
+                    root_task_id               TEXT,
+                    status                     TEXT NOT NULL,
+                    phase                      TEXT NOT NULL,
+                    active_instance_id         TEXT,
+                    active_task_id             TEXT,
+                    active_role_id             TEXT,
+                    active_subagent_instance_id TEXT,
+                    last_error                 TEXT,
+                    created_at                 TEXT NOT NULL,
+                    updated_at                 TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_run_runtime_session_updated ON run_runtime(session_id, updated_at DESC)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_run_runtime_status ON run_runtime(status, updated_at DESC)"
-        )
-        self._conn.commit()
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_run_runtime_session_updated ON run_runtime(session_id, updated_at DESC)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_run_runtime_status ON run_runtime(status, updated_at DESC)"
+            )
+            self._conn.commit()
 
     def upsert(self, record: RunRuntimeRecord) -> RunRuntimeRecord:
-        existing = self.get(record.run_id)
-        created_at = (
-            existing.created_at.isoformat()
-            if existing is not None
-            else record.created_at.isoformat()
-        )
-        updated_at = record.updated_at.isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO run_runtime(run_id, session_id, root_task_id, status, phase, active_instance_id,
-                                    active_task_id, active_role_id, active_subagent_instance_id,
-                                    last_error, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id)
-            DO UPDATE SET
-                session_id=excluded.session_id,
-                root_task_id=excluded.root_task_id,
-                status=excluded.status,
-                phase=excluded.phase,
-                active_instance_id=excluded.active_instance_id,
-                active_task_id=excluded.active_task_id,
-                active_role_id=excluded.active_role_id,
-                active_subagent_instance_id=excluded.active_subagent_instance_id,
-                last_error=excluded.last_error,
-                updated_at=excluded.updated_at
-            """,
-            (
-                record.run_id,
-                record.session_id,
-                record.root_task_id,
-                record.status.value,
-                record.phase.value,
-                record.active_instance_id,
-                record.active_task_id,
-                record.active_role_id,
-                record.active_subagent_instance_id,
-                record.last_error,
-                created_at,
-                updated_at,
-            ),
-        )
-        self._conn.commit()
-        next_record = self.get(record.run_id)
-        if next_record is None:
-            raise RuntimeError(f"Failed to persist run runtime {record.run_id}")
-        return next_record
+        with self._lock:
+            existing = self.get(record.run_id)
+            created_at = (
+                existing.created_at.isoformat()
+                if existing is not None
+                else record.created_at.isoformat()
+            )
+            updated_at = record.updated_at.isoformat()
+            self._conn.execute(
+                """
+                INSERT INTO run_runtime(run_id, session_id, root_task_id, status, phase, active_instance_id,
+                                        active_task_id, active_role_id, active_subagent_instance_id,
+                                        last_error, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    root_task_id=excluded.root_task_id,
+                    status=excluded.status,
+                    phase=excluded.phase,
+                    active_instance_id=excluded.active_instance_id,
+                    active_task_id=excluded.active_task_id,
+                    active_role_id=excluded.active_role_id,
+                    active_subagent_instance_id=excluded.active_subagent_instance_id,
+                    last_error=excluded.last_error,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    record.run_id,
+                    record.session_id,
+                    record.root_task_id,
+                    record.status.value,
+                    record.phase.value,
+                    record.active_instance_id,
+                    record.active_task_id,
+                    record.active_role_id,
+                    record.active_subagent_instance_id,
+                    record.last_error,
+                    created_at,
+                    updated_at,
+                ),
+            )
+            self._conn.commit()
+            next_record = self.get(record.run_id)
+            if next_record is None:
+                raise RuntimeError(f"Failed to persist run runtime {record.run_id}")
+            return next_record
 
     def ensure(
         self,
@@ -173,40 +177,46 @@ class RunRuntimeRepository:
         return self.upsert(next_record)
 
     def get(self, run_id: str) -> RunRuntimeRecord | None:
-        row = self._conn.execute(
-            "SELECT * FROM run_runtime WHERE run_id=?",
-            (run_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._to_record(row)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM run_runtime WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._to_record(row)
 
     def list_by_session(self, session_id: str) -> tuple[RunRuntimeRecord, ...]:
-        rows = self._conn.execute(
-            "SELECT * FROM run_runtime WHERE session_id=? ORDER BY updated_at DESC",
-            (session_id,),
-        ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM run_runtime WHERE session_id=? ORDER BY updated_at DESC",
+                (session_id,),
+            ).fetchall()
+            return tuple(self._to_record(row) for row in rows)
 
     def list_recoverable(self) -> tuple[RunRuntimeRecord, ...]:
-        rows = self._conn.execute(
-            """
-            SELECT * FROM run_runtime
-            WHERE status IN (?, ?, ?, ?)
-            ORDER BY updated_at DESC
-            """,
-            (
-                RunRuntimeStatus.QUEUED.value,
-                RunRuntimeStatus.RUNNING.value,
-                RunRuntimeStatus.PAUSED.value,
-                RunRuntimeStatus.STOPPED.value,
-            ),
-        ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM run_runtime
+                WHERE status IN (?, ?, ?, ?)
+                ORDER BY updated_at DESC
+                """,
+                (
+                    RunRuntimeStatus.QUEUED.value,
+                    RunRuntimeStatus.RUNNING.value,
+                    RunRuntimeStatus.PAUSED.value,
+                    RunRuntimeStatus.STOPPED.value,
+                ),
+            ).fetchall()
+            return tuple(self._to_record(row) for row in rows)
 
     def delete_by_session(self, session_id: str) -> None:
-        self._conn.execute("DELETE FROM run_runtime WHERE session_id=?", (session_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM run_runtime WHERE session_id=?", (session_id,)
+            )
+            self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> RunRuntimeRecord:
         return RunRuntimeRecord(
