@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.workspace.models import (
+from agent_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceProfile,
     WorkspaceRef,

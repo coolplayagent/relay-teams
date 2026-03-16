@@ -15,7 +15,7 @@ from pydantic_ai import Tool
 from agent_teams.logger import get_logger
 
 from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.skills.models import Skill, SkillInstructionEntry
+from agent_teams.skills.skill_models import Skill, SkillInstructionEntry
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 

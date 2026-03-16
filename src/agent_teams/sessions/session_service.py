@@ -8,21 +8,21 @@ from typing import cast
 
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
-from agent_teams.sessions.rounds_projection import (
+from agent_teams.sessions.session_rounds_projection import (
     approvals_to_projection,
     build_session_rounds,
     find_round_by_run_id,
     paginate_rounds,
 )
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -33,7 +33,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import (

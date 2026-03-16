@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode
-from agent_teams.sessions.runs.models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.persistence.db import open_sqlite
 
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None

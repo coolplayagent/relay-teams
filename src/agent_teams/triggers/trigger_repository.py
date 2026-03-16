@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from agent_teams.triggers.models import (
+from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
     TriggerDefinition,

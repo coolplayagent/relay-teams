@@ -16,7 +16,7 @@ from uuid import uuid4
 from agent_teams.logger import get_logger, log_event, log_tool_error
 from agent_teams.notifications import NotificationContext, NotificationType
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.models import RunEvent
+from agent_teams.sessions.runs.run_models import RunEvent
 
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus

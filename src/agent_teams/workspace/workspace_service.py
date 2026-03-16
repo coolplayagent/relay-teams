@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from agent_teams.paths import get_project_config_dir
-from agent_teams.workspace.models import (
+from agent_teams.workspace.workspace_models import (
     BranchBinding,
     FileScopeBackend,
     WorkspaceFileScope,
@@ -14,7 +14,7 @@ from agent_teams.workspace.models import (
     WorkspaceRecord,
 )
 from agent_teams.workspace.git_worktree import GitWorktreeClient
-from agent_teams.workspace.repository import WorkspaceRepository
+from agent_teams.workspace.workspace_repository import WorkspaceRepository
 
 
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")

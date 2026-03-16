@@ -5,12 +5,12 @@ from collections.abc import Callable
 
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.providers.contracts import LLMProvider
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.providers.provider_contracts import LLMProvider
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository

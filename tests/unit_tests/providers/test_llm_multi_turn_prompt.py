@@ -28,21 +28,21 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
-from agent_teams.providers.contracts import LLMRequest
+from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.roles import RoleMemoryService
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.models import RunEvent
-from agent_teams.sessions.runs.models import RunThinkingConfig
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.sessions.runs.run_models import RunEvent
+from agent_teams.sessions.runs.run_models import RunThinkingConfig
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -904,10 +904,10 @@ async def test_generate_does_not_persist_duplicate_leading_user_request(
         instance_id="inst-dedupe",
         task_id="task-dedupe",
         trace_id="run-dedupe",
-        content="浣犲ソ",
+        content="dedupe request",
         role_id="coordinator_agent",
     )
-    duplicated_request = ModelRequest(parts=[UserPromptPart(content="浣犲ソ")])
+    duplicated_request = ModelRequest(parts=[UserPromptPart(content="dedupe request")])
     scripted_agent = _SequentialAgent(
         [
             _ScriptedAgentRun(

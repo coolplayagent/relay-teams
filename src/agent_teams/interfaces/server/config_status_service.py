@@ -5,10 +5,10 @@ from pydantic import JsonValue
 
 from collections.abc import Callable
 
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 
 
 class ConfigStatusService:

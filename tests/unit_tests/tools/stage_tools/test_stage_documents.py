@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.tools.stage_tools import docs as stage_docs_module
-from agent_teams.tools.stage_tools.docs import (
+from agent_teams.tools.stage_tools import stage_documents as stage_docs_module
+from agent_teams.tools.stage_tools.stage_documents import (
     current_stage_doc_path,
     stage_docs_dir,
     previous_stage_doc_path,

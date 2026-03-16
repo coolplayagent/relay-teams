@@ -10,8 +10,8 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.notifications import NotificationService
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository

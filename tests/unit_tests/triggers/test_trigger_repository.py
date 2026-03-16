@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.triggers.models import (
+from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
     TriggerDefinition,
@@ -14,7 +14,7 @@ from agent_teams.triggers.models import (
     TriggerSourceType,
     TriggerStatus,
 )
-from agent_teams.triggers.repository import (
+from agent_teams.triggers.trigger_repository import (
     TriggerEventDuplicateError,
     TriggerRepository,
 )

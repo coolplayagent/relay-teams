@@ -11,8 +11,8 @@ from typing import cast
 
 from agent_teams.sessions.runs.enums import ApprovalMode
 from agent_teams.notifications import NotificationService, default_notification_config
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 

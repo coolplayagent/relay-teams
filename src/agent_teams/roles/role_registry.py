@@ -6,8 +6,8 @@ from pathlib import Path
 import yaml
 
 from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
-from agent_teams.roles.models import RoleConfigSource
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.role_models import RoleConfigSource
+from agent_teams.roles.role_models import RoleDefinition
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
@@ -195,7 +195,7 @@ class RoleLoader:
         )
 
     def _split_front_matter(self, content: str) -> tuple[str, str]:
-        content = content.lstrip("﻿")
+        content = content.lstrip("\ufeff")
         if not content.startswith("---"):
             raise ValueError("Role markdown must start with YAML front matter")
 

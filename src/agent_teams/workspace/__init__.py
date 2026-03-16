@@ -10,10 +10,10 @@ from agent_teams.workspace.ids import (
     build_instance_session_scope_id,
 )
 from agent_teams.workspace.directory_picker import pick_workspace_directory
-from agent_teams.workspace.manager import (
+from agent_teams.workspace.workspace_manager import (
     WorkspaceManager,
 )
-from agent_teams.workspace.models import (
+from agent_teams.workspace.workspace_models import (
     BranchBinding,
     FileScopeBackend,
     WorkspaceBackend,
@@ -24,8 +24,8 @@ from agent_teams.workspace.models import (
     WorkspaceRef,
     default_workspace_profile,
 )
-from agent_teams.workspace.repository import WorkspaceRepository
-from agent_teams.workspace.service import WorkspaceService
+from agent_teams.workspace.workspace_repository import WorkspaceRepository
+from agent_teams.workspace.workspace_service import WorkspaceService
 
 __all__ = [
     "WorkspaceBackend",

@@ -16,13 +16,13 @@ from agent_teams.notifications import (
     NotificationService,
     NotificationType,
 )
-from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import ApprovalMode, InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.models import IntentInput, RunEvent, RunResult
+from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
@@ -38,7 +38,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
 from agent_teams.trace import bind_trace_context

@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles import (
     RoleDocumentDraft,
     RoleRegistry,
     default_memory_profile,
 )
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import build_default_registry
 
 

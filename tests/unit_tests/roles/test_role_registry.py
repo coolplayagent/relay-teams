@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from agent_teams.builtin import get_builtin_roles_dir
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleLoader, RoleRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
 
 
 def test_role_loader_loads_markdown_role() -> None:

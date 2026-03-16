@@ -15,11 +15,11 @@ from agent_teams.interfaces.server.deps import (
     get_workspace_service,
 )
 from agent_teams.interfaces.server.routers import prompts
-from agent_teams.mcp.models import McpConfigScope, McpServerSpec, McpToolInfo
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.skills.models import SkillInstructionEntry
+from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.skills.skill_models import SkillInstructionEntry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workspace import (
     WorkspaceManager,

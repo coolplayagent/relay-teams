@@ -6,7 +6,7 @@ import json
 from typer.testing import CliRunner
 
 from agent_teams.interfaces.cli import app as cli_app
-from agent_teams.mcp.models import (
+from agent_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSummary,
     McpServerToolsSummary,

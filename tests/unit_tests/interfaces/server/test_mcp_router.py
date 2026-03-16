@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from agent_teams.interfaces.server.deps import get_mcp_service
 from agent_teams.interfaces.server.routers import mcp
-from agent_teams.mcp.models import (
+from agent_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSummary,
     McpServerToolsSummary,

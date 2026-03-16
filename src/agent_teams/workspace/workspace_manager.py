@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from agent_teams.paths import get_project_config_dir
 from agent_teams.workspace.handle import WorkspaceHandle
 from agent_teams.workspace.ids import build_conversation_id
-from agent_teams.workspace.models import (
+from agent_teams.workspace.workspace_models import (
     BranchBinding,
     FileScopeBackend,
     WorkspaceRecord,
@@ -19,7 +19,7 @@ from agent_teams.workspace.models import (
     WorkspaceRef,
     default_workspace_profile,
 )
-from agent_teams.workspace.repository import WorkspaceRepository
+from agent_teams.workspace.workspace_repository import WorkspaceRepository
 
 
 class WorkspaceManager(BaseModel):

@@ -12,7 +12,7 @@ from agent_teams.interfaces.server.deps import (
     get_tool_registry,
 )
 from agent_teams.interfaces.server.routers import roles
-from agent_teams.mcp.models import McpConfigScope, McpServerSummary
+from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
 from agent_teams.roles import (
     RoleConfigSource,
     RoleConfigOptions,

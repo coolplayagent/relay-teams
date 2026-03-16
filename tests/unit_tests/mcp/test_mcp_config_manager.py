@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from agent_teams.mcp import config_manager
-from agent_teams.mcp.models import McpConfigScope
+from agent_teams.mcp import mcp_config_manager as config_manager
+from agent_teams.mcp.mcp_models import McpConfigScope
 
 
 def _clear_proxy_env(monkeypatch) -> None:

@@ -9,7 +9,7 @@ if TYPE_CHECKING:
         ProxyEnvConfig,
         build_llm_http_client,
     )
-    from agent_teams.providers.contracts import EchoProvider, LLMProvider
+    from agent_teams.providers.provider_contracts import EchoProvider, LLMProvider
     from agent_teams.providers.model_config import (
         ModelEndpointConfig,
         ProviderModelInfo,
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
         ModelConnectivityProbeService,
         ModelConnectivityTokenUsage,
     )
-    from agent_teams.providers.registry import (
+    from agent_teams.providers.provider_registry import (
         ProviderRegistry,
         create_default_provider_registry,
         list_provider_models,
@@ -73,8 +73,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.providers.token_usage_repo",
         "AgentTokenSummary",
     ),
-    "EchoProvider": ("agent_teams.providers.contracts", "EchoProvider"),
-    "LLMProvider": ("agent_teams.providers.contracts", "LLMProvider"),
+    "EchoProvider": ("agent_teams.providers.provider_contracts", "EchoProvider"),
+    "LLMProvider": ("agent_teams.providers.provider_contracts", "LLMProvider"),
     "ModelEndpointConfig": (
         "agent_teams.providers.model_config",
         "ModelEndpointConfig",
@@ -119,7 +119,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.providers.model_config",
         "ProviderModelInfo",
     ),
-    "ProviderRegistry": ("agent_teams.providers.registry", "ProviderRegistry"),
+    "ProviderRegistry": ("agent_teams.providers.provider_registry", "ProviderRegistry"),
     "ProviderType": ("agent_teams.providers.model_config", "ProviderType"),
     "ProxyEnvConfig": (
         "agent_teams.providers.http_client_factory",
@@ -147,11 +147,11 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "build_llm_http_client",
     ),
     "create_default_provider_registry": (
-        "agent_teams.providers.registry",
+        "agent_teams.providers.provider_registry",
         "create_default_provider_registry",
     ),
     "list_provider_models": (
-        "agent_teams.providers.registry",
+        "agent_teams.providers.provider_registry",
         "list_provider_models",
     ),
 }

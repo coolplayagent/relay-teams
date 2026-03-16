@@ -7,8 +7,13 @@ from typing import TypedDict
 
 import typer
 
-from agent_teams.skills.models import Skill, SkillResource, SkillScope, SkillScript
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_models import (
+    Skill,
+    SkillResource,
+    SkillScope,
+    SkillScript,
+)
+from agent_teams.skills.skill_registry import SkillRegistry
 
 skills_app = typer.Typer(
     no_args_is_help=True,

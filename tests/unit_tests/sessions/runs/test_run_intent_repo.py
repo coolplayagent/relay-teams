@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode
-from agent_teams.sessions.runs.models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 
 

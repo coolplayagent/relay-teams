@@ -4,8 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import get_mcp_service
-from agent_teams.mcp.models import McpServerSummary, McpServerToolsSummary
-from agent_teams.mcp.service import McpService
+from agent_teams.mcp.mcp_models import McpServerSummary, McpServerToolsSummary
+from agent_teams.mcp.mcp_service import McpService
 
 router = APIRouter(prefix="/mcp", tags=["MCP"])
 

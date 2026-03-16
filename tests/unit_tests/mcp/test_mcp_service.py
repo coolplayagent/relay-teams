@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.mcp.models import (
+from agent_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSpec,
     McpToolInfo,
 )
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.mcp.service import McpService
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.mcp.mcp_service import McpService
 from agent_teams.trace import get_trace_context
 
 

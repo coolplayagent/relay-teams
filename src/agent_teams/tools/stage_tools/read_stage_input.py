@@ -6,7 +6,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
-from agent_teams.tools.stage_tools.docs import previous_stage_doc_path
+from agent_teams.tools.stage_tools.stage_documents import previous_stage_doc_path
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:

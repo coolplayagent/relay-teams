@@ -9,9 +9,9 @@ import logging
 
 import typer
 
-from agent_teams.mcp.config_manager import McpConfigManager
-from agent_teams.mcp.models import McpServerSummary, McpServerToolsSummary
-from agent_teams.mcp.service import McpService
+from agent_teams.mcp.mcp_config_manager import McpConfigManager
+from agent_teams.mcp.mcp_models import McpServerSummary, McpServerToolsSummary
+from agent_teams.mcp.mcp_service import McpService
 from agent_teams.paths import get_app_config_dir
 
 mcp_app = typer.Typer(

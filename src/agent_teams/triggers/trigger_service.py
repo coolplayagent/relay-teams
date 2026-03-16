@@ -9,7 +9,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from agent_teams.triggers.models import (
+from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
     TriggerCreateInput,
@@ -21,7 +21,7 @@ from agent_teams.triggers.models import (
     TriggerStatus,
     TriggerUpdateInput,
 )
-from agent_teams.triggers.repository import (
+from agent_teams.triggers.trigger_repository import (
     TriggerEventDuplicateError,
     TriggerNameConflictError,
     TriggerRepository,

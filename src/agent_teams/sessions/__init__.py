@@ -5,15 +5,15 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.sessions.rounds_projection import (
+    from agent_teams.sessions.session_rounds_projection import (
         approvals_to_projection,
         build_session_rounds,
         find_round_by_run_id,
         paginate_rounds,
     )
     from agent_teams.sessions.session_models import SessionRecord
-    from agent_teams.sessions.session_repo import SessionRepository
-    from agent_teams.sessions.service import SessionService
+    from agent_teams.sessions.session_repository import SessionRepository
+    from agent_teams.sessions.session_service import SessionService
 
 __all__ = [
     "SessionRecord",
@@ -28,23 +28,26 @@ __all__ = [
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SessionRecord": ("agent_teams.sessions.session_models", "SessionRecord"),
     "SessionRepository": (
-        "agent_teams.sessions.session_repo",
+        "agent_teams.sessions.session_repository",
         "SessionRepository",
     ),
-    "SessionService": ("agent_teams.sessions.service", "SessionService"),
+    "SessionService": ("agent_teams.sessions.session_service", "SessionService"),
     "approvals_to_projection": (
-        "agent_teams.sessions.rounds_projection",
+        "agent_teams.sessions.session_rounds_projection",
         "approvals_to_projection",
     ),
     "build_session_rounds": (
-        "agent_teams.sessions.rounds_projection",
+        "agent_teams.sessions.session_rounds_projection",
         "build_session_rounds",
     ),
     "find_round_by_run_id": (
-        "agent_teams.sessions.rounds_projection",
+        "agent_teams.sessions.session_rounds_projection",
         "find_round_by_run_id",
     ),
-    "paginate_rounds": ("agent_teams.sessions.rounds_projection", "paginate_rounds"),
+    "paginate_rounds": (
+        "agent_teams.sessions.session_rounds_projection",
+        "paginate_rounds",
+    ),
 }
 
 

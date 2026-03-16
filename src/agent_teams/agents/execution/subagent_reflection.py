@@ -30,7 +30,7 @@ from agent_teams.providers.openai_model_profiles import (
 )
 from agent_teams.roles.memory_models import RoleMemoryRecord
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.role_models import RoleDefinition
 
 LOGGER = get_logger(__name__)
 

@@ -15,10 +15,10 @@ from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     build_user_prompt,
 )
-from agent_teams.mcp.models import McpConfigScope, McpServerSpec, McpToolInfo
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 

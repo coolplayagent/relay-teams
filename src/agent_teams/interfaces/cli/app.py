@@ -13,8 +13,8 @@ import typer
 
 from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from agent_teams.env.env_cli import env_app
-from agent_teams.interfaces.cli.approvals import build_approvals_app
-from agent_teams.interfaces.cli.prompt_cli import (
+from agent_teams.interfaces.cli.approvals_cli import build_approvals_app
+from agent_teams.interfaces.cli.run_prompt_cli import (
     execute_prompt as _execute_prompt_impl,
     root_command as _root_command_impl,
     run_single_prompt as _run_single_prompt_impl,
@@ -22,10 +22,10 @@ from agent_teams.interfaces.cli.prompt_cli import (
 )
 from agent_teams.interfaces.server.cli import build_server_app
 from agent_teams.mcp.mcp_cli import mcp_app
-from agent_teams.roles.cli import build_roles_app
+from agent_teams.roles.role_cli import build_roles_app
 from agent_teams.sessions.runs.enums import ApprovalMode
-from agent_teams.skills.cli import skills_app
-from agent_teams.triggers.cli import build_triggers_app
+from agent_teams.skills.skill_cli import skills_app
+from agent_teams.triggers.trigger_cli import build_triggers_app
 
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
 

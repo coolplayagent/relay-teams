@@ -10,9 +10,9 @@ from pydantic_ai.messages import (
 )
 
 from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.service import SessionService
+from agent_teams.sessions.session_service import SessionService
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -22,7 +22,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan

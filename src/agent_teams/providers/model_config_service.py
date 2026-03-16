@@ -15,7 +15,7 @@ from agent_teams.providers.model_connectivity import (
     ModelConnectivityProbeService,
 )
 from agent_teams.providers.model_config_manager import ModelConfigManager
-from agent_teams.providers.registry import list_provider_models
+from agent_teams.providers.provider_registry import list_provider_models
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 
 

@@ -16,18 +16,18 @@ from agent_teams.agents.orchestration.task_execution_service import (
 from agent_teams.agents.orchestration.verification import verify_task
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
-from agent_teams.providers.contracts import LLMProvider
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.providers.provider_contracts import LLMProvider
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.logger import get_logger, log_event
 from agent_teams.agents.orchestration.human_gate import GateManager
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
-from agent_teams.sessions.runs.models import IntentInput, RunEvent
+from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,

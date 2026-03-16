@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.interfaces.server.routers import runs
-from agent_teams.sessions.runs.models import IntentInput
+from agent_teams.sessions.runs.run_models import IntentInput
 
 
 class _FakeRunService:

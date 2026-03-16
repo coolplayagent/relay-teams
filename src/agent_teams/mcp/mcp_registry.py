@@ -5,7 +5,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, cast
 
 from agent_teams.logger import get_logger
-from agent_teams.mcp.models import McpServerSpec, McpToolInfo
+from agent_teams.mcp.mcp_models import McpServerSpec, McpToolInfo
 from agent_teams.trace import trace_span
 
 if TYPE_CHECKING:

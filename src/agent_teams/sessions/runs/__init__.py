@@ -5,8 +5,8 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
-    from agent_teams.sessions.runs.control import RunControlManager
+    from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+    from agent_teams.sessions.runs.run_control_manager import RunControlManager
     from agent_teams.sessions.runs.enums import (
         ExecutionMode,
         InjectionSource,
@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from agent_teams.sessions.runs.event_stream import RunEventHub
     from agent_teams.sessions.runs.ids import TraceId, new_trace_id
     from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-    from agent_teams.sessions.runs.manager import RunManager
-    from agent_teams.sessions.runs.models import (
+    from agent_teams.sessions.runs.run_manager import RunManager
+    from agent_teams.sessions.runs.run_models import (
         InjectionMessage,
         IntentInput,
         RunEvent,
@@ -78,19 +78,19 @@ __all__ = [
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActiveSessionRunRegistry": (
-        "agent_teams.sessions.runs.active_registry",
+        "agent_teams.sessions.runs.active_run_registry",
         "ActiveSessionRunRegistry",
     ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),
     "EventLog": ("agent_teams.sessions.runs.event_log", "EventLog"),
-    "InjectionMessage": ("agent_teams.sessions.runs.models", "InjectionMessage"),
+    "InjectionMessage": ("agent_teams.sessions.runs.run_models", "InjectionMessage"),
     "InjectionSource": ("agent_teams.sessions.runs.enums", "InjectionSource"),
-    "IntentInput": ("agent_teams.sessions.runs.models", "IntentInput"),
+    "IntentInput": ("agent_teams.sessions.runs.run_models", "IntentInput"),
     "RunControlManager": (
-        "agent_teams.sessions.runs.control",
+        "agent_teams.sessions.runs.run_control_manager",
         "RunControlManager",
     ),
-    "RunEvent": ("agent_teams.sessions.runs.models", "RunEvent"),
+    "RunEvent": ("agent_teams.sessions.runs.run_models", "RunEvent"),
     "RunEventHub": ("agent_teams.sessions.runs.event_stream", "RunEventHub"),
     "RunEventType": ("agent_teams.sessions.runs.enums", "RunEventType"),
     "RunInjectionManager": (
@@ -101,8 +101,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.sessions.runs.run_intent_repo",
         "RunIntentRepository",
     ),
-    "RunManager": ("agent_teams.sessions.runs.manager", "RunManager"),
-    "RunResult": ("agent_teams.sessions.runs.models", "RunResult"),
+    "RunManager": ("agent_teams.sessions.runs.run_manager", "RunManager"),
+    "RunResult": ("agent_teams.sessions.runs.run_models", "RunResult"),
     "RunRuntimePhase": (
         "agent_teams.sessions.runs.run_runtime_repo",
         "RunRuntimePhase",

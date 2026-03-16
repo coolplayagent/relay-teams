@@ -5,8 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agent_teams.logger import get_logger
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)

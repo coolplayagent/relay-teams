@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.models import (
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_models import (
     RoleConfigSource,
     RoleDefinition,
     RoleDocumentDraft,
@@ -15,8 +15,8 @@ from agent_teams.roles.models import (
     RoleDocumentSummary,
     RoleValidationResult,
 )
-from agent_teams.roles.registry import RoleLoader, RoleRegistry
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.roles.memory_models import default_memory_profile
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.sessions.runs.models import IntentInput
+from agent_teams.sessions.runs.run_models import IntentInput
 
 
 class _CoordinatorStub:

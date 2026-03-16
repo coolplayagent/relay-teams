@@ -25,7 +25,7 @@ from agent_teams.agents.orchestration import (
     validate_exchange_binding,
     validate_role_communication,
 )
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.role_models import RoleDefinition
 
 
 def test_role_state_space_rejects_unknown_transition_state() -> None:

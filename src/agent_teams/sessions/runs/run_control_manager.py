@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
-from agent_teams.sessions.runs.models import InjectionMessage, RunEvent
+from agent_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,

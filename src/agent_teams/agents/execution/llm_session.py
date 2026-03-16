@@ -44,9 +44,9 @@ from agent_teams.logger import (
     log_model_stream_chunk,
 )
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.models import RunEvent
+from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -75,12 +75,12 @@ from agent_teams.tools.runtime import (
     ToolApprovalPolicy,
     ToolDeps,
 )
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
-from agent_teams.providers.contracts import LLMRequest
+from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -90,7 +90,7 @@ if TYPE_CHECKING:
     from agent_teams.agents.orchestration.task_execution_service import (
         TaskExecutionService,
     )
-    from agent_teams.roles.registry import RoleRegistry
+    from agent_teams.roles.role_registry import RoleRegistry
 
 LOGGER = get_logger(__name__)
 

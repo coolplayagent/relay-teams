@@ -4,8 +4,8 @@ from __future__ import annotations
 from pydantic import JsonValue
 
 from agent_teams.logger import get_logger
-from agent_teams.mcp.models import McpServerSummary, McpServerToolsSummary
-from agent_teams.mcp.registry import McpRegistry
+from agent_teams.mcp.mcp_models import McpServerSummary, McpServerToolsSummary
+from agent_teams.mcp.mcp_registry import McpRegistry
 
 from agent_teams.trace import trace_span
 

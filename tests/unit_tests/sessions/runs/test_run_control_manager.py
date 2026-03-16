@@ -5,7 +5,7 @@ import pytest
 from pydantic_ai.messages import UserPromptPart
 
 from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository

@@ -5,7 +5,7 @@ import json
 from typing import cast
 
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.models import RunEvent
+from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.notifications import (
     NotificationConfig,
     NotificationChannel,

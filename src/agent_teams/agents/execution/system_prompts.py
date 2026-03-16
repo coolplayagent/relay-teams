@@ -11,9 +11,9 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.agents.tasks.models import TaskEnvelope
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry, is_coordinator_role_definition
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry, is_coordinator_role_definition
 
 ROLE_USAGE_PROMPT = (
     "## Role Usage\n"

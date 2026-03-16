@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_teams.persistence.db import open_sqlite
-from agent_teams.workspace.models import (
+from agent_teams.workspace.workspace_models import (
     WorkspaceProfile,
     WorkspaceRecord,
     default_workspace_profile,

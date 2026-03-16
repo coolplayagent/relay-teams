@@ -19,23 +19,25 @@ from agent_teams.env.environment_variable_service import EnvironmentVariableServ
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
-from agent_teams.mcp.config_manager import McpConfigManager
+from agent_teams.mcp.mcp_config_manager import McpConfigManager
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.mcp.service import McpService
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.mcp.mcp_service import McpService
 from agent_teams.notifications import NotificationConfigManager, NotificationService
-from agent_teams.notifications.settings_service import NotificationSettingsService
+from agent_teams.notifications.notification_settings_service import (
+    NotificationSettingsService,
+)
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
-from agent_teams.providers.contracts import LLMProvider
+from agent_teams.providers.provider_contracts import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.http_client_factory import clear_llm_http_client_cache
-from agent_teams.providers.factory import create_provider_factory
+from agent_teams.providers.provider_factory import create_provider_factory
 from agent_teams.agents.orchestration.task_execution_service_factory import (
     create_task_execution_service,
 )
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles import (
     RoleLoader,
     RoleMemoryRepository,
@@ -43,15 +45,15 @@ from agent_teams.roles import (
     RoleRegistry,
 )
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.manager import RunManager
+from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 from agent_teams.sessions import SessionService
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -60,7 +62,7 @@ from agent_teams.agents.execution.subagent_reflection import SubagentReflectionS
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository

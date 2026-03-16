@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
 
 
 def build_role_with_memory(

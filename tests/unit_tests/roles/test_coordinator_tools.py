@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from agent_teams.builtin import get_builtin_roles_dir
-from agent_teams.roles.registry import RoleLoader
+from agent_teams.roles.role_registry import RoleLoader
 
 
 def test_coordinator_uses_task_tools_and_not_emit_event() -> None:

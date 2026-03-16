@@ -28,7 +28,9 @@ from agent_teams.interfaces.server.deps import (
 )
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
-from agent_teams.notifications.settings_service import NotificationSettingsService
+from agent_teams.notifications.notification_settings_service import (
+    NotificationSettingsService,
+)
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ProviderType,

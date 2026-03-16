@@ -10,7 +10,7 @@ from agent_teams.interfaces.server.deps import (
     get_skill_registry,
     get_tool_registry,
 )
-from agent_teams.mcp.service import McpService
+from agent_teams.mcp.mcp_service import McpService
 from agent_teams.roles import (
     RoleConfigOptions,
     RoleDocumentDraft,
@@ -20,7 +20,7 @@ from agent_teams.roles import (
     RoleValidationResult,
 )
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 
 router = APIRouter(prefix="/roles", tags=["Roles"])

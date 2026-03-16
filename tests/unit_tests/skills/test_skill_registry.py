@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import cast
 
 from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.skills.models import SkillScope
-from agent_teams.roles.models import RoleDefinition
-from agent_teams.roles.registry import RoleRegistry
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_models import SkillScope
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 
 from agent_teams.tools.runtime import ToolContext
 from agent_teams.trace import get_trace_context

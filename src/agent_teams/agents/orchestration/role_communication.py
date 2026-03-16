@@ -4,7 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_teams.agents.instances.models import AgentRuntimeRecord, SubAgentInstance
-from agent_teams.roles.models import RoleDefinition
+from agent_teams.roles.role_models import RoleDefinition
 
 
 class RoleStateTransition(BaseModel):

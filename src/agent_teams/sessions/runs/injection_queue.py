@@ -3,7 +3,7 @@ from __future__ import annotations
 from threading import Lock
 
 from agent_teams.sessions.runs.enums import InjectionSource
-from agent_teams.sessions.runs.models import InjectionMessage
+from agent_teams.sessions.runs.run_models import InjectionMessage
 
 
 class RunInjectionManager:

@@ -9,7 +9,7 @@ import yaml
 from agent_teams.builtin import get_builtin_skills_dir
 from agent_teams.logger import get_logger
 from agent_teams.paths import get_app_config_dir
-from agent_teams.skills.models import (
+from agent_teams.skills.skill_models import (
     Skill,
     SkillMetadata,
     SkillResource,

@@ -5,7 +5,9 @@ from pydantic import JsonValue
 
 from typing import cast
 
-from agent_teams.notifications.config_manager import NotificationConfigManager
+from agent_teams.notifications.notification_config_manager import (
+    NotificationConfigManager,
+)
 from agent_teams.notifications.models import NotificationConfig
 
 

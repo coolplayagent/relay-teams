@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 )
 
 from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.rounds_projection import build_session_rounds
+from agent_teams.sessions.session_rounds_projection import build_session_rounds
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository

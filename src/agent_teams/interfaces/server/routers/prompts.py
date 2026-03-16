@@ -26,10 +26,10 @@ from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     build_user_prompt,
 )
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_registry import RoleRegistry
 
-from agent_teams.skills.registry import SkillRegistry
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 

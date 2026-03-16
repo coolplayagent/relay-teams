@@ -5,15 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.triggers.models import (
+from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
     TriggerCreateInput,
     TriggerIngestInput,
     TriggerSourceType,
 )
-from agent_teams.triggers.repository import TriggerRepository
-from agent_teams.triggers.service import TriggerAuthRejectedError, TriggerService
+from agent_teams.triggers.trigger_repository import TriggerRepository
+from agent_teams.triggers.trigger_service import (
+    TriggerAuthRejectedError,
+    TriggerService,
+)
 
 
 def _new_service(tmp_path: Path) -> TriggerService:

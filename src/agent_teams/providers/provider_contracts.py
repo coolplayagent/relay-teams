@@ -4,7 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 from typing import override
 
-from agent_teams.sessions.runs.models import RunThinkingConfig
+from agent_teams.sessions.runs.run_models import RunThinkingConfig
 
 
 class LLMRequest(BaseModel):

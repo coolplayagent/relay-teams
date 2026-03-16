@@ -7,10 +7,10 @@ from typing import cast
 import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.sessions.runs.active_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.manager import RunManager
-from agent_teams.sessions.runs.models import IntentInput
+from agent_teams.sessions.runs.run_manager import RunManager
+from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.notifications import (
     NotificationChannel,
     NotificationConfig,
@@ -18,7 +18,7 @@ from agent_teams.notifications import (
     NotificationService,
 )
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.control import RunControlManager
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -26,7 +26,7 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.session_repo import SessionRepository
+from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 
 

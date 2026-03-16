@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_teams.roles.models import (
+from agent_teams.roles.role_models import (
     RoleConfigOptions,
     RoleConfigSource,
     RoleDefinition,
@@ -16,7 +16,7 @@ from agent_teams.roles.memory_models import (
 )
 from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.registry import RoleLoader, RoleRegistry
+from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
 
 __all__ = [
     "default_memory_profile",

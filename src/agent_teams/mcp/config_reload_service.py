@@ -4,9 +4,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from agent_teams.logger import get_logger
-from agent_teams.mcp.config_manager import McpConfigManager
-from agent_teams.mcp.registry import McpRegistry
-from agent_teams.roles.registry import RoleRegistry
+from agent_teams.mcp.mcp_config_manager import McpConfigManager
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
