@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.models import AgentRuntimeRecord
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.agents.orchestration import (
     FeedbackLoopSpec,
     RoleAgentBinding,

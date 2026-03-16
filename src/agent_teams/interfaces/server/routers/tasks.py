@@ -11,7 +11,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.interfaces.server.deps import get_task_repo, get_task_service
 
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.tasks.models import TaskRecord
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])

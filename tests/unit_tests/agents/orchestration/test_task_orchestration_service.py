@@ -17,10 +17,10 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 
-from agent_teams.agents.agent_repo import AgentInstanceRepository
-from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.session_repo import SessionRepository
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan

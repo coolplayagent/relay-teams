@@ -47,18 +47,20 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.models import RunEvent
-from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.agents.execution.agent_builder import build_coordination_agent
+from agent_teams.agents.execution.coordination_agent_builder import (
+    build_coordination_agent,
+)
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     SystemPromptBuildInput,

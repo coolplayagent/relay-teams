@@ -21,7 +21,7 @@ from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.logger import get_logger, log_event
 from agent_teams.providers.http_client_factory import build_llm_http_client
 from agent_teams.providers.model_config import ModelEndpointConfig

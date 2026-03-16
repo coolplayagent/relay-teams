@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.models import AgentRuntimeRecord
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.workspace import build_conversation_id
 

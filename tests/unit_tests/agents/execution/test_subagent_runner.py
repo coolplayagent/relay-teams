@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.subagent import SubAgentRequest, SubAgentRunner
+from agent_teams.agents.execution import SubAgentRequest, SubAgentRunner
 from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,

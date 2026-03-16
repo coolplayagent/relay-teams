@@ -8,8 +8,8 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.models import create_subagent_instance
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
@@ -26,7 +26,7 @@ from agent_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.models import IntentInput, RunEvent
-from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.sessions.session_repo import SessionRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -34,7 +34,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.workspace import build_conversation_id
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType

@@ -4,7 +4,7 @@ from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType
 from agent_teams.agents.tasks.models import VerificationResult
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 
 
 def verify_task(

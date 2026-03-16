@@ -5,14 +5,14 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.agents.agent_repo import AgentInstanceRepository
-    from agent_teams.agents.enums import InstanceStatus
+    from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
+    from agent_teams.agents.instances.enums import InstanceStatus
     from agent_teams.agents.execution.subagent_runner import (
         SubAgentRequest,
         SubAgentRunner,
     )
-    from agent_teams.agents.ids import InstanceId, new_instance_id
-    from agent_teams.agents.models import (
+    from agent_teams.agents.instances.ids import InstanceId, new_instance_id
+    from agent_teams.agents.instances.models import (
         AgentRuntimeRecord,
         SubAgentInstance,
         create_subagent_instance,
@@ -34,12 +34,12 @@ __all__ = [
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "AgentInstanceRepository": (
-        "agent_teams.agents.agent_repo",
+        "agent_teams.agents.instances.instance_repository",
         "AgentInstanceRepository",
     ),
-    "AgentRuntimeRecord": ("agent_teams.agents.models", "AgentRuntimeRecord"),
-    "InstanceId": ("agent_teams.agents.ids", "InstanceId"),
-    "InstanceStatus": ("agent_teams.agents.enums", "InstanceStatus"),
+    "AgentRuntimeRecord": ("agent_teams.agents.instances.models", "AgentRuntimeRecord"),
+    "InstanceId": ("agent_teams.agents.instances.ids", "InstanceId"),
+    "InstanceStatus": ("agent_teams.agents.instances.enums", "InstanceStatus"),
     "MetaAgent": ("agent_teams.agents.orchestration.meta_agent", "MetaAgent"),
     "SubAgentRequest": (
         "agent_teams.agents.execution.subagent_runner",
@@ -49,12 +49,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.agents.execution.subagent_runner",
         "SubAgentRunner",
     ),
-    "SubAgentInstance": ("agent_teams.agents.models", "SubAgentInstance"),
+    "SubAgentInstance": ("agent_teams.agents.instances.models", "SubAgentInstance"),
     "create_subagent_instance": (
-        "agent_teams.agents.models",
+        "agent_teams.agents.instances.models",
         "create_subagent_instance",
     ),
-    "new_instance_id": ("agent_teams.agents.ids", "new_instance_id"),
+    "new_instance_id": ("agent_teams.agents.instances.ids", "new_instance_id"),
 }
 
 

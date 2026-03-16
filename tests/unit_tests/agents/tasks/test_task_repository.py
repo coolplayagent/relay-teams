@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 

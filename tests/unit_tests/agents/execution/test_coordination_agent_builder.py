@@ -5,7 +5,9 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.execution import agent_builder as coordination_agent
+from agent_teams.agents.execution import (
+    coordination_agent_builder as coordination_agent,
+)
 from agent_teams.tools.registry import ToolRegistry
 
 

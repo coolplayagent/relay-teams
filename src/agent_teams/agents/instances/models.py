@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.ids import new_instance_id
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.ids import new_instance_id
 from agent_teams.workspace.ids import (
     build_conversation_id,
     build_instance_conversation_id,

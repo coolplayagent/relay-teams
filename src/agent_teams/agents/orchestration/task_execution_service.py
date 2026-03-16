@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
-from agent_teams.agents.enums import InstanceStatus
+from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.logger import get_logger, log_event
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -18,10 +18,10 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.sessions.runs.control import RunControlManager
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.agents.agent_repo import AgentInstanceRepository
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.models import RunThinkingConfig
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -30,7 +30,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.workspace import WorkspaceManager
 from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.events import EventEnvelope, EventType

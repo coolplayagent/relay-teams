@@ -13,7 +13,7 @@ from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.tasks.enums import TaskStatus
 
 

@@ -21,7 +21,7 @@ from agent_teams.sessions.runs.manager import RunManager
 from agent_teams.sessions import SessionService
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.registry import SkillRegistry
-from agent_teams.agents.tasks.task_repo import TaskRepository
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService

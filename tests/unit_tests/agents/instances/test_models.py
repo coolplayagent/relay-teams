@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.agents.enums import InstanceStatus
-from agent_teams.agents.models import create_subagent_instance
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.workspace import build_instance_conversation_id
 
 

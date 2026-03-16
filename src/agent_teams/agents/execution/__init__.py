@@ -5,8 +5,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.agents.execution.agent_builder import build_coordination_agent
-    from agent_teams.agents.execution.message_repo import MessageRepository
+    from agent_teams.agents.execution.coordination_agent_builder import (
+        build_coordination_agent,
+    )
+    from agent_teams.agents.execution.message_repository import MessageRepository
     from agent_teams.agents.execution.subagent_runner import (
         SubAgentRequest,
         SubAgentRunner,
@@ -21,7 +23,7 @@ __all__ = [
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "MessageRepository": (
-        "agent_teams.agents.execution.message_repo",
+        "agent_teams.agents.execution.message_repository",
         "MessageRepository",
     ),
     "SubAgentRequest": (
@@ -33,7 +35,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "SubAgentRunner",
     ),
     "build_coordination_agent": (
-        "agent_teams.agents.execution.agent_builder",
+        "agent_teams.agents.execution.coordination_agent_builder",
         "build_coordination_agent",
     ),
 }
