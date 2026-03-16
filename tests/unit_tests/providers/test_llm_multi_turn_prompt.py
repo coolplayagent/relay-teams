@@ -597,6 +597,7 @@ def _build_provider(
             project_root=Path("."), shared_store=shared_store
         ),
         role_memory_service=cast(RoleMemoryService | None, None),
+        subagent_reflection_service=None,
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=registry,
@@ -903,10 +904,10 @@ async def test_generate_does_not_persist_duplicate_leading_user_request(
         instance_id="inst-dedupe",
         task_id="task-dedupe",
         trace_id="run-dedupe",
-        content="你好",
+        content="浣犲ソ",
         role_id="coordinator_agent",
     )
-    duplicated_request = ModelRequest(parts=[UserPromptPart(content="你好")])
+    duplicated_request = ModelRequest(parts=[UserPromptPart(content="浣犲ソ")])
     scripted_agent = _SequentialAgent(
         [
             _ScriptedAgentRun(
@@ -967,10 +968,10 @@ async def test_generate_does_not_persist_duplicate_response_after_dropping_leadi
         instance_id="inst-dedupe",
         task_id="task-dedupe",
         trace_id="run-dedupe",
-        content="浣犲ソ",
+        content="hello",
         role_id="coordinator_agent",
     )
-    duplicated_request = ModelRequest(parts=[UserPromptPart(content="浣犲ソ")])
+    duplicated_request = ModelRequest(parts=[UserPromptPart(content="hello")])
     final_response = ModelResponse(parts=[TextPart(content="ok")])
     scripted_agent = _SequentialAgent(
         [

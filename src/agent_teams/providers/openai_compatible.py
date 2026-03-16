@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from agent_teams.notifications import NotificationService
     from agent_teams.providers.model_config import ModelEndpointConfig
     from agent_teams.roles.memory_service import RoleMemoryService
+    from agent_teams.agents.execution.subagent_reflection import (
+        SubagentReflectionService,
+    )
     from agent_teams.roles.registry import RoleRegistry
     from agent_teams.sessions.runs.control import RunControlManager
     from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -60,6 +63,7 @@ class OpenAICompatibleProvider(LLMProvider):
         run_intent_repo: RunIntentRepository,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
+        subagent_reflection_service: SubagentReflectionService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -89,6 +93,7 @@ class OpenAICompatibleProvider(LLMProvider):
             run_intent_repo=run_intent_repo,
             workspace_manager=workspace_manager,
             role_memory_service=role_memory_service,
+            subagent_reflection_service=subagent_reflection_service,
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_registry=skill_registry,

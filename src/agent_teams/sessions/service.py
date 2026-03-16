@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import cast
 
 from agent_teams.agents.models import AgentRuntimeRecord
+from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.mcp.registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
@@ -67,6 +68,7 @@ class SessionService:
         workspace_manager: WorkspaceManager | None = None,
         workspace_service: WorkspaceService | None = None,
         role_memory_service: RoleMemoryService | None = None,
+        subagent_reflection_service: SubagentReflectionService | None = None,
         role_registry: RoleRegistry | None = None,
         skill_registry: SkillRegistry | None = None,
         mcp_registry: McpRegistry | None = None,
@@ -86,6 +88,7 @@ class SessionService:
         self._workspace_manager = workspace_manager
         self._workspace_service = workspace_service
         self._role_memory_service = role_memory_service
+        self._subagent_reflection_service = subagent_reflection_service
         self._role_registry = role_registry
         self._skill_registry = skill_registry
         self._mcp_registry = mcp_registry
@@ -204,8 +207,35 @@ class SessionService:
             )
         return tuple(enriched)
 
-    def list_agents_in_session(self, session_id: str) -> tuple[AgentRuntimeRecord, ...]:
-        return self._agent_repo.list_session_role_instances(session_id)
+    def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
+        records = self._agent_repo.list_session_role_instances(session_id)
+        return tuple(self._agent_projection(record) for record in records)
+
+    def get_agent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, object]:
+        agent = self._require_session_agent(session_id, instance_id)
+        return self._reflection_projection(agent)
+
+    async def refresh_subagent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, object]:
+        if self._subagent_reflection_service is None or self._role_registry is None:
+            raise RuntimeError("Subagent reflection is not available")
+        agent = self._require_session_agent(session_id, instance_id)
+        if self._role_registry.is_coordinator_role(agent.role_id):
+            raise RuntimeError("Coordinator reflection refresh is not supported")
+        role = self._role_registry.get(agent.role_id)
+        record = await self._subagent_reflection_service.refresh_reflection(
+            role=role,
+            workspace_id=agent.workspace_id,
+            conversation_id=agent.conversation_id,
+        )
+        return self._reflection_projection(agent, role_record=record, source="manual")
 
     def get_agent_messages(
         self, session_id: str, instance_id: str
@@ -245,6 +275,8 @@ class SessionService:
                 "status": record.status.value,
                 "instance_id": record.assigned_instance_id or "",
                 "run_id": record.envelope.trace_id,
+                "created_at": record.created_at.isoformat(),
+                "updated_at": record.updated_at.isoformat(),
             }
             for record in records
             if record.envelope.parent_task_id is not None
@@ -394,6 +426,63 @@ class SessionService:
             "instance_id": agent.instance_id,
             "role_id": agent.role_id,
             "task_id": runtime.active_task_id,
+        }
+
+    def _require_session_agent(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> AgentRuntimeRecord:
+        agent = self._agent_repo.get_instance(instance_id)
+        if agent.session_id != session_id:
+            raise KeyError(instance_id)
+        return agent
+
+    def _agent_projection(self, record: AgentRuntimeRecord) -> dict[str, object]:
+        reflection = self._reflection_projection(record)
+        return {
+            **record.model_dump(mode="json"),
+            "reflection_summary_preview": reflection["preview"],
+            "reflection_updated_at": reflection["updated_at"],
+        }
+
+    def _reflection_projection(
+        self,
+        record: AgentRuntimeRecord,
+        *,
+        source: str = "stored",
+        role_record: object | None = None,
+    ) -> dict[str, object]:
+        memory = role_record
+        if memory is None and self._role_memory_service is not None:
+            memory = self._role_memory_service.get_reflection_record(
+                role_id=record.role_id,
+                workspace_id=record.workspace_id,
+            )
+        if memory is None:
+            return {
+                "instance_id": record.instance_id,
+                "role_id": record.role_id,
+                "summary": "",
+                "preview": "",
+                "updated_at": None,
+                "source": source,
+            }
+        updated_at = getattr(memory, "updated_at", None)
+        summary = str(getattr(memory, "content_markdown", "") or "").strip()
+        preview = ""
+        if self._role_memory_service is not None:
+            preview = self._role_memory_service.build_reflection_preview(
+                role_id=record.role_id,
+                workspace_id=record.workspace_id,
+            )
+        return {
+            "instance_id": record.instance_id,
+            "role_id": record.role_id,
+            "summary": summary,
+            "preview": preview,
+            "updated_at": updated_at.isoformat() if updated_at is not None else None,
+            "source": source,
         }
 
     def _public_phase(self, runtime: RunRuntimeRecord, approval_count: int) -> str:

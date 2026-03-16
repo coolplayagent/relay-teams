@@ -7,22 +7,17 @@ from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 
 
-def test_role_memory_service_builds_injected_memory_and_daily_entries(
+def test_role_memory_service_builds_injected_memory_and_preview(
     tmp_path: Path,
 ) -> None:
     service = RoleMemoryService(
         repository=RoleMemoryRepository(tmp_path / "role_memory.db")
     )
 
-    service.record_task_result(
+    service.update_reflection_memory(
         role_id="writer",
         workspace_id="workspace-a",
-        session_id="session-1",
-        task_id="task-1",
-        objective="Draft a summary",
-        result="Summarized the design.",
-        transcript_lines=("line-1", "line-2"),
-        memory_date="2026-03-14",
+        content_markdown="- Prefer concise output\n- Check tool results before responding",
     )
 
     injected = service.build_injected_memory(
@@ -30,11 +25,15 @@ def test_role_memory_service_builds_injected_memory_and_daily_entries(
         workspace_id="workspace-a",
         memory_date="2026-03-14",
     )
+    preview = service.build_reflection_preview(
+        role_id="writer",
+        workspace_id="workspace-a",
+        max_chars=40,
+    )
 
-    assert "## Role Memory" in injected
-    assert "## Daily Memory" in injected
-    assert "Draft a summary: Summarized the design." in injected
-    assert "Summarized the design." in injected
+    assert "Prefer concise output" in injected
+    assert "Check tool results before responding" in injected
+    assert preview.startswith("- Prefer concise output")
 
 
 def test_role_memory_service_isolates_memory_by_workspace(tmp_path: Path) -> None:
@@ -42,25 +41,15 @@ def test_role_memory_service_isolates_memory_by_workspace(tmp_path: Path) -> Non
         repository=RoleMemoryRepository(tmp_path / "role_memory_scoped.db")
     )
 
-    service.record_task_result(
+    service.update_reflection_memory(
         role_id="writer",
         workspace_id="workspace-a",
-        session_id="session-a",
-        task_id="task-a",
-        objective="Draft A",
-        result="Result A",
-        transcript_lines=(),
-        memory_date="2026-03-14",
+        content_markdown="- Memory A",
     )
-    service.record_task_result(
+    service.update_reflection_memory(
         role_id="writer",
         workspace_id="workspace-b",
-        session_id="session-b",
-        task_id="task-b",
-        objective="Draft B",
-        result="Result B",
-        transcript_lines=(),
-        memory_date="2026-03-14",
+        content_markdown="- Memory B",
     )
 
     injected_a = service.build_injected_memory(
@@ -74,7 +63,7 @@ def test_role_memory_service_isolates_memory_by_workspace(tmp_path: Path) -> Non
         memory_date="2026-03-14",
     )
 
-    assert "Draft A: Result A" in injected_a
-    assert "Result B" not in injected_a
-    assert "Draft B: Result B" in injected_b
-    assert "Result A" not in injected_b
+    assert "Memory A" in injected_a
+    assert "Memory B" not in injected_a
+    assert "Memory B" in injected_b
+    assert "Memory A" not in injected_b

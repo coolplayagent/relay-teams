@@ -211,6 +211,36 @@ class MessageRepository:
             (conversation_id,),
         )
 
+    def compact_conversation_history(
+        self,
+        conversation_id: str,
+        *,
+        keep_message_count: int,
+    ) -> None:
+        safe_keep_count = max(1, int(keep_message_count))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (conversation_id,),
+            ).fetchall()
+            if len(rows) <= safe_keep_count:
+                return
+            stale_ids = [
+                int(row["id"])
+                for row in rows[:-safe_keep_count]
+                if isinstance(row["id"], int)
+            ]
+            if not stale_ids:
+                return
+            placeholders = ",".join("?" for _ in stale_ids)
+            self._run_write_with_retry(
+                lambda: self._conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    stale_ids,
+                )
+            )
+            self._run_write_with_retry(self._conn.commit)
+
     def append_user_prompt_if_missing(
         self,
         *,

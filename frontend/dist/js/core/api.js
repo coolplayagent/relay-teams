@@ -1,4 +1,4 @@
-/**
+﻿/**
  * core/api.js
  * Backward-compatible facade. New implementation lives under ./api/.
  */
@@ -11,6 +11,8 @@ export {
     fetchSessionAgents,
     fetchSessionTasks,
     fetchAgentMessages,
+    fetchAgentReflection,
+    refreshAgentReflection,
     updateSession,
     sendUserPrompt,
     resolveGate,

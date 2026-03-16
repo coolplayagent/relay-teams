@@ -246,7 +246,16 @@ Returns active run recovery state, pending tool approvals, paused subagent state
 
 ### `GET /sessions/{session_id}/agents`
 
-Lists one session-level agent instance per delegated role in the session.
+Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace.
+
+Response fields include:
+- `instance_id`
+- `role_id`
+- `status`
+- `created_at`
+- `updated_at`
+- `reflection_summary_preview`
+- `reflection_updated_at`
 
 ### `GET /sessions/{session_id}/events`
 
@@ -259,6 +268,22 @@ Lists persisted messages in the session.
 ### `GET /sessions/{session_id}/agents/{instance_id}/messages`
 
 Lists messages for one agent instance.
+
+### `GET /sessions/{session_id}/agents/{instance_id}/reflection`
+
+Returns the full stored reflection summary for one subagent instance.
+
+Response fields:
+- `session_id`
+- `instance_id`
+- `role_id`
+- `summary`
+- `updated_at`
+- `source`
+
+### `POST /sessions/{session_id}/agents/{instance_id}/reflection:refresh`
+
+Triggers reflection recomputation for one subagent instance and returns the refreshed summary. This uses the same compaction/reflection strategy as automatic context compaction.
 
 ### `GET /sessions/{session_id}/tasks`
 
@@ -508,8 +533,7 @@ Request:
   "skills": [],
   "model_profile": "default",
   "memory_profile": {
-    "enabled": true,
-    "daily_enabled": true
+    "enabled": true
   },
   "system_prompt": "Implement the requested change."
 }

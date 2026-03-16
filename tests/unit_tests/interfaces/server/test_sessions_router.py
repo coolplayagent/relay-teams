@@ -12,6 +12,7 @@ from agent_teams.sessions.session_models import SessionRecord
 class _FakeSessionService:
     def __init__(self) -> None:
         self.updated_calls: list[tuple[str, dict[str, str]]] = []
+        self.reflection_refresh_calls: list[tuple[str, str]] = []
         self.raise_missing = False
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
@@ -86,6 +87,31 @@ class _FakeSessionService:
                 )
             ],
         )
+
+    def get_agent_reflection(
+        self, session_id: str, instance_id: str
+    ) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "instance_id": instance_id,
+            "role_id": "writer",
+            "summary": "Use concise drafts.",
+            "updated_at": "2026-03-13T00:01:30Z",
+            "source": "stored",
+        }
+
+    async def refresh_subagent_reflection(
+        self, session_id: str, instance_id: str
+    ) -> dict[str, object]:
+        self.reflection_refresh_calls.append((session_id, instance_id))
+        return {
+            "session_id": session_id,
+            "instance_id": instance_id,
+            "role_id": "writer",
+            "summary": "Use concise drafts.",
+            "updated_at": "2026-03-13T00:02:00Z",
+            "source": "manual",
+        }
 
 
 def _create_client(fake_service: _FakeSessionService) -> TestClient:
@@ -184,3 +210,25 @@ def test_get_run_token_usage_route_returns_extended_totals() -> None:
             }
         ],
     }
+
+
+def test_get_agent_reflection_route_returns_projection() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/agents/inst-1/reflection")
+
+    assert response.status_code == 200
+    assert response.json()["instance_id"] == "inst-1"
+    assert response.json()["source"] == "stored"
+
+
+def test_refresh_agent_reflection_route_returns_projection() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/sessions/session-1/agents/inst-1/reflection:refresh")
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "manual"
+    assert fake_service.reflection_refresh_calls == [("session-1", "inst-1")]

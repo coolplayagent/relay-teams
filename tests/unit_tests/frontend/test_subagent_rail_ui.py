@@ -27,6 +27,8 @@ console.log(JSON.stringify({
     selectedRoleId: state.selectedRoleId,
     summaryText: globalThis.__elements.subagentStatusSummary.textContent,
     selectorHtml: globalThis.__elements.subagentRoleSelect.innerHTML,
+    metaHtml: globalThis.__elements.subagentRoleMeta.innerHTML,
+    metaHidden: globalThis.__elements.subagentRoleMeta.hidden,
     openAgentPanelCalls: globalThis.__openAgentPanelCalls,
 }));
 """.strip(),
@@ -39,6 +41,8 @@ console.log(JSON.stringify({
             "status": "running",
             "created_at": "2026-03-13T00:01:00Z",
             "updated_at": "2026-03-13T00:02:00.000Z",
+            "reflection_summary_preview": "Use concise drafts.",
+            "reflection_updated_at": "2026-03-13T00:01:30Z",
         }
     ]
     assert payload["sessionTasks"] == [
@@ -49,15 +53,20 @@ console.log(JSON.stringify({
             "status": "running",
             "instance_id": "writer-1",
             "run_id": "run-1",
+            "created_at": "2026-03-13T00:01:10Z",
+            "updated_at": "2026-03-13T00:01:40Z",
         }
     ]
     assert payload["selectedRoleId"] == "writer"
     assert payload["summaryText"] == "1 running / 1 roles"
     selector_html = cast(str, payload["selectorHtml"])
+    meta_html = cast(str, payload["metaHtml"])
     open_agent_panel_calls = cast(list[object], payload["openAgentPanelCalls"])
 
     assert "Coordinator" not in selector_html
     assert "writer" in selector_html
+    assert meta_html == ""
+    assert payload["metaHidden"] is True
     assert open_agent_panel_calls[-1] == {
         "instanceId": "writer-2",
         "roleId": "writer",
@@ -99,6 +108,8 @@ export async function fetchSessionAgents() {
             status: "running",
             created_at: "2026-03-13T00:01:00Z",
             updated_at: "2026-03-13T00:01:00Z",
+            reflection_summary_preview: "Use concise drafts.",
+            reflection_updated_at: "2026-03-13T00:01:30Z",
         },
     ];
 }
@@ -120,6 +131,8 @@ export async function fetchSessionTasks() {
             status: "running",
             instance_id: "writer-1",
             run_id: "run-1",
+            created_at: "2026-03-13T00:01:10Z",
+            updated_at: "2026-03-13T00:01:40Z",
         },
     ];
 }
@@ -208,6 +221,7 @@ function createElement() {{
         innerHTML: "",
         textContent: "",
         disabled: false,
+        hidden: false,
         value: "",
         classList: createClassList(),
     }};
@@ -235,14 +249,15 @@ globalThis.__openAgentPanelCalls = [];
         check=False,
         cwd=str(repo_root),
         text=True,
+        encoding="utf-8",
         timeout=30,
     )
 
     if completed.returncode != 0:
         raise AssertionError(
-            "Node runner failed:\\n"
-            f"STDOUT:\\n{completed.stdout}\\n"
-            f"STDERR:\\n{completed.stderr}"
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
         )
 
     return json.loads(completed.stdout)

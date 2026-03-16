@@ -24,6 +24,13 @@ def _clear_proxy_env(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
+def _set_test_app_config_dir(monkeypatch, config_dir: Path) -> None:
+    monkeypatch.setattr(
+        "agent_teams.env.runtime_env.get_app_config_dir",
+        lambda user_home_dir=None: config_dir,
+    )
+
+
 def test_load_registry_reads_app_scope_only(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".config" / "agent-teams"
     app_config_dir.mkdir(parents=True)
@@ -59,6 +66,7 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
     _clear_proxy_env(monkeypatch)
     app_config_dir = tmp_path / ".config" / "agent-teams"
     app_config_dir.mkdir(parents=True)
+    _set_test_app_config_dir(monkeypatch, app_config_dir)
 
     (app_config_dir / ".env").write_text(
         "HTTP_PROXY=http://proxy.internal:8080\nNO_PROXY=localhost,127.0.0.1\n",
@@ -95,7 +103,6 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
         "http_proxy": "http://proxy.internal:8080",
         "NO_PROXY": "localhost,127.0.0.1",
         "no_proxy": "localhost,127.0.0.1",
-        "SSL_VERIFY": "true",
     }
     assert registry.get_spec("filesystem").server_config["env"] == expected_proxy_env
     assert registry.get_spec("events").server_config["env"] == expected_proxy_env
@@ -113,6 +120,7 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
     _clear_proxy_env(monkeypatch)
     app_config_dir = tmp_path / ".config" / "agent-teams"
     app_config_dir.mkdir(parents=True)
+    _set_test_app_config_dir(monkeypatch, app_config_dir)
     (app_config_dir / ".env").write_text(
         "HTTP_PROXY=http://proxy.internal:8080\n",
         encoding="utf-8",
@@ -143,7 +151,6 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
         "HTTP_PROXY": "http://custom-proxy.internal:9000",
         "http_proxy": "http://custom-proxy.internal:9000",
         "CUSTOM_TOKEN": "secret",
-        "SSL_VERIFY": "true",
     }
 
 

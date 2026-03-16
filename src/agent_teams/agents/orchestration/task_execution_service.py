@@ -414,25 +414,8 @@ class TaskExecutionService(BaseModel):
         conversation_id: str,
         result: str,
     ) -> None:
-        if (
-            self.role_registry.is_coordinator_role(role_id)
-            or self.role_memory_service is None
-        ):
-            return
-        transcript = self.message_repo.get_history_for_conversation_task(
-            conversation_id,
-            task_id=task.task_id,
-        )
-        transcript_lines = tuple(str(message) for message in transcript)
-        self.role_memory_service.record_task_result(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            session_id=task.session_id,
-            task_id=task.task_id,
-            objective=task.objective,
-            result=result,
-            transcript_lines=transcript_lines,
-        )
+        del role_id, workspace_id, task, conversation_id, result
+        return
 
     def _shared_state_snapshot(
         self,

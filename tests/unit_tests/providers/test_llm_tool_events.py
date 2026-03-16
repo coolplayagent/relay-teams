@@ -106,6 +106,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             shared_store=shared_store,
         ),
         role_memory_service=cast(RoleMemoryService | None, None),
+        subagent_reflection_service=None,
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/subagentRail.js
  * Session-level subagent rail state, selector, and visibility controls.
  */
@@ -72,6 +72,8 @@ export function rememberLiveSubagent(instanceId, roleId) {
         status: 'running',
         created_at: existingIndex >= 0 ? nextAgents[existingIndex].created_at : nowIso,
         updated_at: nowIso,
+        reflection_summary_preview: existingIndex >= 0 ? nextAgents[existingIndex].reflection_summary_preview : '',
+        reflection_updated_at: existingIndex >= 0 ? nextAgents[existingIndex].reflection_updated_at : '',
     };
     if (existingIndex >= 0) {
         nextAgents[existingIndex] = {
@@ -195,7 +197,7 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
     select.innerHTML = roles
         .map(agent => {
             const status = humanizeStatus(agent.status || 'idle');
-            return `<option value="${escapeAttribute(agent.role_id)}">${escapeHtml(agent.role_id)} · ${escapeHtml(status)}</option>`;
+            return `<option value="${escapeAttribute(agent.role_id)}">${escapeHtml(agent.role_id)} 路 ${escapeHtml(status)}</option>`;
         })
         .join('');
     state.selectedRoleId = selectedRoleId;
@@ -205,51 +207,8 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
 function renderSelectedRoleMeta() {
     const metaEl = els.subagentRoleMeta;
     if (!metaEl) return;
-
-    const selected = findAgentByRole(resolveSelectedRoleId());
-    if (!selected) {
-        metaEl.innerHTML = `
-            <div class="subagent-meta-empty">No delegated subagent instances in this session.</div>
-        `;
-        return;
-    }
-
-    const tasks = (state.sessionTasks || []).filter(task => task.role_id === selected.role_id);
-    const latestTasks = tasks.slice().sort((left, right) =>
-        String(right.task_id || '').localeCompare(String(left.task_id || ''))
-    ).slice(0, 4);
-
-    metaEl.innerHTML = `
-        <div class="subagent-meta-card">
-            <div class="subagent-meta-topline">
-                <span class="subagent-meta-role">${escapeHtml(selected.role_id)}</span>
-                <span class="subagent-meta-status is-${escapeAttribute(String(selected.status || 'idle'))}">
-                    ${escapeHtml(humanizeStatus(selected.status || 'idle'))}
-                </span>
-            </div>
-            <div class="subagent-meta-secondary">
-                <span>${escapeHtml(shortInstanceId(selected.instance_id))}</span>
-                <span>${escapeHtml(formatTimestamp(selected.updated_at || selected.created_at || ''))}</span>
-            </div>
-            <div class="subagent-meta-tasks">
-                ${latestTasks.length > 0
-                    ? `
-                        <div class="subagent-task-list">
-                            ${latestTasks.map(task => `
-                                <div class="subagent-task-row">
-                                    <span class="subagent-task-title">${escapeHtml(task.title || task.task_id || 'Task')}</span>
-                                    <span class="subagent-task-state is-${escapeAttribute(String(task.status || 'created'))}">
-                                        ${escapeHtml(humanizeStatus(task.status || 'created'))}
-                                    </span>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `
-                    : '<span class="subagent-task-empty">No delegated tasks yet.</span>'
-                }
-            </div>
-        </div>
-    `;
+    metaEl.hidden = true;
+    metaEl.innerHTML = '';
 }
 
 function ensureSelectedPanel({ preserveSelection = true } = {}) {
@@ -306,6 +265,8 @@ function normalizeSessionAgents(payload) {
             status: String(item.status || 'idle'),
             created_at: String(item.created_at || ''),
             updated_at: String(item.updated_at || item.created_at || ''),
+            reflection_summary_preview: String(item.reflection_summary_preview || ''),
+            reflection_updated_at: String(item.reflection_updated_at || ''),
         };
         const existing = latestByRole.get(roleId);
         if (!existing || String(record.updated_at).localeCompare(String(existing.updated_at)) >= 0) {
@@ -328,6 +289,8 @@ function normalizeSessionTasks(payload) {
             status: String(item.status || 'created'),
             instance_id: String(item.instance_id || ''),
             run_id: String(item.run_id || ''),
+            created_at: String(item.created_at || ''),
+            updated_at: String(item.updated_at || item.created_at || ''),
         }));
 }
 

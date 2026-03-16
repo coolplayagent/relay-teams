@@ -1,4 +1,4 @@
-/**
+﻿/**
  * core/api/sessions.js
  * Session and history related API wrappers.
  */
@@ -79,6 +79,22 @@ export async function fetchAgentMessages(sessionId, instanceId) {
     );
 }
 
+export async function fetchAgentReflection(sessionId, instanceId) {
+    return requestJson(
+        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
+        undefined,
+        'Failed to fetch agent reflection',
+    );
+}
+
+export async function refreshAgentReflection(sessionId, instanceId) {
+    return requestJson(
+        `/api/sessions/${sessionId}/agents/${instanceId}/reflection:refresh`,
+        { method: 'POST' },
+        'Failed to refresh agent reflection',
+    );
+}
+
 export async function deleteSession(sessionId) {
     return requestJson(
         `/api/sessions/${sessionId}`,
@@ -86,3 +102,4 @@ export async function deleteSession(sessionId) {
         'Failed to delete session',
     );
 }
+

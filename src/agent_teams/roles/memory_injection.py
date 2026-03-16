@@ -14,7 +14,11 @@ def build_role_with_memory(
     role_id: str,
     workspace_id: str,
 ) -> RoleDefinition:
-    if role_registry.is_coordinator_role(role_id) or role_memory_service is None:
+    if (
+        role_registry.is_coordinator_role(role_id)
+        or role_memory_service is None
+        or role.memory_profile.enabled is False
+    ):
         return role
 
     memory_text = role_memory_service.build_injected_memory(
@@ -26,6 +30,6 @@ def build_role_with_memory(
 
     return role.model_copy(
         update={
-            "system_prompt": f"{role.system_prompt}\n\n## Role Memory\n{memory_text}",
+            "system_prompt": f"{role.system_prompt}\n\n## Reflection Memory\n{memory_text}",
         }
     )

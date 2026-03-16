@@ -323,6 +323,27 @@ class AgentTeamsClient:
             {"content": content},
         )
 
+    def get_subagent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
+        )
+
+    def refresh_subagent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/sessions/{session_id}/agents/{instance_id}/reflection:refresh",
+            {},
+        )
+
     def _request_json(
         self,
         method: str,

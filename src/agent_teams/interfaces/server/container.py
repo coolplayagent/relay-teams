@@ -29,6 +29,7 @@ from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.providers.contracts import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
+from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.http_client_factory import clear_llm_http_client_cache
 from agent_teams.providers.factory import create_provider_factory
 from agent_teams.agents.orchestration.factory import create_task_execution_service
@@ -53,6 +54,7 @@ from agent_teams.agents.agent_repo import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repo import MessageRepository
+from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
@@ -167,6 +169,16 @@ class ServerContainer:
         self.role_memory_service: RoleMemoryService = RoleMemoryService(
             repository=self.role_memory_repo
         )
+        reflection_config = self._resolve_reflection_model_config()
+        self.subagent_reflection_service: SubagentReflectionService | None = (
+            SubagentReflectionService(
+                config=reflection_config,
+                message_repo=self.message_repo,
+                role_memory_service=self.role_memory_service,
+            )
+            if reflection_config is not None
+            else None
+        )
         self._ensure_default_workspace()
 
         self.agent_repo.mark_running_instances_failed()
@@ -253,6 +265,7 @@ class ServerContainer:
             workspace_manager=self.workspace_manager,
             workspace_service=self.workspace_service,
             role_memory_service=self.role_memory_service,
+            subagent_reflection_service=self.subagent_reflection_service,
             role_registry=self.role_registry,
             skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
@@ -318,6 +331,7 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             role_memory_service=self.role_memory_service,
+            subagent_reflection_service=self.subagent_reflection_service,
             tool_registry=self.tool_registry,
             mcp_registry=self.mcp_registry,
             skill_registry=self.skill_registry,
@@ -356,6 +370,13 @@ class ServerContainer:
             message_repo=self.message_repo,
             session_repo=self.session_repo,
         )
+
+    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
+        if self.runtime.default_model_profile is not None:
+            return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
+        for profile in self.runtime.llm_profiles.values():
+            return profile
+        return None
 
     async def start(self) -> None:
         return None

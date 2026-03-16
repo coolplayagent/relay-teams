@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/settings/index.js
  * Settings modal shell and tab routing.
  */
@@ -266,8 +266,6 @@ function createModal() {
                                                         <select id="role-memory-enabled-input"></select>
                                                     </div>
                                                     <div class="form-group">
-                                                        <label for="role-memory-daily-enabled-input">Daily Memory</label>
-                                                        <select id="role-memory-daily-enabled-input"></select>
                                                     </div>
                                                     <p class="role-workspace-note" id="role-workspace-note">
                                                         Role memory is global by role. Stage documents are managed separately under the bound workspace and session directory.
@@ -614,3 +612,4 @@ export function closeSettings() {
 }
 
 window.openSettings = openSettings;
+

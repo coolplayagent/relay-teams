@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/settings/rolesSettings.js
  * Role settings panel bindings.
  */
@@ -25,7 +25,7 @@ let defaultModelProfileName = '';
 let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
-let currentMemoryProfile = { enabled: true, daily_enabled: true };
+let currentMemoryProfile = { enabled: true };
 let currentSelections = {
     tools: [],
     mcp_servers: [],
@@ -280,10 +280,6 @@ function renderMemoryProfileSelects(memoryProfile) {
         'role-memory-enabled-input',
         memoryProfile.enabled !== false,
     );
-    renderBooleanSelect(
-        'role-memory-daily-enabled-input',
-        memoryProfile.daily_enabled !== false,
-    );
 }
 
 function renderBooleanSelect(id, selected) {
@@ -375,7 +371,7 @@ function handleAddRole() {
         mcp_servers: [],
         skills: [],
         model_profile: 'default',
-        memory_profile: { enabled: true, daily_enabled: true },
+        memory_profile: { enabled: true },
         system_prompt: '',
         file_name: '',
     });
@@ -448,7 +444,6 @@ function buildDraftFromForm() {
     const memoryProfile = {
         ...(currentMemoryProfile || {}),
         enabled: getBooleanSelectValue('role-memory-enabled-input', true),
-        daily_enabled: getBooleanSelectValue('role-memory-daily-enabled-input', true),
     };
 
     return {
@@ -570,11 +565,10 @@ function getBooleanSelectValue(id, defaultValue) {
 
 function normalizeMemoryProfile(memoryProfile) {
     if (!memoryProfile || typeof memoryProfile !== 'object') {
-        return { enabled: true, daily_enabled: true };
+        return { enabled: true };
     }
     return {
         enabled: memoryProfile.enabled !== false,
-        daily_enabled: memoryProfile.daily_enabled !== false,
     };
 }
 
@@ -607,3 +601,4 @@ function setActionDisplay(id, visible) {
         button.style.display = visible ? 'inline-flex' : 'none';
     }
 }
+

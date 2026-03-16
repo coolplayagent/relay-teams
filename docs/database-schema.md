@@ -343,7 +343,7 @@ Primary query keys used by repositories:
 - `agent_teams.tools.runtime`: `approval_tickets`.
 - `agent_teams.providers`: `token_usage`.
 - `agent_teams.triggers`: `triggers`, `trigger_events`.
-- `agent_teams.roles`: `role_memories`, `role_daily_memories`.
+- `agent_teams.roles`: `role_memories`.
 
 ---
 
@@ -381,32 +381,12 @@ CREATE TABLE IF NOT EXISTS role_memories (
 );
 ```
 
-Purpose: durable role memory shared by the same `role_id` inside one workspace.
+Purpose: workspace-scoped durable role memory. For subagents this table stores the current reflection summary that is injected into future same-role sessions in the same workspace.
 
----
-
-### 2.11 `role_daily_memories`
-
-```sql
-CREATE TABLE IF NOT EXISTS role_daily_memories (
-    role_id           TEXT NOT NULL,
-    workspace_id      TEXT NOT NULL,
-    memory_date       TEXT NOT NULL,
-    kind              TEXT NOT NULL,
-    content_markdown  TEXT NOT NULL,
-    source_session_id TEXT,
-    source_task_id    TEXT,
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
-    PRIMARY KEY (role_id, workspace_id, memory_date, kind)
-);
-```
-
-Purpose: per-day role memory snapshots scoped to one workspace.
-
-`kind` values:
-- `raw`
-- `digest`
+Notes:
+- there is no `role_daily_memories` table anymore
+- legacy daily-memory tables may be dropped during repository initialization
+- reflection growth is controlled by compaction and summary rewrite, not append-only rows
 
 ---
 

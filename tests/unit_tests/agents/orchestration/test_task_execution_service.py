@@ -614,12 +614,13 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
 
     assert result == "ok"
     assert provider.system_prompts
-    assert "## Role Memory" in provider.system_prompts[0]
+    assert "## Reflection Memory" in provider.system_prompts[0]
     assert "Prefer concise output." in provider.system_prompts[0]
     assert "/d/workspace/aider" not in provider.system_prompts[0]
     durable = role_memory_service.build_injected_memory(
         role_id="time",
         workspace_id="default",
     )
-    assert "query time: ok" in durable
+    assert "Prefer concise output." in durable
+    assert "query time: ok" not in durable
     assert "Refer to /d/workspace/aider." not in durable

@@ -31,4 +31,3 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     assert 'for="role-version-input"' in settings_source
     assert 'for="role-model-profile-input"' in settings_source
     assert 'for="role-memory-enabled-input"' in settings_source
-    assert 'for="role-memory-daily-enabled-input"' in settings_source

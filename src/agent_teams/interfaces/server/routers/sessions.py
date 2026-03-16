@@ -121,9 +121,33 @@ def list_session_agents(
     session_id: str,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return [
-        record.model_dump() for record in service.list_agents_in_session(session_id)
-    ]
+    return list(service.list_agents_in_session(session_id))
+
+
+@router.get("/{session_id}/agents/{instance_id}/reflection")
+def get_agent_reflection(
+    session_id: str,
+    instance_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, object]:
+    try:
+        return service.get_agent_reflection(session_id, instance_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+
+
+@router.post("/{session_id}/agents/{instance_id}/reflection:refresh")
+async def refresh_agent_reflection(
+    session_id: str,
+    instance_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, object]:
+    try:
+        return await service.refresh_subagent_reflection(session_id, instance_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{session_id}/events")

@@ -32,7 +32,6 @@ console.log(JSON.stringify({
     selectedRoleName: document.getElementById("role-name-input").value,
     selectedRoleDescription: document.getElementById("role-description-input").value,
     memoryEnabled: document.getElementById("role-memory-enabled-input").value,
-    dailyMemoryEnabled: document.getElementById("role-memory-daily-enabled-input").value,
     listDisplay: document.getElementById("roles-list").style.display,
     editorDisplay: document.getElementById("role-editor-panel").style.display,
     modelProfileValue: document.getElementById("role-model-profile-input").value,
@@ -52,7 +51,6 @@ console.log(JSON.stringify({
     assert payload["selectedRoleName"] == "Reviewer"
     assert payload["selectedRoleDescription"] == "Reviews delivered work."
     assert payload["memoryEnabled"] == "true"
-    assert payload["dailyMemoryEnabled"] == "false"
     assert payload["listDisplay"] == "none"
     assert payload["editorDisplay"] == "block"
     assert payload["modelProfileValue"] == "default"
@@ -90,7 +88,6 @@ toolOptions[1].onchange();
 document.getElementById("role-model-profile-input").value = "editor";
 document.getElementById("role-description-input").value = "Drafts user-facing content with structure.";
 document.getElementById("role-memory-enabled-input").value = "false";
-document.getElementById("role-memory-daily-enabled-input").value = "true";
 document.getElementById("role-system-prompt-input").value = "Write the first draft with structure.";
 
 await document.getElementById("validate-role-btn").onclick();
@@ -136,7 +133,6 @@ console.log(JSON.stringify({
     assert validate_payload["tools"] == ["read_file", "write_file"]
     assert validate_payload["memory_profile"] == {
         "enabled": False,
-        "daily_enabled": True,
     }
     assert validate_payload["model_profile"] == "editor"
     assert payload["firstSavedRoleId"] == "writer"
@@ -148,7 +144,6 @@ console.log(JSON.stringify({
     assert second_saved_payload["tools"] == ["read_file"]
     assert second_saved_payload["memory_profile"] == {
         "enabled": True,
-        "daily_enabled": True,
     }
     assert payload["statusText"] == "Saved and validated."
     assert payload["fileMeta"] == "File: new_role.md"
@@ -237,7 +232,7 @@ const roleRecords = {
         mcp_servers: [],
         skills: [],
         model_profile: "default",
-        memory_profile: { enabled: true, daily_enabled: true },
+        memory_profile: { enabled: true },
         system_prompt: "Write the first draft.",
         file_name: "writer.md",
         content: "---\\nrole_id: writer\\n---\\n\\nWrite the first draft.\\n",
@@ -252,7 +247,7 @@ const roleRecords = {
         mcp_servers: ["docs"],
         skills: ["diff"],
         model_profile: "default",
-        memory_profile: { enabled: true, daily_enabled: false },
+        memory_profile: { enabled: true },
         system_prompt: "Review the delivered work.",
         file_name: "reviewer.md",
         content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
@@ -511,7 +506,6 @@ function createElements() {{
         ["role-mcp-picker", createElement("block")],
         ["role-skills-picker", createElement("block")],
         ["role-memory-enabled-input", createElement("block")],
-        ["role-memory-daily-enabled-input", createElement("block")],
         ["role-system-prompt-input", createElement("block")],
         ["role-system-prompt-preview", createElement("none")],
         ["role-file-meta", createElement("block")],

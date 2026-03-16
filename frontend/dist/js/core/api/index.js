@@ -1,16 +1,18 @@
-/**
+﻿/**
  * core/api/index.js
  * Public API facade composed from domain-specific modules.
  */
 export {
     deleteSession,
     fetchAgentMessages,
+    fetchAgentReflection,
     fetchSessionAgents,
     fetchSessionHistory,
     fetchSessionRecovery,
     fetchSessionRounds,
     fetchSessions,
     fetchSessionTasks,
+    refreshAgentReflection,
     startNewSession,
     updateSession,
 } from './sessions.js';

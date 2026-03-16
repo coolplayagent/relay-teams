@@ -77,6 +77,7 @@ from agent_teams.mcp.registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
+from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.skills.registry import SkillRegistry
 from agent_teams.workspace import (
     WorkspaceManager,
@@ -117,6 +118,7 @@ class AgentLlmSession:
         run_intent_repo: RunIntentRepository,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
+        subagent_reflection_service: SubagentReflectionService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -145,6 +147,7 @@ class AgentLlmSession:
         self._run_intent_repo = run_intent_repo
         self._workspace_manager = workspace_manager
         self._role_memory_service = role_memory_service
+        self._subagent_reflection_service = subagent_reflection_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
@@ -307,6 +310,12 @@ class AgentLlmSession:
                     )
                 )
             )
+        )
+        history = await self._maybe_compact_history(
+            request=request,
+            history=history,
+            workspace_id=resolved_workspace_id,
+            conversation_id=resolved_conversation_id,
         )
         history = self._persist_user_prompt_if_needed(
             request=request,
@@ -1094,6 +1103,26 @@ class AgentLlmSession:
         messages = list(history)
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
+
+    async def _maybe_compact_history(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        workspace_id: str,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if self._subagent_reflection_service is None:
+            return history
+        if self._role_registry.is_coordinator_role(request.role_id):
+            return history
+        role = self._role_registry.get(request.role_id)
+        return await self._subagent_reflection_service.maybe_compact(
+            role=role,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            history=history,
+        )
 
     def _persist_user_prompt_if_needed(
         self,
