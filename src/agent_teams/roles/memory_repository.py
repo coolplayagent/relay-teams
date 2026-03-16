@@ -30,6 +30,7 @@ class RoleMemoryRepository:
                 role_id=role_id,
                 workspace_id=workspace_id,
                 content_markdown="",
+                updated_at=None,
             )
         return RoleMemoryRecord(
             role_id=str(row["role_id"]),
@@ -55,6 +56,13 @@ class RoleMemoryRepository:
                           updated_at=excluded.updated_at
             """,
             (role_id, workspace_id, content_markdown, now),
+        )
+        self._conn.commit()
+
+    def delete_role_memory(self, *, role_id: str, workspace_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM role_memories WHERE role_id=? AND workspace_id=?",
+            (role_id, workspace_id),
         )
         self._conn.commit()
 

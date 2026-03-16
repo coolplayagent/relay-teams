@@ -86,6 +86,72 @@ console.log(JSON.stringify({
     assert session_agent["reflection_updated_at"] == "2026-03-16T08:20:45.539634+00:00"
 
 
+def test_reflection_memory_supports_inline_edit_and_delete(tmp_path: Path) -> None:
+    payload = _run_panel_factory_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { createPanel } = await import('./panelFactory.mjs');
+const { state } = await import('./mockState.mjs');
+const { calls } = await import('./mockApi.mjs');
+const { calls: historyCalls } = await import('./mockHistory.mjs');
+const { calls: railCalls } = await import('./mockSubagentRail.mjs');
+
+globalThis.confirm = () => true;
+state.currentSessionId = 'session-1';
+state.sessionAgents = [
+    {
+        instance_id: 'inst-1',
+        role_id: 'writer',
+        reflection_summary_preview: 'Old note',
+        reflection_updated_at: '2026-03-16T08:00:00Z',
+    },
+];
+
+const panel = createPanel('inst-1', 'writer', () => undefined);
+const body = panel.panelEl.querySelector('.agent-panel-reflection-body');
+body.dataset.summary = 'Old note';
+body.textContent = 'Old note';
+
+panel.panelEl.querySelector('.agent-panel-reflection-edit').onclick();
+const editor = panel.panelEl.querySelector('.agent-panel-reflection-editor-input');
+editor.value = 'Edited by human';
+await panel.panelEl.querySelector('.agent-panel-reflection-save').onclick();
+
+const afterEdit = {
+    updateCalls: calls.updateAgentReflection,
+    summaryPreview: state.sessionAgents[0].reflection_summary_preview,
+    updatedAt: state.sessionAgents[0].reflection_updated_at,
+    historyCalls: historyCalls.loadAgentHistory,
+    railCalls: railCalls.refreshSubagentRail,
+};
+
+await panel.panelEl.querySelector('.agent-panel-reflection-delete').onclick();
+
+console.log(JSON.stringify({
+    afterEdit,
+    deleteCalls: calls.deleteAgentReflection,
+    afterDelete: state.sessionAgents[0],
+    historyCalls: historyCalls.loadAgentHistory,
+    railCalls: railCalls.refreshSubagentRail,
+}));
+""".strip(),
+    )
+
+    assert payload["afterEdit"] == {
+        "updateCalls": [["session-1", "inst-1", "Edited by human"]],
+        "summaryPreview": "Edited by human",
+        "updatedAt": "2026-03-16T08:31:00Z",
+        "historyCalls": 1,
+        "railCalls": 1,
+    }
+    assert payload["deleteCalls"] == [["session-1", "inst-1"]]
+    after_delete = cast(dict[str, object], payload["afterDelete"])
+    assert after_delete["reflection_summary_preview"] == ""
+    assert after_delete["reflection_updated_at"] == ""
+    assert payload["historyCalls"] == 2
+    assert payload["railCalls"] == 2
+
+
 def test_panel_sections_are_collapsed_by_default_and_expand_on_click(
     tmp_path: Path,
 ) -> None:
@@ -177,6 +243,11 @@ def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, o
 
     (tmp_path / "mockApi.mjs").write_text(
         """
+export const calls = {
+    updateAgentReflection: [],
+    deleteAgentReflection: [],
+};
+
 export async function injectSubagentMessage() {
     return undefined;
 }
@@ -189,6 +260,22 @@ export async function refreshAgentReflection() {
     return await new Promise(resolve => {
         globalThis.__resolveReflection = resolve;
     });
+}
+
+export async function updateAgentReflection(sessionId, instanceId, summary) {
+    calls.updateAgentReflection.push([sessionId, instanceId, summary]);
+    return {
+        preview: summary,
+        updated_at: '2026-03-16T08:31:00Z',
+    };
+}
+
+export async function deleteAgentReflection(sessionId, instanceId) {
+    calls.deleteAgentReflection.push([sessionId, instanceId]);
+    return {
+        preview: '',
+        updated_at: '',
+    };
 }
 """.strip(),
         encoding="utf-8",
@@ -297,9 +384,32 @@ class FakeElement {{
     set innerHTML(value) {{
         this._innerHTML = value;
         this._children = new Map();
+        if (String(value).includes('agent-panel-stop')) {{
+            this._registerRootChildren();
+            return;
+        }}
+        if (String(value).includes('agent-panel-reflection-editor-input')) {{
+            const editor = new FakeElement();
+            const match = String(value).match(/<textarea[^>]*>([\\s\\S]*?)<\\/textarea>/);
+            editor.value = match ? match[1]
+                .replaceAll('&amp;', '&')
+                .replaceAll('&lt;', '<')
+                .replaceAll('&gt;', '>')
+                .replaceAll('&quot;', '"')
+                .replaceAll('&#39;', "'")
+                : '';
+            this._children.set('.agent-panel-reflection-editor-input', editor);
+            this._children.set('.agent-panel-reflection-cancel', new FakeElement());
+            this._children.set('.agent-panel-reflection-save', new FakeElement());
+        }}
+    }}
+
+    _registerRootChildren() {{
         for (const selector of [
             '.agent-panel-stop',
             '.agent-panel-refresh-reflection',
+            '.agent-panel-reflection-edit',
+            '.agent-panel-reflection-delete',
             '.panel-inject-input',
             '.panel-send-btn',
             '.agent-panel-scroll',
@@ -329,7 +439,14 @@ class FakeElement {{
     }}
 
     querySelector(selector) {{
-        return this._children.get(selector) || null;
+        if (this._children.has(selector)) {{
+            return this._children.get(selector) || null;
+        }}
+        for (const child of this._children.values()) {{
+            const nested = child.querySelector(selector);
+            if (nested) return nested;
+        }}
+        return null;
     }}
 
     appendChild(child) {{
@@ -347,6 +464,21 @@ class FakeElement {{
 
     getAttribute(name) {{
         return this.attributes.get(name) || null;
+    }}
+
+    focus() {{
+        return undefined;
+    }}
+
+    setSelectionRange() {{
+        return undefined;
+    }}
+
+    click() {{
+        if (typeof this.onclick === 'function') {{
+            return this.onclick();
+        }}
+        return undefined;
     }}
 }}
 
@@ -387,6 +519,7 @@ def test_layout_css_keeps_reflect_button_styles() -> None:
 
     assert ".agent-panel-refresh-reflection," in css_text
     assert ".agent-panel-refresh-reflection:hover" in css_text
-    assert "display: inline-flex;" in css_text
+    assert ".agent-panel-icon-btn" in css_text
+    assert ".agent-panel-reflection-editor-input" in css_text
     assert ".agent-panel-section-body[hidden]" in css_text
     assert "display: none !important;" in css_text

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,4 +22,4 @@ class RoleMemoryRecord(BaseModel):
     role_id: str = Field(min_length=1)
     workspace_id: str = Field(min_length=1)
     content_markdown: str = ""
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime | None = None

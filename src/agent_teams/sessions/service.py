@@ -237,6 +237,41 @@ class SessionService:
         )
         return self._reflection_projection(agent, role_record=record, source="manual")
 
+    def update_agent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        summary: str,
+    ) -> dict[str, object]:
+        if self._role_memory_service is None:
+            raise RuntimeError("Subagent reflection is not available")
+        agent = self._require_session_agent(session_id, instance_id)
+        record = self._role_memory_service.update_reflection_memory(
+            role_id=agent.role_id,
+            workspace_id=agent.workspace_id,
+            content_markdown=summary,
+        )
+        return self._reflection_projection(
+            agent,
+            role_record=record,
+            source="manual_edit",
+        )
+
+    def delete_agent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, object]:
+        if self._role_memory_service is None:
+            raise RuntimeError("Subagent reflection is not available")
+        agent = self._require_session_agent(session_id, instance_id)
+        self._role_memory_service.delete_reflection_memory(
+            role_id=agent.role_id,
+            workspace_id=agent.workspace_id,
+        )
+        return self._reflection_projection(agent, source="manual_delete")
+
     def get_agent_messages(
         self, session_id: str, instance_id: str
     ) -> list[dict[str, object]]:

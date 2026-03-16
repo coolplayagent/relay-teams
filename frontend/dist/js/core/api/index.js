@@ -13,6 +13,8 @@ export {
     fetchSessions,
     fetchSessionTasks,
     refreshAgentReflection,
+    updateAgentReflection,
+    deleteAgentReflection,
     startNewSession,
     updateSession,
 } from './sessions.js';

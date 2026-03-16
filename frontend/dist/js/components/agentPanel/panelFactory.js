@@ -1,8 +1,14 @@
-﻿/**
+/**
  * components/agentPanel/panelFactory.js
  * Panel DOM factory and inject-message bindings.
  */
-import { injectSubagentMessage, refreshAgentReflection, stopRun } from '../../core/api.js';
+import {
+    deleteAgentReflection,
+    injectSubagentMessage,
+    refreshAgentReflection,
+    stopRun,
+    updateAgentReflection,
+} from '../../core/api.js';
 import { refreshSessionRecovery, resumeRecoverableRun } from '../../app/recovery.js';
 import { bindPanelContextIndicator, schedulePanelContextPreview } from '../contextIndicators.js';
 import { state } from '../../core/state.js';
@@ -35,17 +41,35 @@ export function createPanel(instanceId, roleId, onClose) {
                 </div>
             </div>
             <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
-            <button class="agent-panel-refresh-reflection" title="Refresh reflection memory">Reflect</button>
-            <button class="agent-panel-stop" title="Stop this subagent">Stop</button>
+            <button class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory">Reflect</button>
+            <button class="agent-panel-stop" type="button" title="Stop this subagent">Stop</button>
         </div>
         <div class="agent-panel-section agent-panel-reflection" data-collapsed="true">
-            <button class="agent-panel-section-toggle agent-panel-reflection-toggle" type="button" aria-expanded="false">
-                <span class="agent-panel-section-heading">
-                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
-                    <span class="agent-panel-section-title">Reflection memory</span>
-                </span>
-                <span class="agent-panel-section-meta agent-panel-reflection-meta"></span>
-            </button>
+            <div class="agent-panel-section-header">
+                <button class="agent-panel-section-toggle agent-panel-reflection-toggle" type="button" aria-expanded="false">
+                    <span class="agent-panel-section-heading">
+                        <span class="agent-panel-section-chevron" aria-hidden="true">></span>
+                        <span class="agent-panel-section-title">Reflection memory</span>
+                    </span>
+                    <span class="agent-panel-section-meta agent-panel-reflection-meta"></span>
+                </button>
+                <div class="agent-panel-section-actions" aria-label="Reflection memory actions">
+                    <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="Edit reflection memory" aria-label="Edit reflection memory">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            <path d="M16.5 3.5a2.12 2.12 0 113 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <button class="agent-panel-icon-btn agent-panel-reflection-delete" type="button" title="Delete reflection memory" aria-label="Delete reflection memory">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M3 6h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            <path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6" stroke="currentColor" stroke-width="1.8"/>
+                            <path d="M6.5 6l1 13a1.5 1.5 0 001.5 1.4h6a1.5 1.5 0 001.5-1.4l1-13" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                            <path d="M10 10.5v6M14 10.5v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
             <div class="agent-panel-section-body agent-panel-reflection-body" hidden>No reflection memory yet.</div>
         </div>
         <div class="agent-panel-section agent-panel-summary" data-collapsed="true">
@@ -68,7 +92,7 @@ export function createPanel(instanceId, roleId, onClose) {
             <div class="panel-input-wrapper">
                 <textarea class="panel-inject-input" placeholder="Inject message to this agent..." rows="1"></textarea>
                 <div class="context-indicator panel-context-indicator" data-instance-id="${instanceId}" data-state="idle" title="Latest provider context usage">-- / --</div>
-                <button class="panel-send-btn" title="Send">
+                <button class="panel-send-btn" type="button" title="Send">
                     <svg viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
                 </button>
             </div>
@@ -100,16 +124,41 @@ export function createPanel(instanceId, roleId, onClose) {
             setReflectionButtonState(reflectionBtn, 'loading');
             try {
                 const reflection = await refreshAgentReflection(state.currentSessionId, instanceId);
-                updateReflectionState(instanceId, reflection);
-                await loadAgentHistory(instanceId, roleId);
-                const rail = await import('../subagentRail.js');
-                await rail.refreshSubagentRail(state.currentSessionId, { preserveSelection: true });
+                await syncReflectionState(instanceId, roleId, reflection, panelEl);
                 setReflectionButtonState(reflectionBtn, 'success');
                 reflectionBtnResetTimer = scheduleReflectionButtonReset(reflectionBtn);
             } catch (e) {
                 setReflectionButtonState(reflectionBtn, 'error');
                 reflectionBtnResetTimer = scheduleReflectionButtonReset(reflectionBtn);
                 sysLog(`Failed to refresh reflection: ${e.message}`, 'log-error');
+            }
+        };
+    }
+
+    const editReflectionBtn = panelEl.querySelector('.agent-panel-reflection-edit');
+    if (editReflectionBtn) {
+        editReflectionBtn.onclick = () => {
+            openReflectionEditor(panelEl, instanceId, roleId);
+        };
+    }
+
+    const deleteReflectionBtn = panelEl.querySelector('.agent-panel-reflection-delete');
+    if (deleteReflectionBtn) {
+        deleteReflectionBtn.onclick = async () => {
+            if (!state.currentSessionId) return;
+            const confirmed = typeof window.confirm === 'function'
+                ? window.confirm('Delete reflection memory for this subagent role?')
+                : true;
+            if (!confirmed) return;
+            setReflectionActionButtonsDisabled(panelEl, true);
+            try {
+                const reflection = await deleteAgentReflection(state.currentSessionId, instanceId);
+                await syncReflectionState(instanceId, roleId, reflection, panelEl);
+                sysLog(`Deleted reflection memory for ${roleId || instanceId}`, 'log-info');
+            } catch (e) {
+                sysLog(`Failed to delete reflection memory: ${e.message}`, 'log-error');
+            } finally {
+                setReflectionActionButtonsDisabled(panelEl, false);
             }
         };
     }
@@ -134,8 +183,8 @@ export function createPanel(instanceId, roleId, onClose) {
         const text = textarea.value.trim();
         if (!text || !state.activeRunId) return;
         const shouldResume = !!(
-            state.currentRecoverySnapshot?.pausedSubagent &&
-            state.currentRecoverySnapshot?.activeRun?.run_id === state.activeRunId
+            state.currentRecoverySnapshot?.pausedSubagent
+            && state.currentRecoverySnapshot?.activeRun?.run_id === state.activeRunId
         );
         textarea.value = '';
         textarea.style.height = 'auto';
@@ -202,16 +251,127 @@ function setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, expanded) {
     bodyEl.hidden = !nextExpanded;
 }
 
+async function syncReflectionState(instanceId, roleId, reflection, panelEl) {
+    resetReflectionBody(panelEl);
+    updateReflectionState(instanceId, reflection);
+    await loadAgentHistory(instanceId, roleId);
+    const rail = await import('../subagentRail.js');
+    await rail.refreshSubagentRail(state.currentSessionId, { preserveSelection: true });
+}
+
 function updateReflectionState(instanceId, reflection) {
     state.sessionAgents = (state.sessionAgents || []).map(agent =>
         agent.instance_id === instanceId
             ? {
                 ...agent,
-                reflection_summary_preview: String(reflection?.preview || agent.reflection_summary_preview || ''),
-                reflection_updated_at: String(reflection?.updated_at || agent.reflection_updated_at || ''),
+                reflection_summary_preview: String(reflection?.preview || ''),
+                reflection_updated_at: String(reflection?.updated_at || ''),
             }
             : agent,
     );
+}
+
+function openReflectionEditor(panelEl, instanceId, roleId) {
+    const reflectionEls = getReflectionElements(panelEl);
+    if (!reflectionEls) return;
+    const { sectionEl, toggleEl, bodyEl } = reflectionEls;
+    const currentSummary = String(bodyEl.dataset.summary || '').trim();
+
+    setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, true);
+    bodyEl.dataset.mode = 'editing';
+    bodyEl.innerHTML = `
+        <div class="agent-panel-reflection-editor">
+            <textarea class="agent-panel-reflection-editor-input" rows="8" placeholder="Write long-term notes for this subagent role...">${escapeHtml(currentSummary)}</textarea>
+            <div class="agent-panel-reflection-editor-actions">
+                <button class="agent-panel-reflection-cancel" type="button">Cancel</button>
+                <button class="agent-panel-reflection-save" type="button">Save</button>
+            </div>
+        </div>
+    `;
+
+    const editorInput = panelEl.querySelector('.agent-panel-reflection-editor-input');
+    const cancelBtn = panelEl.querySelector('.agent-panel-reflection-cancel');
+    const saveBtn = panelEl.querySelector('.agent-panel-reflection-save');
+    if (!editorInput || !cancelBtn || !saveBtn) return;
+
+    autosizeTextarea(editorInput);
+    if (typeof editorInput.focus === 'function') {
+        editorInput.focus();
+    }
+    if (typeof editorInput.setSelectionRange === 'function') {
+        const end = editorInput.value.length;
+        editorInput.setSelectionRange(end, end);
+    }
+
+    editorInput.addEventListener('input', () => {
+        autosizeTextarea(editorInput);
+    });
+    editorInput.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault();
+            saveBtn.click();
+        }
+    });
+
+    cancelBtn.onclick = () => {
+        resetReflectionBody(panelEl);
+        bodyEl.textContent = currentSummary || 'No reflection memory yet.';
+    };
+
+    saveBtn.onclick = async () => {
+        if (!state.currentSessionId) return;
+        saveBtn.disabled = true;
+        cancelBtn.disabled = true;
+        try {
+            const reflection = await updateAgentReflection(
+                state.currentSessionId,
+                instanceId,
+                editorInput.value,
+            );
+            await syncReflectionState(instanceId, roleId, reflection, panelEl);
+            sysLog(`Updated reflection memory for ${roleId || instanceId}`, 'log-info');
+        } catch (e) {
+            saveBtn.disabled = false;
+            cancelBtn.disabled = false;
+            sysLog(`Failed to update reflection memory: ${e.message}`, 'log-error');
+        }
+    };
+}
+
+function getReflectionElements(panelEl) {
+    const sectionEl = panelEl.querySelector('.agent-panel-reflection');
+    const toggleEl = panelEl.querySelector('.agent-panel-reflection-toggle');
+    const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
+    if (!sectionEl || !toggleEl || !bodyEl) return null;
+    return { sectionEl, toggleEl, bodyEl };
+}
+
+function resetReflectionBody(panelEl) {
+    const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
+    if (!bodyEl) return;
+    bodyEl.dataset.mode = '';
+    bodyEl.innerHTML = '';
+}
+
+function setReflectionActionButtonsDisabled(panelEl, disabled) {
+    const editBtn = panelEl.querySelector('.agent-panel-reflection-edit');
+    const deleteBtn = panelEl.querySelector('.agent-panel-reflection-delete');
+    if (editBtn) editBtn.disabled = disabled;
+    if (deleteBtn) deleteBtn.disabled = disabled;
+}
+
+function autosizeTextarea(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(textarea.scrollHeight, 140)}px`;
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 
 function setReflectionButtonState(button, stateName) {

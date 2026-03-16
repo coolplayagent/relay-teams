@@ -95,6 +95,26 @@ export async function refreshAgentReflection(sessionId, instanceId) {
     );
 }
 
+export async function updateAgentReflection(sessionId, instanceId, summary) {
+    return requestJson(
+        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ summary }),
+        },
+        'Failed to update agent reflection',
+    );
+}
+
+export async function deleteAgentReflection(sessionId, instanceId) {
+    return requestJson(
+        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
+        { method: 'DELETE' },
+        'Failed to delete agent reflection',
+    );
+}
+
 export async function deleteSession(sessionId) {
     return requestJson(
         `/api/sessions/${sessionId}`,

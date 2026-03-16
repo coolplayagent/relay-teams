@@ -344,6 +344,28 @@ class AgentTeamsClient:
             {},
         )
 
+    def update_subagent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+        summary: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PATCH",
+            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
+            {"summary": summary},
+        )
+
+    def delete_subagent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
+        )
+
     def _request_json(
         self,
         method: str,

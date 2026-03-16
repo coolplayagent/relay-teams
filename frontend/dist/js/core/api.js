@@ -13,6 +13,8 @@ export {
     fetchAgentMessages,
     fetchAgentReflection,
     refreshAgentReflection,
+    updateAgentReflection,
+    deleteAgentReflection,
     updateSession,
     sendUserPrompt,
     resolveGate,

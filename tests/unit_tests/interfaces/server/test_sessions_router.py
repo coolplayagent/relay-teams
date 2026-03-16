@@ -13,6 +13,8 @@ class _FakeSessionService:
     def __init__(self) -> None:
         self.updated_calls: list[tuple[str, dict[str, str]]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
+        self.reflection_update_calls: list[tuple[str, str, str]] = []
+        self.reflection_delete_calls: list[tuple[str, str]] = []
         self.raise_missing = False
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
@@ -111,6 +113,36 @@ class _FakeSessionService:
             "summary": "Use concise drafts.",
             "updated_at": "2026-03-13T00:02:00Z",
             "source": "manual",
+        }
+
+    def update_agent_reflection(
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        summary: str,
+    ) -> dict[str, object]:
+        self.reflection_update_calls.append((session_id, instance_id, summary))
+        return {
+            "session_id": session_id,
+            "instance_id": instance_id,
+            "role_id": "writer",
+            "summary": summary,
+            "updated_at": "2026-03-13T00:03:00Z",
+            "source": "manual_edit",
+        }
+
+    def delete_agent_reflection(
+        self, session_id: str, instance_id: str
+    ) -> dict[str, object]:
+        self.reflection_delete_calls.append((session_id, instance_id))
+        return {
+            "session_id": session_id,
+            "instance_id": instance_id,
+            "role_id": "writer",
+            "summary": "",
+            "updated_at": None,
+            "source": "manual_delete",
         }
 
 
@@ -232,3 +264,30 @@ def test_refresh_agent_reflection_route_returns_projection() -> None:
     assert response.status_code == 200
     assert response.json()["source"] == "manual"
     assert fake_service.reflection_refresh_calls == [("session-1", "inst-1")]
+
+
+def test_update_agent_reflection_route_returns_projection() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1/agents/inst-1/reflection",
+        json={"summary": "Keep implementation notes concise."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "manual_edit"
+    assert fake_service.reflection_update_calls == [
+        ("session-1", "inst-1", "Keep implementation notes concise.")
+    ]
+
+
+def test_delete_agent_reflection_route_returns_projection() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.delete("/api/sessions/session-1/agents/inst-1/reflection")
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "manual_delete"
+    assert fake_service.reflection_delete_calls == [("session-1", "inst-1")]

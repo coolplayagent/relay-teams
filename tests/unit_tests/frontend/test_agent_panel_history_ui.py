@@ -75,6 +75,7 @@ function createNode() {
         innerHTML: '',
         textContent: '',
         className: '',
+        dataset: {},
     };
 }
 """.strip(),

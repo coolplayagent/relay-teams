@@ -274,16 +274,32 @@ Lists messages for one agent instance.
 Returns the full stored reflection summary for one subagent instance.
 
 Response fields:
-- `session_id`
 - `instance_id`
 - `role_id`
 - `summary`
+- `preview`
 - `updated_at`
 - `source`
 
 ### `POST /sessions/{session_id}/agents/{instance_id}/reflection:refresh`
 
 Triggers reflection recomputation for one subagent instance and returns the refreshed summary. This uses the same compaction/reflection strategy as automatic context compaction.
+
+### `PATCH /sessions/{session_id}/agents/{instance_id}/reflection`
+
+Overwrites the stored reflection summary for that subagent role in the current workspace.
+
+Request:
+
+```json
+{
+  "summary": "- Prefer concise implementation notes"
+}
+```
+
+### `DELETE /sessions/{session_id}/agents/{instance_id}/reflection`
+
+Deletes the stored reflection summary for that subagent role in the current workspace. The response returns an empty reflection projection with `updated_at=null`.
 
 ### `GET /sessions/{session_id}/tasks`
 

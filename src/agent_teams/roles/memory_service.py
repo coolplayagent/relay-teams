@@ -50,6 +50,17 @@ class RoleMemoryService:
             workspace_id=workspace_id,
         )
 
+    def delete_reflection_memory(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+    ) -> None:
+        self._repository.delete_role_memory(
+            role_id=role_id,
+            workspace_id=workspace_id,
+        )
+
     def build_reflection_preview(
         self,
         *,
@@ -64,7 +75,7 @@ class RoleMemoryService:
         normalized = " ".join(text.split())
         if len(normalized) <= max_chars:
             return normalized
-        return normalized[: max_chars - 1].rstrip() + "…"
+        return normalized[: max_chars - 3].rstrip() + "..."
 
     def record_task_result(
         self,

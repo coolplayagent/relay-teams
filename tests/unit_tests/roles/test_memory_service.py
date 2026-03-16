@@ -67,3 +67,30 @@ def test_role_memory_service_isolates_memory_by_workspace(tmp_path: Path) -> Non
     assert "Memory B" not in injected_a
     assert "Memory B" in injected_b
     assert "Memory A" not in injected_b
+
+
+def test_role_memory_service_delete_clears_summary_and_timestamp(
+    tmp_path: Path,
+) -> None:
+    service = RoleMemoryService(
+        repository=RoleMemoryRepository(tmp_path / "role_memory_delete.db")
+    )
+
+    service.update_reflection_memory(
+        role_id="writer",
+        workspace_id="workspace-a",
+        content_markdown="- Temporary note",
+    )
+
+    service.delete_reflection_memory(
+        role_id="writer",
+        workspace_id="workspace-a",
+    )
+
+    record = service.get_reflection_record(
+        role_id="writer",
+        workspace_id="workspace-a",
+    )
+
+    assert record.content_markdown == ""
+    assert record.updated_at is None

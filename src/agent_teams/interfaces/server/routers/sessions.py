@@ -24,6 +24,12 @@ class UpdateSessionRequest(BaseModel):
     metadata: dict[str, str]
 
 
+class UpdateAgentReflectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+
+
 @router.post("", response_model=SessionRecord)
 def create_session(
     req: CreateSessionRequest,
@@ -144,6 +150,39 @@ async def refresh_agent_reflection(
 ) -> dict[str, object]:
     try:
         return await service.refresh_subagent_reflection(session_id, instance_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/{session_id}/agents/{instance_id}/reflection")
+def update_agent_reflection(
+    session_id: str,
+    instance_id: str,
+    req: UpdateAgentReflectionRequest,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, object]:
+    try:
+        return service.update_agent_reflection(
+            session_id,
+            instance_id,
+            summary=req.summary,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/{session_id}/agents/{instance_id}/reflection")
+def delete_agent_reflection(
+    session_id: str,
+    instance_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, object]:
+    try:
+        return service.delete_agent_reflection(session_id, instance_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:

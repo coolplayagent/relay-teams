@@ -43,8 +43,13 @@ function renderReflection(panelEl, reflection) {
     if (!metaEl || !bodyEl) return;
 
     const updatedAt = String(reflection?.updated_at || '').trim();
+    const summary = String(reflection?.summary || '').trim();
     metaEl.textContent = updatedAt ? new Date(updatedAt).toLocaleString() : 'No reflection yet';
-    bodyEl.textContent = String(reflection?.summary || '').trim() || 'No reflection memory yet.';
+    bodyEl.dataset.summary = summary;
+    bodyEl.dataset.updatedAt = updatedAt;
+    bodyEl.dataset.source = String(reflection?.source || 'stored');
+    if (bodyEl.dataset.mode === 'editing') return;
+    bodyEl.textContent = summary || 'No reflection memory yet.';
 }
 
 
