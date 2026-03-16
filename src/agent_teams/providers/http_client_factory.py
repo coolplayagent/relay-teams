@@ -8,11 +8,11 @@ import httpx
 
 from agent_teams.env.proxy_env import (
     ProxyEnvConfig,
+    load_proxy_env_config,
     resolve_proxy_env_config,
     resolve_ssl_verify,
 )
 from agent_teams.env.proxy_http_client import create_proxy_async_http_client
-from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
 __all__ = ["ProxyEnvConfig", "build_llm_http_client", "clear_llm_http_client_cache"]
@@ -34,11 +34,19 @@ def build_llm_http_client(
     ssl_verify: bool | None = None,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
 ) -> httpx.AsyncClient:
-    resolved_env = load_merged_env_vars() if merged_env is None else merged_env
-    effective_ssl_verify = _resolve_effective_ssl_verify(
-        merged_env=resolved_env,
-        ssl_verify=ssl_verify,
-    )
+    if merged_env is None:
+        proxy_config = load_proxy_env_config()
+        resolved_env = proxy_config.normalized_env()
+        effective_ssl_verify = resolve_ssl_verify(
+            proxy_config=proxy_config,
+            explicit_ssl_verify=ssl_verify,
+        )
+    else:
+        resolved_env = merged_env
+        effective_ssl_verify = _resolve_effective_ssl_verify(
+            merged_env=resolved_env,
+            ssl_verify=ssl_verify,
+        )
     client = _cached_llm_http_client(
         merged_env=_proxy_cache_key(resolved_env),
         ssl_verify=effective_ssl_verify,

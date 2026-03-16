@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
+from agent_teams.env.proxy_env import ProxyEnvConfig
 from agent_teams.providers import http_client_factory
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
@@ -44,6 +45,45 @@ def test_build_llm_http_client_builds_direct_client_without_proxy_config() -> No
     assert client.timeout.connect == DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
     assert getattr(transport, "_http_proxy_transport") is None
     assert getattr(transport, "_https_proxy_transport") is None
+
+
+def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+
+    captured_kwargs: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        http_client_factory,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(
+            https_proxy="http://alice:secret@proxy.internal:8443",
+            no_proxy="localhost,127.0.0.1",
+            ssl_verify=False,
+        ),
+    )
+    monkeypatch.setattr(
+        http_client_factory,
+        "create_proxy_async_http_client",
+        lambda **kwargs: captured_kwargs.update(kwargs) or _FakeAsyncClient(),
+    )
+
+    client = http_client_factory.build_llm_http_client()
+
+    assert isinstance(client, _FakeAsyncClient)
+    assert captured_kwargs == {
+        "merged_env": {
+            "HTTPS_PROXY": "http://alice:secret@proxy.internal:8443",
+            "https_proxy": "http://alice:secret@proxy.internal:8443",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
+        },
+        "ssl_verify": False,
+        "connect_timeout_seconds": DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    }
 
 
 def test_build_llm_http_client_uses_requested_connect_timeout() -> None:
