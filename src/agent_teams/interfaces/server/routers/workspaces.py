@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_workspace_service
@@ -33,6 +34,12 @@ class PickWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root_path: str | None = Field(default=None, min_length=1)
+
+
+class ForkWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
 
 
 @router.post("", response_model=WorkspaceRecord)
@@ -93,10 +100,33 @@ def get_workspace(
 @router.delete("/{workspace_id}")
 def delete_workspace(
     workspace_id: str,
+    remove_worktree: Annotated[bool, Query()] = False,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
     try:
-        service.delete_workspace(workspace_id)
+        service.delete_workspace_with_options(
+            workspace_id=workspace_id,
+            remove_worktree=remove_worktree,
+        )
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{workspace_id}:fork", response_model=WorkspaceRecord)
+def fork_workspace(
+    workspace_id: str,
+    req: ForkWorkspaceRequest,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceRecord:
+    try:
+        return service.fork_workspace(
+            source_workspace_id=workspace_id,
+            name=req.name,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

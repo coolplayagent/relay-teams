@@ -564,6 +564,25 @@ Rules:
 
 Returns one registered execution workspace.
 
+### `POST /workspaces/{workspace_id}:fork`
+
+Creates a forked execution workspace backed by a Git worktree.
+
+Request:
+
+```json
+{
+  "name": "alpha-project-fork"
+}
+```
+
+Rules:
+- Source workspace must exist and its `root_path` must be inside a Git repository.
+- The backend normalizes `name` into the new `workspace_id`.
+- The fork creates branch `fork/{workspace_id}` from the source workspace current `HEAD`.
+- The worktree directory is created under the managed workspace storage directory and becomes the new workspace `root_path`.
+- The returned workspace profile uses `file_scope.backend = "git_worktree"` and includes `source_root_path`, `branch_name`, and `forked_from_workspace_id`.
+
 ### `POST /workspaces/pick`
 
 Opens a native directory picker on the local machine, then registers the chosen
@@ -596,7 +615,9 @@ Response:
         "readable_paths": ["."],
         "writable_paths": ["."],
         "branch_binding": "shared",
-        "branch_name": null
+        "branch_name": null,
+        "source_root_path": null,
+        "forked_from_workspace_id": null
       }
     },
     "created_at": "2026-03-14T12:00:00Z",
@@ -611,6 +632,18 @@ Rules:
 - Linux native picking requires an installed desktop picker such as `zenity`,
   `qarma`, `yad`, or `kdialog`.
 - Returns `503` when the runtime cannot open a native directory picker.
+
+### `DELETE /workspaces/{workspace_id}`
+
+Deletes one registered execution workspace.
+
+Query:
+- `remove_worktree`: `true|false`
+
+Rules:
+- `remove_worktree=true` only affects workspaces with `file_scope.backend = "git_worktree"`.
+- When `remove_worktree=true`, the backend runs `git worktree remove --force` before deleting the workspace record.
+- When `remove_worktree=false`, the backend deletes only the workspace record.
 
 ## Prompt APIs
 

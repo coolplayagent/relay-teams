@@ -141,6 +141,67 @@ console.log(JSON.stringify({
     assert payload["renamedLabel"] == "Renamed Session"
 
 
+def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+globalThis.__confirmDialogResponses = [true, false];
+
+await loadProjects();
+let projectsList = document.getElementById("projects-list");
+let firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-options-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-fork-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+projectsList = document.getElementById("projects-list");
+const forkedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+forkedProject.querySelector(".project-options-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+projectsList = document.getElementById("projects-list");
+const openForkedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+openForkedProject.querySelector(".project-remove-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    forkCalls: globalThis.__forkCalls,
+    deleteWorkspaceCalls: globalThis.__deleteWorkspaceCalls,
+    createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    confirmDialogTitles: globalThis.__confirmDialogCalls.map(item => item.title),
+}));
+""".strip(),
+    )
+
+    assert payload["forkCalls"] == [
+        {
+            "workspaceId": "alpha-project",
+            "name": "Alpha Project Fork",
+        }
+    ]
+    assert payload["deleteWorkspaceCalls"] == [
+        {
+            "workspaceId": "alpha-project-fork",
+            "options": {"removeWorktree": False},
+        }
+    ]
+    assert payload["createdSessionWorkspaceIds"] == ["alpha-project-fork"]
+    assert payload["confirmDialogTitles"] == [
+        "Remove Workspace",
+        "Remove Project Worktree",
+    ]
+
+
 def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
@@ -170,7 +231,10 @@ function parseElements(source, selector) {
     const results = [];
     const patterns = {
         ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+        ".project-options-btn": /class="([^"]*project-options-btn[^"]*)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
+        ".project-fork-btn": /class="project-fork-btn"[^>]*>/g,
+        ".project-remove-btn": /class="project-remove-btn"[^>]*>/g,
         ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
@@ -186,8 +250,14 @@ function parseElements(source, selector) {
     while (match) {
         if (selector === ".project-toggle") {
             results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
+        } else if (selector === ".project-options-btn") {
+            results.push(createNode({ className: match[1] }));
         } else if (selector === ".project-new-session-btn") {
             results.push(createNode({ className: match[1] }));
+        } else if (selector === ".project-fork-btn") {
+            results.push(createNode());
+        } else if (selector === ".project-remove-btn") {
+            results.push(createNode());
         } else if (selector === ".project-session-visibility-btn") {
             results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
         } else if (selector === ".session-rename-btn") {
@@ -360,13 +430,20 @@ export async function flushTasks() {
 
     mock_feedback_path.write_text(
         """
-export async function showConfirmDialog() {
+export async function showConfirmDialog(options = {}) {
+    globalThis.__confirmDialogCalls.push(options);
+    if (Array.isArray(globalThis.__confirmDialogResponses) && globalThis.__confirmDialogResponses.length > 0) {
+        return globalThis.__confirmDialogResponses.shift();
+    }
     return true;
 }
 
 export async function showTextInputDialog(options = {}) {
     if (options.title === "Rename Session") {
         return "Renamed Session";
+    }
+    if (options.title === "Fork Project") {
+        return "Alpha Project Fork";
     }
     return "/work/Gamma Project";
 }
@@ -390,11 +467,21 @@ const workspaces = [
         workspace_id: "alpha-project",
         root_path: "/work/Alpha Project",
         updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
     },
     {
         workspace_id: "beta-project",
         root_path: "/work/Beta Project",
         updated_at: "2026-03-13T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
     },
 ];
 
@@ -454,17 +541,38 @@ export async function pickWorkspace(rootPath = null) {
         workspace_id: "gamma-project",
         root_path: rootPath,
         updated_at: "2026-03-14T12:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
     });
     return {
         workspace: workspaces[2],
     };
 }
 
+export async function forkWorkspace(workspaceId, name) {
+    globalThis.__forkCalls.push({ workspaceId, name });
+    workspaces.unshift({
+        workspace_id: "alpha-project-fork",
+        root_path: "/worktrees/alpha-project-fork",
+        updated_at: "2026-03-14T12:30:00Z",
+        profile: {
+            file_scope: {
+                backend: "git_worktree",
+            },
+        },
+    });
+    return workspaces[0];
+}
+
 export async function deleteSession() {
     return undefined;
 }
 
-export async function deleteWorkspace() {
+export async function deleteWorkspace(workspaceId, options = {}) {
+    globalThis.__deleteWorkspaceCalls.push({ workspaceId, options });
     return { status: "ok" };
 }
 """.strip(),
@@ -496,7 +604,11 @@ export const state = {
 import {{ createDomEnvironment, flushTasks, installGlobals }} from "./mockDom.mjs";
 
 globalThis.__logs = [];
+globalThis.__confirmDialogCalls = [];
+globalThis.__confirmDialogResponses = [];
 globalThis.__createdSessionWorkspaceIds = [];
+globalThis.__deleteWorkspaceCalls = [];
+globalThis.__forkCalls = [];
 globalThis.__renameCalls = [];
 globalThis.__selectedSessionIds = [];
 installGlobals(createDomEnvironment());

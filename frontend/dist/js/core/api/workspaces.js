@@ -23,9 +23,23 @@ export async function pickWorkspace(rootPath = null) {
     );
 }
 
-export async function deleteWorkspace(workspaceId) {
+export async function forkWorkspace(workspaceId, name) {
     return requestJson(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+        `/api/workspaces/${encodeURIComponent(workspaceId)}:fork`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: String(name || '').trim() }),
+        },
+        'Failed to fork project',
+    );
+}
+
+export async function deleteWorkspace(workspaceId, options = {}) {
+    const removeWorktree = options?.removeWorktree === true;
+    const query = removeWorktree ? '?remove_worktree=true' : '';
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}${query}`,
         {
             method: 'DELETE',
         },

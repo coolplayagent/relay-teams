@@ -67,5 +67,6 @@ export {
 export {
     deleteWorkspace,
     fetchWorkspaces,
+    forkWorkspace,
     pickWorkspace,
 } from './workspaces.js';

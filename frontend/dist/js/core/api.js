@@ -52,5 +52,6 @@ export {
     fetchSessionTokenUsage,
     deleteWorkspace,
     fetchWorkspaces,
+    forkWorkspace,
     pickWorkspace,
 } from './api/index.js';

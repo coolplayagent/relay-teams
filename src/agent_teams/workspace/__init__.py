@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from agent_teams.workspace.handle import WorkspaceHandle
+from agent_teams.workspace.git_worktree import GitWorktreeClient
 from agent_teams.workspace.ids import (
     build_conversation_id,
     build_instance_conversation_id,
@@ -29,6 +30,7 @@ from agent_teams.workspace.service import WorkspaceService
 __all__ = [
     "WorkspaceBackend",
     "WorkspaceHandle",
+    "GitWorktreeClient",
     "WorkspaceLocations",
     "WorkspaceManager",
     "WorkspaceProfile",

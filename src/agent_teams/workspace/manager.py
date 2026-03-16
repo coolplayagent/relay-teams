@@ -78,7 +78,8 @@ class WorkspaceManager(BaseModel):
 
     def session_artifact_dir(self, *, workspace_id: str, session_id: str) -> Path:
         record = self._resolve_record(workspace_id, None)
-        return record.root_path / ".agent_teams" / "sessions" / session_id
+        filesystem_root = self._filesystem_root_for_record(record)
+        return filesystem_root / ".agent_teams" / "sessions" / session_id
 
     def role_stage_dir(
         self,
@@ -105,7 +106,7 @@ class WorkspaceManager(BaseModel):
         base_locations = self.locations_for(record.workspace_id)
         file_scope = profile.file_scope
         worktree_root = (
-            base_locations.workspace_dir / "worktree"
+            record.root_path
             if file_scope.backend == FileScopeBackend.GIT_WORKTREE
             else None
         )
@@ -173,3 +174,8 @@ class WorkspaceManager(BaseModel):
             root_path=self.project_root.resolve(),
             profile=profile or default_workspace_profile(),
         )
+
+    def _filesystem_root_for_record(self, record: WorkspaceRecord) -> Path:
+        if record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE:
+            return record.root_path
+        return record.root_path

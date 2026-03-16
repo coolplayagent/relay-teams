@@ -5175,6 +5175,7 @@ body.light-theme .project-session-toggle-btn {
     z-index: 8;
 }
 
+.projects-list .project-fork-btn,
 .projects-list .project-remove-btn {
     width: 100%;
     min-height: 28px;
@@ -5188,6 +5189,10 @@ body.light-theme .project-session-toggle-btn {
     gap: 0.45rem;
     text-align: left;
     cursor: pointer;
+}
+
+.projects-list .project-fork-btn:hover {
+    background: var(--bg-hover);
 }
 
 .projects-list .project-remove-btn:hover {

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,17 +10,57 @@ import pytest
 
 from agent_teams.interfaces.server.deps import get_workspace_service
 from agent_teams.interfaces.server.routers import workspaces
-from agent_teams.workspace import WorkspaceRepository, WorkspaceService
+from agent_teams.workspace import (
+    FileScopeBackend,
+    GitWorktreeClient,
+    WorkspaceFileScope,
+    WorkspaceProfile,
+    WorkspaceRepository,
+    WorkspaceService,
+)
 
 
-def _create_test_client(tmp_path: Path) -> tuple[TestClient, WorkspaceService]:
+class FakeGitWorktreeClient(GitWorktreeClient):
+    def __init__(self) -> None:
+        self.remove_calls: list[tuple[Path, Path]] = []
+
+    def ensure_repository(self, repository_root: Path) -> Path:
+        return repository_root.resolve()
+
+    def current_head(self, repository_root: Path) -> str:
+        return "abc123"
+
+    def add_worktree(
+        self,
+        *,
+        repository_root: Path,
+        branch_name: str,
+        target_path: Path,
+        start_point: str,
+    ) -> None:
+        _ = (repository_root, branch_name, start_point)
+        target_path.mkdir(parents=True, exist_ok=True)
+
+    def remove_worktree(self, *, repository_root: Path, target_path: Path) -> None:
+        self.remove_calls.append((repository_root, target_path))
+        shutil.rmtree(target_path, ignore_errors=True)
+
+    def prune(self, repository_root: Path) -> None:
+        _ = repository_root
+
+
+def _create_test_client(
+    tmp_path: Path,
+    *,
+    service: WorkspaceService | None = None,
+) -> tuple[TestClient, WorkspaceService]:
     app = FastAPI()
     app.include_router(workspaces.router, prefix="/api")
-    service = WorkspaceService(
+    resolved_service = service or WorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
     )
-    app.dependency_overrides[get_workspace_service] = lambda: service
-    return TestClient(app), service
+    app.dependency_overrides[get_workspace_service] = lambda: resolved_service
+    return TestClient(app), resolved_service
 
 
 def test_create_workspace(tmp_path: Path) -> None:
@@ -132,17 +173,67 @@ def test_pick_workspace_creates_workspace_for_provided_root_path(
     assert payload["workspace"]["root_path"] == str(root_path.resolve())
 
 
-def test_delete_workspace(tmp_path: Path) -> None:
-    client, service = _create_test_client(tmp_path)
+def test_fork_workspace(tmp_path: Path) -> None:
     root_path = tmp_path / "workspace-root"
     root_path.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        git_worktree_client=FakeGitWorktreeClient(),
+    )
+    service._workspace_storage_dir = lambda workspace_id: (
+        tmp_path / "storage" / workspace_id
+    )  # type: ignore[method-assign]
     _ = service.create_workspace(
         workspace_id="project-alpha",
         root_path=root_path,
     )
+    client, _ = _create_test_client(tmp_path, service=service)
 
-    response = client.delete("/api/workspaces/project-alpha")
+    response = client.post(
+        "/api/workspaces/project-alpha:fork",
+        json={"name": "Alpha Project Fork"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace_id"] == "alpha-project-fork"
+    assert payload["root_path"] == str(
+        (tmp_path / "storage" / "alpha-project-fork" / "worktree").resolve()
+    )
+    assert payload["profile"]["file_scope"]["backend"] == "git_worktree"
+    assert payload["profile"]["file_scope"]["branch_name"] == "fork/alpha-project-fork"
+
+
+def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None:
+    root_path = tmp_path / "storage" / "alpha-project-fork" / "worktree"
+    root_path.mkdir(parents=True)
+    git_client = FakeGitWorktreeClient()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        git_worktree_client=git_client,
+    )
+    service._workspace_storage_dir = lambda workspace_id: (
+        tmp_path / "storage" / workspace_id
+    )  # type: ignore[method-assign]
+    _ = service.create_workspace(
+        workspace_id="alpha-project-fork",
+        root_path=root_path,
+        profile=WorkspaceProfile(
+            file_scope=WorkspaceFileScope(
+                backend=FileScopeBackend.GIT_WORKTREE,
+                branch_name="fork/alpha-project-fork",
+                source_root_path=str((tmp_path / "workspace-root").resolve()),
+                forked_from_workspace_id="project-alpha",
+            )
+        ),
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.delete("/api/workspaces/alpha-project-fork?remove_worktree=true")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert git_client.remove_calls == [
+        ((tmp_path / "workspace-root").resolve(), root_path.resolve())
+    ]
     assert service.list_workspaces() == ()

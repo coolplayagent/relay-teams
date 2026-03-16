@@ -33,6 +33,8 @@ class WorkspaceFileScope(BaseModel):
     writable_paths: tuple[str, ...] = (".",)
     branch_binding: BranchBinding = BranchBinding.SHARED
     branch_name: str | None = None
+    source_root_path: str | None = None
+    forked_from_workspace_id: str | None = None
 
 
 def default_workspace_profile() -> WorkspaceProfile:

@@ -10,6 +10,7 @@ import {
     deleteSession,
     fetchSessions,
     fetchWorkspaces,
+    forkWorkspace,
     pickWorkspace,
     startNewSession,
     updateSession,
@@ -42,12 +43,20 @@ function escapeHtml(value) {
 }
 
 function formatProjectLabel(workspace) {
+    const workspaceId = String(workspace?.workspace_id || 'Project').trim() || 'Project';
+    if (String(workspace?.profile?.file_scope?.backend || '').trim() === 'git_worktree') {
+        return workspaceId;
+    }
     const rootPath = String(workspace?.root_path || '').trim();
     if (!rootPath) {
-        return String(workspace?.workspace_id || 'Project');
+        return workspaceId;
     }
-    const parts = rootPath.split(/[\\/]/).filter(Boolean);
-    return parts.at(-1) || String(workspace?.workspace_id || 'Project');
+    const parts = rootPath.split(/[\/]/).filter(Boolean);
+    return parts.at(-1) || workspaceId;
+}
+
+function isForkedWorkspace(workspace) {
+    return String(workspace?.profile?.file_scope?.backend || '').trim() === 'git_worktree';
 }
 
 function formatSessionLabel(session) {
@@ -276,6 +285,7 @@ function bindProjectCard(card, group) {
     const newSessionButtons = card.querySelectorAll('.project-new-session-btn');
     const sessionVisibilityButtons = card.querySelectorAll('.project-session-visibility-btn');
     const optionsButtons = card.querySelectorAll('.project-options-btn');
+    const forkButtons = card.querySelectorAll('.project-fork-btn');
     const removeButtons = card.querySelectorAll('.project-remove-btn');
     const renameButtons = card.querySelectorAll('.session-rename-btn');
     const deleteButtons = card.querySelectorAll('.session-delete-btn');
@@ -316,6 +326,13 @@ function bindProjectCard(card, group) {
             event?.stopPropagation?.();
             openProjectMenuId = openProjectMenuId === workspaceId ? null : workspaceId;
             void loadProjects();
+        };
+    });
+
+    forkButtons.forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            void handleForkWorkspaceClick(workspace);
         };
     });
 
@@ -485,6 +502,12 @@ function renderProjectCard(group) {
             menuOpen
                 ? `
                     <div class="project-menu" role="menu">
+                        <button class="project-fork-btn" type="button" role="menuitem">
+                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                <path d="M7 5.5a2.5 2.5 0 1 1 2.36 3.32v1.36a4.5 4.5 0 0 0 2.64 4.1V6.82A2.5 2.5 0 1 1 14 4.5v9.78a4.5 4.5 0 0 0 2.64-4.1V8.82A2.5 2.5 0 1 1 18.5 9c0 3.16-2.6 5.74-6 5.98V18a2 2 0 1 1-1 0v-3.02C8.1 14.74 5.5 12.16 5.5 9a2.5 2.5 0 0 1 1.5-2.29" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                            <span>Fork</span>
+                        </button>
                         <button class="project-remove-btn" type="button" role="menuitem">
                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                 <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -650,6 +673,40 @@ export async function handleNewProjectClick() {
     }
 }
 
+export async function handleForkWorkspaceClick(workspace) {
+    const workspaceId = String(workspace?.workspace_id || '').trim();
+    if (!workspaceId) {
+        return;
+    }
+    const suggestedName = `${formatProjectLabel(workspace)} Fork`;
+    const enteredName = await showTextInputDialog({
+        title: 'Fork Project',
+        message: 'Enter the name for the forked project.',
+        tone: 'info',
+        confirmLabel: 'Fork',
+        cancelLabel: 'Cancel',
+        placeholder: 'Forked project name',
+        value: suggestedName,
+    });
+    const nextName = String(enteredName || '').trim();
+    if (!nextName) {
+        return;
+    }
+
+    try {
+        const forkedWorkspace = await forkWorkspace(workspaceId, nextName);
+        expandedProjectIds.add(forkedWorkspace.workspace_id);
+        expandedProjectSessionIds.add(forkedWorkspace.workspace_id);
+        state.currentWorkspaceId = forkedWorkspace.workspace_id;
+        openProjectMenuId = null;
+        sysLog(`Forked project: ${forkedWorkspace.workspace_id}`);
+        await loadProjects();
+        await handleNewSessionClick(forkedWorkspace.workspace_id, true);
+    } catch (error) {
+        sysLog(`Error forking project: ${error.message}`, 'log-error');
+    }
+}
+
 export async function handleRemoveWorkspaceClick(workspace) {
     const workspaceId = String(workspace?.workspace_id || '').trim();
     if (!workspaceId) {
@@ -667,6 +724,17 @@ export async function handleRemoveWorkspaceClick(workspace) {
         return;
     }
 
+    let removeWorktree = false;
+    if (isForkedWorkspace(workspace)) {
+        removeWorktree = await showConfirmDialog({
+            title: 'Remove Project Worktree',
+            message: `Delete the git worktree for ${workspaceLabel} too? Choose Cancel to keep the worktree on disk.`,
+            tone: 'warning',
+            confirmLabel: 'Delete Worktree',
+            cancelLabel: 'Keep Worktree',
+        });
+    }
+
     try {
         const sessions = await fetchSessions();
         const workspaceSessions = Array.isArray(sessions)
@@ -679,7 +747,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         for (const session of workspaceSessions) {
             await deleteSession(session.session_id);
         }
-        await deleteWorkspace(workspaceId);
+        await deleteWorkspace(workspaceId, { removeWorktree });
 
         expandedProjectIds.delete(workspaceId);
         expandedProjectSessionIds.delete(workspaceId);

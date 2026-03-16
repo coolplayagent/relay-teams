@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
 );
 ```
 
-Purpose: registered execution workspaces.
+Purpose: registered execution workspaces. `profile_json` stores the typed workspace profile, including Git worktree metadata such as `source_root_path`, `branch_name`, and `forked_from_workspace_id` when a workspace is created through project forking.
 
 ---
 

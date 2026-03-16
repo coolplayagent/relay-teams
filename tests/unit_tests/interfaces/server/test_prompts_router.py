@@ -21,6 +21,11 @@ from agent_teams.roles.models import RoleDefinition
 from agent_teams.roles.registry import RoleRegistry
 from agent_teams.skills.models import SkillInstructionEntry
 from agent_teams.tools.registry import ToolRegistry
+from agent_teams.workspace import (
+    WorkspaceManager,
+    WorkspaceRepository,
+    WorkspaceService,
+)
 
 
 class _FakeWorkspaceService:
@@ -149,7 +154,7 @@ def _create_client() -> TestClient:
     app.dependency_overrides[get_workspace_service] = lambda: _FakeWorkspaceService(
         {"preview-workspace"}
     )
-    app.dependency_overrides[get_workspace_manager] = _FakeWorkspaceManager
+    app.dependency_overrides[get_workspace_manager] = lambda: _FakeWorkspaceManager()
     return TestClient(app)
 
 
@@ -193,10 +198,31 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert "## Available Roles" in payload["provider_system_prompt"]
 
 
-def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provided() -> (
-    None
-):
-    client = _create_client()
+def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provided(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "preview-workspace" / "execution-root" / "preview"
+    workspace_root.mkdir(parents=True)
+    workspace_repo = WorkspaceRepository(tmp_path / "prompt_preview.db")
+    workspace_service = WorkspaceService(repository=workspace_repo)
+    _ = workspace_service.create_workspace(
+        workspace_id="preview-workspace",
+        root_path=workspace_root,
+    )
+    workspace_manager = WorkspaceManager(
+        project_root=tmp_path,
+        workspace_repo=workspace_repo,
+    )
+
+    app = FastAPI()
+    app.include_router(prompts.router, prefix="/api")
+    app.dependency_overrides[get_role_registry] = _build_role_registry
+    app.dependency_overrides[get_tool_registry] = _build_tool_registry
+    app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
+    app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
+    app.dependency_overrides[get_workspace_service] = lambda: workspace_service
+    app.dependency_overrides[get_workspace_manager] = lambda: workspace_manager
+    client = TestClient(app)
 
     response = client.post(
         "/api/prompts:preview",
@@ -209,7 +235,7 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
     assert response.status_code == 200
     payload = response.json()
     assert (
-        "- Working Directory: /tmp/preview-workspace/execution-root/preview"
+        f"- Working Directory: {workspace_root.resolve()}"
         in payload["runtime_system_prompt"]
     )
 
