@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import httpx
 
-from agent_teams.env.proxy_http_client import create_proxy_http_client
+from agent_teams.net.clients import create_sync_http_client
 
 _SSL_VERIFY_DISABLED = 0
 _SSL_VERIFY_REQUIRED = 2
@@ -15,8 +15,8 @@ def _transport_verify_mode(transport: object) -> int:
     return int(ssl_context.verify_mode)
 
 
-def test_create_proxy_http_client_routes_requests_with_runtime_proxy_rules() -> None:
-    with create_proxy_http_client(
+def test_create_sync_http_client_routes_requests_with_runtime_proxy_rules() -> None:
+    with create_sync_http_client(
         merged_env={
             "HTTPS_PROXY": "http://proxy.example:8080",
             "NO_PROXY": "localhost;127.*;example.com;<local>",
@@ -37,8 +37,8 @@ def test_create_proxy_http_client_routes_requests_with_runtime_proxy_rules() -> 
     assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
 
 
-def test_create_proxy_http_client_disables_ssl_verification_when_configured() -> None:
-    with create_proxy_http_client(merged_env={"SSL_VERIFY": "false"}) as client:
+def test_create_sync_http_client_disables_ssl_verification_when_configured() -> None:
+    with create_sync_http_client(merged_env={"SSL_VERIFY": "false"}) as client:
         verify_mode = _transport_verify_mode(
             getattr(client._transport, "_direct_transport")
         )

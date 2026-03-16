@@ -67,3 +67,16 @@ def test_list_provider_models_can_filter_by_provider() -> None:
     assert len(models) == 1
     assert models[0].profile == "default"
     assert models[0].provider == ProviderType.OPENAI_COMPATIBLE
+
+
+def test_model_endpoint_config_normalizes_string_fields() -> None:
+    config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="  gpt-4o-mini  ",
+        base_url="  https://openai-compatible.local/v1  ",
+        api_key="  key-openai  ",
+    )
+
+    assert config.model == "gpt-4o-mini"
+    assert config.base_url == "https://openai-compatible.local/v1"
+    assert config.api_key == "key-openai"

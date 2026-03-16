@@ -10,7 +10,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from agent_teams.env.proxy_http_client import create_proxy_async_http_client
+from agent_teams.net.clients import create_async_http_client
 from agent_teams.tools.workspace_tools.ripgrep_errors import (
     DownloadFailedError,
     ExtractionFailedError,
@@ -112,7 +112,7 @@ async def _download_rg(target: Path) -> None:
         f"https://github.com/BurntSushi/ripgrep/releases/download/{VERSION}/{filename}"
     )
 
-    async with create_proxy_async_http_client(follow_redirects=True) as client:
+    async with create_async_http_client(follow_redirects=True) as client:
         response = await client.get(url)
         if response.status_code != 200:
             raise DownloadFailedError(url, response.status_code)

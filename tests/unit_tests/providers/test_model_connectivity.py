@@ -73,7 +73,7 @@ def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -118,7 +118,7 @@ def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -138,7 +138,7 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -171,7 +171,7 @@ def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> Non
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -195,7 +195,7 @@ def test_probe_returns_timeout_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **_kwargs: _FakeHttpClient(error=httpx.ReadTimeout("timed out")),
     )
 
@@ -213,7 +213,7 @@ def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 401,
@@ -236,7 +236,7 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -266,7 +266,7 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -307,7 +307,7 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -336,7 +336,7 @@ def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(200, json={"items": [{"id": "missing-data"}]})
         ),
@@ -373,7 +373,7 @@ def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) ->
     )
 
     monkeypatch.setattr(
-        "agent_teams.providers.model_connectivity.create_proxy_http_client",
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(

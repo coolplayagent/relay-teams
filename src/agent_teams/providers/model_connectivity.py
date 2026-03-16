@@ -9,7 +9,7 @@ from typing import cast
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.env.proxy_http_client import create_proxy_http_client
+from agent_teams.net.clients import create_sync_http_client
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
@@ -393,7 +393,7 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            with create_proxy_http_client(
+            with create_sync_http_client(
                 timeout_seconds=timeout_ms / 1000,
                 connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
@@ -498,7 +498,7 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            with create_proxy_http_client(
+            with create_sync_http_client(
                 timeout_seconds=timeout_ms / 1000,
                 connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,

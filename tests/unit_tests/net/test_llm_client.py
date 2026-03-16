@@ -7,8 +7,8 @@ import httpx
 import pytest
 
 from agent_teams.env.proxy_env import ProxyEnvConfig
-from agent_teams.providers import http_client_factory
-from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from agent_teams.net import llm_client
+from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
 
 _SSL_VERIFY_DISABLED = 0
@@ -17,9 +17,9 @@ _SSL_VERIFY_REQUIRED = 2
 
 @pytest.fixture(autouse=True)
 def clear_llm_http_client_cache() -> Iterator[None]:
-    http_client_factory.clear_llm_http_client_cache()
+    llm_client.clear_llm_http_client_cache()
     yield
-    http_client_factory.clear_llm_http_client_cache()
+    llm_client.clear_llm_http_client_cache()
 
 
 def _transport_verify_mode(transport: object) -> int:
@@ -30,19 +30,19 @@ def _transport_verify_mode(transport: object) -> int:
 
 def _routing_transport(client: httpx.AsyncClient) -> object:
     transport = client._transport
-    assert type(transport).__name__ == "_AsyncProxyRoutingTransport"
+    assert type(transport).__name__ == "AsyncProxyRoutingTransport"
     return transport
 
 
 def test_build_llm_http_client_builds_direct_client_without_proxy_config() -> None:
-    client = http_client_factory.build_llm_http_client(merged_env={})
+    client = llm_client.build_llm_http_client(merged_env={})
     transport = _routing_transport(client)
     direct_transport = getattr(transport, "_direct_transport")
 
     assert client is not None
     assert client.trust_env is False
     assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
-    assert client.timeout.connect == DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+    assert client.timeout.connect == DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
     assert getattr(transport, "_http_proxy_transport") is None
     assert getattr(transport, "_https_proxy_transport") is None
 
@@ -57,7 +57,7 @@ def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
     captured_kwargs: dict[str, object] = {}
 
     monkeypatch.setattr(
-        http_client_factory,
+        llm_client,
         "load_proxy_env_config",
         lambda: ProxyEnvConfig(
             https_proxy="http://alice:secret@proxy.internal:8443",
@@ -66,12 +66,12 @@ def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
         ),
     )
     monkeypatch.setattr(
-        http_client_factory,
-        "create_proxy_async_http_client",
+        llm_client,
+        "create_async_http_client",
         lambda **kwargs: captured_kwargs.update(kwargs) or _FakeAsyncClient(),
     )
 
-    client = http_client_factory.build_llm_http_client()
+    client = llm_client.build_llm_http_client()
 
     assert isinstance(client, _FakeAsyncClient)
     assert captured_kwargs == {
@@ -82,12 +82,12 @@ def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
             "no_proxy": "localhost,127.0.0.1",
         },
         "ssl_verify": False,
-        "connect_timeout_seconds": DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+        "connect_timeout_seconds": DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
     }
 
 
 def test_build_llm_http_client_uses_requested_connect_timeout() -> None:
-    client = http_client_factory.build_llm_http_client(
+    client = llm_client.build_llm_http_client(
         merged_env={},
         connect_timeout_seconds=42.5,
     )
@@ -96,7 +96,7 @@ def test_build_llm_http_client_uses_requested_connect_timeout() -> None:
 
 
 def test_build_llm_http_client_builds_proxy_and_no_proxy_mounts() -> None:
-    client = http_client_factory.build_llm_http_client(
+    client = llm_client.build_llm_http_client(
         merged_env={
             "http_proxy": "proxy.internal:8080",
             "no_proxy": "localhost,example.com,127.0.0.1,::1",
@@ -123,7 +123,7 @@ def test_build_llm_http_client_builds_proxy_and_no_proxy_mounts() -> None:
 
 
 def test_build_llm_http_client_respects_no_proxy_wildcard() -> None:
-    client = http_client_factory.build_llm_http_client(
+    client = llm_client.build_llm_http_client(
         merged_env={
             "HTTP_PROXY": "http://proxy.internal:8080",
             "NO_PROXY": "*",
@@ -139,7 +139,7 @@ def test_build_llm_http_client_respects_no_proxy_wildcard() -> None:
 
 
 def test_build_llm_http_client_disables_ssl_verification_when_configured() -> None:
-    client = http_client_factory.build_llm_http_client(
+    client = llm_client.build_llm_http_client(
         merged_env={
             "HTTP_PROXY": "http://proxy.internal:8080",
             "SSL_VERIFY": "false",
@@ -158,9 +158,7 @@ def test_build_llm_http_client_disables_ssl_verification_when_configured() -> No
 def test_build_llm_http_client_creates_direct_client_when_only_ssl_verification_is_disabled() -> (
     None
 ):
-    client = http_client_factory.build_llm_http_client(
-        merged_env={"SSL_VERIFY": "false"}
-    )
+    client = llm_client.build_llm_http_client(merged_env={"SSL_VERIFY": "false"})
     transport = _routing_transport(client)
     direct_transport = getattr(transport, "_direct_transport")
 

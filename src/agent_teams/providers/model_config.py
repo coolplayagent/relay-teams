@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
-DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = 15.0
+DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
 
 class ProviderType(StrEnum):
@@ -38,6 +39,13 @@ class ModelEndpointConfig(BaseModel):
         le=300.0,
     )
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
+
+    @field_validator("model", "base_url", "api_key", mode="before")
+    @classmethod
+    def _normalize_string_fields(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class ProviderModelInfo(BaseModel):

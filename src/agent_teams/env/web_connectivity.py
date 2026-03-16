@@ -15,7 +15,7 @@ from agent_teams.env.proxy_env import (
     ProxyEnvInput,
     proxy_applies_to_url,
 )
-from agent_teams.env.proxy_http_client import create_proxy_http_client
+from agent_teams.net.clients import create_sync_http_client
 
 _MAX_WEB_PROBE_TIMEOUT_MS = 300_000
 _HEAD_FALLBACK_STATUS_CODES = {405, 501}
@@ -79,7 +79,7 @@ class WebConnectivityProbeService:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
 
-        with create_proxy_http_client(
+        with create_sync_http_client(
             proxy_config=proxy_config,
             timeout_seconds=timeout_seconds,
             connect_timeout_seconds=timeout_seconds,

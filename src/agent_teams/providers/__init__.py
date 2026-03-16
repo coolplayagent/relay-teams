@@ -5,10 +5,6 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.providers.http_client_factory import (
-        ProxyEnvConfig,
-        build_llm_http_client,
-    )
     from agent_teams.providers.provider_contracts import EchoProvider, LLMProvider
     from agent_teams.providers.model_config import (
         ModelEndpointConfig,
@@ -57,13 +53,11 @@ __all__ = [
     "ProviderModelInfo",
     "ProviderRegistry",
     "ProviderType",
-    "ProxyEnvConfig",
     "RunTokenUsage",
     "SamplingConfig",
     "SessionTokenUsage",
     "TokenUsageRecord",
     "TokenUsageRepository",
-    "build_llm_http_client",
     "create_default_provider_registry",
     "list_provider_models",
 ]
@@ -121,10 +115,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     ),
     "ProviderRegistry": ("agent_teams.providers.provider_registry", "ProviderRegistry"),
     "ProviderType": ("agent_teams.providers.model_config", "ProviderType"),
-    "ProxyEnvConfig": (
-        "agent_teams.providers.http_client_factory",
-        "ProxyEnvConfig",
-    ),
     "RunTokenUsage": (
         "agent_teams.providers.token_usage_repo",
         "RunTokenUsage",
@@ -141,10 +131,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "TokenUsageRepository": (
         "agent_teams.providers.token_usage_repo",
         "TokenUsageRepository",
-    ),
-    "build_llm_http_client": (
-        "agent_teams.providers.http_client_factory",
-        "build_llm_http_client",
     ),
     "create_default_provider_registry": (
         "agent_teams.providers.provider_registry",

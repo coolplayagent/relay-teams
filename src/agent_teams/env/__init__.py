@@ -9,6 +9,7 @@ from agent_teams.env.environment_variable_models import (
     EnvironmentVariableValueKind,
 )
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import (
     ProxyEnvConfig,
     ProxyEnvInput,
@@ -23,11 +24,6 @@ from agent_teams.env.proxy_env import (
     resolve_proxy_env_config,
     sync_proxy_env_to_process_env,
 )
-from agent_teams.env.proxy_http_client import (
-    create_proxy_async_http_client,
-    create_proxy_http_client,
-)
-from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.runtime_env import (
     get_app_env_file_path,
     get_env_var,
@@ -56,8 +52,6 @@ __all__ = [
     "ProxyConfigService",
     "apply_proxy_env_to_process_env",
     "build_subprocess_env",
-    "create_proxy_async_http_client",
-    "create_proxy_http_client",
     "extract_proxy_env_vars",
     "get_app_env_file_path",
     "get_env_var",

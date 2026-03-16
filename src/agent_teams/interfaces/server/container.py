@@ -32,7 +32,7 @@ from agent_teams.providers.provider_contracts import LLMProvider
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.providers.model_config import ModelEndpointConfig
-from agent_teams.providers.http_client_factory import clear_llm_http_client_cache
+from agent_teams.net.llm_client import clear_llm_http_client_cache
 from agent_teams.providers.provider_factory import create_provider_factory
 from agent_teams.agents.orchestration.task_execution_service_factory import (
     create_task_execution_service,
