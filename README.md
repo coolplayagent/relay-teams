@@ -7,30 +7,37 @@ Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
 
 Core code lives under `src/agent_teams/`:
 
-- `agents/`: agent domain package
-  - `agents/execution/`: agent turn execution, prompt assembly, and LLM session flow
-  - `agents/orchestration/`: coordinator flow, task orchestration, verification, and human gate logic
-  - `agents/tasks/`: task domain models, ids, events, and task status utilities
-- `env/`: runtime environment loading and env-related CLI support
+- `agents/`: agent models and orchestration domain
+  - `agents/execution/`: prompt assembly, message persistence, subagent running, and LLM session flow
+  - `agents/instances/`: subagent instance models, ids, enums, and repositories
+  - `agents/orchestration/`: coordinator flow, task execution, verification, role communication, and human gate logic
+  - `agents/tasks/`: task models, ids, events, repositories, and status helpers
+- `builtin/`: built-in roles, default config, logging config, and bundled skills/resources
+- `env/`: runtime env loading, proxy support, connectivity checks, and env CLI support
 - `interfaces/`: external interfaces
-  - `interfaces/server/`: FastAPI HTTP/SSE API and routers
-  - `interfaces/cli/`: Typer CLI entrypoints, HTTP/SSE client behavior, and prompt inspection commands
+  - `interfaces/cli/`: Typer CLI entrypoints for prompts, approvals, triggers, environment, skills, and server control
   - `interfaces/sdk/`: Python HTTP client SDK
-- `logger/`, `trace/`: structured logging and trace context
-- `mcp/`: MCP capability integration
-- `notifications/`: backend-driven notification rules and event dispatch
-- `paths/`: path and filesystem location helpers
-- `providers/`: provider contracts, model configuration, registries, and OpenAI-compatible adapters
-- `reflection/`: reflection result modeling and reflection services
-- `roles/`: role definitions and role validation
-- `sessions/`: session lifecycle, round projection services, and run-scoped execution packages
-  - `sessions/runs/`: run-time orchestration, run control, event streaming, injection flows, and active-run coordination
-- `shared_types/`: cross-domain shared type aliases and lightweight contracts
-- `skills/`: skill loading/registry support
-- `state/`: persistence and state repositories
-- `tools/`: built-in tool registration and implementations (`registry/`, `runtime/`, `stage_tools/`, `task_tools/`, `workspace_tools/`)
-- `triggers/`: trigger management and event ingestion flows
-- `workspace/`: workspace indexing, materialization, and workspace-facing services
+  - `interfaces/server/`: FastAPI app, DI container, config services, static asset serving, and `/api/*` routers
+- `logger/`: runtime logging configuration and structured logger helpers
+- `mcp/`: MCP config loading, registry, service, reload flow, and CLI support
+- `net/`: HTTP client helpers, LLM client wrappers, constants, and proxy-aware transports
+- `notifications/`: notification models, config management, settings service, and delivery service
+- `paths/`: app/project path helpers
+- `persistence/`: database access and shared persistence models/repos
+- `providers/`: model config, provider contracts, connectivity probes, OpenAI-compatible adapters, factories, and token usage
+- `roles/`: role models, registry, settings, memory injection, and CLI support
+- `sessions/`: session models, repository, service, and round projection
+  - `sessions/runs/`: active-run registry, run control, event log/stream, injection queue, runtime config, and run state repositories
+- `skills/`: discovery, registry, config reload, and CLI support
+- `tools/`: built-in tool registration and runtime policy/state
+  - `tools/registry/`: default tool registration and registry composition
+  - `tools/runtime/`: execution context, approval state, persisted runtime state, and policy enforcement
+  - `tools/stage_tools/`: staged document read/write helpers
+  - `tools/task_tools/`: task creation, listing, dispatch, and update tools
+  - `tools/workspace_tools/`: workspace read/write, shell, grep, glob, and ripgrep tools
+- `trace/`: request/span trace context
+- `triggers/`: trigger models, repository, service, and CLI support
+- `workspace/`: workspace ids, handles, git worktree support, repositories, manager, and services
 
 Frontend assets are built into `frontend/dist` (`css/` and `js/`) and served by the backend.
 
@@ -51,8 +58,24 @@ Frontend assets are now decoupled under `frontend/dist` and served by the backen
 
 ### 1) Install dependencies
 
+Use the setup script for your platform, or install directly with `uv`.
+
+Windows:
+
+```powershell
+.\setup.bat
+```
+
+Linux/macOS:
+
 ```bash
-uv sync
+sh setup.sh
+```
+
+Direct install:
+
+```bash
+uv sync --extra dev
 ```
 
 ### 2) Create runtime config files
@@ -186,7 +209,8 @@ uv run agent-teams mcp tools filesystem --format json
 from agent_teams.interfaces.sdk.client import AgentTeamsClient
 
 client = AgentTeamsClient(base_url="http://127.0.0.1:8000")
-run = client.create_run(intent="do multi-step work", session_id="s1")
+session = client.create_session(workspace_id="default", session_id="s1")
+run = client.create_run(intent="do multi-step work", session_id=session["session_id"])
 for event in client.stream_run_events(run.run_id):
     print(event.get("event_type"))
 ```
@@ -194,11 +218,11 @@ for event in client.stream_run_events(run.run_id):
 ### 5.4) Preview assembled prompts for a role
 
 ```bash
-uv run agent-teams prompts get --role-id coordinator_agent
+uv run agent-teams roles prompt --role-id coordinator_agent
 ```
 
 ```bash
-uv run agent-teams prompts get --role-id coordinator_agent --format json --section provider
+uv run agent-teams roles prompt --role-id coordinator_agent --format json --section provider
 ```
 
 ### 6) List triggers
@@ -231,7 +255,10 @@ Unit and integration tests are split under `tests/`:
 
 - `tests/unit_tests/` directory structure must mirror `src/agent_teams/` one-to-one.
 - `tests/unit_tests/sessions/runs/`: unit coverage for the run execution package nested under `sessions/`
-- `tests/integration_tests/`: integration scenarios split by `api/`, `browser/`, and shared `support/`
+- `tests/integration_tests/api/`: HTTP and SSE integration flows against the backend
+- `tests/integration_tests/browser/`: browser automation scenarios
+- `tests/integration_tests/cli/`: CLI integration coverage
+- `tests/integration_tests/support/`: shared integration helpers
 
 Run unit tests:
 
@@ -251,4 +278,3 @@ Run browser automation tests (Playwright):
 uv run playwright install chromium
 uv run pytest -q tests/integration_tests/browser
 ```
-
