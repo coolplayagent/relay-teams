@@ -50,6 +50,12 @@ docker:
     - HTTP_PROXY
     - HTTPS_PROXY
     - NO_PROXY
+  # extra_env: verbatim env vars injected into containers.
+  # Use when container-side values differ from host, e.g. proxy with
+  # host.docker.internal instead of 127.0.0.1:
+  # extra_env:
+  #   HTTP_PROXY: "http://host.docker.internal:7897"
+  #   HTTPS_PROXY: "http://host.docker.internal:7897"
 
 # --- Filtering ---
 limit: null                             # max items to run, null = all

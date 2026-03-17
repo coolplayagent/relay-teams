@@ -13,7 +13,7 @@ agent_teams:
   execution_mode: ai
   approval_mode: yolo
   timeout_seconds: 600
-  config_dir: null
+  config_dir: "~/.config/agent-teams"
 
 workspace_mode: docker
 evals_workdir: .agent_teams/evals/workspaces
@@ -23,6 +23,15 @@ docker:
   image_prefix: "sweb.eval.x86_64"
   agent_runtime_image: "agent-teams-runtime:latest"
   container_startup_timeout_seconds: 60
+  # Proxy addresses must use host.docker.internal inside containers
+  # (127.0.0.1 refers to the container itself, not the host).
+  extra_env:
+    HTTP_PROXY: "http://host.docker.internal:7897"
+    HTTPS_PROXY: "http://host.docker.internal:7897"
+    http_proxy: "http://host.docker.internal:7897"
+    https_proxy: "http://host.docker.internal:7897"
+    NO_PROXY: "localhost,127.0.0.1"
+    no_proxy: "localhost,127.0.0.1"
 
 limit: null
 item_ids: []

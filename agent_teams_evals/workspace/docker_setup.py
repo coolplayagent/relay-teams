@@ -75,6 +75,10 @@ class DockerConfig(BaseModel):
     container_startup_timeout_seconds: float = 60.0
     # Host environment variable names to forward into each container.
     forward_env_vars: tuple[str, ...] = _DEFAULT_FORWARD_ENV
+    # Extra environment variables injected verbatim into each container.
+    # Use this for container-specific values that differ from the host, e.g.
+    # proxy addresses using host.docker.internal instead of 127.0.0.1.
+    extra_env: dict[str, str] = {}
 
 
 class DockerWorkspaceSetup(WorkspaceSetup):
@@ -112,13 +116,18 @@ class DockerWorkspaceSetup(WorkspaceSetup):
 
         # Mount agent-teams config dir (model.json, roles/) if provided.
         if self._config_dir is not None:
-            cmd += ["-v", f"{self._config_dir.resolve()}:/root/.config/agent-teams"]
+            host_cfg = self._config_dir.expanduser().resolve()
+            cmd += ["-v", f"{host_cfg}:/root/.config/agent-teams"]
 
         # Forward selected host environment variables.
         for var in self._docker_cfg.forward_env_vars:
             val = os.environ.get(var)
             if val:
                 cmd += ["-e", f"{var}={val}"]
+
+        # Apply extra_env overrides (verbatim, no host-env lookup).
+        for key, val in self._docker_cfg.extra_env.items():
+            cmd += ["-e", f"{key}={val}"]
 
         # Start agent-teams directly via the venv binary — no PATH conflict.
         cmd += [
