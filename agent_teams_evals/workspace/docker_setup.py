@@ -6,6 +6,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 import typer
@@ -26,24 +27,8 @@ _DEFAULT_FORWARD_ENV = (
     "no_proxy",
 )
 
-# Startup script injected into the container via `bash -c`.
-# If /agent-teams is volume-mounted (source tree), uv runs in that project dir
-# so Python 3.13 is guaranteed by pyproject.toml's requires-python.
-# The container's own Python (e.g. 3.9) remains on PATH and is used by shell
-# commands the agent spawns — correct for SWE-bench project tests.
-_STARTUP_SCRIPT = """\
-set -e
-export PATH="/root/.cargo/bin:/root/.local/bin:$PATH"
-if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-fi
-if [ -d /agent-teams ]; then
-    cd /agent-teams
-    uv run agent-teams server start --host 0.0.0.0 --port 8000
-else
-    uv tool run --python 3.13 agent-teams server start --host 0.0.0.0 --port 8000
-fi
-"""
+# Path inside the runtime base image where agent-teams is installed.
+_AGENT_RUNTIME_BIN = "/opt/agent-runtime/venv/bin/agent-teams"
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -56,20 +41,16 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _docker_run(
-    image: str,
-    port: int,
-    volumes: dict[str, str],
-    env: dict[str, str],
-) -> str:
-    cmd = ["docker", "run", "-d", "-p", f"{port}:8000"]
-    for host_path, container_path in volumes.items():
-        cmd.extend(["-v", f"{host_path}:{container_path}"])
-    for key, val in env.items():
-        cmd.extend(["-e", f"{key}={val}"])
-    cmd.extend([image, "bash", "-c", _STARTUP_SCRIPT])
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return result.stdout.strip()
+def _create_runtime_container(image: str) -> str:
+    """Create a stopped data container whose volumes will be shared into eval containers."""
+    name = f"agent-runtime-{uuid.uuid4().hex[:8]}"
+    subprocess.run(
+        ["docker", "create", "--name", name, image],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return name
 
 
 def _wait_for_server(base_url: str, timeout: float) -> None:
@@ -86,13 +67,13 @@ def _wait_for_server(base_url: str, timeout: float) -> None:
 class DockerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # Image name prefix; full image = {image_prefix}.{instance_id}:latest
+    # SWE-bench image prefix; full image = {image_prefix}.{instance_id}:latest
     image_prefix: str = "swebench/sweb.eval.x86_64"
-    # Path to local agent-teams source tree to volume-mount as /agent-teams.
-    # None = agent-teams must already be installed in the image.
-    agent_teams_source: Path | None = None
-    container_startup_timeout_seconds: float = 120.0
-    # Host environment variable names to forward into the container.
+    # Base image that provides /opt/agent-runtime/venv/ via --volumes-from.
+    # Build once with: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+    agent_runtime_image: str = "agent-teams-runtime:latest"
+    container_startup_timeout_seconds: float = 60.0
+    # Host environment variable names to forward into each container.
     forward_env_vars: tuple[str, ...] = _DEFAULT_FORWARD_ENV
 
 
@@ -104,6 +85,11 @@ class DockerWorkspaceSetup(WorkspaceSetup):
     ) -> None:
         self._docker_cfg = docker_cfg
         self._config_dir = config_dir
+        # Create a stopped data container that holds /opt/agent-runtime/.
+        # All eval containers mount its volumes via --volumes-from.
+        self._runtime_container = _create_runtime_container(
+            docker_cfg.agent_runtime_image
+        )
 
     def prepare(self, item: EvalItem) -> PreparedWorkspace:
         if item.base_commit is None:
@@ -112,20 +98,43 @@ class DockerWorkspaceSetup(WorkspaceSetup):
         image = f"{self._docker_cfg.image_prefix}.{item.item_id}:latest"
         port = _find_free_port()
 
-        volumes: dict[str, str] = {}
-        if self._docker_cfg.agent_teams_source is not None:
-            volumes[str(self._docker_cfg.agent_teams_source.resolve())] = "/agent-teams"
-        if self._config_dir is not None:
-            volumes[str(self._config_dir.resolve())] = "/root/.config/agent-teams"
+        cmd = [
+            "docker",
+            "run",
+            "-d",
+            "-p",
+            f"{port}:8000",
+            # Mount /opt/agent-runtime/ from the runtime data container.
+            # Python 3.13 + agent-teams live here, NOT on system PATH.
+            "--volumes-from",
+            self._runtime_container,
+        ]
 
-        env: dict[str, str] = {}
+        # Mount agent-teams config dir (model.json, roles/) if provided.
+        if self._config_dir is not None:
+            cmd += ["-v", f"{self._config_dir.resolve()}:/root/.config/agent-teams"]
+
+        # Forward selected host environment variables.
         for var in self._docker_cfg.forward_env_vars:
             val = os.environ.get(var)
             if val:
-                env[var] = val
+                cmd += ["-e", f"{var}={val}"]
+
+        # Start agent-teams directly via the venv binary — no PATH conflict.
+        cmd += [
+            image,
+            _AGENT_RUNTIME_BIN,
+            "server",
+            "start",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+        ]
 
         _log(item.item_id, f"starting container {image} on port {port} ...")
-        container_id = _docker_run(image, port, volumes, env)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        container_id = result.stdout.strip()
         _log(item.item_id, f"container: {container_id[:12]}")
 
         agent_base_url = f"http://localhost:{port}"
@@ -149,3 +158,10 @@ class DockerWorkspaceSetup(WorkspaceSetup):
                 ["docker", "rm", "-f", workspace.container_id],
                 capture_output=True,
             )
+
+    def teardown(self) -> None:
+        """Remove the runtime data container after all items have finished."""
+        subprocess.run(
+            ["docker", "rm", "-f", self._runtime_container],
+            capture_output=True,
+        )

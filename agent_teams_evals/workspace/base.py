@@ -27,3 +27,6 @@ class WorkspaceSetup(ABC):
 
     @abstractmethod
     def cleanup(self, workspace: PreparedWorkspace) -> None: ...
+
+    def teardown(self) -> None:
+        """Called once after all items finish. Override for global cleanup."""

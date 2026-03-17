@@ -41,9 +41,10 @@ git_clone_timeout_seconds: 120
 
 docker:
   image_prefix: "swebench/sweb.eval.x86_64"
-  agent_teams_source: "."              # volume-mount local source tree (dev mode)
-                                       # null = agent-teams must be pre-installed in image
-  container_startup_timeout_seconds: 120
+  # Runtime base image: provides /opt/agent-runtime/venv/ via --volumes-from.
+  # Build once: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+  agent_runtime_image: "agent-teams-runtime:latest"
+  container_startup_timeout_seconds: 60
   forward_env_vars:
     - ANTHROPIC_API_KEY
     - HTTP_PROXY

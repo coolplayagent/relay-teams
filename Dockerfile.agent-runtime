@@ -1,0 +1,25 @@
+# Agent-teams runtime base image.
+# Contains Python 3.13 + agent-teams installed in an isolated venv at
+# /opt/agent-runtime/venv/ — intentionally NOT on system PATH so that
+# eval containers retain their own Python version as the default python.
+#
+# Build:
+#   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+#
+# The image is used as a volume source (data container) at eval time:
+#   docker create --name agent-runtime agent-teams-runtime:latest
+#   docker run --volumes-from agent-runtime <swebench-image> \
+#       /opt/agent-runtime/venv/bin/agent-teams server start ...
+
+FROM python:3.13-slim
+
+# Install into an isolated venv, not into system Python
+RUN python3 -m venv /opt/agent-runtime/venv
+
+WORKDIR /build
+COPY pyproject.toml ./
+COPY src/ src/
+RUN /opt/agent-runtime/venv/bin/pip install . --quiet --no-cache-dir
+
+# Smoke-test: verify the entry point works
+RUN /opt/agent-runtime/venv/bin/agent-teams --help > /dev/null

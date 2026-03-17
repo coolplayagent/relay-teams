@@ -164,18 +164,22 @@ def run(
         if result.error:
             typer.echo(f"  error: {result.error}")
 
-    if cfg.concurrency <= 1:
-        for item in items:
-            result = runner.run_item(item)
-            _print_result(result)
-            results.append(result)
-    else:
-        with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
-            futures = {pool.submit(runner.run_item, item): item for item in items}
-            for future in as_completed(futures):
-                result = future.result()
+    try:
+        if cfg.concurrency <= 1:
+            for item in items:
+                result = runner.run_item(item)
                 _print_result(result)
                 results.append(result)
+        else:
+            with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
+                futures = {pool.submit(runner.run_item, item): item for item in items}
+                for future in as_completed(futures):
+                    result = future.result()
+                    _print_result(result)
+                    results.append(result)
+    finally:
+        if workspace_setup is not None:
+            workspace_setup.teardown()
 
     report = build_report(
         results,
