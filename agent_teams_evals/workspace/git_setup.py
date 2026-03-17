@@ -3,15 +3,20 @@ from __future__ import annotations
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 
-from agent_teams_evals.config import EvalConfig
 from agent_teams_evals.models import EvalItem
 from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
 
 
 class GitWorkspaceSetup(WorkspaceSetup):
-    def __init__(self, config: EvalConfig) -> None:
-        self._config = config
+    def __init__(
+        self,
+        evals_workdir: Path,
+        git_clone_timeout_seconds: float = 120.0,
+    ) -> None:
+        self._evals_workdir = evals_workdir
+        self._clone_timeout = git_clone_timeout_seconds
 
     def prepare(self, item: EvalItem) -> PreparedWorkspace:
         if item.repo_url is None:
@@ -19,7 +24,7 @@ class GitWorkspaceSetup(WorkspaceSetup):
         if item.base_commit is None:
             raise ValueError(f"Item {item.item_id} has no base_commit")
 
-        item_dir = self._config.evals_workdir / item.item_id
+        item_dir = self._evals_workdir / item.item_id
 
         # Remove any directories left by previous partial runs.
         if item_dir.exists():
@@ -31,12 +36,11 @@ class GitWorkspaceSetup(WorkspaceSetup):
         repo_path = item_dir / run_hash / "repo"
         repo_path.mkdir(parents=True, exist_ok=True)
 
-        timeout = self._config.git_clone_timeout_seconds
         subprocess.run(
             ["git", "clone", item.repo_url, str(repo_path)],
             check=True,
             capture_output=True,
-            timeout=timeout,
+            timeout=self._clone_timeout,
         )
         subprocess.run(
             ["git", "checkout", item.base_commit],
@@ -53,7 +57,6 @@ class GitWorkspaceSetup(WorkspaceSetup):
         )
 
     def cleanup(self, workspace: PreparedWorkspace) -> None:
-        # Delete the run-hash directory (parent of repo/).
         run_dir = workspace.repo_path.parent
         if run_dir.exists():
             shutil.rmtree(run_dir)

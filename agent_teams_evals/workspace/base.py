@@ -14,6 +14,11 @@ class PreparedWorkspace(BaseModel):
     item_id: str
     repo_path: Path
     base_commit: str
+    # Docker mode: ID of the running container for this item.
+    container_id: str | None = None
+    # Docker mode: base URL of the agent-teams server inside the container,
+    # e.g. "http://localhost:8023". Overrides backend config.base_url when set.
+    agent_base_url: str | None = None
 
 
 class WorkspaceSetup(ABC):

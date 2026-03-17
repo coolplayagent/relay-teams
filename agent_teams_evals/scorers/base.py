@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-from pydantic import JsonValue
+from typing import TYPE_CHECKING
 
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+
+if TYPE_CHECKING:
+    from agent_teams_evals.workspace.base import PreparedWorkspace
 
 
 class Scorer(ABC):
@@ -16,12 +18,11 @@ class Scorer(ABC):
         run_id: str,
         session_id: str,
         outcome: RunOutcome,
-        events: list[dict[str, JsonValue]],
         agent_output: str,
         generated_patch: str,
         token_usage: TokenUsage,
         duration_seconds: float,
-        workspace_path: str | None = None,
+        workspace: PreparedWorkspace | None = None,
         error: str | None = None,
     ) -> EvalResult: ...
 

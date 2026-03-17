@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
-
-from pydantic import JsonValue
+from typing import TYPE_CHECKING
 
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
+
+if TYPE_CHECKING:
+    from agent_teams_evals.workspace.base import PreparedWorkspace
 
 
 class RegexScorer(Scorer):
@@ -20,12 +22,11 @@ class RegexScorer(Scorer):
         run_id: str,
         session_id: str,
         outcome: RunOutcome,
-        events: list[dict[str, JsonValue]],
         agent_output: str,
         generated_patch: str,
         token_usage: TokenUsage,
         duration_seconds: float,
-        workspace_path: str | None = None,
+        workspace: PreparedWorkspace | None = None,
         error: str | None = None,
     ) -> EvalResult:
         if not item.expected_patterns:
@@ -40,10 +41,11 @@ class RegexScorer(Scorer):
             matched = len(item.expected_patterns) - len(unmatched)
             total = len(item.expected_patterns)
             score_val = matched / total if total > 0 else 0.0
-            if unmatched:
-                detail = f"unmatched patterns: {unmatched}"
-            else:
-                detail = f"all {total} patterns matched"
+            detail = (
+                f"unmatched patterns: {unmatched}"
+                if unmatched
+                else f"all {total} patterns matched"
+            )
 
         return EvalResult(
             item_id=item.item_id,
@@ -59,6 +61,6 @@ class RegexScorer(Scorer):
             generated_patch=generated_patch,
             token_usage=token_usage,
             duration_seconds=duration_seconds,
-            workspace_path=workspace_path,
+            workspace_path=str(workspace.repo_path) if workspace else None,
             error=error,
         )

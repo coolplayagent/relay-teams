@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams_evals.config import EvalConfig
+from agent_teams_evals.backends.agent_teams import AgentTeamsBackend, AgentTeamsConfig
 from agent_teams_evals.loaders.swebench_loader import SWEBenchLoader
 from agent_teams_evals.models import EvalItem
 from agent_teams_evals.runner import EvalRunner
@@ -13,6 +13,7 @@ from agent_teams_evals.workspace.git_setup import GitWorkspaceSetup
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
 _DATASET_PATH = Path(".agent_teams/evals/datasets/swebench-lite.jsonl")
+_EVALS_WORKDIR = Path(".agent_teams/evals/workspaces")
 
 
 def _load_items() -> list[EvalItem]:
@@ -23,17 +24,12 @@ def _load_items() -> list[EvalItem]:
 
 @pytest.mark.parametrize("item", _load_items(), ids=lambda it: it.item_id)
 def test_item(item: EvalItem, backend_url: str) -> None:
-    config = EvalConfig(
-        base_url=backend_url,
-        output_dir=Path(".agent_teams/evals/results/swebench"),
-    )
-    scorer = SWEBenchScorer(config)
-    workspace_setup = GitWorkspaceSetup(config)
+    backend = AgentTeamsBackend(AgentTeamsConfig(base_url=backend_url))
+    workspace_setup = GitWorkspaceSetup(_EVALS_WORKDIR)
     patch_extractor = PatchExtractor()
-
     runner = EvalRunner(
-        config=config,
-        scorer=scorer,
+        backend=backend,
+        scorer=SWEBenchScorer(),
         workspace_setup=workspace_setup,
         patch_extractor=patch_extractor,
     )

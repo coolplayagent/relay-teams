@@ -4,58 +4,104 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams_evals.config import EvalConfig
+from agent_teams_evals.backends.agent_teams import AgentTeamsConfig
+from agent_teams_evals.workspace.docker_setup import DockerConfig
 
 _SAMPLE_YAML = """\
 # Agent Teams Eval Config
 # Generate this file: python agent_teams_evals/run.py init-config
 # Run with:           python agent_teams_evals/run.py run --config eval.yaml
 
-# --- Backend ---
-base_url: "http://127.0.0.1:8000"
-workspace_id: default
-execution_mode: ai
-
 # --- Dataset ---
 dataset: jsonl                          # jsonl | swebench
 dataset_path: .agent_teams/evals/datasets/custom.jsonl
 
 # --- Scorer ---
-scorer: keyword                         # keyword | regex | event_status | swebench
+scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker
+swebench_pass_threshold: 0.8            # used by swebench scorer (Jaccard threshold)
+
+# --- Backend ---
+backend: agent_teams
+agent_teams:
+  base_url: "http://127.0.0.1:8000"    # used in git mode; docker mode uses per-container port
+  execution_mode: ai
+  approval_mode: yolo
+  timeout_seconds: 600
+  config_dir: null                      # docker mode: mount this as ~/.config/agent-teams
+                                        # controls model, role, system prompt
+                                        # e.g. ./eval_configs/claude-sonnet
+                                        # null = use whatever config is in the container
+
+# --- Workspace ---
+workspace_mode: git                     # git | docker
+evals_workdir: .agent_teams/evals/workspaces
+git_clone_timeout_seconds: 120
+
+docker:
+  image_prefix: "swebench/sweb.eval.x86_64"
+  agent_teams_source: "."              # volume-mount local source tree (dev mode)
+                                       # null = agent-teams must be pre-installed in image
+  container_startup_timeout_seconds: 120
+  forward_env_vars:
+    - ANTHROPIC_API_KEY
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
 
 # --- Filtering ---
 limit: null                             # max items to run, null = all
 item_ids: []                            # run only these item IDs, [] = all
 
 # --- Execution ---
-run_timeout_seconds: 300
 concurrency: 1
 keep_workspaces: false
-git_clone_timeout_seconds: 120
-
-# --- Scoring ---
-swebench_pass_threshold: 0.8            # Jaccard threshold for swebench scorer
-
-# --- Cost estimation (USD per 1M tokens) ---
-cost_per_million_input_tokens: 3.0      # Claude Sonnet input price
-cost_per_million_output_tokens: 15.0    # Claude Sonnet output price
 
 # --- Output ---
 output_dir: .agent_teams/evals/results
 report_format: json                     # json | html | both
+
+# --- Cost estimation (USD per 1M tokens) ---
+cost_per_million_input_tokens: 3.0      # Claude Sonnet input price
+cost_per_million_output_tokens: 15.0    # Claude Sonnet output price
 """
 
 
-class RunConfig(EvalConfig):
-    """Full run configuration: EvalConfig fields plus dataset/scorer/report selection."""
-
+class RunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Dataset
     dataset: str = "jsonl"
+    dataset_path: Path | None = None
+
+    # Scorer
     scorer: str = "keyword"
+    swebench_pass_threshold: float = 0.8
+
+    # Backend
+    backend: str = "agent_teams"
+    agent_teams: AgentTeamsConfig = Field(default_factory=AgentTeamsConfig)
+
+    # Workspace
+    workspace_mode: str = "git"
+    evals_workdir: Path = Path(".agent_teams/evals/workspaces")
+    git_clone_timeout_seconds: float = 120.0
+    docker: DockerConfig = Field(default_factory=DockerConfig)
+
+    # Filtering
+    limit: int | None = None
+    item_ids: tuple[str, ...] = ()
+
+    # Execution
+    concurrency: int = 1
+    keep_workspaces: bool = False
+
+    # Output
+    output_dir: Path = Path(".agent_teams/evals/results")
     report_format: Literal["json", "html", "both"] = "json"
+    cost_per_million_input_tokens: float = 3.0
+    cost_per_million_output_tokens: float = 15.0
 
 
 def load_run_config(path: Path) -> RunConfig:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from pydantic import JsonValue
+from typing import TYPE_CHECKING
 
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
+
+if TYPE_CHECKING:
+    from agent_teams_evals.workspace.base import PreparedWorkspace
 
 
 class EventStatusScorer(Scorer):
@@ -18,12 +21,11 @@ class EventStatusScorer(Scorer):
         run_id: str,
         session_id: str,
         outcome: RunOutcome,
-        events: list[dict[str, JsonValue]],
         agent_output: str,
         generated_patch: str,
         token_usage: TokenUsage,
         duration_seconds: float,
-        workspace_path: str | None = None,
+        workspace: PreparedWorkspace | None = None,
         error: str | None = None,
     ) -> EvalResult:
         passed = outcome == RunOutcome.COMPLETED
@@ -44,6 +46,6 @@ class EventStatusScorer(Scorer):
             generated_patch=generated_patch,
             token_usage=token_usage,
             duration_seconds=duration_seconds,
-            workspace_path=workspace_path,
+            workspace_path=str(workspace.repo_path) if workspace else None,
             error=error,
         )

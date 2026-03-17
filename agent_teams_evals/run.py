@@ -23,13 +23,12 @@ def run(
     limit: int | None = typer.Option(None, help="Override: max items to evaluate"),
     item_ids: list[str] = typer.Option([], help="Override: specific item IDs to run"),
     concurrency: int | None = typer.Option(None, help="Override: parallel workers"),
-    keep_workspaces: bool | None = typer.Option(
-        None, help="Override: keep cloned repos"
-    ),
+    keep_workspaces: bool | None = typer.Option(None, help="Override: keep workspaces"),
     base_url: str | None = typer.Option(None, help="Override: backend base URL"),
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    from agent_teams_evals.backends.agent_teams import AgentTeamsBackend
     from agent_teams_evals.loaders.jsonl_loader import JsonlLoader
     from agent_teams_evals.loaders.swebench_loader import SWEBenchLoader
     from agent_teams_evals.reporter import EvalReporter, build_report
@@ -38,7 +37,9 @@ def run(
     from agent_teams_evals.scorers.event_status_scorer import EventStatusScorer
     from agent_teams_evals.scorers.keyword_scorer import KeywordScorer
     from agent_teams_evals.scorers.regex_scorer import RegexScorer
+    from agent_teams_evals.scorers.swebench_docker_scorer import SWEBenchDockerScorer
     from agent_teams_evals.scorers.swebench_scorer import SWEBenchScorer
+    from agent_teams_evals.workspace.docker_setup import DockerWorkspaceSetup
     from agent_teams_evals.workspace.git_setup import GitWorkspaceSetup
     from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
@@ -54,10 +55,14 @@ def run(
         overrides["concurrency"] = concurrency
     if keep_workspaces is not None:
         overrides["keep_workspaces"] = keep_workspaces
-    if base_url is not None:
-        overrides["base_url"] = base_url
     if overrides:
         cfg = cfg.model_copy(update=overrides)
+    if base_url is not None:
+        cfg = cfg.model_copy(
+            update={
+                "agent_teams": cfg.agent_teams.model_copy(update={"base_url": base_url})
+            }
+        )
 
     if cfg.dataset_path is None:
         typer.echo("Error: dataset_path is required in the config file.", err=True)
@@ -65,9 +70,50 @@ def run(
 
     typer.echo(f"Config: {config_file}")
     typer.echo(
-        f"  dataset={cfg.dataset}  scorer={cfg.scorer}  concurrency={cfg.concurrency}"
+        f"  dataset={cfg.dataset}  scorer={cfg.scorer}"
+        f"  backend={cfg.backend}  workspace_mode={cfg.workspace_mode}"
+        f"  concurrency={cfg.concurrency}"
     )
 
+    # Backend
+    match cfg.backend:
+        case "agent_teams":
+            backend = AgentTeamsBackend(cfg.agent_teams)
+        case _:
+            typer.echo(f"Error: unknown backend '{cfg.backend}'", err=True)
+            raise typer.Exit(1)
+
+    # Workspace setup
+    workspace_setup = None
+    patch_extractor = None
+    match cfg.workspace_mode:
+        case "docker":
+            workspace_setup = DockerWorkspaceSetup(
+                cfg.docker, cfg.agent_teams.config_dir
+            )
+        case "git":
+            if cfg.dataset == "swebench":
+                workspace_setup = GitWorkspaceSetup(
+                    cfg.evals_workdir, cfg.git_clone_timeout_seconds
+                )
+                patch_extractor = PatchExtractor()
+
+    # Scorer
+    match cfg.scorer:
+        case "swebench_docker":
+            scorer = SWEBenchDockerScorer()
+        case "swebench":
+            scorer = SWEBenchScorer(cfg.swebench_pass_threshold)
+            if patch_extractor is None and workspace_setup is not None:
+                patch_extractor = PatchExtractor()
+        case "regex":
+            scorer = RegexScorer()
+        case "event_status":
+            scorer = EventStatusScorer()
+        case _:
+            scorer = KeywordScorer()
+
+    # Load dataset
     if cfg.dataset == "swebench":
         loader = SWEBenchLoader()
     else:
@@ -85,32 +131,13 @@ def run(
         items = items[: cfg.limit]
         typer.echo(f"Limited to {len(items)} items")
 
-    if cfg.dataset == "swebench" or cfg.scorer == "swebench":
-        scorer_instance = SWEBenchScorer(cfg)
-        workspace_setup: GitWorkspaceSetup | None = (
-            GitWorkspaceSetup(cfg) if cfg.dataset == "swebench" else None
-        )
-        patch_ext: PatchExtractor | None = (
-            PatchExtractor() if workspace_setup is not None else None
-        )
-    elif cfg.scorer == "regex":
-        scorer_instance = RegexScorer()
-        workspace_setup = None
-        patch_ext = None
-    elif cfg.scorer == "event_status":
-        scorer_instance = EventStatusScorer()
-        workspace_setup = None
-        patch_ext = None
-    else:
-        scorer_instance = KeywordScorer()
-        workspace_setup = None
-        patch_ext = None
-
     runner = EvalRunner(
-        config=cfg,
-        scorer=scorer_instance,
+        backend=backend,
+        scorer=scorer,
         workspace_setup=workspace_setup,
-        patch_extractor=patch_ext,
+        patch_extractor=patch_extractor,
+        keep_workspaces=cfg.keep_workspaces,
+        concurrency=cfg.concurrency,
     )
 
     total = len(items)
@@ -153,7 +180,7 @@ def run(
     report = build_report(
         results,
         dataset=cfg.dataset,
-        scorer_name=scorer_instance.name,
+        scorer_name=scorer.name,
         cost_per_million_input=cfg.cost_per_million_input_tokens,
         cost_per_million_output=cfg.cost_per_million_output_tokens,
     )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from pydantic import JsonValue
-
-from agent_teams_evals.config import EvalConfig
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
+
+if TYPE_CHECKING:
+    from agent_teams_evals.workspace.base import PreparedWorkspace
 
 _DIFF_HEADER = re.compile(r"^diff --git", re.MULTILINE)
 
@@ -35,8 +36,8 @@ def _try_extract_patch_from_output(agent_output: str) -> str:
 
 
 class SWEBenchScorer(Scorer):
-    def __init__(self, config: EvalConfig) -> None:
-        self._threshold = config.swebench_pass_threshold
+    def __init__(self, pass_threshold: float = 0.8) -> None:
+        self._threshold = pass_threshold
 
     @property
     def name(self) -> str:
@@ -49,17 +50,14 @@ class SWEBenchScorer(Scorer):
         run_id: str,
         session_id: str,
         outcome: RunOutcome,
-        events: list[dict[str, JsonValue]],
         agent_output: str,
         generated_patch: str,
         token_usage: TokenUsage,
         duration_seconds: float,
-        workspace_path: str | None = None,
+        workspace: PreparedWorkspace | None = None,
         error: str | None = None,
     ) -> EvalResult:
-        patch = generated_patch
-        if not patch:
-            patch = _try_extract_patch_from_output(agent_output)
+        patch = generated_patch or _try_extract_patch_from_output(agent_output)
 
         if item.reference_patch and patch:
             ref_lines = _extract_changed_lines(item.reference_patch)
@@ -93,6 +91,6 @@ class SWEBenchScorer(Scorer):
             generated_patch=patch,
             token_usage=token_usage,
             duration_seconds=duration_seconds,
-            workspace_path=workspace_path,
+            workspace_path=str(workspace.repo_path) if workspace else None,
             error=error,
         )
