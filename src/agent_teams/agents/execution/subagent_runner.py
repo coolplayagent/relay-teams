@@ -48,15 +48,18 @@ class SubAgentRunner(BaseModel):
         conversation_id: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         thinking: RunThinkingConfig | None = None,
+        system_prompt_override: str | None = None,
     ) -> str:
-        system_prompt = await self.prompt_builder.build(
-            PromptBuildInput(
-                role=self.role,
-                task=task,
-                shared_state_snapshot=shared_state_snapshot,
-                working_directory=working_directory,
+        system_prompt = system_prompt_override
+        if system_prompt is None:
+            system_prompt = await self.prompt_builder.build(
+                PromptBuildInput(
+                    role=self.role,
+                    task=task,
+                    shared_state_snapshot=shared_state_snapshot,
+                    working_directory=working_directory,
+                )
             )
-        )
         generate = cast(
             Callable[[object], Awaitable[str]],
             getattr(self.provider, "generate"),

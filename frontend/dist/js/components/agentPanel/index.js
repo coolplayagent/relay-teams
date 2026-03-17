@@ -7,7 +7,7 @@ import { state } from '../../core/state.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import { closeDrawerUi, getDrawer, openDrawerUi } from './dom.js';
 import { schedulePanelContextPreview } from '../contextIndicators.js';
-import { loadAgentHistory } from './history.js';
+import { loadAgentHistory, syncAgentPanelState } from './history.js';
 import { createPanel } from './panelFactory.js';
 import {
     clearPanels,
@@ -48,6 +48,7 @@ export function openAgentPanel(
     const panel = ensurePanel(instanceId, roleId);
     if (!panel) return;
     const activeRunId = state.activeRunId || getActiveRoundRunId();
+    syncAgentPanelState(instanceId, roleId);
     const shouldRefreshHistory = !!(
         state.currentSessionId
         && (

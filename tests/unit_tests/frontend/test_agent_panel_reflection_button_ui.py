@@ -161,6 +161,12 @@ def test_panel_sections_are_collapsed_by_default_and_expand_on_click(
 const { createPanel } = await import('./panelFactory.mjs');
 
 const panel = createPanel('inst-1', 'writer', () => undefined);
+const promptSection = panel.panelEl.querySelector('.agent-panel-runtime-prompt');
+const promptToggle = panel.panelEl.querySelector('.agent-panel-runtime-prompt-toggle');
+const promptBody = panel.panelEl.querySelector('.agent-panel-runtime-prompt-body');
+const toolsSection = panel.panelEl.querySelector('.agent-panel-runtime-tools');
+const toolsToggle = panel.panelEl.querySelector('.agent-panel-runtime-tools-toggle');
+const toolsBody = panel.panelEl.querySelector('.agent-panel-runtime-tools-body');
 const reflectionSection = panel.panelEl.querySelector('.agent-panel-reflection');
 const reflectionToggle = panel.panelEl.querySelector('.agent-panel-reflection-toggle');
 const reflectionBody = panel.panelEl.querySelector('.agent-panel-reflection-body');
@@ -169,6 +175,12 @@ const summaryToggle = panel.panelEl.querySelector('.agent-panel-summary-toggle')
 const summaryBody = panel.panelEl.querySelector('.agent-panel-summary-body');
 
 const initialState = {
+    promptExpanded: promptToggle.getAttribute('aria-expanded'),
+    promptHidden: promptBody.hidden,
+    promptCollapsed: promptSection.dataset.collapsed,
+    toolsExpanded: toolsToggle.getAttribute('aria-expanded'),
+    toolsHidden: toolsBody.hidden,
+    toolsCollapsed: toolsSection.dataset.collapsed,
     reflectionExpanded: reflectionToggle.getAttribute('aria-expanded'),
     reflectionHidden: reflectionBody.hidden,
     reflectionCollapsed: reflectionSection.dataset.collapsed,
@@ -177,10 +189,18 @@ const initialState = {
     summaryCollapsed: summarySection.dataset.collapsed,
 };
 
+promptToggle.onclick();
+toolsToggle.onclick();
 reflectionToggle.onclick();
 summaryToggle.onclick();
 
 const expandedState = {
+    promptExpanded: promptToggle.getAttribute('aria-expanded'),
+    promptHidden: promptBody.hidden,
+    promptCollapsed: promptSection.dataset.collapsed,
+    toolsExpanded: toolsToggle.getAttribute('aria-expanded'),
+    toolsHidden: toolsBody.hidden,
+    toolsCollapsed: toolsSection.dataset.collapsed,
     reflectionExpanded: reflectionToggle.getAttribute('aria-expanded'),
     reflectionHidden: reflectionBody.hidden,
     reflectionCollapsed: reflectionSection.dataset.collapsed,
@@ -194,6 +214,12 @@ console.log(JSON.stringify({ initialState, expandedState }));
     )
 
     assert payload["initialState"] == {
+        "promptExpanded": "false",
+        "promptHidden": True,
+        "promptCollapsed": "true",
+        "toolsExpanded": "false",
+        "toolsHidden": True,
+        "toolsCollapsed": "true",
         "reflectionExpanded": "false",
         "reflectionHidden": True,
         "reflectionCollapsed": "true",
@@ -202,6 +228,12 @@ console.log(JSON.stringify({ initialState, expandedState }));
         "summaryCollapsed": "true",
     }
     assert payload["expandedState"] == {
+        "promptExpanded": "true",
+        "promptHidden": False,
+        "promptCollapsed": "false",
+        "toolsExpanded": "true",
+        "toolsHidden": False,
+        "toolsCollapsed": "false",
         "reflectionExpanded": "true",
         "reflectionHidden": False,
         "reflectionCollapsed": "false",
@@ -414,6 +446,14 @@ class FakeElement {{
             '.panel-send-btn',
             '.agent-panel-scroll',
             '.agent-token-usage',
+            '.agent-panel-runtime-prompt',
+            '.agent-panel-runtime-prompt-toggle',
+            '.agent-panel-runtime-prompt-meta',
+            '.agent-panel-runtime-prompt-body',
+            '.agent-panel-runtime-tools',
+            '.agent-panel-runtime-tools-toggle',
+            '.agent-panel-runtime-tools-meta',
+            '.agent-panel-runtime-tools-body',
             '.agent-panel-reflection',
             '.agent-panel-reflection-toggle',
             '.agent-panel-reflection-meta',
@@ -521,5 +561,17 @@ def test_layout_css_keeps_reflect_button_styles() -> None:
     assert ".agent-panel-refresh-reflection:hover" in css_text
     assert ".agent-panel-icon-btn" in css_text
     assert ".agent-panel-reflection-editor-input" in css_text
+    assert ".agent-panel-runtime-prompt-body" in css_text
+    assert ".agent-panel-runtime-tools-body" in css_text
+    assert ".agent-panel-runtime-pre" in css_text
+    assert ".agent-panel-json-pre" in css_text
+    assert "font-size: 0.78rem;" in css_text
+    assert "line-height: 1.5;" in css_text
+    assert "max-height: 20rem;" in css_text
+    assert "overflow: auto;" in css_text
+    assert "border: none;" in css_text
+    assert "background: transparent;" in css_text
+    assert "scrollbar-gutter: stable;" in css_text
+    assert "scrollbar-width: thin;" in css_text
     assert ".agent-panel-section-body[hidden]" in css_text
     assert "display: none !important;" in css_text

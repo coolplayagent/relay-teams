@@ -2,39 +2,54 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
+from agent_teams.agents.execution.system_prompts import (
+    PromptBuildInput,
+    RuntimePromptBuilder,
+)
 from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
+)
+from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.events import EventEnvelope, EventType
+from agent_teams.agents.tasks.models import TaskEnvelope
+from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.logger import get_logger, log_event
-from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.roles.memory_injection import build_role_with_memory
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_models import RunThinkingConfig
+from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
+
+if TYPE_CHECKING:
+    from agent_teams.skills.skill_registry import SkillRegistry
+    from agent_teams.tools.registry import ToolRegistry
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.workspace import WorkspaceManager
-from agent_teams.agents.tasks.enums import TaskStatus
-from agent_teams.agents.tasks.events import EventEnvelope, EventType
-from agent_teams.agents.tasks.models import TaskEnvelope
 
 LOGGER = get_logger(__name__)
 
@@ -53,6 +68,9 @@ class TaskExecutionService(BaseModel):
     workspace_manager: WorkspaceManager
     prompt_builder: RuntimePromptBuilder
     provider_factory: Callable[[RoleDefinition], object]
+    tool_registry: object
+    skill_registry: object
+    mcp_registry: McpRegistry
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
@@ -183,6 +201,20 @@ class TaskExecutionService(BaseModel):
                 task=task,
                 user_prompt_override=user_prompt_override,
             )
+            (
+                runtime_system_prompt,
+                runtime_tools_json,
+            ) = await self._prepare_runtime_snapshot(
+                role=role_for_run,
+                task=task,
+                working_directory=workspace.resolve_workdir(),
+                shared_state_snapshot=snapshot,
+            )
+            self.agent_repo.update_runtime_snapshot(
+                instance_id,
+                runtime_system_prompt=runtime_system_prompt,
+                runtime_tools_json=runtime_tools_json,
+            )
             result = await runner.run(
                 task=task,
                 instance_id=instance_id,
@@ -191,6 +223,7 @@ class TaskExecutionService(BaseModel):
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
                 thinking=self._thinking_for_run(task.trace_id),
+                system_prompt_override=runtime_system_prompt,
             )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
@@ -404,6 +437,137 @@ class TaskExecutionService(BaseModel):
             role_id=role_id,
             workspace_id=workspace_id,
         )
+
+    async def _prepare_runtime_snapshot(
+        self,
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+    ) -> tuple[str, str]:
+        runtime_system_prompt = await self.prompt_builder.build(
+            PromptBuildInput(
+                role=role,
+                task=task,
+                shared_state_snapshot=shared_state_snapshot,
+                working_directory=working_directory,
+            )
+        )
+        runtime_tools = await self._build_runtime_tools_snapshot(role)
+        return runtime_system_prompt, json.dumps(
+            runtime_tools.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def _build_runtime_tools_snapshot(
+        self,
+        role: RoleDefinition,
+    ) -> RuntimeToolsSnapshot:
+        skill_registry = cast("SkillRegistry", self.skill_registry)
+        tool_registry = cast("ToolRegistry", self.tool_registry)
+        skill_tool_names = frozenset(
+            tool.name for tool in skill_registry.get_toolset_tools(role.skills)
+        )
+        from agent_teams.agents.execution.coordination_agent_builder import (
+            build_coordination_agent,
+        )
+
+        tool_agent = build_coordination_agent(
+            model_name="snapshot-model",
+            base_url="https://example.invalid/v1",
+            api_key="snapshot",
+            system_prompt="runtime-tools-snapshot",
+            allowed_tools=role.tools,
+            allowed_mcp_servers=(),
+            allowed_skills=role.skills,
+            tool_registry=tool_registry,
+            mcp_registry=None,
+            skill_registry=skill_registry,
+        )
+        local_tools: list[RuntimeToolSnapshotEntry] = []
+        skill_tools: list[RuntimeToolSnapshotEntry] = []
+        for tool in tool_agent._function_toolset.tools.values():
+            entry = self._tool_entry_from_definition(
+                source=cast(
+                    Literal["local", "skill", "mcp"],
+                    "skill" if tool.name in skill_tool_names else "local",
+                ),
+                name=tool.tool_def.name,
+                description=tool.tool_def.description or "",
+                kind=self._normalize_tool_kind(tool.tool_def.kind),
+                strict=tool.tool_def.strict,
+                sequential=tool.tool_def.sequential,
+                parameters_json_schema=(
+                    dict(tool.tool_def.parameters_json_schema)
+                    if isinstance(tool.tool_def.parameters_json_schema, dict)
+                    else {}
+                ),
+            )
+            if entry.source == "skill":
+                skill_tools.append(entry)
+            else:
+                local_tools.append(entry)
+
+        mcp_tools: list[RuntimeToolSnapshotEntry] = []
+        for server_name in role.mcp_servers:
+            for tool in await self.mcp_registry.list_tool_schemas(server_name):
+                mcp_tools.append(
+                    self._tool_entry_from_definition(
+                        source="mcp",
+                        name=tool.name,
+                        description=tool.description,
+                        kind="function",
+                        strict=None,
+                        sequential=False,
+                        parameters_json_schema=tool.input_schema,
+                        server_name=server_name,
+                    )
+                )
+
+        local_tools.sort(key=lambda item: item.name)
+        skill_tools.sort(key=lambda item: item.name)
+        mcp_tools.sort(key=lambda item: (item.server_name, item.name))
+        return RuntimeToolsSnapshot(
+            local_tools=tuple(local_tools),
+            skill_tools=tuple(skill_tools),
+            mcp_tools=tuple(mcp_tools),
+        )
+
+    def _tool_entry_from_definition(
+        self,
+        *,
+        source: Literal["local", "skill", "mcp"],
+        name: str,
+        description: str,
+        kind: Literal["function", "output", "external", "unapproved"],
+        strict: bool | None,
+        sequential: bool,
+        parameters_json_schema: Mapping[str, JsonValue],
+        server_name: str = "",
+    ) -> RuntimeToolSnapshotEntry:
+        return RuntimeToolSnapshotEntry(
+            source=source,
+            name=name,
+            description=description,
+            server_name=server_name,
+            kind=kind,
+            strict=strict,
+            sequential=sequential,
+            parameters_json_schema=dict(parameters_json_schema),
+        )
+
+    def _normalize_tool_kind(
+        self,
+        kind: str,
+    ) -> Literal["function", "output", "external", "unapproved"]:
+        if kind in {"function", "output", "external", "unapproved"}:
+            return cast(
+                Literal["function", "output", "external", "unapproved"],
+                kind,
+            )
+        return "function"
 
     def _record_memory_if_needed(
         self,

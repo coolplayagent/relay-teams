@@ -37,6 +37,59 @@ function renderTokenBadge(panelEl, instanceId, runUsage) {
     `;
 }
 
+function getSessionAgent(instanceId, roleId) {
+    const agents = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
+    return agents.find(agent => String(agent.instance_id || '') === String(instanceId || ''))
+        || agents.find(agent => !!roleId && String(agent.role_id || '') === String(roleId || ''))
+        || null;
+}
+
+function renderRuntimePrompt(panelEl, sessionAgent) {
+    const metaEl = panelEl.querySelector('.agent-panel-runtime-prompt-meta');
+    const bodyEl = panelEl.querySelector('.agent-panel-runtime-prompt-body');
+    if (!metaEl || !bodyEl) return;
+
+    const prompt = String(sessionAgent?.runtime_system_prompt || '').trim();
+    const lineCount = prompt ? prompt.split(/\r?\n/).length : 0;
+    metaEl.textContent = lineCount > 0 ? `${lineCount} lines` : 'No snapshot yet';
+    bodyEl.innerHTML = prompt
+        ? `<pre class="agent-panel-runtime-pre">${escapeHtml(prompt)}</pre>`
+        : 'No runtime system prompt yet.';
+}
+
+function renderRuntimeTools(panelEl, sessionAgent) {
+    const metaEl = panelEl.querySelector('.agent-panel-runtime-tools-meta');
+    const bodyEl = panelEl.querySelector('.agent-panel-runtime-tools-body');
+    if (!metaEl || !bodyEl) return;
+
+    const raw = String(sessionAgent?.runtime_tools_json || '').trim();
+    if (!raw) {
+        metaEl.textContent = 'No snapshot yet';
+        bodyEl.textContent = 'No runtime tools snapshot yet.';
+        return;
+    }
+
+    let parsed = null;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        parsed = null;
+    }
+
+    const pretty = parsed ? JSON.stringify(parsed, null, 2) : raw;
+    const toolCount = parsed ? countRuntimeTools(parsed) : 0;
+    metaEl.textContent = toolCount > 0 ? `${toolCount} tools` : 'JSON snapshot';
+    bodyEl.innerHTML = `<pre class="agent-panel-json-pre"><code>${escapeHtml(pretty)}</code></pre>`;
+}
+
+function countRuntimeTools(payload) {
+    if (!payload || typeof payload !== 'object') return 0;
+    const localTools = Array.isArray(payload.local_tools) ? payload.local_tools.length : 0;
+    const skillTools = Array.isArray(payload.skill_tools) ? payload.skill_tools.length : 0;
+    const mcpTools = Array.isArray(payload.mcp_tools) ? payload.mcp_tools.length : 0;
+    return localTools + skillTools + mcpTools;
+}
+
 function renderReflection(panelEl, reflection) {
     const metaEl = panelEl.querySelector('.agent-panel-reflection-meta');
     const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
@@ -52,17 +105,13 @@ function renderReflection(panelEl, reflection) {
     bodyEl.textContent = summary || 'No reflection memory yet.';
 }
 
-
 function renderPanelSummary(panelEl, instanceId, roleId) {
     const statusEl = panelEl.querySelector('.agent-panel-summary-status');
     const updatedEl = panelEl.querySelector('.agent-panel-summary-updated');
     const tasksEl = panelEl.querySelector('.agent-panel-summary-tasks');
     if (!statusEl || !updatedEl || !tasksEl) return;
 
-    const agents = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
-    const selectedAgent = agents.find(agent => String(agent.instance_id || '') === String(instanceId || ''))
-        || agents.find(agent => !!roleId && String(agent.role_id || '') === String(roleId || ''))
-        || null;
+    const selectedAgent = getSessionAgent(instanceId, roleId);
     const status = humanizeStatus(selectedAgent?.status || 'idle');
     statusEl.textContent = status;
     statusEl.className = `agent-panel-summary-status is-${escapeAttribute(String(selectedAgent?.status || 'idle'))}`;
@@ -107,7 +156,6 @@ function formatTimestamp(value) {
     return parsed.toLocaleString();
 }
 
-
 function compareTimelineDesc(left, right) {
     const leftTs = parseTimelineValue(left?.updated_at || left?.created_at || '');
     const rightTs = parseTimelineValue(right?.updated_at || right?.created_at || '');
@@ -135,6 +183,15 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
     return escapeHtml(value).replaceAll('`', '&#96;');
+}
+
+export function syncAgentPanelState(instanceId, roleId = null) {
+    const panel = getPanel(instanceId);
+    if (!panel) return;
+    const sessionAgent = getSessionAgent(instanceId, roleId);
+    renderRuntimePrompt(panel.panelEl, sessionAgent);
+    renderRuntimeTools(panel.panelEl, sessionAgent);
+    renderPanelSummary(panel.panelEl, instanceId, roleId);
 }
 
 export async function loadAgentHistory(instanceId, roleId = null) {
@@ -181,8 +238,8 @@ export async function loadAgentHistory(instanceId, roleId = null) {
         panel.loadedSessionId = state.currentSessionId || '';
         panel.loadedRunId = runId || '';
         renderTokenBadge(panel.panelEl, instanceId, runUsage);
+        syncAgentPanelState(instanceId, roleId);
         renderReflection(panel.panelEl, reflection);
-        renderPanelSummary(panel.panelEl, instanceId, roleId);
     } catch (e) {
         scrollEl.innerHTML =
             '<div class="panel-empty" style="color:var(--danger)">Failed to load history.</div>';

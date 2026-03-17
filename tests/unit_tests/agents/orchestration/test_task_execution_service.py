@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,8 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.tools.registry import build_default_registry
 from agent_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -108,6 +111,9 @@ def _build_service(
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
     )
     return service, task_repo, agent_repo, message_repo
@@ -169,6 +175,9 @@ def _build_service_with_control(
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
         run_control_manager=run_control_manager,
         run_intent_repo=RunIntentRepository(db_path),
     )
@@ -300,6 +309,13 @@ async def test_execute_persists_objective_before_first_turn(
     assert len(history) == 1
     assert isinstance(history[0], ModelRequest)
     assert history[0].parts[0].content == "query time"
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert "You are the time role." in runtime_record.runtime_system_prompt
+    assert json.loads(runtime_record.runtime_tools_json) == {
+        "local_tools": [],
+        "skill_tools": [],
+        "mcp_tools": [],
+    }
 
 
 @pytest.mark.asyncio
@@ -526,6 +542,9 @@ async def test_execute_coordinator_receives_task_runtime_contract(
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
     )
 
     result = await service.execute(
@@ -598,6 +617,9 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
         role_memory_service=role_memory_service,
     )
     task, instance_id = _seed_task(

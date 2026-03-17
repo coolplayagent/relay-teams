@@ -2,16 +2,22 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from agent_teams.logger import get_logger
-from agent_teams.mcp.mcp_models import McpServerSpec, McpToolInfo
+from agent_teams.mcp.mcp_models import McpServerSpec, McpToolInfo, McpToolSchema
 from agent_teams.trace import trace_span
 
 if TYPE_CHECKING:
     from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 
 LOGGER = get_logger(__name__)
+
+
+class _ListedMcpTool(Protocol):
+    name: object
+    description: object
+    inputSchema: object
 
 
 class McpRegistry:
@@ -56,9 +62,7 @@ class McpRegistry:
             operation="list_tools",
             attributes={"server_name": name},
         ):
-            toolset = self._get_or_create_toolset(name)
-            async with toolset:
-                mcp_tools = await toolset.client.list_tools()
+            mcp_tools = await self._list_tool_objects(name)
             return tuple(
                 McpToolInfo(
                     name=str(tool.name),
@@ -68,6 +72,35 @@ class McpRegistry:
                 )
                 for tool in mcp_tools
             )
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        with trace_span(
+            LOGGER,
+            component="mcp.registry",
+            operation="list_tool_schemas",
+            attributes={"server_name": name},
+        ):
+            mcp_tools = await self._list_tool_objects(name)
+            return tuple(
+                McpToolSchema(
+                    name=str(tool.name),
+                    description=tool.description
+                    if isinstance(tool.description, str)
+                    else "",
+                    input_schema=(
+                        dict(tool.inputSchema)
+                        if isinstance(tool.inputSchema, dict)
+                        else {}
+                    ),
+                )
+                for tool in mcp_tools
+            )
+
+    async def _list_tool_objects(self, name: str) -> tuple[_ListedMcpTool, ...]:
+        toolset = self._get_or_create_toolset(name)
+        async with toolset:
+            mcp_tools = await toolset.client.list_tools()
+        return cast("tuple[_ListedMcpTool, ...]", tuple(mcp_tools))
 
     def _get_or_create_toolset(self, name: str) -> FastMCPToolset:
         with trace_span(

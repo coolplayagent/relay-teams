@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class McpConfigScope(str, Enum):
@@ -15,6 +15,14 @@ class McpToolInfo(BaseModel):
 
     name: str
     description: str = ""
+
+
+class McpToolSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    description: str = ""
+    input_schema: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class McpServerSpec(BaseModel):

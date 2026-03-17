@@ -51,12 +51,20 @@ await loadAgentHistory('inst-1', 'writer');
 
 console.log(JSON.stringify({
     tasksHtml: panelEl.querySelector('.agent-panel-summary-tasks').innerHTML,
+    promptHtml: panelEl.querySelector('.agent-panel-runtime-prompt-body').innerHTML,
+    promptMeta: panelEl.querySelector('.agent-panel-runtime-prompt-meta').textContent,
+    toolsHtml: panelEl.querySelector('.agent-panel-runtime-tools-body').innerHTML,
+    toolsMeta: panelEl.querySelector('.agent-panel-runtime-tools-meta').textContent,
 }));
 
 function createPanelElement() {
     return {
         _nodes: new Map([
             ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
             ['.agent-panel-reflection-meta', createNode()],
             ['.agent-panel-reflection-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
@@ -85,6 +93,76 @@ function createNode() {
     assert tasks_html.index("Newer completed task") < tasks_html.index(
         "Older completed task"
     )
+    assert "You are the runtime writer." in cast(str, payload["promptHtml"])
+    assert payload["promptMeta"] == "1 lines"
+    assert "local_tools" in cast(str, payload["toolsHtml"])
+    assert payload["toolsMeta"] == "1 tools"
+
+
+def test_sync_agent_panel_state_renders_runtime_snapshot_from_session_state(
+    tmp_path: Path,
+) -> None:
+    payload = _run_history_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { syncAgentPanelState } = await import('./history.mjs');
+const { setPanel } = await import('./mockPanelState.mjs');
+
+const panelEl = createPanelElement();
+setPanel('inst-1', {
+    panelEl,
+    scrollEl: panelEl.querySelector('.agent-panel-scroll'),
+    loadedSessionId: 'session-1',
+    loadedRunId: 'run-1',
+});
+
+syncAgentPanelState('inst-1', 'writer');
+
+console.log(JSON.stringify({
+    promptHtml: panelEl.querySelector('.agent-panel-runtime-prompt-body').innerHTML,
+    promptMeta: panelEl.querySelector('.agent-panel-runtime-prompt-meta').textContent,
+    toolsHtml: panelEl.querySelector('.agent-panel-runtime-tools-body').innerHTML,
+    toolsMeta: panelEl.querySelector('.agent-panel-runtime-tools-meta').textContent,
+    summaryStatus: panelEl.querySelector('.agent-panel-summary-status').textContent,
+}));
+
+function createPanelElement() {
+    return {
+        _nodes: new Map([
+            ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
+            ['.agent-panel-reflection-meta', createNode()],
+            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-summary-status', createNode()],
+            ['.agent-panel-summary-updated', createNode()],
+            ['.agent-panel-summary-tasks', createNode()],
+            ['.agent-token-usage[data-instance-id="inst-1"]', createNode()],
+        ]),
+        querySelector(selector) {
+            return this._nodes.get(selector) || null;
+        },
+    };
+}
+
+function createNode() {
+    return {
+        innerHTML: '',
+        textContent: '',
+        className: '',
+        dataset: {},
+    };
+}
+""".strip(),
+    )
+
+    assert "You are the runtime writer." in cast(str, payload["promptHtml"])
+    assert payload["promptMeta"] == "1 lines"
+    assert "local_tools" in cast(str, payload["toolsHtml"])
+    assert payload["toolsMeta"] == "1 tools"
+    assert payload["summaryStatus"] == "Completed"
 
 
 def _run_history_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -143,6 +221,8 @@ export const state = {
             status: 'completed',
             updated_at: '2026-03-16T08:20:00Z',
             created_at: '2026-03-16T08:00:00Z',
+            runtime_system_prompt: 'You are the runtime writer.',
+            runtime_tools_json: '{"local_tools":[{"source":"local","name":"read","description":"Read a file","server_name":"","kind":"function","strict":null,"sequential":false,"parameters_json_schema":{}}],"skill_tools":[],"mcp_tools":[]}',
         },
     ],
 };

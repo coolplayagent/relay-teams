@@ -48,23 +48,25 @@ Purpose: registered execution workspaces. `profile_json` stores the typed worksp
 
 ```sql
 CREATE TABLE IF NOT EXISTS agent_instances (
-    run_id          TEXT NOT NULL,
-    trace_id        TEXT NOT NULL,
-    session_id      TEXT NOT NULL,
-    instance_id     TEXT PRIMARY KEY,
-    role_id         TEXT NOT NULL,
-    workspace_id    TEXT NOT NULL DEFAULT '',
-    conversation_id TEXT NOT NULL DEFAULT '',
-    status          TEXT NOT NULL,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+    run_id                TEXT NOT NULL,
+    trace_id              TEXT NOT NULL,
+    session_id            TEXT NOT NULL,
+    instance_id           TEXT PRIMARY KEY,
+    role_id               TEXT NOT NULL,
+    workspace_id          TEXT NOT NULL DEFAULT '',
+    conversation_id       TEXT NOT NULL DEFAULT '',
+    status                TEXT NOT NULL,
+    runtime_system_prompt TEXT NOT NULL DEFAULT '',
+    runtime_tools_json    TEXT NOT NULL DEFAULT '',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_instances_run_status
     ON agent_instances(run_id, status);
 ```
 
-Purpose: runtime snapshot of agent instances.
+Purpose: runtime snapshot of agent instances. Besides lifecycle state, each row now stores the latest runtime system prompt and runtime tools JSON shown in the subagent panel.
 
 Notes:
 - Runtime semantics are session-level: one delegated role instance is reused across all tasks in the same session.

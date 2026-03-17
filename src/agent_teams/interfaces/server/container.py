@@ -361,6 +361,8 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             provider_factory=self._provider_factory,
+            tool_registry=self.tool_registry,
+            skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,

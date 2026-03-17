@@ -20,6 +20,8 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workspace import WorkspaceManager
 
 
@@ -36,6 +38,8 @@ def create_task_execution_service(
     run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
     provider_factory: Callable[[RoleDefinition], LLMProvider],
+    tool_registry: ToolRegistry,
+    skill_registry: SkillRegistry,
     mcp_registry: McpRegistry,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
@@ -56,6 +60,9 @@ def create_task_execution_service(
             mcp_registry=mcp_registry,
         ),
         provider_factory=provider_factory,
+        tool_registry=tool_registry,
+        skill_registry=skill_registry,
+        mcp_registry=mcp_registry,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,

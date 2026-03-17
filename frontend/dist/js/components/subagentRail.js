@@ -74,6 +74,8 @@ export function rememberLiveSubagent(instanceId, roleId) {
         updated_at: nowIso,
         reflection_summary_preview: existingIndex >= 0 ? nextAgents[existingIndex].reflection_summary_preview : '',
         reflection_updated_at: existingIndex >= 0 ? nextAgents[existingIndex].reflection_updated_at : '',
+        runtime_system_prompt: existingIndex >= 0 ? nextAgents[existingIndex].runtime_system_prompt : '',
+        runtime_tools_json: existingIndex >= 0 ? nextAgents[existingIndex].runtime_tools_json : '',
     };
     if (existingIndex >= 0) {
         nextAgents[existingIndex] = {
@@ -267,6 +269,8 @@ function normalizeSessionAgents(payload) {
             updated_at: String(item.updated_at || item.created_at || ''),
             reflection_summary_preview: String(item.reflection_summary_preview || ''),
             reflection_updated_at: String(item.reflection_updated_at || ''),
+            runtime_system_prompt: String(item.runtime_system_prompt || ''),
+            runtime_tools_json: String(item.runtime_tools_json || ''),
         };
         const existing = latestByRole.get(roleId);
         if (!existing || String(record.updated_at).localeCompare(String(existing.updated_at)) >= 0) {

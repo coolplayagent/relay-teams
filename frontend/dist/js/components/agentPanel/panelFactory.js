@@ -44,6 +44,26 @@ export function createPanel(instanceId, roleId, onClose) {
             <button class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory">Reflect</button>
             <button class="agent-panel-stop" type="button" title="Stop this subagent">Stop</button>
         </div>
+        <div class="agent-panel-section agent-panel-runtime-prompt" data-collapsed="true">
+            <button class="agent-panel-section-toggle agent-panel-runtime-prompt-toggle" type="button" aria-expanded="false">
+                <span class="agent-panel-section-heading">
+                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
+                    <span class="agent-panel-section-title">System prompt</span>
+                </span>
+                <span class="agent-panel-section-meta agent-panel-runtime-prompt-meta"></span>
+            </button>
+            <div class="agent-panel-section-body agent-panel-runtime-prompt-body" hidden>No runtime system prompt yet.</div>
+        </div>
+        <div class="agent-panel-section agent-panel-runtime-tools" data-collapsed="true">
+            <button class="agent-panel-section-toggle agent-panel-runtime-tools-toggle" type="button" aria-expanded="false">
+                <span class="agent-panel-section-heading">
+                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
+                    <span class="agent-panel-section-title">Tools</span>
+                </span>
+                <span class="agent-panel-section-meta agent-panel-runtime-tools-meta"></span>
+            </button>
+            <div class="agent-panel-section-body agent-panel-runtime-tools-body" hidden>No runtime tools snapshot yet.</div>
+        </div>
         <div class="agent-panel-section agent-panel-reflection" data-collapsed="true">
             <div class="agent-panel-section-header">
                 <button class="agent-panel-section-toggle agent-panel-reflection-toggle" type="button" aria-expanded="false">
@@ -163,6 +183,18 @@ export function createPanel(instanceId, roleId, onClose) {
         };
     }
 
+    bindCollapsibleSection(panelEl, {
+        sectionSelector: '.agent-panel-runtime-prompt',
+        toggleSelector: '.agent-panel-runtime-prompt-toggle',
+        bodySelector: '.agent-panel-runtime-prompt-body',
+        expanded: false,
+    });
+    bindCollapsibleSection(panelEl, {
+        sectionSelector: '.agent-panel-runtime-tools',
+        toggleSelector: '.agent-panel-runtime-tools-toggle',
+        bodySelector: '.agent-panel-runtime-tools-body',
+        expanded: false,
+    });
     bindCollapsibleSection(panelEl, {
         sectionSelector: '.agent-panel-reflection',
         toggleSelector: '.agent-panel-reflection-toggle',

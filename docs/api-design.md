@@ -246,7 +246,7 @@ Returns active run recovery state, pending tool approvals, paused subagent state
 
 ### `GET /sessions/{session_id}/agents`
 
-Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace.
+Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
 
 Response fields include:
 - `instance_id`
@@ -256,6 +256,8 @@ Response fields include:
 - `updated_at`
 - `reflection_summary_preview`
 - `reflection_updated_at`
+- `runtime_system_prompt`
+- `runtime_tools_json`
 
 ### `GET /sessions/{session_id}/events`
 

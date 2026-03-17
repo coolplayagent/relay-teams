@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.ids import new_instance_id
@@ -62,6 +63,8 @@ class AgentRuntimeRecord(BaseModel):
     workspace_id: str = Field(min_length=1)
     conversation_id: str = Field(min_length=1)
     status: InstanceStatus
+    runtime_system_prompt: str = ""
+    runtime_tools_json: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -86,6 +89,27 @@ class AgentRuntimeRecord(BaseModel):
                 role_id,
             )
         return payload
+
+
+class RuntimeToolSnapshotEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: Literal["local", "skill", "mcp"]
+    name: str = Field(min_length=1)
+    description: str = ""
+    server_name: str = ""
+    kind: Literal["function", "output", "external", "unapproved"] = "function"
+    strict: bool | None = None
+    sequential: bool = False
+    parameters_json_schema: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class RuntimeToolsSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    local_tools: tuple[RuntimeToolSnapshotEntry, ...] = ()
+    skill_tools: tuple[RuntimeToolSnapshotEntry, ...] = ()
+    mcp_tools: tuple[RuntimeToolSnapshotEntry, ...] = ()
 
 
 def create_subagent_instance(

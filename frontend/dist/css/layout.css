@@ -1085,6 +1085,68 @@ body.is-resizing-rails .right-rail-resizer {
     line-height: 1.5;
 }
 
+.agent-panel-runtime-prompt {
+    background: color-mix(in srgb, var(--bg-surface-glass) 60%, transparent);
+}
+
+.agent-panel-runtime-tools {
+    background: color-mix(in srgb, var(--bg-2) 26%, transparent);
+}
+
+.agent-panel-runtime-prompt-body,
+.agent-panel-runtime-tools-body {
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.agent-panel-runtime-pre,
+.agent-panel-json-pre {
+    margin: 0;
+    padding: 0.2rem 0.3rem 0.2rem 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    max-height: 20rem;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
+}
+
+.agent-panel-runtime-pre {
+    font-family: inherit;
+}
+
+.agent-panel-json-pre {
+    font-family: var(--font-mono);
+}
+
+.agent-panel-json-pre code {
+    font-family: inherit;
+}
+
+.agent-panel-runtime-pre::-webkit-scrollbar,
+.agent-panel-json-pre::-webkit-scrollbar {
+    width: 0.45rem;
+    height: 0.45rem;
+}
+
+.agent-panel-runtime-pre::-webkit-scrollbar-thumb,
+.agent-panel-json-pre::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+}
+
+.agent-panel-runtime-pre::-webkit-scrollbar-track,
+.agent-panel-json-pre::-webkit-scrollbar-track {
+    background: transparent;
+}
+
 .agent-panel-reflection-editor {
     display: flex;
     flex-direction: column;
