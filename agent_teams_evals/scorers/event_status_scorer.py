@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from pydantic import JsonValue
+
+from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+from agent_teams_evals.scorers.base import Scorer
+
+
+class EventStatusScorer(Scorer):
+    @property
+    def name(self) -> str:
+        return "event_status"
+
+    def score(
+        self,
+        *,
+        item: EvalItem,
+        run_id: str,
+        session_id: str,
+        outcome: RunOutcome,
+        events: list[dict[str, JsonValue]],
+        agent_output: str,
+        generated_patch: str,
+        token_usage: TokenUsage,
+        duration_seconds: float,
+        workspace_path: str | None = None,
+        error: str | None = None,
+    ) -> EvalResult:
+        passed = outcome == RunOutcome.COMPLETED
+        score_val = 1.0 if passed else 0.0
+        detail = f"run outcome: {outcome.value}"
+
+        return EvalResult(
+            item_id=item.item_id,
+            dataset=item.dataset,
+            run_id=run_id,
+            session_id=session_id,
+            outcome=outcome,
+            passed=passed,
+            score=score_val,
+            scorer_name=self.name,
+            scorer_detail=detail,
+            agent_output=agent_output,
+            generated_patch=generated_patch,
+            token_usage=token_usage,
+            duration_seconds=duration_seconds,
+            workspace_path=workspace_path,
+            error=error,
+        )

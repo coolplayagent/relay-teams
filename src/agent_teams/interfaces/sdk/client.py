@@ -167,6 +167,10 @@ class AgentTeamsClient:
             ) from exc
         except URLError as exc:
             raise RuntimeError(f"Failed to connect to server: {exc}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Stream timed out after {self._stream_timeout_seconds}s"
+            ) from exc
 
     def list_tool_approvals(self, run_id: str) -> list[dict[str, JsonValue]]:
         data = self._request_json("GET", f"/api/runs/{run_id}/tool-approvals")
@@ -356,6 +360,21 @@ class AgentTeamsClient:
             {"summary": summary},
         )
 
+    def create_workspace(
+        self,
+        *,
+        workspace_id: str,
+        root_path: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            "/api/workspaces",
+            {"workspace_id": workspace_id, "root_path": root_path},
+        )
+
+    def delete_workspace(self, workspace_id: str) -> dict[str, JsonValue]:
+        return self._request_json("DELETE", f"/api/workspaces/{workspace_id}")
+
     def delete_subagent_reflection(
         self,
         session_id: str,
@@ -400,6 +419,8 @@ class AgentTeamsClient:
             raise RuntimeError(f"HTTP {exc.code} {method} {path}: {body}") from exc
         except URLError as exc:
             raise RuntimeError(f"Failed to connect to server: {exc}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(f"Request timed out: {method} {path}") from exc
 
 
 # Backward-compatible alias.

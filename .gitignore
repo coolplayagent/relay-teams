@@ -13,3 +13,6 @@ tmp.db-journal
 pytest-cache-files-*/
 frontend/node_modules/
 frontend/.vite/
+
+.claude
+.agent_teams/evals/

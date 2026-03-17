@@ -39,7 +39,7 @@ agent-teams = "agent_teams.interfaces.cli.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests", "tests/integration_tests"]
-pythonpath = ["src", "tests"]
+pythonpath = ["src", "tests", "."]
 
 [tool.setuptools.packages.find]
 where = ["src"]
