@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterator
 
@@ -79,7 +80,12 @@ class AgentTeamsBackend(AgentBackend):
             for raw_event in client.stream_run_events(run_id):
                 event_count += 1
                 event_type = raw_event.get("event_type")
-                data = raw_event.get("data", {})
+                payload_json = raw_event.get("payload_json", "{}")
+                data: object = (
+                    json.loads(payload_json)
+                    if isinstance(payload_json, str)
+                    else {}
+                )
 
                 if event_type == "text_delta":
                     if isinstance(data, dict):

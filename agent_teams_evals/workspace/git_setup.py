@@ -47,7 +47,7 @@ class GitWorkspaceSetup(WorkspaceSetup):
             cwd=repo_path,
             check=True,
             capture_output=True,
-            timeout=60.0,
+            timeout=self._clone_timeout,
         )
 
         return PreparedWorkspace(

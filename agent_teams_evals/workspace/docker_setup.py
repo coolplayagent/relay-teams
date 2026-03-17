@@ -27,10 +27,6 @@ _DEFAULT_FORWARD_ENV = (
     "no_proxy",
 )
 
-# Path inside the runtime base image where agent-teams is installed.
-_AGENT_RUNTIME_BIN = "/opt/agent-runtime/venv/bin/agent-teams"
-
-
 def _log(item_id: str, msg: str) -> None:
     typer.echo(f"  [{item_id}] {msg}")
 
@@ -69,9 +65,15 @@ class DockerConfig(BaseModel):
 
     # SWE-bench image prefix; full image = {image_prefix}.{instance_id}:latest
     image_prefix: str = "swebench/sweb.eval.x86_64"
-    # Base image that provides /opt/agent-runtime/venv/ via --volumes-from.
+    # Base image that provides /opt/agent-runtime/ via --volumes-from.
     # Build once with: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
     agent_runtime_image: str = "agent-teams-runtime:latest"
+    # Path to the agent-teams binary inside agent_runtime_image.
+    agent_runtime_bin: str = "/opt/agent-runtime/venv/bin/agent-teams"
+    # Port the agent-teams server listens on inside the container.
+    container_server_port: int = 8000
+    # Path inside each eval container where the repo is checked out.
+    container_repo_path: str = "/testbed"
     container_startup_timeout_seconds: float = 60.0
     # Host environment variable names to forward into each container.
     forward_env_vars: tuple[str, ...] = _DEFAULT_FORWARD_ENV
@@ -107,9 +109,9 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             "run",
             "-d",
             "-p",
-            f"{port}:8000",
+            f"{port}:{self._docker_cfg.container_server_port}",
             # Mount /opt/agent-runtime/ from the runtime data container.
-            # Python 3.13 + agent-teams live here, NOT on system PATH.
+            # Python 3.12 + agent-teams live here, NOT on system PATH.
             "--volumes-from",
             self._runtime_container,
         ]
@@ -132,13 +134,13 @@ class DockerWorkspaceSetup(WorkspaceSetup):
         # Start agent-teams directly via the venv binary — no PATH conflict.
         cmd += [
             image,
-            _AGENT_RUNTIME_BIN,
+            self._docker_cfg.agent_runtime_bin,
             "server",
             "start",
             "--host",
             "0.0.0.0",
             "--port",
-            "8000",
+            str(self._docker_cfg.container_server_port),
         ]
 
         _log(item.item_id, f"starting container {image} on port {port} ...")
@@ -159,7 +161,7 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             base_commit=item.base_commit,
             container_id=container_id,
             agent_base_url=agent_base_url,
-            container_repo_path="/testbed",  # SWE-bench standard path inside container
+            container_repo_path=self._docker_cfg.container_repo_path,
         )
 
     def cleanup(self, workspace: PreparedWorkspace) -> None:
