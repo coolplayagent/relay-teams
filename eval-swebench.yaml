@@ -1,0 +1,37 @@
+# SWE-bench Verified eval run
+# Run: uv run python agent_teams_evals/run.py run --config eval-swebench.yaml
+
+dataset: swebench
+dataset_path: .agent_teams/evals/datasets/swebench-verified-1.jsonl
+
+scorer: swebench
+swebench_pass_threshold: 0.8
+
+backend: agent_teams
+agent_teams:
+  base_url: "http://127.0.0.1:8000"
+  execution_mode: ai
+  approval_mode: yolo
+  timeout_seconds: 600
+  config_dir: null
+
+workspace_mode: docker
+evals_workdir: .agent_teams/evals/workspaces
+git_clone_timeout_seconds: 180
+
+docker:
+  image_prefix: "sweb.eval.x86_64"
+  agent_runtime_image: "agent-teams-runtime:latest"
+  container_startup_timeout_seconds: 60
+
+limit: null
+item_ids: []
+
+concurrency: 1
+keep_workspaces: false
+
+output_dir: .agent_teams/evals/results/swebench-verified-1
+report_format: both
+
+cost_per_million_input_tokens: 3.0
+cost_per_million_output_tokens: 15.0

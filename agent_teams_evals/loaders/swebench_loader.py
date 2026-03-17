@@ -38,39 +38,54 @@ def _parse_test_list(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _iter_objects(text: str) -> list[dict[str, object]]:
+    """Parse one or more JSON objects from text, supporting both strict JSONL
+    (one compact object per line) and pretty-printed multi-line objects."""
+    decoder = json.JSONDecoder()
+    pos = 0
+    objs: list[dict[str, object]] = []
+    while pos < len(text):
+        stripped = text[pos:].lstrip()
+        if not stripped:
+            break
+        skip = len(text[pos:]) - len(stripped)
+        obj, end = decoder.raw_decode(stripped)
+        if isinstance(obj, dict):
+            objs.append(obj)
+        pos += skip + end
+    return objs
+
+
 class SWEBenchLoader(DatasetLoader):
     def load(self, path: Path) -> list[EvalItem]:
         items: list[EvalItem] = []
-        with path.open(encoding="utf-8") as fh:
-            for line_num, line in enumerate(fh, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                raw = json.loads(line)
+        text = path.read_text(encoding="utf-8")
+        for line_num, raw in enumerate(_iter_objects(text), start=1):
+            instance_id = str(raw.get("instance_id", f"item-{line_num}"))
+            repo = str(raw.get("repo", ""))
+            repo_url = f"https://github.com/{repo}" if repo else None
+            base_commit_raw = raw.get("base_commit")
+            base_commit = str(base_commit_raw) if base_commit_raw is not None else None
+            problem_statement = str(raw.get("problem_statement", ""))
+            reference_patch_raw = raw.get("patch")
+            reference_patch = str(reference_patch_raw) if reference_patch_raw is not None else None
+            fail_to_pass = _parse_test_list(raw.get("FAIL_TO_PASS", []))
+            pass_to_pass = _parse_test_list(raw.get("PASS_TO_PASS", []))
 
-                instance_id = str(raw.get("instance_id", f"item-{line_num}"))
-                repo = str(raw.get("repo", ""))
-                repo_url = f"https://github.com/{repo}" if repo else None
-                base_commit = raw.get("base_commit")
-                problem_statement = str(raw.get("problem_statement", ""))
-                reference_patch = raw.get("patch")
-                fail_to_pass = _parse_test_list(raw.get("FAIL_TO_PASS", []))
-                pass_to_pass = _parse_test_list(raw.get("PASS_TO_PASS", []))
+            extra_fields: dict[str, str] = {
+                k: str(v) for k, v in raw.items() if k not in _SWEBENCH_FIELDS
+            }
 
-                extra_fields: dict[str, str] = {
-                    k: str(v) for k, v in raw.items() if k not in _SWEBENCH_FIELDS
-                }
-
-                item = EvalItem(
-                    item_id=instance_id,
-                    dataset="swebench",
-                    intent=problem_statement,
-                    repo_url=repo_url,
-                    base_commit=base_commit,
-                    reference_patch=reference_patch,
-                    fail_to_pass=fail_to_pass,
-                    pass_to_pass=pass_to_pass,
-                    extra_fields=extra_fields,
-                )
-                items.append(item)
+            item = EvalItem(
+                item_id=instance_id,
+                dataset="swebench",
+                intent=problem_statement,
+                repo_url=repo_url,
+                base_commit=base_commit,
+                reference_patch=reference_patch,
+                fail_to_pass=fail_to_pass,
+                pass_to_pass=pass_to_pass,
+                extra_fields=extra_fields,
+            )
+            items.append(item)
         return items

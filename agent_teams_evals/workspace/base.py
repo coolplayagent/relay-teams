@@ -19,6 +19,9 @@ class PreparedWorkspace(BaseModel):
     # Docker mode: base URL of the agent-teams server inside the container,
     # e.g. "http://localhost:8023". Overrides backend config.base_url when set.
     agent_base_url: str | None = None
+    # Docker mode: the repo path as a raw POSIX string as seen INSIDE the
+    # container. Avoids Windows path conversion of repo_path on the host.
+    container_repo_path: str | None = None
 
 
 class WorkspaceSetup(ABC):

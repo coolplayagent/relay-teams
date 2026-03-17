@@ -7,10 +7,28 @@ from agent_teams_evals.workspace.base import PreparedWorkspace
 
 class PatchExtractor:
     def extract(self, workspace: PreparedWorkspace) -> str:
-        result = subprocess.run(
-            ["git", "diff"],
-            cwd=workspace.repo_path,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout
+        if workspace.container_id:
+            # Docker mode: the code lives inside the container at container_repo_path.
+            result = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    workspace.container_id,
+                    "git",
+                    "-C",
+                    workspace.container_repo_path or "/testbed",
+                    "diff",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+        else:
+            result = subprocess.run(
+                ["git", "diff"],
+                cwd=workspace.repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+        return result.stdout or ""

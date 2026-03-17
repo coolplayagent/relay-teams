@@ -146,10 +146,11 @@ class DockerWorkspaceSetup(WorkspaceSetup):
 
         return PreparedWorkspace(
             item_id=item.item_id,
-            repo_path=Path("/testbed"),  # standard SWE-bench path inside the container
+            repo_path=Path("."),  # placeholder; container_repo_path is used instead
             base_commit=item.base_commit,
             container_id=container_id,
             agent_base_url=agent_base_url,
+            container_repo_path="/testbed",  # SWE-bench standard path inside container
         )
 
     def cleanup(self, workspace: PreparedWorkspace) -> None:

@@ -1,25 +1,61 @@
 # Agent-teams runtime base image.
-# Contains Python 3.13 + agent-teams installed in an isolated venv at
-# /opt/agent-runtime/venv/ — intentionally NOT on system PATH so that
-# eval containers retain their own Python version as the default python.
+# Contains Python 3.12 + agent-teams fully bundled in /opt/agent-runtime/
+# so it can be mounted into any x86_64 Linux container via --volumes-from.
+#
+# Uses python:3.12-slim-bullseye (Debian 11, glibc 2.31) which is compatible
+# with SWE-bench eval containers (Ubuntu 22.04, glibc 2.35).
 #
 # Build:
 #   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
 #
-# The image is used as a volume source (data container) at eval time:
+# Usage (data container pattern):
 #   docker create --name agent-runtime agent-teams-runtime:latest
 #   docker run --volumes-from agent-runtime <swebench-image> \
 #       /opt/agent-runtime/venv/bin/agent-teams server start ...
 
-FROM python:3.13-slim
+FROM python:3.12-slim-bullseye
 
-# Install into an isolated venv, not into system Python
-RUN python3 -m venv /opt/agent-runtime/venv
+# Create venv with --copies so the python3 binary is a real file.
+RUN python3 -m venv --copies /opt/agent-runtime/venv
 
 WORKDIR /build
 COPY pyproject.toml ./
 COPY src/ src/
 RUN /opt/agent-runtime/venv/bin/pip install . --quiet --no-cache-dir
 
-# Smoke-test: verify the entry point works
+# Bundle the complete Python stdlib so PYTHONHOME works in any container.
+# PYTHONHOME=/opt/agent-runtime/python-home makes Python look for stdlib at
+# /opt/agent-runtime/python-home/lib/python3.12/ — we copy it there.
+RUN mkdir -p /opt/agent-runtime/python-home/lib && \
+    cp -r /usr/local/lib/python3.12 /opt/agent-runtime/python-home/lib/
+
+# Bundle libpython and Debian-specific shared libraries that differ from
+# Ubuntu 22.04 (used by SWE-bench containers):
+#   libffi.so.7   -> Ubuntu 22.04 only has libffi.so.8
+#   libssl.so.1.1 -> Ubuntu 22.04 only has libssl.so.3
+#   libcrypto.so.1.1 -> Ubuntu 22.04 only has libcrypto.so.3
+RUN find /usr/local/lib -name "libpython*.so*" \
+        -exec cp {} /opt/agent-runtime/python-home/lib/ \; && \
+    cp /usr/lib/x86_64-linux-gnu/libffi.so.7 \
+       /usr/lib/x86_64-linux-gnu/libssl.so.1.1 \
+       /usr/lib/x86_64-linux-gnu/libcrypto.so.1.1 \
+       /opt/agent-runtime/python-home/lib/
+
+# Replace the pip entry point with a wrapper that sets up the portable
+# Python environment before invoking the real script.
+RUN cp /opt/agent-runtime/venv/bin/agent-teams \
+       /opt/agent-runtime/venv/bin/agent-teams-script.py && \
+    printf '#!/bin/sh\n\
+export PYTHONHOME=/opt/agent-runtime/python-home\n\
+export PYTHONPATH=/opt/agent-runtime/venv/lib/python3.12/site-packages\n\
+export LD_LIBRARY_PATH=/opt/agent-runtime/python-home/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n\
+exec /opt/agent-runtime/venv/bin/python3 \\\n\
+    /opt/agent-runtime/venv/bin/agent-teams-script.py "$@"\n' \
+    > /opt/agent-runtime/venv/bin/agent-teams && \
+    chmod +x /opt/agent-runtime/venv/bin/agent-teams
+
+# Smoke-test inside the build environment
 RUN /opt/agent-runtime/venv/bin/agent-teams --help > /dev/null
+
+# Declare volume so --volumes-from mounts /opt/agent-runtime/ into eval containers
+VOLUME /opt/agent-runtime

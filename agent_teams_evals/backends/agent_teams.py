@@ -50,9 +50,10 @@ class AgentTeamsBackend(AgentBackend):
         workspace_id = f"eval-{workspace.item_id}"
         _try_delete_workspace(client, workspace_id)
         _log(workspace.item_id, f"registering workspace {workspace_id!r} ...")
+        root_path = workspace.container_repo_path or str(workspace.repo_path.resolve())
         client.create_workspace(
             workspace_id=workspace_id,
-            root_path=str(workspace.repo_path.resolve()),
+            root_path=root_path,
         )
 
         try:
