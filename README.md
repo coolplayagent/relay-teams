@@ -14,6 +14,7 @@ Core code lives under `src/agent_teams/`:
   - `agents/tasks/`: task models, ids, events, repositories, and status helpers
 - `builtin/`: built-in roles, default config, logging config, and bundled skills/resources
 - `env/`: runtime env loading, proxy support, connectivity checks, and env CLI support
+- `gateway/`: external channel session mapping, ACP stdio bridge, and future IM gateway transports
 - `interfaces/`: external interfaces
   - `interfaces/cli/`: Typer CLI entrypoints for prompts, approvals, triggers, environment, skills, and server control
   - `interfaces/sdk/`: Python HTTP client SDK
@@ -202,6 +203,18 @@ This settings page edits Agent Teams app runtime variables, while `uv run agent-
 uv run agent-teams mcp list
 uv run agent-teams mcp tools filesystem --format json
 ```
+
+### 5.2.1) Start the ACP stdio gateway
+
+Use the gateway entrypoint when an ACP host launches Agent Teams over stdio JSON-RPC:
+
+```bash
+uv run agent-teams gateway acp stdio
+```
+
+Current ACP coverage includes `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, and MCP connection lifecycle scaffolding (`mcp/connect`, `mcp/disconnect`). Session-scoped ACP metadata is persisted in the local SQLite database so follow-up turns can reuse the same internal Agent Teams session.
+
+For Zed IDE setup, see `docs/zed-acp-usage.md`.
 
 ### 5.3) Create a run and stream events (HTTP SDK)
 

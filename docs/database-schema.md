@@ -1,4 +1,4 @@
-﻿# Database Schema
+# Database Schema
 
 ## 1. Storage
 
@@ -321,6 +321,43 @@ Purpose: append-only ingest audit log for trigger events.
 
 ---
 
+### 2.9.1 `gateway_sessions`
+
+```sql
+CREATE TABLE IF NOT EXISTS gateway_sessions (
+    gateway_session_id       TEXT PRIMARY KEY,
+    channel_type             TEXT NOT NULL,
+    external_session_id      TEXT NOT NULL,
+    internal_session_id      TEXT NOT NULL,
+    active_run_id            TEXT,
+    peer_user_id             TEXT,
+    peer_chat_id             TEXT,
+    cwd                      TEXT,
+    capabilities_json        TEXT NOT NULL,
+    channel_state_json       TEXT NOT NULL,
+    session_mcp_servers_json TEXT NOT NULL,
+    mcp_connections_json     TEXT NOT NULL,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gateway_sessions_channel_external
+    ON gateway_sessions(channel_type, external_session_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_sessions_internal_session
+    ON gateway_sessions(internal_session_id);
+```
+
+Purpose: persistent mapping between an external gateway channel session and the internal Agent Teams session/run state used by the runtime.
+
+Notes:
+- `channel_type` identifies the transport-facing gateway implementation, starting with `acp_stdio`.
+- `external_session_id` is the channel-visible session key; `internal_session_id` remains the core runtime session source of truth.
+- `capabilities_json` stores channel-scoped capability negotiation data.
+- `session_mcp_servers_json` stores session-scoped MCP server declarations supplied through the gateway transport.
+- `mcp_connections_json` stores MCP connection state for gateway-managed transports such as MCP over ACP.
+
+---
+
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
@@ -330,6 +367,8 @@ Primary query keys used by repositories:
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: trigger-level retrieval across `triggers`, `trigger_events`.
 - `event_id`: trigger-event level retrieval for audit and replay preparation.
+- `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
+- `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
 
 ---
 
@@ -345,6 +384,7 @@ Primary query keys used by repositories:
 - `agent_teams.tools.runtime`: `approval_tickets`.
 - `agent_teams.providers`: `token_usage`.
 - `agent_teams.triggers`: `triggers`, `trigger_events`.
+- `agent_teams.gateway`: `gateway_sessions`.
 - `agent_teams.roles`: `role_memories`.
 
 ---

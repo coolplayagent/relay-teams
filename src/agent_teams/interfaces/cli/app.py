@@ -13,6 +13,7 @@ import typer
 
 from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from agent_teams.env.env_cli import env_app
+from agent_teams.gateway.gateway_cli import build_gateway_app
 from agent_teams.interfaces.cli.approvals_cli import build_approvals_app
 from agent_teams.interfaces.cli.run_prompt_cli import (
     execute_prompt as _execute_prompt_impl,
@@ -209,6 +210,7 @@ approvals_app = build_approvals_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+gateway_app = build_gateway_app()
 triggers_app = build_triggers_app(
     request_json=_trigger_request_json,
     auto_start_if_needed=_trigger_auto_start,
@@ -284,6 +286,7 @@ app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(triggers_app, name="triggers")
 app.add_typer(skills_app, name="skills")
+app.add_typer(gateway_app, name="gateway")
 
 
 def main() -> None:
