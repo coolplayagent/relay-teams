@@ -21,6 +21,7 @@ RUN python3 -m venv --copies /opt/agent-runtime/venv
 WORKDIR /build
 COPY pyproject.toml ./
 COPY src/ src/
+COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
 RUN /opt/agent-runtime/venv/bin/pip install . --quiet --no-cache-dir
 
 # Bundle the complete Python stdlib so PYTHONHOME works in any container.
@@ -49,6 +50,7 @@ RUN cp /opt/agent-runtime/venv/bin/agent-teams \
 export PYTHONHOME=/opt/agent-runtime/python-home\n\
 export PYTHONPATH=/opt/agent-runtime/venv/lib/python3.12/site-packages\n\
 export LD_LIBRARY_PATH=/opt/agent-runtime/python-home/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n\
+cd /opt/agent-runtime\n\
 exec /opt/agent-runtime/venv/bin/python3 \\\n\
     /opt/agent-runtime/venv/bin/agent-teams-script.py "$@"\n' \
     > /opt/agent-runtime/venv/bin/agent-teams && \

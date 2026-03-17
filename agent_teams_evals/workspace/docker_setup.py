@@ -81,6 +81,20 @@ class DockerConfig(BaseModel):
     # Use this for container-specific values that differ from the host, e.g.
     # proxy addresses using host.docker.internal instead of 127.0.0.1.
     extra_env: dict[str, str] = {}
+    # When true, build agent_runtime_image from runtime_dockerfile before running.
+    # The build context is the current working directory.
+    build_runtime_image: bool = False
+    # Dockerfile used when build_runtime_image is true.
+    runtime_dockerfile: str = "Dockerfile.agent-runtime"
+
+
+def _build_runtime_image(dockerfile: str, image: str) -> None:
+    typer.echo(f"Building runtime image {image!r} from {dockerfile!r} ...")
+    subprocess.run(
+        ["docker", "build", "-f", dockerfile, "-t", image, "."],
+        check=True,
+    )
+    typer.echo(f"Runtime image {image!r} built.")
 
 
 class DockerWorkspaceSetup(WorkspaceSetup):
@@ -91,6 +105,10 @@ class DockerWorkspaceSetup(WorkspaceSetup):
     ) -> None:
         self._docker_cfg = docker_cfg
         self._config_dir = config_dir
+        if docker_cfg.build_runtime_image:
+            _build_runtime_image(
+                docker_cfg.runtime_dockerfile, docker_cfg.agent_runtime_image
+            )
         # Create a stopped data container that holds /opt/agent-runtime/.
         # All eval containers mount its volumes via --volumes-from.
         self._runtime_container = _create_runtime_container(
