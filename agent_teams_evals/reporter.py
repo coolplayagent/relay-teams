@@ -1,22 +1,34 @@
 from __future__ import annotations
 
+import statistics
 from pathlib import Path
 
 import typer
 
-from agent_teams_evals.models import EvalReport, EvalResult
+from agent_teams_evals.models import EvalReport, EvalResult, RunOutcome
 
-_COL_WIDTHS = (30, 12, 8, 8, 10, 8)
-_HEADERS = ("item_id", "outcome", "passed", "score", "duration(s)", "scorer")
+_COL_WIDTHS = (30, 12, 8, 8, 10, 14, 8)
+_HEADERS = (
+    "item_id",
+    "outcome",
+    "passed",
+    "score",
+    "duration(s)",
+    "tok_in/out(k)",
+    "scorer",
+)
 
 
 def _row(result: EvalResult) -> tuple[str, ...]:
+    in_k = result.token_usage.input_tokens / 1000
+    out_k = result.token_usage.output_tokens / 1000
     return (
         result.item_id[:30],
         result.outcome.value,
         "PASS" if result.passed else "FAIL",
         f"{result.score:.3f}",
         f"{result.duration_seconds:.1f}",
+        f"{in_k:.1f}k/{out_k:.1f}k",
         result.scorer_name,
     )
 
@@ -40,10 +52,21 @@ class EvalReporter:
             f"({report.pass_rate * 100:.1f}%)"
         )
         typer.echo(
-            f"Tokens  : in={report.total_input_tokens}, "
-            f"out={report.total_output_tokens}"
+            f"Outcomes: completed={report.outcome_completed}"
+            f"  failed={report.outcome_failed}"
+            f"  timed_out={report.outcome_timed_out}"
+            f"  stopped={report.outcome_stopped}"
         )
-        typer.echo(f"Mean dur: {report.mean_duration_seconds:.1f}s")
+        typer.echo(
+            f"Tokens  : in={report.total_input_tokens:,}"
+            f"  out={report.total_output_tokens:,}"
+            f"  est_cost=${report.estimated_cost_usd:.4f}"
+        )
+        typer.echo(
+            f"Duration: mean={report.mean_duration_seconds:.1f}s"
+            f"  p50={report.p50_duration_seconds:.1f}s"
+            f"  p95={report.p95_duration_seconds:.1f}s"
+        )
         typer.echo("")
         typer.echo(hr)
         typer.echo(_line(_HEADERS, _COL_WIDTHS))
@@ -62,13 +85,16 @@ class EvalReporter:
         for r in report.results:
             status_class = "pass" if r.passed else "fail"
             error_cell = r.error or ""
+            in_k = r.token_usage.input_tokens / 1000
+            out_k = r.token_usage.output_tokens / 1000
             rows_html += (
                 f"<tr class='{status_class}'>"
                 f"<td>{r.item_id}</td>"
                 f"<td>{r.outcome.value}</td>"
                 f"<td>{'PASS' if r.passed else 'FAIL'}</td>"
                 f"<td>{r.score:.3f}</td>"
-                f"<td>{r.duration_seconds:.1f}</td>"
+                f"<td>{r.duration_seconds:.1f}s</td>"
+                f"<td>{in_k:.1f}k / {out_k:.1f}k</td>"
                 f"<td>{r.scorer_name}</td>"
                 f"<td>{r.scorer_detail}</td>"
                 f"<td>{error_cell}</td>"
@@ -97,16 +123,17 @@ tr.fail td {{ background: #ffe6e6; }}
 <p>Dataset: {report.dataset}</p>
 <p>Scorer: {report.scorer_name}</p>
 <p>Results: {report.passed}/{report.total} passed ({report.pass_rate * 100:.1f}%)</p>
+<p>Outcomes: completed={report.outcome_completed} failed={report.outcome_failed} timed_out={report.outcome_timed_out} stopped={report.outcome_stopped}</p>
 <p>Mean score: {report.mean_score:.3f}</p>
-<p>Mean duration: {report.mean_duration_seconds:.1f}s</p>
-<p>Tokens: in={report.total_input_tokens}, out={report.total_output_tokens}</p>
+<p>Duration: mean={report.mean_duration_seconds:.1f}s p50={report.p50_duration_seconds:.1f}s p95={report.p95_duration_seconds:.1f}s</p>
+<p>Tokens: in={report.total_input_tokens:,} out={report.total_output_tokens:,} est_cost=${report.estimated_cost_usd:.4f}</p>
 <p>Generated: {report.generated_at.isoformat()}</p>
 </div>
 <table>
 <thead>
 <tr>
 <th>item_id</th><th>outcome</th><th>passed</th><th>score</th>
-<th>duration(s)</th><th>scorer</th><th>detail</th><th>error</th>
+<th>duration</th><th>tok_in/out(k)</th><th>scorer</th><th>detail</th><th>error</th>
 </tr>
 </thead>
 <tbody>
@@ -122,6 +149,9 @@ def build_report(
     results: list[EvalResult],
     dataset: str,
     scorer_name: str,
+    *,
+    cost_per_million_input: float = 3.0,
+    cost_per_million_output: float = 15.0,
 ) -> EvalReport:
     total = len(results)
     passed = sum(1 for r in results if r.passed)
@@ -129,11 +159,24 @@ def build_report(
     failed = total - passed
     pass_rate = passed / total if total > 0 else 0.0
     mean_score = sum(r.score for r in results) / total if total > 0 else 0.0
-    mean_duration = (
-        sum(r.duration_seconds for r in results) / total if total > 0 else 0.0
-    )
+
+    durations = sorted(r.duration_seconds for r in results)
+    mean_duration = sum(durations) / total if total > 0 else 0.0
+    p50 = statistics.median(durations) if durations else 0.0
+    p95_idx = max(0, int(len(durations) * 0.95) - 1)
+    p95 = durations[p95_idx] if durations else 0.0
+
+    outcome_completed = sum(1 for r in results if r.outcome == RunOutcome.COMPLETED)
+    outcome_failed = sum(1 for r in results if r.outcome == RunOutcome.FAILED)
+    outcome_timed_out = sum(1 for r in results if r.outcome == RunOutcome.TIMEOUT)
+    outcome_stopped = sum(1 for r in results if r.outcome == RunOutcome.STOPPED)
+
     total_input = sum(r.token_usage.input_tokens for r in results)
     total_output = sum(r.token_usage.output_tokens for r in results)
+    estimated_cost = (
+        total_input / 1_000_000 * cost_per_million_input
+        + total_output / 1_000_000 * cost_per_million_output
+    )
 
     return EvalReport(
         dataset=dataset,
@@ -145,7 +188,14 @@ def build_report(
         pass_rate=pass_rate,
         mean_score=mean_score,
         mean_duration_seconds=mean_duration,
+        p50_duration_seconds=p50,
+        p95_duration_seconds=p95,
+        outcome_completed=outcome_completed,
+        outcome_failed=outcome_failed,
+        outcome_timed_out=outcome_timed_out,
+        outcome_stopped=outcome_stopped,
         total_input_tokens=total_input,
         total_output_tokens=total_output,
+        estimated_cost_usd=estimated_cost,
         results=tuple(results),
     )

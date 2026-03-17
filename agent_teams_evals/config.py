@@ -21,3 +21,5 @@ class EvalConfig(BaseModel):
     keep_workspaces: bool = False
     swebench_pass_threshold: float = 0.8
     git_clone_timeout_seconds: float = 120.0
+    cost_per_million_input_tokens: float = 3.0
+    cost_per_million_output_tokens: float = 15.0

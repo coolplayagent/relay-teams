@@ -17,31 +17,23 @@ app = typer.Typer(help="Agent benchmark evaluation CLI", add_completion=False)
 
 @app.command()
 def run(
-    dataset: str = typer.Option(..., help="Dataset type: 'jsonl' or 'swebench'"),
-    dataset_path: Path = typer.Option(..., help="Path to JSONL dataset file"),
-    scorer: str = typer.Option(
-        "keyword", help="Scorer: keyword | regex | event_status | swebench"
+    config_file: Path = typer.Option(
+        ..., "--config", "-c", help="Path to YAML run config"
     ),
-    base_url: str = typer.Option("http://127.0.0.1:8000", help="Backend base URL"),
-    workspace_id: str = typer.Option("default", help="Workspace ID for sessions"),
-    execution_mode: str = typer.Option("ai", help="Run execution mode"),
-    run_timeout: float = typer.Option(300.0, help="Run timeout in seconds"),
-    limit: int | None = typer.Option(None, help="Max items to evaluate"),
-    item_ids: list[str] = typer.Option([], help="Specific item IDs to evaluate"),
-    keep_workspaces: bool = typer.Option(False, help="Keep cloned repos after run"),
-    concurrency: int = typer.Option(1, help="Number of items to run in parallel"),
-    output_dir: Path = typer.Option(
-        Path(".agent_teams/evals/results"), help="Output directory"
+    limit: int | None = typer.Option(None, help="Override: max items to evaluate"),
+    item_ids: list[str] = typer.Option([], help="Override: specific item IDs to run"),
+    concurrency: int | None = typer.Option(None, help="Override: parallel workers"),
+    keep_workspaces: bool | None = typer.Option(
+        None, help="Override: keep cloned repos"
     ),
-    swebench_threshold: float = typer.Option(0.8, help="SWE-bench pass threshold"),
-    report_format: str = typer.Option("json", help="Report format: json | html | both"),
+    base_url: str | None = typer.Option(None, help="Override: backend base URL"),
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from agent_teams_evals.config import EvalConfig
     from agent_teams_evals.loaders.jsonl_loader import JsonlLoader
     from agent_teams_evals.loaders.swebench_loader import SWEBenchLoader
     from agent_teams_evals.reporter import EvalReporter, build_report
+    from agent_teams_evals.run_config import load_run_config
     from agent_teams_evals.runner import EvalRunner
     from agent_teams_evals.scorers.event_status_scorer import EventStatusScorer
     from agent_teams_evals.scorers.keyword_scorer import KeywordScorer
@@ -50,50 +42,62 @@ def run(
     from agent_teams_evals.workspace.git_setup import GitWorkspaceSetup
     from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
-    config = EvalConfig(
-        base_url=base_url,
-        workspace_id=workspace_id,
-        execution_mode=execution_mode,
-        run_timeout_seconds=run_timeout,
-        output_dir=output_dir,
-        dataset_path=dataset_path,
-        limit=limit,
-        item_ids=tuple(item_ids),
-        concurrency=concurrency,
-        keep_workspaces=keep_workspaces,
-        swebench_pass_threshold=swebench_threshold,
+    cfg = load_run_config(config_file)
+
+    # Apply CLI overrides
+    overrides: dict[str, object] = {}
+    if limit is not None:
+        overrides["limit"] = limit
+    if item_ids:
+        overrides["item_ids"] = tuple(item_ids)
+    if concurrency is not None:
+        overrides["concurrency"] = concurrency
+    if keep_workspaces is not None:
+        overrides["keep_workspaces"] = keep_workspaces
+    if base_url is not None:
+        overrides["base_url"] = base_url
+    if overrides:
+        cfg = cfg.model_copy(update=overrides)
+
+    if cfg.dataset_path is None:
+        typer.echo("Error: dataset_path is required in the config file.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Config: {config_file}")
+    typer.echo(
+        f"  dataset={cfg.dataset}  scorer={cfg.scorer}  concurrency={cfg.concurrency}"
     )
 
-    if dataset == "swebench":
+    if cfg.dataset == "swebench":
         loader = SWEBenchLoader()
     else:
-        loader = JsonlLoader(dataset_name=dataset)
+        loader = JsonlLoader(dataset_name=cfg.dataset)
 
-    items = loader.load(dataset_path)
-    typer.echo(f"Loaded {len(items)} items from {dataset_path}")
+    items = loader.load(cfg.dataset_path)
+    typer.echo(f"Loaded {len(items)} items from {cfg.dataset_path}")
 
-    if item_ids:
-        id_set = set(item_ids)
+    if cfg.item_ids:
+        id_set = set(cfg.item_ids)
         items = [it for it in items if it.item_id in id_set]
         typer.echo(f"Filtered to {len(items)} items by item_ids")
 
-    if limit is not None:
-        items = items[:limit]
+    if cfg.limit is not None:
+        items = items[: cfg.limit]
         typer.echo(f"Limited to {len(items)} items")
 
-    if dataset == "swebench" or scorer == "swebench":
-        scorer_instance = SWEBenchScorer(config)
+    if cfg.dataset == "swebench" or cfg.scorer == "swebench":
+        scorer_instance = SWEBenchScorer(cfg)
         workspace_setup: GitWorkspaceSetup | None = (
-            GitWorkspaceSetup(config) if dataset == "swebench" else None
+            GitWorkspaceSetup(cfg) if cfg.dataset == "swebench" else None
         )
         patch_ext: PatchExtractor | None = (
             PatchExtractor() if workspace_setup is not None else None
         )
-    elif scorer == "regex":
+    elif cfg.scorer == "regex":
         scorer_instance = RegexScorer()
         workspace_setup = None
         patch_ext = None
-    elif scorer == "event_status":
+    elif cfg.scorer == "event_status":
         scorer_instance = EventStatusScorer()
         workspace_setup = None
         patch_ext = None
@@ -103,14 +107,14 @@ def run(
         patch_ext = None
 
     runner = EvalRunner(
-        config=config,
+        config=cfg,
         scorer=scorer_instance,
         workspace_setup=workspace_setup,
         patch_extractor=patch_ext,
     )
 
     total = len(items)
-    typer.echo(f"Running {total} items (concurrency={concurrency}) ...")
+    typer.echo(f"Running {total} items (concurrency={cfg.concurrency}) ...")
     results: list = []
     completed = 0
 
@@ -121,39 +125,66 @@ def run(
         nonlocal completed
         completed += 1
         status = "PASS" if result.passed else "FAIL"
+        in_k = result.token_usage.input_tokens / 1000
+        out_k = result.token_usage.output_tokens / 1000
         typer.echo(
             f"[{completed}/{total}] {result.item_id}  {status}"
-            f"  score={result.score:.3f}  {result.scorer_detail}"
+            f"  score={result.score:.3f}"
+            f"  tokens=in:{in_k:.1f}k out:{out_k:.1f}k"
+            f"  dur={result.duration_seconds:.1f}s"
+            f"  {result.scorer_detail}"
         )
         if result.error:
             typer.echo(f"  error: {result.error}")
 
-    if concurrency <= 1:
+    if cfg.concurrency <= 1:
         for item in items:
             result = runner.run_item(item)
             _print_result(result)
             results.append(result)
     else:
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
             futures = {pool.submit(runner.run_item, item): item for item in items}
             for future in as_completed(futures):
                 result = future.result()
                 _print_result(result)
                 results.append(result)
 
-    report = build_report(results, dataset=dataset, scorer_name=scorer_instance.name)
+    report = build_report(
+        results,
+        dataset=cfg.dataset,
+        scorer_name=scorer_instance.name,
+        cost_per_million_input=cfg.cost_per_million_input_tokens,
+        cost_per_million_output=cfg.cost_per_million_output_tokens,
+    )
     reporter = EvalReporter()
     reporter.print_summary(report)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if report_format in ("json", "both"):
-        json_path = output_dir / "report.json"
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    if cfg.report_format in ("json", "both"):
+        json_path = cfg.output_dir / "report.json"
         reporter.write_json(report, json_path)
         typer.echo(f"JSON report: {json_path}")
-    if report_format in ("html", "both"):
-        html_path = output_dir / "report.html"
+    if cfg.report_format in ("html", "both"):
+        html_path = cfg.output_dir / "report.html"
         reporter.write_html(report, html_path)
         typer.echo(f"HTML report: {html_path}")
+
+
+@app.command(name="init-config")
+def init_config(
+    output: Path = typer.Option(
+        Path("eval.yaml"), help="Output path for sample config"
+    ),
+) -> None:
+    """Generate a sample YAML run config."""
+    from agent_teams_evals.run_config import sample_yaml
+
+    output.write_text(sample_yaml(), encoding="utf-8")
+    typer.echo(f"Sample config written to: {output}")
+    typer.echo(
+        f"Edit it, then run:  python agent_teams_evals/run.py run --config {output}"
+    )
 
 
 @app.command()

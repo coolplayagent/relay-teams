@@ -69,8 +69,15 @@ class EvalReport(BaseModel):
     pass_rate: float = Field(ge=0.0, le=1.0)
     mean_score: float
     mean_duration_seconds: float
+    p50_duration_seconds: float = 0.0
+    p95_duration_seconds: float = 0.0
+    outcome_completed: int = 0
+    outcome_failed: int = 0
+    outcome_timed_out: int = 0
+    outcome_stopped: int = 0
     total_input_tokens: int
     total_output_tokens: int
+    estimated_cost_usd: float = 0.0
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc)
     )
