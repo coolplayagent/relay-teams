@@ -18,11 +18,7 @@ def _log(item_id: str, msg: str) -> None:
     typer.echo(f"  [{item_id}] {msg}")
 
 
-def _build_enriched_intent(item: EvalItem, *, with_repo_context: bool) -> str:
-    if with_repo_context:
-        return (
-            f"Repository: {item.repo_url} (commit {item.base_commit})\n\n{item.intent}"
-        )
+def _build_intent(item: EvalItem) -> str:
     return item.intent
 
 
@@ -58,9 +54,7 @@ class EvalRunner:
                 prepared = self._workspace_setup.prepare(item)
                 _log(item.item_id, f"repo ready: {prepared.repo_path}")
 
-            intent = _build_enriched_intent(
-                item, with_repo_context=prepared is not None
-            )
+            intent = _build_intent(item)
             workspace = prepared if prepared is not None else _null_workspace(item)
 
             run_id = ""
