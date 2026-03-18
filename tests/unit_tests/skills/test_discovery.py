@@ -93,10 +93,11 @@ def test_skills_directory_from_config_dirs_uses_app_and_builtin_scopes(
 
 
 def test_skills_directory_from_default_scopes_uses_resolved_scope_dirs(
+    tmp_path: Path,
     monkeypatch,
 ) -> None:
-    app_skills_dir = Path("D:/home/.config/agent-teams/skills").resolve()
-    builtin_skills_dir = Path("D:/agent-teams/builtin/skills").resolve()
+    app_skills_dir = tmp_path / "home" / ".config" / "agent-teams" / "skills"
+    builtin_skills_dir = tmp_path / "agent-teams" / "builtin" / "skills"
     monkeypatch.setattr(
         discovery, "get_app_skills_dir", lambda **kwargs: app_skills_dir
     )
@@ -106,5 +107,5 @@ def test_skills_directory_from_default_scopes_uses_resolved_scope_dirs(
 
     directory = SkillsDirectory.from_default_scopes()
 
-    assert directory.base_dir == app_skills_dir
-    assert directory.fallback_dirs == (builtin_skills_dir,)
+    assert directory.base_dir == app_skills_dir.resolve()
+    assert directory.fallback_dirs == (builtin_skills_dir.resolve(),)
