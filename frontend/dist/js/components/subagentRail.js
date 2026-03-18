@@ -199,7 +199,7 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
     select.innerHTML = roles
         .map(agent => {
             const status = humanizeStatus(agent.status || 'idle');
-            return `<option value="${escapeAttribute(agent.role_id)}">${escapeHtml(agent.role_id)} 路 ${escapeHtml(status)}</option>`;
+            return `<option value="${escapeAttribute(agent.role_id)}">${escapeHtml(agent.role_id)} is ${escapeHtml(status)}</option>`;
         })
         .join('');
     state.selectedRoleId = selectedRoleId;
