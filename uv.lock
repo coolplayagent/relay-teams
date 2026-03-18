@@ -51,6 +51,8 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
 ]
+
+[package.dev-dependencies]
 evals = [
     { name = "datasets" },
     { name = "docker" },
@@ -61,8 +63,6 @@ evals = [
 requires-dist = [
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.36.2" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.8.0" },
-    { name = "datasets", marker = "extra == 'evals'", specifier = ">=2.14.0" },
-    { name = "docker", marker = "extra == 'evals'", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.49.0" },
@@ -78,11 +78,17 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.10" },
-    { name = "swebench", marker = "extra == 'evals'", specifier = ">=4.0.0" },
     { name = "typer", specifier = ">=0.12.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
-provides-extras = ["evals", "dev"]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+evals = [
+    { name = "datasets", specifier = ">=2.14.0" },
+    { name = "docker", specifier = ">=7.0.0" },
+    { name = "swebench", specifier = ">=4.0.0" },
+]
 
 [[package]]
 name = "aiofile"

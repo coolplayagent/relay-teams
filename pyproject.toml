@@ -20,11 +20,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-evals = [
-  "swebench>=4.0.0",
-  "docker>=7.0.0",
-  "datasets>=2.14.0",
-]
 dev = [
   "pytest>=8.2.0",
   "pytest-timeout >= 2.1.0",
@@ -58,6 +53,16 @@ where = ["src"]
   "skills/*/SKILL.md",
   "skills/*/scripts/*.py",
 ]
+
+[dependency-groups]
+evals = [
+  "swebench>=4.0.0",
+  "docker>=7.0.0",
+  "datasets>=2.14.0",
+]
+
+[tool.uv]
+default-groups = ["evals"]
 
 [tool.pyright]
 extraPaths = ["src", "tests"]
