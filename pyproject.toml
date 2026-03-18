@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+evals = [
+  "swebench>=4.0.0",
+]
 dev = [
   "pytest>=8.2.0",
   "pytest-timeout >= 2.1.0",
