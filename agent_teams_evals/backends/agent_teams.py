@@ -41,7 +41,12 @@ class AgentTeamsBackend(AgentBackend):
     def __init__(self, config: AgentTeamsConfig) -> None:
         self._config = config
 
-    def run(self, intent: str, workspace: PreparedWorkspace) -> Iterator[AgentEvent]:
+    def run(
+        self,
+        intent: str,
+        workspace: PreparedWorkspace,
+        keep_workspace: bool = False,
+    ) -> Iterator[AgentEvent]:
         base_url = workspace.agent_base_url or self._config.base_url
         client = AgentTeamsClient(
             base_url=base_url,
@@ -122,4 +127,5 @@ class AgentTeamsBackend(AgentBackend):
                     break
 
         finally:
-            _try_delete_workspace(client, workspace_id)
+            if not keep_workspace:
+                _try_delete_workspace(client, workspace_id)

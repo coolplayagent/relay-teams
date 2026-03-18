@@ -38,5 +38,8 @@ class AgentConfig(BaseModel):
 class AgentBackend(ABC):
     @abstractmethod
     def run(
-        self, intent: str, workspace: PreparedWorkspace
+        self,
+        intent: str,
+        workspace: PreparedWorkspace,
+        keep_workspace: bool = False,
     ) -> Iterator[AgentEvent]: ...

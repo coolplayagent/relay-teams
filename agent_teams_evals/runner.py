@@ -70,7 +70,7 @@ class EvalRunner:
             output_tokens = 0
             outcome = RunOutcome.TIMEOUT
 
-            for event in self._backend.run(intent, workspace):
+            for event in self._backend.run(intent, workspace, keep_workspace=self._keep_workspaces):
                 match event.type:
                     case "metadata":
                         run_id = event.run_id
