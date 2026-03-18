@@ -8,6 +8,7 @@ import configparser
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -515,30 +516,24 @@ def _load_logger_settings(config_dir: Path) -> _LoggerSettings:
 
 
 class _WindowsSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
-    """TimedRotatingFileHandler that retries the rename step on Windows.
+    """TimedRotatingFileHandler with Windows-safe rotation.
 
-    On Windows, os.rename raises PermissionError (WinError 32) when the file
-    is still held open at the rotation boundary (e.g., by antivirus or OS
-    buffering). This subclass overrides rotate() with an exponential-backoff
-    retry loop so that transient locks do not crash the logging thread.
+    On Windows, os.rename raises PermissionError (WinError 32) when the source
+    file is still held open (e.g., by antivirus or OS buffering). This subclass
+    overrides rotate() with a copy-then-truncate strategy: the content is copied
+    to the destination and the source is cleared in-place, so the open stream
+    handle is never invalidated.
     """
 
     def rotate(self, source: str, dest: str) -> None:
         if sys.platform != "win32" or callable(self.rotator):
             super().rotate(source, dest)
             return
-        last_exc: PermissionError | None = None
-        for attempt in range(6):
-            try:
-                if os.path.exists(dest):
-                    os.remove(dest)
-                os.rename(source, dest)
-                return
-            except PermissionError as exc:
-                last_exc = exc
-                time.sleep(0.05 * (2**attempt))
-        if last_exc is not None:
-            raise last_exc
+        if os.path.exists(dest):
+            os.remove(dest)
+        shutil.copy2(source, dest)
+        with open(source, "w", encoding="utf-8"):
+            pass
 
 
 def _build_file_handler(
