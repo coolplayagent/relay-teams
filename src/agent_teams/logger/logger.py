@@ -10,7 +10,6 @@ import logging
 import os
 import shutil
 import sys
-import time
 import traceback
 from datetime import UTC, datetime
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler

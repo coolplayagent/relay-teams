@@ -68,7 +68,9 @@ class SWEBenchLoader(DatasetLoader):
             base_commit = str(base_commit_raw) if base_commit_raw is not None else None
             problem_statement = str(raw.get("problem_statement", ""))
             reference_patch_raw = raw.get("patch")
-            reference_patch = str(reference_patch_raw) if reference_patch_raw is not None else None
+            reference_patch = (
+                str(reference_patch_raw) if reference_patch_raw is not None else None
+            )
             fail_to_pass = _parse_test_list(raw.get("FAIL_TO_PASS", []))
             pass_to_pass = _parse_test_list(raw.get("PASS_TO_PASS", []))
 

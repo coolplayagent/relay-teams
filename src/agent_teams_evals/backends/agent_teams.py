@@ -87,9 +87,7 @@ class AgentTeamsBackend(AgentBackend):
                 event_type = raw_event.get("event_type")
                 payload_json = raw_event.get("payload_json", "{}")
                 data: object = (
-                    json.loads(payload_json)
-                    if isinstance(payload_json, str)
-                    else {}
+                    json.loads(payload_json) if isinstance(payload_json, str) else {}
                 )
 
                 if event_type == "text_delta":
