@@ -31,6 +31,7 @@ def run(
     from agent_teams_evals.scorers.regex_scorer import RegexScorer
     from agent_teams_evals.scorers.swebench_docker_scorer import SWEBenchDockerScorer
     from agent_teams_evals.scorers.swebench_scorer import SWEBenchScorer
+    from agent_teams_evals.workspace.artifact_collector import ArtifactCollector
     from agent_teams_evals.workspace.docker_setup import DockerWorkspaceSetup
     from agent_teams_evals.workspace.git_setup import GitWorkspaceSetup
     from agent_teams_evals.workspace.patch_extractor import PatchExtractor
@@ -123,11 +124,14 @@ def run(
         items = items[: cfg.limit]
         typer.echo(f"Limited to {len(items)} items")
 
+    artifact_collector = ArtifactCollector(cfg.output_dir) if cfg.save_artifacts else None
+
     runner = EvalRunner(
         backend=backend,
         scorer=scorer,
         workspace_setup=workspace_setup,
         patch_extractor=patch_extractor,
+        artifact_collector=artifact_collector,
         keep_workspaces=cfg.keep_workspaces,
         concurrency=cfg.concurrency,
     )

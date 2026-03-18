@@ -10,6 +10,7 @@ import typer
 from agent_teams_evals.backends.base import AgentBackend
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
+from agent_teams_evals.workspace.artifact_collector import ArtifactCollector
 from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
@@ -33,6 +34,7 @@ class EvalRunner:
         scorer: Scorer,
         workspace_setup: WorkspaceSetup | None = None,
         patch_extractor: PatchExtractor | None = None,
+        artifact_collector: ArtifactCollector | None = None,
         keep_workspaces: bool = False,
         concurrency: int = 1,
     ) -> None:
@@ -40,6 +42,7 @@ class EvalRunner:
         self._scorer = scorer
         self._workspace_setup = workspace_setup
         self._patch_extractor = patch_extractor
+        self._artifact_collector = artifact_collector
         self._keep_workspaces = keep_workspaces
         self._concurrency = concurrency
 
@@ -103,7 +106,7 @@ class EvalRunner:
 
             duration = time.monotonic() - t_start
 
-            return self._scorer.score(
+            result = self._scorer.score(
                 item=item,
                 run_id=run_id,
                 session_id=session_id,
@@ -119,7 +122,7 @@ class EvalRunner:
         except Exception as exc:
             duration = time.monotonic() - t_start
             _log(item.item_id, f"ERROR: {exc}")
-            return EvalResult(
+            result = EvalResult(
                 item_id=item.item_id,
                 dataset=item.dataset,
                 run_id="",
@@ -135,6 +138,12 @@ class EvalRunner:
             )
 
         finally:
+            if self._artifact_collector is not None:
+                try:
+                    self._artifact_collector.collect(item, result, prepared)
+                except Exception:
+                    _log(item.item_id, "failed to collect artifacts")
+
             if (
                 not self._keep_workspaces
                 and prepared is not None
@@ -144,6 +153,8 @@ class EvalRunner:
                     self._workspace_setup.cleanup(prepared)
                 except Exception:
                     pass
+
+        return result
 
     def run_all(self, items: list[EvalItem]) -> list[EvalResult]:
         if self._concurrency <= 1:

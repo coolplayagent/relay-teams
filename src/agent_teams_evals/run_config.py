@@ -64,6 +64,7 @@ item_ids: []                            # run only these item IDs, [] = all
 # --- Execution ---
 concurrency: 1
 keep_workspaces: false
+save_artifacts: true                    # persist replay data (patch, output, db, logs)
 
 # --- Output ---
 output_dir: .agent_teams/evals/results
@@ -103,6 +104,7 @@ class RunConfig(BaseModel):
     # Execution
     concurrency: int = 1
     keep_workspaces: bool = False
+    save_artifacts: bool = True
 
     # Output
     output_dir: Path = Path(".agent_teams/evals/results")
