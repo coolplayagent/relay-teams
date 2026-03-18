@@ -15,7 +15,7 @@ import {
     renderMessageBlock,
     renderParts,
     resolvePendingToolBlock,
-    scrollBottom,
+    forceScrollBottom,
     setToolValidationFailureState,
 } from './helpers.js';
 
@@ -65,7 +65,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
     }
 
     applyPendingApprovalsToHistory(container, pendingToolApprovals, runId);
-    scrollBottom(container);
+    forceScrollBottom(container);
 }
 
 function applyPendingApprovalsToHistory(container, approvals, runId) {

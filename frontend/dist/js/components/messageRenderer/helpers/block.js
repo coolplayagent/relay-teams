@@ -108,6 +108,15 @@ export function labelFromRole(role, roleId, instanceId) {
 }
 
 export function scrollBottom(container) {
+    if (!container) return;
+    const threshold = 80;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom <= threshold) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+export function forceScrollBottom(container) {
     if (container) container.scrollTop = container.scrollHeight;
 }
 

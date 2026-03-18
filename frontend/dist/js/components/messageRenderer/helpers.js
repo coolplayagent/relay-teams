@@ -7,6 +7,7 @@ export {
     renderParts,
     labelFromRole,
     scrollBottom,
+    forceScrollBottom,
     appendMessageText,
     appendThinkingText,
     updateMessageText,
