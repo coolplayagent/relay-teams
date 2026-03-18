@@ -107,9 +107,22 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         return
     typer.echo(f"  [{item_id}] image {image!r} not found, building ...")
     try:
+        import sys
+        import types
+
+        # swebench.harness imports `prepare_images` which imports the Unix-only
+        # `resource` module.  Stub it on Windows before the first import so that
+        # the package loads; the stub is never actually called during image builds.
+        if "resource" not in sys.modules and sys.platform == "win32":
+            _resource_stub = types.ModuleType("resource")
+            _resource_stub.RLIMIT_NOFILE = 0  # type: ignore[attr-defined]
+            _resource_stub.getrlimit = lambda _: (0, 0)  # type: ignore[attr-defined]
+            _resource_stub.setrlimit = lambda _a, _b: None  # type: ignore[attr-defined]
+            sys.modules["resource"] = _resource_stub
+
         import docker as docker_sdk  # type: ignore[import-untyped]
         from datasets import load_dataset  # type: ignore[import-untyped]
-        from swebench.harness.build_docker import (  # type: ignore[import-untyped]
+        from swebench.harness.docker_build import (  # type: ignore[import-untyped]
             build_base_images,
             build_env_images,
             build_instance_images,
