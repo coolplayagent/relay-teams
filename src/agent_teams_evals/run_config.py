@@ -11,8 +11,8 @@ from agent_teams_evals.workspace.docker_setup import DockerConfig
 
 _SAMPLE_YAML = """\
 # Agent Teams Eval Config
-# Generate this file: python agent_teams_evals/run.py init-config
-# Run with:           python agent_teams_evals/run.py run --config eval.yaml
+# Generate this file: agent-teams-evals init-config
+# Run with:           agent-teams-evals run --config eval.yaml
 
 # --- Dataset ---
 dataset: jsonl                          # jsonl | swebench

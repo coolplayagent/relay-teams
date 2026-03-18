@@ -1,6 +1,14 @@
 # agent_teams_evals
 
-Benchmark evaluation framework for agent-teams. Drives the agent system entirely through its HTTP SDK — no internal imports from `src/`.
+Benchmark evaluation framework for agent-teams. Lives under `src/agent_teams_evals/` as part of the main project package layout. Drives the agent system through its HTTP SDK.
+
+## Setup
+
+The evals dependencies (`swebench`, `docker`, `datasets`) are declared as a dependency group in the root `pyproject.toml` and installed automatically by `uv sync`:
+
+```bash
+uv sync
+```
 
 ## Quick start
 
@@ -9,12 +17,18 @@ Benchmark evaluation framework for agent-teams. Drives the agent system entirely
 agent-teams server start
 
 # 2. Generate a config file
-python agent_teams_evals/run.py init-config --output eval.yaml
+agent-teams-evals init-config --output eval.yaml
 
 # 3. Edit eval.yaml (set dataset_path, scorer, workspace_mode, etc.)
 
 # 4. Run
-python agent_teams_evals/run.py run --config eval.yaml
+agent-teams-evals run --config eval.yaml
+```
+
+CLI overrides are available for quick one-offs without editing the file:
+
+```bash
+agent-teams-evals run --config eval.yaml --limit 5 --concurrency 2
 ```
 
 ## Workspace modes
@@ -40,7 +54,7 @@ docker:
   # SWE-bench image prefix; full image = {image_prefix}.{instance_id}:latest
   image_prefix: "swebench/sweb.eval.x86_64"
 
-  # Runtime base image — build once before running evals:
+  # Runtime base image -- build once before running evals:
   #   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
 
@@ -67,9 +81,12 @@ docker:
   # extra_env:
   #   HTTP_PROXY: "http://host.docker.internal:7897"
   #   HTTPS_PROXY: "http://host.docker.internal:7897"
+
+  # Auto-build missing SWE-bench instance images (requires docker + datasets packages).
+  build_instance_images: false
 ```
 
-The runtime image is a data container — it is created once (`docker create`) and mounted into every eval container via `--volumes-from`. It provides Python 3.12 and the agent-teams venv at `/opt/agent-runtime/`.
+The runtime image is a data container -- it is created once (`docker create`) and mounted into every eval container via `--volumes-from`. It provides Python 3.12 and the agent-teams venv at `/opt/agent-runtime/`.
 
 ## Config file reference
 
@@ -127,12 +144,6 @@ cost_per_million_input_tokens: 3.0
 cost_per_million_output_tokens: 15.0
 ```
 
-CLI overrides are available for quick one-offs without editing the file:
-
-```bash
-python agent_teams_evals/run.py run --config eval.yaml --limit 5 --concurrency 2
-```
-
 ## Datasets
 
 Place dataset files under `.agent_teams/evals/datasets/` (git-ignored).
@@ -160,21 +171,19 @@ Example:
 
 ### SWE-bench
 
-Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified) and save the file under `.agent_teams/evals/datasets/`. Set `dataset: swebench` in config — the loader maps SWE-bench fields automatically.
-
-A ready-to-use config is provided at `eval-swebench.yaml` in the repo root.
+Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified) and save the file under `.agent_teams/evals/datasets/`. Set `dataset: swebench` in config -- the loader maps SWE-bench fields automatically.
 
 ## Scorers
 
 | Scorer | Passes when | Requires |
 |---|---|---|
-| `keyword` | all `expected_keywords` appear in agent output | — |
-| `regex` | all `expected_patterns` match agent output | — |
-| `event_status` | run outcome is `completed` (baseline) | — |
+| `keyword` | all `expected_keywords` appear in agent output | -- |
+| `regex` | all `expected_patterns` match agent output | -- |
+| `event_status` | run outcome is `completed` (baseline) | -- |
 | `swebench` | Jaccard similarity of generated vs reference patch >= threshold | git diff, `reference_patch` |
 | `swebench_docker` | `fail_to_pass` tests pass and `pass_to_pass` tests do not regress | docker mode, `fail_to_pass`/`pass_to_pass` |
 
-`swebench_docker` runs `pytest` directly inside the eval container via `docker exec` — no patch extraction needed.
+`swebench_docker` runs `pytest` directly inside the eval container via `docker exec` -- no patch extraction needed.
 
 ## How workspace isolation works
 
@@ -182,7 +191,7 @@ A ready-to-use config is provided at `eval-swebench.yaml` in the repo root.
 
 1. Repo is cloned to `.agent_teams/evals/workspaces/{item_id}/{run_hash}/repo/`
 2. That directory is registered as a temporary workspace via `POST /api/workspaces`
-3. The session is created inside that workspace — the agent's file tools are scoped to the repo
+3. The session is created inside that workspace -- the agent's file tools are scoped to the repo
 4. After the run, the workspace is deleted and the clone is removed (unless `keep_workspaces: true`)
 
 ### docker mode
@@ -198,8 +207,8 @@ A ready-to-use config is provided at `eval-swebench.yaml` in the repo root.
 
 Results land in `output_dir` (default `.agent_teams/evals/results/`):
 
-- `report.json` — full structured report (all item results + summary stats)
-- `report.html` — self-contained HTML report with per-item table
+- `report.json` -- full structured report (all item results + summary stats)
+- `report.html` -- self-contained HTML report with per-item table
 
 Summary printed to stdout after each run:
 
@@ -215,7 +224,7 @@ Duration: mean=187.3s  p50=165.2s  p95=310.8s
 ## Re-rendering a report
 
 ```bash
-python agent_teams_evals/run.py report \
+agent-teams-evals report \
     --results-file .agent_teams/evals/results/report.json \
     --format html
 ```
@@ -223,11 +232,11 @@ python agent_teams_evals/run.py report \
 ## Module layout
 
 ```
-agent_teams_evals/
+src/agent_teams_evals/
     run.py                  CLI entry point (typer)
     run_config.py           RunConfig model + YAML loader + sample template
     models.py               EvalItem, EvalResult, EvalReport, RunOutcome, TokenUsage
-    runner.py               EvalRunner — drives one item end-to-end
+    runner.py               EvalRunner -- drives one item end-to-end
     reporter.py             ASCII table + JSON + HTML output, build_report()
     conftest.py             pytest fixture: backend_url
     backends/
@@ -251,6 +260,6 @@ agent_teams_evals/
         patch_extractor.py  git diff extraction (local or via docker exec)
     jsonl/
         eval_custom.py      pytest parametrize scenario for custom JSONL
-    swebench/
+    swebench_evals/
         eval_lite.py        pytest parametrize scenario for SWE-bench
 ```
