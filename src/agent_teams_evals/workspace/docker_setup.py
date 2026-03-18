@@ -215,16 +215,13 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             self._runtime_container,
         ]
 
-        # Mount agent-teams config (model.json, roles/ etc.) read-only to a
-        # staging path.  A shell wrapper copies everything except .db files into
-        # the real config dir so each container gets its own SQLite database and
-        # concurrent containers never fight over the same file.
-        _CONFIG_STAGING = "/tmp/agent-config-host"
-        _CONFIG_TARGET = "/root/.config/agent-teams"
-        use_config_wrapper = self._config_dir is not None
-        if use_config_wrapper:
+        # Mount host config (model.json, roles/ etc.) read-only to a staging
+        # path.  The eval-entrypoint.sh (baked into the runtime image) copies
+        # config files into the real location and strips .db files so each
+        # container gets its own SQLite database.
+        if self._config_dir is not None:
             host_cfg = self._config_dir.expanduser().resolve()
-            cmd += ["-v", f"{host_cfg}:{_CONFIG_STAGING}:ro"]
+            cmd += ["-v", f"{host_cfg}:/tmp/agent-config-host:ro"]
 
         # Forward selected host environment variables.
         for var in self._docker_cfg.forward_env_vars:
@@ -236,26 +233,17 @@ class DockerWorkspaceSetup(WorkspaceSetup):
         for key, val in self._docker_cfg.extra_env.items():
             cmd += ["-e", f"{key}={val}"]
 
-        server_cmd = (
-            f"{self._docker_cfg.agent_runtime_bin}"
-            f" server start --host 0.0.0.0"
-            f" --port {self._docker_cfg.container_server_port}"
-        )
-
-        if use_config_wrapper:
-            # Copy config tree then remove database files so each container
-            # starts with its own empty SQLite database.
-            shell_script = (
-                f"cp -a {_CONFIG_STAGING}/. {_CONFIG_TARGET}/"
-                f" && rm -f {_CONFIG_TARGET}/*.db {_CONFIG_TARGET}/*.db-wal {_CONFIG_TARGET}/*.db-shm"
-                f" && exec {server_cmd}"
-            )
-            cmd += [image, "sh", "-c", shell_script]
-        else:
-            cmd += [
-                image,
-                *server_cmd.split(),
-            ]
+        cmd += [
+            image,
+            "/opt/agent-runtime/eval-entrypoint.sh",
+            self._docker_cfg.agent_runtime_bin,
+            "server",
+            "start",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(self._docker_cfg.container_server_port),
+        ]
 
         _log(item.item_id, f"starting container {image} on port {port} ...")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)

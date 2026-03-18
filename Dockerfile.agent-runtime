@@ -56,6 +56,12 @@ exec /opt/agent-runtime/venv/bin/python3 \\\n\
     > /opt/agent-runtime/venv/bin/agent-teams && \
     chmod +x /opt/agent-runtime/venv/bin/agent-teams
 
+# Eval entrypoint: copies host config (excluding .db) so each container
+# gets its own SQLite database.  Falls through to exec "$@" when no
+# host config is mounted.
+COPY docker/eval-entrypoint.sh /opt/agent-runtime/eval-entrypoint.sh
+RUN chmod +x /opt/agent-runtime/eval-entrypoint.sh
+
 # Smoke-test inside the build environment
 RUN /opt/agent-runtime/venv/bin/agent-teams --help > /dev/null
 
