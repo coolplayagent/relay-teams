@@ -123,8 +123,6 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         import docker as docker_sdk  # type: ignore[import-untyped]
         from datasets import load_dataset  # type: ignore[import-untyped]
         from swebench.harness.docker_build import (  # type: ignore[import-untyped]
-            build_base_images,
-            build_env_images,
             build_instance_images,
         )
     except ImportError as exc:
@@ -140,9 +138,17 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         )
 
     client = docker_sdk.from_env()
-    build_base_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
-    build_env_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
-    build_instance_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
+    # build_instance_images chains build_env_images -> build_base_images internally.
+    # Tag parameters must be passed explicitly because swebench 4.x defaults them to
+    # None which triggers an assertion inside make_test_spec.
+    build_instance_images(
+        client=client,
+        dataset=instances,
+        force_rebuild=False,
+        max_workers=1,
+        tag="latest",
+        env_image_tag="latest",
+    )
     typer.echo(f"  [{item_id}] instance image ready.")
 
 
