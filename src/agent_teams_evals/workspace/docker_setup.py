@@ -122,6 +122,7 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
 
         import docker as docker_sdk  # type: ignore[import-untyped]
         from datasets import load_dataset  # type: ignore[import-untyped]
+        import swebench.harness.constants as _swe_constants  # type: ignore[import-untyped]
         from swebench.harness.docker_build import (  # type: ignore[import-untyped]
             build_instance_images,
         )
@@ -129,6 +130,16 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         raise RuntimeError(
             f"swebench and docker packages are required to auto-build instance images: {exc}"
         ) from exc
+
+    # swebench hardcodes relative Path("logs/build_images/...") constants, which
+    # creates a logs/ directory in CWD (the project root).  Redirect them to the
+    # project's configured log directory so build artifacts land alongside other logs.
+    from agent_teams.paths import get_project_log_dir
+
+    _log_dir = get_project_log_dir() / "build_images"
+    _swe_constants.BASE_IMAGE_BUILD_DIR = _log_dir / "base"
+    _swe_constants.ENV_IMAGE_BUILD_DIR = _log_dir / "env"
+    _swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
 
     ds = load_dataset(dataset_name, split="test")
     instances = [dict(r) for r in ds if r["instance_id"] == item_id]

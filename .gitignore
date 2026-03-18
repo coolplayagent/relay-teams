@@ -16,3 +16,4 @@ frontend/.vite/
 
 .claude
 .agent_teams/evals/
+logs/
