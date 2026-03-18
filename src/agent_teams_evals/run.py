@@ -1,16 +1,8 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-# When run as a standalone script, the project root is not automatically in
-# sys.path.  Inserting it at position 0 ensures agent_teams_evals is found
-# before any same-named package that may be installed in site-packages.
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-import typer  # noqa: E402
+import typer
 
 app = typer.Typer(help="Agent benchmark evaluation CLI", add_completion=False)
 
@@ -214,7 +206,7 @@ def init_config(
     output.write_text(sample_yaml(), encoding="utf-8")
     typer.echo(f"Sample config written to: {output}")
     typer.echo(
-        f"Edit it, then run:  python agent_teams_evals/run.py run --config {output}"
+        f"Edit it, then run:  agent-teams-evals run --config {output}"
     )
 
 

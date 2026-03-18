@@ -22,6 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 evals = [
   "swebench>=4.0.0",
+  "docker>=7.0.0",
+  "datasets>=2.14.0",
 ]
 dev = [
   "pytest>=8.2.0",
@@ -39,6 +41,7 @@ dev = [
 
 [project.scripts]
 agent-teams = "agent_teams.interfaces.cli.app:main"
+agent-teams-evals = "agent_teams_evals.run:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests", "tests/integration_tests"]
