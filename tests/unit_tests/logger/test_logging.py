@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from threading import Thread
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from agent_teams.logger import (
     shutdown_logging,
 )
 from agent_teams.logger import logger as logger_module
+from agent_teams.logger.logger import _WindowsSafeTimedRotatingFileHandler
 from agent_teams.trace import bind_trace_context, trace_span
 
 
@@ -256,6 +258,65 @@ def test_backend_logger_handles_concurrent_writes_without_losing_lines(
         assert len(matches) == 100
     finally:
         snapshot.restore()
+
+
+def test_windows_safe_handler_retries_rename_on_permission_error(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "test.log"
+    log_file.write_text("", encoding="utf-8")
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        utc=True,
+    )
+    handler.close()
+
+    dest = str(tmp_path / "test.log.2026-03-17")
+    source = str(log_file)
+
+    perm_error = PermissionError(32, "used by another process")
+    rename_side_effects = [perm_error, perm_error, None]
+
+    with (
+        patch("agent_teams.logger.logger.sys") as mock_sys,
+        patch("agent_teams.logger.logger.os.path.exists", return_value=False),
+        patch("agent_teams.logger.logger.os.rename") as mock_rename,
+        patch("agent_teams.logger.logger.time.sleep") as mock_sleep,
+    ):
+        mock_sys.platform = "win32"
+        mock_rename.side_effect = rename_side_effects
+        handler.rotate(source, dest)
+
+    assert mock_rename.call_count == 3
+    assert mock_sleep.call_count == 2
+    mock_sleep.assert_any_call(0.05)
+    mock_sleep.assert_any_call(0.1)
+
+
+def test_windows_safe_handler_raises_after_max_retries(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "test.log"
+    log_file.write_text("", encoding="utf-8")
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        utc=True,
+    )
+    handler.close()
+
+    perm_error = PermissionError(32, "used by another process")
+
+    with (
+        patch("agent_teams.logger.logger.sys") as mock_sys,
+        patch("agent_teams.logger.logger.os.path.exists", return_value=False),
+        patch("agent_teams.logger.logger.os.rename", side_effect=perm_error),
+        patch("agent_teams.logger.logger.time.sleep"),
+    ):
+        mock_sys.platform = "win32"
+        with pytest.raises(PermissionError):
+            handler.rotate(str(log_file), str(tmp_path / "test.log.rotated"))
 
 
 class _RootLoggerSnapshot:

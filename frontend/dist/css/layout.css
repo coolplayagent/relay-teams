@@ -234,7 +234,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.75rem 1rem;
+    padding: 0.4rem 0.75rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-surface-glass);
     flex-shrink: 0;
@@ -248,14 +248,15 @@
 
 .panel-role-stack {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
     min-width: 0;
-    gap: 0.1rem;
+    gap: 0.25rem;
 }
 
 .panel-role {
     font-weight: 600;
-    font-size: 0.8125rem;
+    font-size: 0.775rem;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -267,6 +268,12 @@
     color: var(--text-secondary);
     font-family: var(--font-mono);
     white-space: nowrap;
+}
+
+.panel-role-stack .panel-id::before {
+    content: '·';
+    margin-right: 0.15rem;
+    color: var(--text-secondary);
 }
 
 .agent-panel-close {
@@ -286,14 +293,14 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 1.9rem;
+    min-height: 1.5rem;
     border: 1px solid var(--border-color);
     background: var(--bg-2);
     color: var(--text-primary);
     cursor: pointer;
-    font-size: 0.75rem;
-    padding: 0.2rem 0.55rem;
-    border-radius: 6px;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 5px;
     line-height: 1.2;
     flex-shrink: 0;
     transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease, opacity 0.18s ease;
@@ -595,7 +602,7 @@ body.is-resizing-rails .right-rail-resizer {
     border-radius: var(--radius-md);
     color: var(--text-primary);
     font-size: 0.8rem;
-    padding: 0.55rem 0.7rem;
+    padding: 0.28rem 0.6rem;
 }
 
 .subagent-role-meta {
@@ -929,8 +936,8 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 .subagent-rail-header {
-    padding: 1rem;
-    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    gap: 0.35rem;
 }
 
 .subagent-rail-title h4 {
@@ -938,7 +945,7 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 .subagent-role-meta {
-    padding: 0.875rem 1rem;
+    padding: 0.5rem 0.75rem;
 }
 
 .agent-drawer {
@@ -946,7 +953,7 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 .agent-panel-header {
-    padding: 0.75rem 1rem;
+    padding: 0.4rem 0.75rem;
 }
 
 .agent-panel-scroll {
@@ -977,7 +984,7 @@ body.is-resizing-rails .right-rail-resizer {
     align-items: flex-start;
     justify-content: space-between;
     gap: 0.8rem;
-    padding: 0.78rem 0.3rem 0.78rem 1rem;
+    padding: 0.28rem 0.3rem 0.28rem 0.85rem;
     border: none;
     background: transparent;
     color: inherit;
@@ -995,7 +1002,7 @@ body.is-resizing-rails .right-rail-resizer {
     align-items: center;
     gap: 0.25rem;
     flex: 0 0 auto;
-    padding: 0.45rem 0 0.45rem 0.2rem;
+    padding: 0.28rem 0 0.28rem 0.2rem;
 }
 
 .agent-panel-icon-btn {
@@ -1295,5 +1302,117 @@ body.light-theme .agent-panel-scroll,
 body.light-theme .agent-panel-input {
     background: var(--bg-surface);
     box-shadow: none;
+}
+
+/* ---- Subagent rail header — single compact row ---- */
+.subagent-rail-header {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.38rem 0.65rem;
+}
+
+.subagent-rail-agent-name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.subagent-rail-agent-id {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.subagent-rail-agent-id:not(:empty)::before {
+    content: '·';
+    margin-right: 0.2rem;
+    color: var(--text-secondary);
+}
+
+.subagent-rail-token-badge {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.subagent-role-select {
+    flex: 0 0 80px;
+    width: 80px;
+    min-width: 0;
+}
+
+.subagent-status-summary {
+    flex-shrink: 0;
+}
+
+/* ---- Agent panel tab bar (1 row replacing 4 section rows) ---- */
+.agent-panel-tabbar {
+    display: flex;
+    flex-direction: row;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-surface-glass);
+    flex-shrink: 0;
+}
+
+.agent-panel-tab {
+    flex: 1;
+    padding: 0.32rem 0.2rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    line-height: 1.3;
+}
+
+.agent-panel-tab:hover {
+    color: var(--text-primary);
+}
+
+.agent-panel-tab[aria-selected="true"] {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 600;
+}
+
+/* ---- Tab pane (collapsible body below tab bar) ---- */
+.agent-panel-tabpane {
+    flex-shrink: 0;
+    max-height: 11rem;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 35%, transparent) transparent;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.agent-panel-tabpane[hidden] {
+    display: none !important;
+}
+
+.agent-panel-tabpane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.28rem 0.7rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+    gap: 0.5rem;
+}
+
+.agent-panel-tabpane .agent-panel-section-body {
+    padding: 0.45rem 0.75rem;
 }
 

@@ -139,13 +139,15 @@
             <aside class="right-rail" id="right-rail">
                 <section class="rail-subagent-card">
                     <div class="subagent-rail-header">
-                        <div class="subagent-rail-title">
-                            <h4>Subagents</h4>
-                            <span id="subagent-status-summary" class="subagent-status-summary">idle / 0 roles</span>
-                        </div>
+                        <span class="subagent-rail-agent-name" id="subagent-rail-agent-name">Subagents</span>
+                        <span class="subagent-rail-agent-id" id="subagent-rail-agent-id"></span>
                         <select id="subagent-role-select" class="subagent-role-select" disabled>
                             <option value="">No subagents</option>
                         </select>
+                        <div id="subagent-rail-token-badge" class="subagent-rail-token-badge"></div>
+                        <button id="subagent-rail-reflect" class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory" hidden>Reflect</button>
+                        <button id="subagent-rail-stop" class="agent-panel-stop" type="button" title="Stop this subagent" hidden>Stop</button>
+                        <span id="subagent-status-summary" class="subagent-status-summary">--</span>
                     </div>
                     <div id="subagent-role-meta" class="subagent-role-meta">
                         <div class="subagent-meta-empty">No delegated subagent instances in this session.</div>

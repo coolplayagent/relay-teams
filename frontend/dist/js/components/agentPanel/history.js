@@ -9,6 +9,7 @@ import {
     renderHistoricalMessageList,
 } from '../messageRenderer.js';
 import {
+    getActiveInstanceId,
     getActiveRoundRunId,
     getPanel,
     getPendingApprovalsForPanel,
@@ -19,22 +20,24 @@ function renderTokenBadge(panelEl, instanceId, runUsage) {
         `.agent-token-usage[data-instance-id="${instanceId}"]`
     );
     if (!badgeEl) return;
-    if (!runUsage) {
-        badgeEl.innerHTML = '';
-        return;
-    }
-    const agent = (runUsage.by_agent || []).find(a => a.instance_id === instanceId);
-    if (!agent || agent.total_tokens === 0) {
-        badgeEl.innerHTML = '';
-        return;
-    }
-    const fmt = n => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-    badgeEl.innerHTML = `
+    let html = '';
+    if (runUsage) {
+        const agent = (runUsage.by_agent || []).find(a => a.instance_id === instanceId);
+        if (agent && agent.total_tokens !== 0) {
+            const fmt = n => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+            html = `
         <span class="token-badge" title="Input: ${agent.input_tokens} | Output: ${agent.output_tokens} | Requests: ${agent.requests}">
             <span class="token-in">In ${fmt(agent.input_tokens)}</span>
             <span class="token-out">Out ${fmt(agent.output_tokens)}</span>
         </span>
     `;
+        }
+    }
+    badgeEl.innerHTML = html;
+    if (getActiveInstanceId() === instanceId) {
+        const railBadge = document.getElementById('subagent-rail-token-badge');
+        if (railBadge) railBadge.innerHTML = html;
+    }
 }
 
 function getSessionAgent(instanceId, roleId) {

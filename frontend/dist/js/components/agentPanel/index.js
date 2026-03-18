@@ -71,6 +71,7 @@ export function openAgentPanel(
 
     panel.panelEl.style.display = 'flex';
     setActiveInstanceId(instanceId);
+    _syncRailHeader(instanceId, roleId, panel);
     schedulePanelContextPreview(instanceId, { immediate: true });
     state.selectedRoleId = roleId || state.selectedRoleId;
     const roleSelect = document.getElementById('subagent-role-select');
@@ -93,6 +94,47 @@ export function clearAllPanels() {
     clearPanels();
     setActiveRoundContext('', []);
     setActiveInstanceId(null);
+    _resetRailHeader();
+}
+
+function _syncRailHeader(instanceId, roleId, panel) {
+    const nameEl = document.getElementById('subagent-rail-agent-name');
+    const idEl = document.getElementById('subagent-rail-agent-id');
+    const railReflect = document.getElementById('subagent-rail-reflect');
+    const railStop = document.getElementById('subagent-rail-stop');
+
+    const friendlyRole = roleId
+        ? roleId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+        : instanceId.slice(0, 8);
+
+    if (nameEl) nameEl.textContent = friendlyRole;
+    if (idEl) idEl.textContent = instanceId.slice(0, 8);
+
+    const hiddenReflect = panel.panelEl.querySelector('.agent-panel-refresh-reflection');
+    const hiddenStop = panel.panelEl.querySelector('.agent-panel-stop');
+
+    if (railReflect) {
+        railReflect.hidden = false;
+        railReflect.onclick = hiddenReflect ? () => hiddenReflect.click() : null;
+    }
+    if (railStop) {
+        railStop.hidden = false;
+        railStop.onclick = hiddenStop ? () => hiddenStop.click() : null;
+    }
+}
+
+function _resetRailHeader() {
+    const nameEl = document.getElementById('subagent-rail-agent-name');
+    const idEl = document.getElementById('subagent-rail-agent-id');
+    const railTokenBadge = document.getElementById('subagent-rail-token-badge');
+    const railReflect = document.getElementById('subagent-rail-reflect');
+    const railStop = document.getElementById('subagent-rail-stop');
+
+    if (nameEl) nameEl.textContent = 'Subagents';
+    if (idEl) idEl.textContent = '';
+    if (railTokenBadge) railTokenBadge.innerHTML = '';
+    if (railReflect) { railReflect.hidden = true; railReflect.onclick = null; }
+    if (railStop) { railStop.hidden = true; railStop.onclick = null; }
 }
 
 export function getPanelScrollContainer(instanceId, roleId) {

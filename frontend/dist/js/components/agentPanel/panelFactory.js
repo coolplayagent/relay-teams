@@ -33,46 +33,32 @@ export function createPanel(instanceId, roleId, onClose) {
         : instanceId.slice(0, 8);
 
     panelEl.innerHTML = `
-        <div class="agent-panel-header">
-            <div class="agent-panel-title">
-                <div class="panel-role-stack">
-                    <span class="panel-role">${friendlyRole}</span>
-                    <span class="panel-id">${instanceId.slice(0, 8)}</span>
-                </div>
-            </div>
+        <div class="agent-panel-controls" hidden>
             <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
             <button class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory">Reflect</button>
             <button class="agent-panel-stop" type="button" title="Stop this subagent">Stop</button>
         </div>
-        <div class="agent-panel-section agent-panel-runtime-prompt" data-collapsed="true">
-            <button class="agent-panel-section-toggle agent-panel-runtime-prompt-toggle" type="button" aria-expanded="false">
-                <span class="agent-panel-section-heading">
-                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
-                    <span class="agent-panel-section-title">System prompt</span>
-                </span>
-                <span class="agent-panel-section-meta agent-panel-runtime-prompt-meta"></span>
-            </button>
-            <div class="agent-panel-section-body agent-panel-runtime-prompt-body" hidden>No runtime system prompt yet.</div>
+        <div class="agent-panel-tabbar" role="tablist" aria-label="Agent sections">
+            <button class="agent-panel-tab" data-tab="prompt" role="tab" aria-selected="false">Prompt</button>
+            <button class="agent-panel-tab" data-tab="tools" role="tab" aria-selected="false">Tools</button>
+            <button class="agent-panel-tab" data-tab="memory" role="tab" aria-selected="false">Memory</button>
+            <button class="agent-panel-tab" data-tab="tasks" role="tab" aria-selected="false">Tasks</button>
         </div>
-        <div class="agent-panel-section agent-panel-runtime-tools" data-collapsed="true">
-            <button class="agent-panel-section-toggle agent-panel-runtime-tools-toggle" type="button" aria-expanded="false">
-                <span class="agent-panel-section-heading">
-                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
-                    <span class="agent-panel-section-title">Tools</span>
-                </span>
-                <span class="agent-panel-section-meta agent-panel-runtime-tools-meta"></span>
-            </button>
-            <div class="agent-panel-section-body agent-panel-runtime-tools-body" hidden>No runtime tools snapshot yet.</div>
+        <div class="agent-panel-tabpane" data-tab="prompt" role="tabpanel" hidden>
+            <div class="agent-panel-tabpane-header">
+                <span class="agent-panel-runtime-prompt-meta agent-panel-section-meta"></span>
+            </div>
+            <div class="agent-panel-section-body agent-panel-runtime-prompt-body">No runtime system prompt yet.</div>
         </div>
-        <div class="agent-panel-section agent-panel-reflection" data-collapsed="true">
-            <div class="agent-panel-section-header">
-                <button class="agent-panel-section-toggle agent-panel-reflection-toggle" type="button" aria-expanded="false">
-                    <span class="agent-panel-section-heading">
-                        <span class="agent-panel-section-chevron" aria-hidden="true">></span>
-                        <span class="agent-panel-section-title">Reflection memory</span>
-                    </span>
-                    <span class="agent-panel-section-meta agent-panel-reflection-meta"></span>
-                </button>
+        <div class="agent-panel-tabpane" data-tab="tools" role="tabpanel" hidden>
+            <div class="agent-panel-tabpane-header">
+                <span class="agent-panel-runtime-tools-meta agent-panel-section-meta"></span>
+            </div>
+            <div class="agent-panel-section-body agent-panel-runtime-tools-body">No runtime tools snapshot yet.</div>
+        </div>
+        <div class="agent-panel-tabpane" data-tab="memory" role="tabpanel" hidden>
+            <div class="agent-panel-tabpane-header">
+                <span class="agent-panel-reflection-meta agent-panel-section-meta"></span>
                 <div class="agent-panel-section-actions" aria-label="Reflection memory actions">
                     <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="Edit reflection memory" aria-label="Edit reflection memory">
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -90,20 +76,16 @@ export function createPanel(instanceId, roleId, onClose) {
                     </button>
                 </div>
             </div>
-            <div class="agent-panel-section-body agent-panel-reflection-body" hidden>No reflection memory yet.</div>
+            <div class="agent-panel-section-body agent-panel-reflection-body">No reflection memory yet.</div>
         </div>
-        <div class="agent-panel-section agent-panel-summary" data-collapsed="true">
-            <button class="agent-panel-section-toggle agent-panel-summary-toggle" type="button" aria-expanded="false">
-                <span class="agent-panel-section-heading">
-                    <span class="agent-panel-section-chevron" aria-hidden="true">></span>
-                    <span class="agent-panel-section-title">Completed tasks</span>
-                </span>
-                <span class="agent-panel-section-meta agent-panel-summary-meta">
+        <div class="agent-panel-tabpane" data-tab="tasks" role="tabpanel" hidden>
+            <div class="agent-panel-tabpane-header">
+                <span class="agent-panel-summary-meta agent-panel-section-meta">
                     <span class="agent-panel-summary-status">Idle</span>
                     <span class="agent-panel-summary-updated"></span>
                 </span>
-            </button>
-            <div class="agent-panel-section-body agent-panel-summary-body" hidden>
+            </div>
+            <div class="agent-panel-section-body agent-panel-summary-body">
                 <div class="agent-panel-summary-tasks">No delegated tasks yet.</div>
             </div>
         </div>
@@ -183,30 +165,7 @@ export function createPanel(instanceId, roleId, onClose) {
         };
     }
 
-    bindCollapsibleSection(panelEl, {
-        sectionSelector: '.agent-panel-runtime-prompt',
-        toggleSelector: '.agent-panel-runtime-prompt-toggle',
-        bodySelector: '.agent-panel-runtime-prompt-body',
-        expanded: false,
-    });
-    bindCollapsibleSection(panelEl, {
-        sectionSelector: '.agent-panel-runtime-tools',
-        toggleSelector: '.agent-panel-runtime-tools-toggle',
-        bodySelector: '.agent-panel-runtime-tools-body',
-        expanded: false,
-    });
-    bindCollapsibleSection(panelEl, {
-        sectionSelector: '.agent-panel-reflection',
-        toggleSelector: '.agent-panel-reflection-toggle',
-        bodySelector: '.agent-panel-reflection-body',
-        expanded: false,
-    });
-    bindCollapsibleSection(panelEl, {
-        sectionSelector: '.agent-panel-summary',
-        toggleSelector: '.agent-panel-summary-toggle',
-        bodySelector: '.agent-panel-summary-body',
-        expanded: false,
-    });
+    bindTabBar(panelEl);
 
     const textarea = panelEl.querySelector('.panel-inject-input');
     const sendBtn = panelEl.querySelector('.panel-send-btn');
@@ -263,24 +222,28 @@ export function createPanel(instanceId, roleId, onClose) {
 }
 
 
-function bindCollapsibleSection(panelEl, { sectionSelector, toggleSelector, bodySelector, expanded = false }) {
-    const sectionEl = panelEl.querySelector(sectionSelector);
-    const toggleEl = panelEl.querySelector(toggleSelector);
-    const bodyEl = panelEl.querySelector(bodySelector);
-    if (!sectionEl || !toggleEl || !bodyEl) return;
-
-    setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, expanded);
-    toggleEl.onclick = () => {
-        const isExpanded = String(toggleEl.getAttribute('aria-expanded') || 'false') === 'true';
-        setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, !isExpanded);
-    };
+function bindTabBar(panelEl) {
+    const tabs = panelEl.querySelectorAll('.agent-panel-tab[data-tab]');
+    tabs.forEach(tab => {
+        tab.onclick = () => {
+            const tabName = tab.dataset.tab;
+            const isSelected = tab.getAttribute('aria-selected') === 'true';
+            if (isSelected) {
+                tab.setAttribute('aria-selected', 'false');
+                const paneEl = panelEl.querySelector(`.agent-panel-tabpane[data-tab="${tabName}"]`);
+                if (paneEl) paneEl.hidden = true;
+            } else {
+                activateTab(panelEl, tabName);
+            }
+        };
+    });
 }
 
-function setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, expanded) {
-    const nextExpanded = expanded === true;
-    sectionEl.dataset.collapsed = nextExpanded ? 'false' : 'true';
-    toggleEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
-    bodyEl.hidden = !nextExpanded;
+function activateTab(panelEl, tabName) {
+    const tabs = panelEl.querySelectorAll('.agent-panel-tab[data-tab]');
+    const panes = panelEl.querySelectorAll('.agent-panel-tabpane[data-tab]');
+    tabs.forEach(t => t.setAttribute('aria-selected', t.dataset.tab === tabName ? 'true' : 'false'));
+    panes.forEach(p => { p.hidden = p.dataset.tab !== tabName; });
 }
 
 async function syncReflectionState(instanceId, roleId, reflection, panelEl) {
@@ -304,12 +267,11 @@ function updateReflectionState(instanceId, reflection) {
 }
 
 function openReflectionEditor(panelEl, instanceId, roleId) {
-    const reflectionEls = getReflectionElements(panelEl);
-    if (!reflectionEls) return;
-    const { sectionEl, toggleEl, bodyEl } = reflectionEls;
+    const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
+    if (!bodyEl) return;
     const currentSummary = String(bodyEl.dataset.summary || '').trim();
 
-    setCollapsibleSectionState(sectionEl, toggleEl, bodyEl, true);
+    activateTab(panelEl, 'memory');
     bodyEl.dataset.mode = 'editing';
     bodyEl.innerHTML = `
         <div class="agent-panel-reflection-editor">
@@ -370,13 +332,6 @@ function openReflectionEditor(panelEl, instanceId, roleId) {
     };
 }
 
-function getReflectionElements(panelEl) {
-    const sectionEl = panelEl.querySelector('.agent-panel-reflection');
-    const toggleEl = panelEl.querySelector('.agent-panel-reflection-toggle');
-    const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
-    if (!sectionEl || !toggleEl || !bodyEl) return null;
-    return { sectionEl, toggleEl, bodyEl };
-}
 
 function resetReflectionBody(panelEl) {
     const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
