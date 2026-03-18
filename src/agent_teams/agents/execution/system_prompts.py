@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
-import shutil
-import sys
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -80,9 +78,6 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     system = platform.system()
     release = platform.release()
     machine = platform.machine()
-    python_version = (
-        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    )
     cwd = (
         str(working_directory.resolve())
         if working_directory is not None
@@ -120,33 +115,10 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     elif system == "Darwin":
         shell_info = "macOS Terminal (zsh/bash)"
 
-    # Determine the Python available in the workspace environment via PATH.
-    # Do NOT use sys.executable — that points to the agent-teams server runtime,
-    # not the Python the agent should invoke inside the target environment.
-    if system != "Windows":
-        which_python3 = shutil.which("python3")
-        which_python = shutil.which("python")
-        if which_python3:
-            py_command = "python3"
-            py_executable = which_python3
-        elif which_python:
-            py_command = "python"
-            py_executable = which_python
-        else:
-            py_command = "python3"
-            py_executable = sys.executable
-    else:
-        py_executable = (
-            shutil.which("python") or shutil.which("python3") or sys.executable
-        )
-        py_command = "python"
-
     lines = [
         "## Runtime Environment Information",
         f"- Operating System: {system} ({release}) {machine}",
         f"- Working Directory: {cwd}",
-        f"- Python: {python_version} (at {py_executable})",
-        f"- Python Command: `{py_command}`",
         f"- Shell Type: {shell_info} (Path: {bash_path})",
     ]
     return "\n".join(lines)
