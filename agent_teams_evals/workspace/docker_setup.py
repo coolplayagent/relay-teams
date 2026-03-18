@@ -86,6 +86,51 @@ class DockerConfig(BaseModel):
     build_runtime_image: bool = False
     # Dockerfile used when build_runtime_image is true.
     runtime_dockerfile: str = "Dockerfile.agent-runtime"
+    # When true, automatically build missing SWE-bench instance images before
+    # each eval item runs. Requires the swebench and docker Python packages.
+    build_instance_images: bool = False
+    # HuggingFace dataset used to look up instance metadata when building images.
+    swebench_dataset: str = "SWE-bench/SWE-bench_Verified"
+
+
+def _image_exists(image: str) -> bool:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
+    """Build a SWE-bench instance image if it does not already exist."""
+    if _image_exists(image):
+        return
+    typer.echo(f"  [{item_id}] image {image!r} not found, building ...")
+    try:
+        import docker as docker_sdk  # type: ignore[import-untyped]
+        from datasets import load_dataset  # type: ignore[import-untyped]
+        from swebench.harness.build_docker import (  # type: ignore[import-untyped]
+            build_base_images,
+            build_env_images,
+            build_instance_images,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            f"swebench and docker packages are required to auto-build instance images: {exc}"
+        ) from exc
+
+    ds = load_dataset(dataset_name, split="test")
+    instances = [dict(r) for r in ds if r["instance_id"] == item_id]
+    if not instances:
+        raise RuntimeError(
+            f"Instance {item_id!r} not found in dataset {dataset_name!r}"
+        )
+
+    client = docker_sdk.from_env()
+    build_base_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
+    build_env_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
+    build_instance_images(client=client, dataset=instances, force_rebuild=False, max_workers=1)
+    typer.echo(f"  [{item_id}] instance image ready.")
 
 
 def _build_runtime_image(dockerfile: str, image: str) -> None:
@@ -120,6 +165,12 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             raise ValueError(f"Item {item.item_id} has no base_commit")
 
         image = f"{self._docker_cfg.image_prefix}.{item.item_id}:latest"
+
+        if self._docker_cfg.build_instance_images:
+            _ensure_instance_image(
+                item.item_id, image, self._docker_cfg.swebench_dataset
+            )
+
         port = _find_free_port()
 
         cmd = [

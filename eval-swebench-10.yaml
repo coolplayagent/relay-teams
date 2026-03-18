@@ -1,8 +1,8 @@
-# SWE-bench Verified eval run
-# Run: uv run python agent_teams_evals/run.py run --config eval-swebench.yaml
+# SWE-bench Verified eval run — first 10 items
+# Run: uv run python agent_teams_evals/run.py run --config eval-swebench-10.yaml
 
 dataset: swebench
-dataset_path: .agent_teams/evals/datasets/swebench-verified-1.jsonl
+dataset_path: .agent_teams/evals/datasets/swebench-verified-10.jsonl
 
 scorer: swebench
 swebench_pass_threshold: 0.8
@@ -26,8 +26,6 @@ docker:
   build_instance_images: true
   swebench_dataset: "SWE-bench/SWE-bench_Verified"
   container_startup_timeout_seconds: 60
-  # Proxy addresses must use host.docker.internal inside containers
-  # (127.0.0.1 refers to the container itself, not the host).
   extra_env:
     HTTP_PROXY: "http://host.docker.internal:7897"
     HTTPS_PROXY: "http://host.docker.internal:7897"
@@ -42,7 +40,7 @@ item_ids: []
 concurrency: 1
 keep_workspaces: false
 
-output_dir: .agent_teams/evals/results/swebench-verified-1
+output_dir: .agent_teams/evals/results/swebench-verified-10
 report_format: both
 
 cost_per_million_input_tokens: 3.0
