@@ -21,9 +21,7 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "grep",
         "list_run_tasks",
         "read",
-        "read_stage_input",
         "shell",
         "update_task",
         "write",
-        "write_stage_doc",
     )

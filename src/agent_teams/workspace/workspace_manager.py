@@ -81,22 +81,6 @@ class WorkspaceManager(BaseModel):
         filesystem_root = self._filesystem_root_for_record(record)
         return filesystem_root / ".agent_teams" / "sessions" / session_id
 
-    def role_stage_dir(
-        self,
-        *,
-        workspace_id: str,
-        session_id: str,
-        role_id: str,
-        stage_name: str,
-    ) -> Path:
-        return (
-            self.session_artifact_dir(workspace_id=workspace_id, session_id=session_id)
-            / "roles"
-            / role_id
-            / "stage"
-            / stage_name
-        )
-
     def _resolve_locations(
         self,
         *,

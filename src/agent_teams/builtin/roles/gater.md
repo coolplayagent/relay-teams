@@ -5,8 +5,6 @@ description: Audits completed work against evidence and acceptance criteria.
 model_profile: default
 version: 1.0.0
 tools:
-  - read_stage_input
-  - write_stage_doc
   - grep
   - glob
   - read

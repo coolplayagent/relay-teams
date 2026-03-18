@@ -4,9 +4,7 @@ name: Designer
 description: Turns ambiguous requests into concrete technical specifications.
 model_profile: default
 version: 1.0.0
-tools:
-  - read_stage_input
-  - write_stage_doc
+tools: []
 ---
 
 ## 角色：Designer (规格架构师) 

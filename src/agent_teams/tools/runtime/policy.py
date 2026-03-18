@@ -13,7 +13,6 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "update_task",
         "shell",
         "write",
-        "write_stage_doc",
     }
 )
 

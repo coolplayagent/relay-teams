@@ -260,11 +260,11 @@ def test_backend_logger_handles_concurrent_writes_without_losing_lines(
         snapshot.restore()
 
 
-def test_windows_safe_handler_retries_rename_on_permission_error(
+def test_windows_safe_handler_copies_and_truncates_on_windows(
     tmp_path: Path,
 ) -> None:
     log_file = tmp_path / "test.log"
-    log_file.write_text("", encoding="utf-8")
+    log_file.write_text("hello log", encoding="utf-8")
     handler = _WindowsSafeTimedRotatingFileHandler(
         filename=str(log_file),
         when="midnight",
@@ -272,33 +272,23 @@ def test_windows_safe_handler_retries_rename_on_permission_error(
     )
     handler.close()
 
-    dest = str(tmp_path / "test.log.2026-03-17")
-    source = str(log_file)
+    dest = tmp_path / "test.log.2026-03-17"
 
-    perm_error = PermissionError(32, "used by another process")
-    rename_side_effects = [perm_error, perm_error, None]
-
-    with (
-        patch("agent_teams.logger.logger.sys") as mock_sys,
-        patch("agent_teams.logger.logger.os.path.exists", return_value=False),
-        patch("agent_teams.logger.logger.os.rename") as mock_rename,
-        patch("agent_teams.logger.logger.time.sleep") as mock_sleep,
-    ):
+    with patch("agent_teams.logger.logger.sys") as mock_sys:
         mock_sys.platform = "win32"
-        mock_rename.side_effect = rename_side_effects
-        handler.rotate(source, dest)
+        handler.rotate(str(log_file), str(dest))
 
-    assert mock_rename.call_count == 3
-    assert mock_sleep.call_count == 2
-    mock_sleep.assert_any_call(0.05)
-    mock_sleep.assert_any_call(0.1)
+    assert dest.read_text(encoding="utf-8") == "hello log"
+    assert log_file.read_text(encoding="utf-8") == ""
 
 
-def test_windows_safe_handler_raises_after_max_retries(
+def test_windows_safe_handler_removes_existing_dest_before_copy(
     tmp_path: Path,
 ) -> None:
     log_file = tmp_path / "test.log"
-    log_file.write_text("", encoding="utf-8")
+    log_file.write_text("new content", encoding="utf-8")
+    dest = tmp_path / "test.log.rotated"
+    dest.write_text("old content", encoding="utf-8")
     handler = _WindowsSafeTimedRotatingFileHandler(
         filename=str(log_file),
         when="midnight",
@@ -306,17 +296,12 @@ def test_windows_safe_handler_raises_after_max_retries(
     )
     handler.close()
 
-    perm_error = PermissionError(32, "used by another process")
-
-    with (
-        patch("agent_teams.logger.logger.sys") as mock_sys,
-        patch("agent_teams.logger.logger.os.path.exists", return_value=False),
-        patch("agent_teams.logger.logger.os.rename", side_effect=perm_error),
-        patch("agent_teams.logger.logger.time.sleep"),
-    ):
+    with patch("agent_teams.logger.logger.sys") as mock_sys:
         mock_sys.platform = "win32"
-        with pytest.raises(PermissionError):
-            handler.rotate(str(log_file), str(tmp_path / "test.log.rotated"))
+        handler.rotate(str(log_file), str(dest))
+
+    assert dest.read_text(encoding="utf-8") == "new content"
+    assert log_file.read_text(encoding="utf-8") == ""
 
 
 class _RootLoggerSnapshot:

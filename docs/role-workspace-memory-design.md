@@ -20,7 +20,6 @@ Responsibilities:
 - point to a concrete `root_path`
 - resolve execution root, readable roots, writable roots
 - enforce path boundaries for tools and shell execution
-- provide the filesystem base used by stage tools
 
 Non-responsibilities:
 
@@ -74,22 +73,7 @@ Rules:
 
 The compaction entry point must depend on a replaceable strategy interface so future compression algorithms can be swapped without changing the execution flow.
 
-## 6. Stage Documents
-
-There is no standalone `artifacts` module.
-
-Stage files are managed directly by `src/agent_teams/tools/stage_tools` and stored under the execution workspace:
-
-`{workspace_root}/.agent_teams/sessions/{session_id}/roles/{role_id}/stage/{stage_name}/{timestamp}.md`
-
-Rules:
-
-- each write creates a new timestamped file
-- previous versions are preserved
-- stage reads choose the latest matching file
-- session deletion removes that session subtree from the bound workspace
-
-## 7. Runtime Injection
+## 6. Runtime Injection
 
 Runtime dependencies are split cleanly:
 
@@ -98,7 +82,7 @@ Runtime dependencies are split cleanly:
 
 Prompt assembly pulls role memory from `roles.memory_service` and shared runtime state from `shared_state`. It no longer loads durable memory through `workspace`.
 
-## 8. Removed Pieces
+## 7. Removed Pieces
 
 The following older concepts are removed:
 
@@ -110,7 +94,7 @@ The following older concepts are removed:
 
 Task completion no longer appends per-task daily memory. Subagent long-term memory is maintained through compact-driven reflection summary rewrites.
 
-## 9. Migration Notes
+## 8. Migration Notes
 
 If you are reading older code or earlier design notes, note these incompatible changes:
 
@@ -118,4 +102,3 @@ If you are reading older code or earlier design notes, note these incompatible c
 - `memory_profile` only contains `enabled`
 - role durable memory lives in `role_memories`
 - `role_daily_memories` has been removed
-- stage files use the direct `stage_tools` layout under workspace/session/role

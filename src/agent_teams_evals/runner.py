@@ -50,6 +50,7 @@ class EvalRunner:
         started_at = datetime.now(tz=timezone.utc)
         t_start = time.monotonic()
         prepared: PreparedWorkspace | None = None
+        result: EvalResult | None = None
 
         try:
             if self._workspace_setup is not None:
@@ -67,7 +68,9 @@ class EvalRunner:
             output_tokens = 0
             outcome = RunOutcome.TIMEOUT
 
-            for event in self._backend.run(intent, workspace, keep_workspace=self._keep_workspaces):
+            for event in self._backend.run(
+                intent, workspace, keep_workspace=self._keep_workspaces
+            ):
                 match event.type:
                     case "metadata":
                         run_id = event.run_id
@@ -138,7 +141,7 @@ class EvalRunner:
             )
 
         finally:
-            if self._artifact_collector is not None:
+            if self._artifact_collector is not None and result is not None:
                 try:
                     self._artifact_collector.collect(item, result, prepared)
                 except Exception:
@@ -154,6 +157,8 @@ class EvalRunner:
                 except Exception:
                     pass
 
+        if result is None:
+            raise RuntimeError("eval run produced no result")
         return result
 
     def run_all(self, items: list[EvalItem]) -> list[EvalResult]:

@@ -432,13 +432,7 @@ Notes:
 
 ---
 
-## 4. Filesystem Layout
+## 4. Notes
 
-### 4.1 Stage documents
-
-- `{workspace_root}/.agent_teams/sessions/{session_id}/roles/{role_id}/stage/{stage_name}/{timestamp}.md`
-
-Notes:
-- Stage files are managed directly by `src/agent_teams/tools/stage_tools`.
 - Session deletion removes that session subtree under the bound workspace.
 - Daily memory is no longer file-based.

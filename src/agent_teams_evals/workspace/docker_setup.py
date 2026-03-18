@@ -27,6 +27,7 @@ _DEFAULT_FORWARD_ENV = (
     "no_proxy",
 )
 
+
 def _log(item_id: str, msg: str) -> None:
     typer.echo(f"  [{item_id}] {msg}")
 
@@ -142,7 +143,7 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
     _swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
 
     ds = load_dataset(dataset_name, split="test")
-    instances = [dict(r) for r in ds if r["instance_id"] == item_id]
+    instances = [dict(r) for r in ds if r["instance_id"] == item_id]  # type: ignore[reportCallIssue]
     if not instances:
         raise RuntimeError(
             f"Instance {item_id!r} not found in dataset {dataset_name!r}"

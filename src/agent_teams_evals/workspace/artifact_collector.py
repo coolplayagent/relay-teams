@@ -71,7 +71,9 @@ class ArtifactCollector:
             "collected_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         path = artifact_dir / "metadata.json"
-        path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def _write_patch(self, artifact_dir: Path, result: EvalResult) -> None:
         if result.generated_patch:
@@ -89,8 +91,9 @@ class ArtifactCollector:
         db_src = "/root/.config/agent-teams/agent_teams.db"
         db_dest = artifact_dir / "agent_teams.db"
         try:
+            container_id = workspace.container_id or ""
             subprocess.run(
-                ["docker", "cp", f"{workspace.container_id}:{db_src}", str(db_dest)],
+                ["docker", "cp", f"{container_id}:{db_src}", str(db_dest)],
                 capture_output=True,
                 check=True,
             )
@@ -102,8 +105,9 @@ class ArtifactCollector:
     ) -> None:
         log_dest = artifact_dir / "container.log"
         try:
+            container_id = workspace.container_id or ""
             result = subprocess.run(
-                ["docker", "logs", workspace.container_id],
+                ["docker", "logs", container_id],
                 capture_output=True,
                 text=True,
             )

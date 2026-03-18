@@ -245,6 +245,10 @@ export function renderHistoricalMessageList() {
         """
 const panels = new Map();
 
+export function getActiveInstanceId() {
+    return null;
+}
+
 export function getActiveRoundRunId() {
     return '';
 }

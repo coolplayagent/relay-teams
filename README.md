@@ -33,7 +33,6 @@ Core code lives under `src/agent_teams/`:
 - `tools/`: built-in tool registration and runtime policy/state
   - `tools/registry/`: default tool registration and registry composition
   - `tools/runtime/`: execution context, approval state, persisted runtime state, and policy enforcement
-  - `tools/stage_tools/`: staged document read/write helpers
   - `tools/task_tools/`: task creation, listing, dispatch, and update tools
   - `tools/workspace_tools/`: workspace read/write, shell, grep, glob, and ripgrep tools
 - `trace/`: request/span trace context

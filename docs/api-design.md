@@ -783,10 +783,8 @@ Lists persisted trigger events.
 
 Gets one persisted trigger event.
 
-## Memory And Stage File Notes
+## Memory Notes
 
 - `workspace` now means execution workspace only.
 - Durable role memory is stored in the database and keyed by `role_id + workspace_id`.
 - Daily role memory is stored in the database and keyed by `role_id + workspace_id + memory_date + kind`.
-- Stage documents are filesystem files managed by `src/agent_teams/tools/stage_tools`.
-- Stage document paths resolve under `{workspace_root}/.agent_teams/sessions/{session_id}/roles/{role_id}/stage/{stage_name}/`.

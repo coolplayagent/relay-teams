@@ -5,7 +5,6 @@ description: Explores the codebase and gathers relevant implementation facts.
 model_profile: default
 version: 1.0.0
 tools:
-  - read_stage_input
   - grep
   - glob
   - read
