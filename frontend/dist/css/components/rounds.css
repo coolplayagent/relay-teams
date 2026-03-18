@@ -247,7 +247,7 @@
 }
 
 .round-nav-float {
-    position: absolute;
+    position: fixed;
     right: 1rem;
     top: 0.75rem;
     width: 270px;
@@ -259,7 +259,7 @@
     background: var(--bg-surface-glass);
     backdrop-filter: blur(6px);
     box-shadow: var(--shadow-md);
-    z-index: 8;
+    z-index: 20;
 }
 
 .round-nav-header {
@@ -269,6 +269,17 @@
     gap: 0.75rem;
     padding: 0.65rem 0.75rem;
     border-bottom: 1px solid var(--border-color);
+    cursor: grab;
+    user-select: none;
+}
+
+.round-nav-float.dragging .round-nav-header {
+    cursor: grabbing;
+}
+
+.round-nav-float.dragging {
+    opacity: 0.88;
+    transition: none;
 }
 
 .round-nav-title {
@@ -302,6 +313,18 @@
     flex-direction: column;
     gap: 0.25rem;
     max-height: 15.5rem;
+}
+
+.round-nav-float.collapsed {
+    width: auto;
+    max-height: none;
+    box-shadow: var(--shadow-sm);
+}
+
+.round-nav-float.collapsed .round-nav-header {
+    padding: 0.3rem 0.55rem;
+    border-bottom: none;
+    gap: 0.5rem;
 }
 
 .round-nav-float.collapsed .round-nav-list {

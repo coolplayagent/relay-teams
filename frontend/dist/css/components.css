@@ -1655,7 +1655,7 @@
 }
 
 .round-nav-float {
-    position: absolute;
+    position: fixed;
     right: 1rem;
     top: 0.75rem;
     width: 270px;
@@ -1667,7 +1667,7 @@
     background: var(--bg-surface-glass);
     backdrop-filter: blur(6px);
     box-shadow: var(--shadow-md);
-    z-index: 8;
+    z-index: 20;
 }
 
 .round-nav-header {
