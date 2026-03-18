@@ -120,18 +120,26 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     elif system == "Darwin":
         shell_info = "macOS Terminal (zsh/bash)"
 
-    # Determine recommended python command
-    py_executable = sys.executable
-    py_command = "python"
+    # Determine the Python available in the workspace environment via PATH.
+    # Do NOT use sys.executable — that points to the agent-teams server runtime,
+    # not the Python the agent should invoke inside the target environment.
     if system != "Windows":
         which_python3 = shutil.which("python3")
-        if (
-            which_python3
-            and Path(which_python3).resolve() == Path(py_executable).resolve()
-        ):
+        which_python = shutil.which("python")
+        if which_python3:
             py_command = "python3"
-        elif not shutil.which("python") and which_python3:
+            py_executable = which_python3
+        elif which_python:
+            py_command = "python"
+            py_executable = which_python
+        else:
             py_command = "python3"
+            py_executable = sys.executable
+    else:
+        py_executable = (
+            shutil.which("python") or shutil.which("python3") or sys.executable
+        )
+        py_command = "python"
 
     lines = [
         "## Runtime Environment Information",
