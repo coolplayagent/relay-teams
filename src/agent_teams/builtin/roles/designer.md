@@ -9,6 +9,7 @@ tools:
   - glob
   - read
   - shell
+  - edit
   - write
 ---
 

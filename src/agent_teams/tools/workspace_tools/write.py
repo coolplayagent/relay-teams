@@ -49,11 +49,17 @@ def format_diff_short(old_content: str, new_content: str) -> str:
     return format_diff_summary(old_content, new_content)
 
 
-def atomic_write(file_path: Path, content: str, encoding: str = "utf-8") -> None:
+def atomic_write(
+    file_path: Path,
+    content: str,
+    encoding: str = "utf-8",
+    newline: str | None = None,
+) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding=encoding,
+        newline=newline,
         delete=False,
         dir=file_path.parent,
         prefix=f".{file_path.name}.",

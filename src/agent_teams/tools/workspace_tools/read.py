@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic_ai import Agent
 
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.workspace_tools.edit_state import record_file_read
 
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000
@@ -237,6 +238,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output.append(f"\n\n(End of file - total {total_lines} lines)")
 
             output.append("</content>")
+            record_file_read(
+                shared_store=ctx.deps.shared_store,
+                task_id=ctx.deps.task_id,
+                path=file_path,
+            )
 
             return "\n".join(output)
 

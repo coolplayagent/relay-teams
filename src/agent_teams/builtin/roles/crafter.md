@@ -8,6 +8,7 @@ tools:
   - grep
   - glob
   - read
+  - edit
   - write
   - shell
 ---
