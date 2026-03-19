@@ -200,7 +200,11 @@ class TaskOrchestrationService:
         elif record.status == TaskStatus.COMPLETED and not normalized_feedback:
             raise ValueError("feedback is required to re-dispatch a completed task")
         elif record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}:
-            raise ValueError("failed or timed out tasks must be recreated")
+            raise ValueError(
+                f"Task '{record.envelope.title}' (role={record.envelope.role_id}) "
+                f"{record.status.value}: {record.error_message or 'unknown error'}. "
+                f"Use create_tasks to create a replacement task."
+            )
 
         if not instance_id:
             instance_id = record.assigned_instance_id or ""
@@ -303,7 +307,9 @@ class TaskOrchestrationService:
             if candidate.status not in blocking_statuses:
                 continue
             raise ValueError(
-                "role instance is busy; finish or resume the existing task before dispatching another task for this role"
+                f"Role {candidate.envelope.role_id} is busy with task "
+                f"'{candidate.envelope.title}' (status={candidate.status.value}). "
+                f"Wait for it to complete or use a different role."
             )
 
     def _get_root_task(self, run_id: str) -> TaskRecord:

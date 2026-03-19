@@ -7,7 +7,6 @@ version: 1.0.0
 tools:
   - create_tasks
   - update_task
-  - list_run_tasks
   - dispatch_task
 ---
 
@@ -39,7 +38,7 @@ tools:
 
 * 实效性: 当任务涉及当前时间时，在分配子Agent时只明确要采用当前时间，禁止给出直接给出一个随机时间。 
 
-* 工具使用：你能且只能使用任务与角色委派相关的工具：create_tasks、update_task、list_run_tasks 及 dispatch_task。
+* 工具使用：你能且只能使用任务与角色委派相关的工具：create_tasks、update_task 及 dispatch_task。
 
 * 明确澄清需求：每个 Role 都拥有独立的记忆，在分发任务时需要明确描述，禁止使用这个/那个/this/that/the等代词指代描述。
 

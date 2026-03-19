@@ -478,7 +478,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
             name="Coordinator Agent",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "list_run_tasks", "dispatch_task"),
+            tools=("create_tasks", "update_task", "dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )

@@ -28,7 +28,6 @@ def _role(role_id: str) -> RoleDefinition:
         tools = (
             "create_tasks",
             "update_task",
-            "list_run_tasks",
             "dispatch_task",
         )
     return RoleDefinition(
@@ -81,7 +80,7 @@ def _coordinator_registry() -> RoleRegistry:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "list_run_tasks", "dispatch_task"),
+            tools=("create_tasks", "update_task", "dispatch_task"),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -121,7 +120,9 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "## Role Usage" in prompt
     assert "## Available Roles" in prompt
     assert "### writer_agent" in prompt
-    assert "Each role entry below is a dispatch target" in prompt
+    assert "### create_tasks" in prompt
+    assert "### dispatch_task" in prompt
+    assert "### update_task" in prompt
     assert "- Description: Drafts release notes." in prompt
     assert "- Tools: read, write" in prompt
     assert "- MCP Tools: docs/search" in prompt
@@ -190,6 +191,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
 
     assert "### writer_agent" in prompt
     assert "## Role Usage" in prompt
-    assert "Use `create_tasks` to create a task for a specific role id" in prompt
-    assert "Use `dispatch_task` after the task is ready to run." in prompt
-    assert "Use `update_task` to refine an existing task" in prompt
+    assert "### create_tasks" in prompt
+    assert "### dispatch_task" in prompt
+    assert "### update_task" in prompt
+    assert "### Delegation guidelines" in prompt

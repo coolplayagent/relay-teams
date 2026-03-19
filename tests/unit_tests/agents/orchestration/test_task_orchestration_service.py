@@ -381,7 +381,7 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
         assigned_instance_id=instance_id,
     )
 
-    with pytest.raises(ValueError, match="role instance is busy"):
+    with pytest.raises(ValueError, match="Role spec_coder is busy with task"):
         await service.dispatch_task(run_id="run-1", task_id=second.envelope.task_id)
 
     second_record = task_repo.get(second.envelope.task_id)
@@ -399,8 +399,8 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
             "",
             "feedback is required to re-dispatch a completed task",
         ),
-        (TaskStatus.FAILED, "", "failed or timed out tasks must be recreated"),
-        (TaskStatus.TIMEOUT, "", "failed or timed out tasks must be recreated"),
+        (TaskStatus.FAILED, "", "Use create_tasks to create a replacement task"),
+        (TaskStatus.TIMEOUT, "", "Use create_tasks to create a replacement task"),
     ],
 )
 async def test_dispatch_task_rejects_invalid_statuses(

@@ -13,7 +13,6 @@ COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
         "create_tasks",
         "update_task",
-        "list_run_tasks",
         "dispatch_task",
     )
 )

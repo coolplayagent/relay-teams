@@ -84,7 +84,6 @@ def _build_coordinator(
             tools=(
                 "create_tasks",
                 "update_task",
-                "list_run_tasks",
                 "dispatch_task",
             ),
             system_prompt="Coordinate tasks.",

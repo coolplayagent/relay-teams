@@ -47,7 +47,6 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
             tools=(
                 "create_tasks",
                 "update_task",
-                "list_run_tasks",
                 "dispatch_task",
             ),
             system_prompt="Coordinate tasks.",
