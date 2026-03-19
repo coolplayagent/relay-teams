@@ -7,7 +7,9 @@ from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
-from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from agent_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+)
 
 
 class ModelConfigManager:

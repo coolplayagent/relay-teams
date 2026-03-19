@@ -93,8 +93,12 @@ def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None
 
     first_dispatch = dispatch_task(api_client, task_id=task_ids[0])
     second_dispatch = dispatch_task(api_client, task_id=task_ids[1])
-    assert first_dispatch["ok"] is True
-    assert second_dispatch["ok"] is True
+    first_task = first_dispatch.get("task")
+    second_task = second_dispatch.get("task")
+    assert isinstance(first_task, dict)
+    assert isinstance(second_task, dict)
+    assert first_task.get("task_id") == task_ids[0]
+    assert second_task.get("task_id") == task_ids[1]
 
     round_response = api_client.get(f"/api/sessions/{session_id}/rounds/{run_id}")
     round_response.raise_for_status()

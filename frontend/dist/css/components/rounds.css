@@ -165,6 +165,72 @@
     scroll-margin-top: 0.75rem;
 }
 
+.round-retry-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin: -0.1rem 0 1rem;
+}
+
+.round-retry-item {
+    padding: 0.75rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border-color) 72%);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--warning) 8%, var(--bg-surface) 92%);
+}
+
+.round-retry-item-active {
+    border-color: color-mix(in srgb, var(--warning) 48%, var(--border-color) 52%);
+    background: color-mix(in srgb, var(--warning) 14%, var(--bg-surface) 86%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
+.round-retry-item-failed {
+    border-color: color-mix(in srgb, var(--danger) 38%, var(--border-color) 62%);
+    background: color-mix(in srgb, var(--danger) 10%, var(--bg-surface) 90%);
+}
+
+.round-retry-main,
+.round-retry-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.round-retry-label {
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    font-weight: 600;
+}
+
+.round-retry-copy,
+.round-retry-time {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.round-retry-code {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.25rem;
+    padding: 0.04rem 0.4rem;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--warning);
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+
+.round-retry-detail {
+    margin-top: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
 .session-round-section.round-section-emphasis .round-detail-header {
     border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
     background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);

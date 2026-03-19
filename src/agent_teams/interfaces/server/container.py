@@ -173,16 +173,7 @@ class ServerContainer:
         self.role_memory_service: RoleMemoryService = RoleMemoryService(
             repository=self.role_memory_repo
         )
-        reflection_config = self._resolve_reflection_model_config()
-        self.subagent_reflection_service: SubagentReflectionService | None = (
-            SubagentReflectionService(
-                config=reflection_config,
-                message_repo=self.message_repo,
-                role_memory_service=self.role_memory_service,
-            )
-            if reflection_config is not None
-            else None
-        )
+        self.subagent_reflection_service = self._build_subagent_reflection_service()
         self._ensure_default_workspace()
 
         self.agent_repo.mark_running_instances_failed()
@@ -384,6 +375,19 @@ class ServerContainer:
             return profile
         return None
 
+    def _build_subagent_reflection_service(
+        self,
+    ) -> SubagentReflectionService | None:
+        reflection_config = self._resolve_reflection_model_config()
+        if reflection_config is None:
+            return None
+        return SubagentReflectionService(
+            config=reflection_config,
+            retry_config=self.runtime.llm_retry,
+            message_repo=self.message_repo,
+            role_memory_service=self.role_memory_service,
+        )
+
     async def start(self) -> None:
         return None
 
@@ -402,6 +406,8 @@ class ServerContainer:
 
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
+        self.subagent_reflection_service = self._build_subagent_reflection_service()
+        self.session_service._subagent_reflection_service = self.subagent_reflection_service
         self._refresh_coordinator_runtime()
 
     def _on_roles_reloaded(self, role_registry: RoleRegistry) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
+import asyncio
 import json
 import logging
 from copy import deepcopy
@@ -30,7 +31,12 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from agent_teams.providers.model_config import ModelEndpointConfig
+from agent_teams.providers.llm_retry import (
+    LlmRetrySchedule,
+    compute_retry_delay_ms,
+    extract_retry_error_info,
+)
+from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from agent_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
@@ -136,6 +142,7 @@ class AgentLlmSession:
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
+        retry_config: LlmRetryConfig | None = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -165,16 +172,24 @@ class AgentLlmSession:
         self._tool_approval_policy = tool_approval_policy
         self._notification_service = notification_service
         self._token_usage_repo = token_usage_repo
+        self._retry_config = retry_config or LlmRetryConfig()
 
     async def run(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
 
-    async def _generate_async(self, request: LLMRequest) -> str:
+    async def _generate_async(
+        self,
+        request: LLMRequest,
+        *,
+        retry_number: int = 0,
+        total_attempts: int | None = None,
+    ) -> str:
         resolved_workspace_id = request.workspace_id
         resolved_conversation_id = request.conversation_id or build_conversation_id(
             request.session_id,
             request.role_id,
         )
+        total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         skill_instructions = (
             tuple(
                 PromptSkillInstruction(
@@ -304,6 +319,9 @@ class AgentLlmSession:
 
         printed_any = False
         emitted_text_chunks: list[str] = []
+        attempt_text_emitted = False
+        attempt_tool_event_emitted = False
+        attempt_messages_committed = False
         history: list[ModelRequest | ModelResponse] = (
             self._truncate_history_to_safe_boundary(
                 self._filter_model_messages(
@@ -367,6 +385,7 @@ class AgentLlmSession:
                                         )
                                         if text_emitted:
                                             printed_any = True
+                                            attempt_text_emitted = True
                                 else:
                                     async for text_delta in stream.stream_text(
                                         delta=True
@@ -377,6 +396,7 @@ class AgentLlmSession:
                                                 request.role_id, text_delta
                                             )
                                             printed_any = True
+                                            attempt_text_emitted = True
                                             emitted_text_chunks.append(text_delta)
                                             self._publish_text_delta_event(
                                                 request=request,
@@ -421,16 +441,21 @@ class AgentLlmSession:
                             new_messages=new_batch,
                         )
                         if new_to_process:
+                            if self._has_tool_side_effect_messages(new_to_process):
+                                attempt_tool_event_emitted = True
                             self._publish_tool_call_events_from_messages(
                                 request=request,
                                 messages=new_to_process,
                             )
                             buffered_messages.extend(new_to_process)
+                            previous_history_size = len(history)
                             history, buffered_messages = self._commit_ready_messages(
                                 request=request,
                                 history=history,
                                 pending_messages=buffered_messages,
                             )
+                            if len(history) > previous_history_size:
+                                attempt_messages_committed = True
                         seen_count += len(new_batch)
 
                         # Drain pending user injections at this boundary (already handled in previous version, check if needed here)
@@ -467,6 +492,7 @@ class AgentLlmSession:
                                 trace_id=request.trace_id,
                                 messages=extra,
                             )
+                            attempt_messages_committed = True
                             # Restart iter() with injected messages appended to committed history
                             history = self._filter_model_messages(
                                 self._message_repo.get_history_for_conversation(
@@ -491,16 +517,21 @@ class AgentLlmSession:
                         new_messages=list(all_new)[seen_count:],
                     )
                     if to_save:
+                        if self._has_tool_side_effect_messages(to_save):
+                            attempt_tool_event_emitted = True
                         self._publish_tool_call_events_from_messages(
                             request=request,
                             messages=to_save,
                         )
                         buffered_messages.extend(to_save)
+                    previous_history_size = len(history)
                     history, buffered_messages = self._commit_all_safe_messages(
                         request=request,
                         history=history,
                         pending_messages=buffered_messages,
                     )
+                    if len(history) > previous_history_size:
+                        attempt_messages_committed = True
                     # Record and publish token usage
                     usage = result.usage()
                     input_tokens = request_level_input_tokens
@@ -587,10 +618,130 @@ class AgentLlmSession:
                 },
                 exc_info=exc,
             )
+            retry_error = extract_retry_error_info(exc)
+            should_retry = (
+                retry_error is not None
+                and self._retry_config.enabled
+                and retry_number < self._retry_config.max_retries
+                and not attempt_text_emitted
+                and not attempt_tool_event_emitted
+                and not attempt_messages_committed
+            )
+            if should_retry:
+                resolved_retry_error = retry_error
+                assert resolved_retry_error is not None
+                next_retry_number = retry_number + 1
+                delay_ms = compute_retry_delay_ms(
+                    config=self._retry_config,
+                    retry_number=next_retry_number,
+                    retry_after_ms=resolved_retry_error.retry_after_ms,
+                )
+                await self._handle_retry_scheduled(
+                    request=request,
+                    schedule=LlmRetrySchedule(
+                        retry_number=next_retry_number,
+                        next_attempt_number=next_retry_number + 1,
+                        total_attempts=total_attempts,
+                        delay_ms=delay_ms,
+                        error=resolved_retry_error,
+                    ),
+                )
+                await asyncio.sleep(delay_ms / 1000)
+                return await self._generate_async(
+                    request,
+                    retry_number=next_retry_number,
+                    total_attempts=total_attempts,
+                )
+            if (
+                retry_error is not None
+                and self._retry_config.enabled
+                and retry_number >= self._retry_config.max_retries
+            ):
+                log_event(
+                    LOGGER,
+                    logging.ERROR,
+                    event="llm.request.retry_exhausted",
+                    message="LLM request retries exhausted",
+                    payload={
+                        "run_id": request.run_id,
+                        "task_id": request.task_id,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                        "retries_used": retry_number,
+                        "status_code": retry_error.status_code,
+                        "error_code": retry_error.error_code,
+                    },
+                )
             raise ModelAPIError(
                 model_name=exc.model_name,
                 message=self._build_model_api_error_message(exc),
             ) from exc
+        except Exception as exc:
+            retry_error = extract_retry_error_info(exc)
+            should_retry = (
+                retry_error is not None
+                and self._retry_config.enabled
+                and retry_number < self._retry_config.max_retries
+                and not attempt_text_emitted
+                and not attempt_tool_event_emitted
+                and not attempt_messages_committed
+            )
+            if should_retry:
+                resolved_retry_error = retry_error
+                assert resolved_retry_error is not None
+                next_retry_number = retry_number + 1
+                delay_ms = compute_retry_delay_ms(
+                    config=self._retry_config,
+                    retry_number=next_retry_number,
+                    retry_after_ms=resolved_retry_error.retry_after_ms,
+                )
+                await self._handle_retry_scheduled(
+                    request=request,
+                    schedule=LlmRetrySchedule(
+                        retry_number=next_retry_number,
+                        next_attempt_number=next_retry_number + 1,
+                        total_attempts=total_attempts,
+                        delay_ms=delay_ms,
+                        error=resolved_retry_error,
+                    ),
+                )
+                await asyncio.sleep(delay_ms / 1000)
+                return await self._generate_async(
+                    request,
+                    retry_number=next_retry_number,
+                    total_attempts=total_attempts,
+                )
+            if retry_error is not None:
+                log_event(
+                    LOGGER,
+                    logging.ERROR,
+                    event="llm.request.failed",
+                    message="LLM provider request failed",
+                    payload={
+                        "model": self._config.model,
+                        "base_url": self._config.base_url,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    },
+                    exc_info=exc,
+                )
+                if retry_number >= self._retry_config.max_retries:
+                    log_event(
+                        LOGGER,
+                        logging.ERROR,
+                        event="llm.request.retry_exhausted",
+                        message="LLM request retries exhausted",
+                        payload={
+                            "run_id": request.run_id,
+                            "task_id": request.task_id,
+                            "role_id": request.role_id,
+                            "instance_id": request.instance_id,
+                            "retries_used": retry_number,
+                            "status_code": retry_error.status_code,
+                            "error_code": retry_error.error_code,
+                        },
+                    )
+            raise
 
         assert result is not None
 
@@ -649,6 +800,61 @@ class AgentLlmSession:
             },
         )
         return text
+
+    def _publish_model_step_started_event(self, *, request: LLMRequest) -> None:
+        self._publish_model_step_started_event(request=request)
+
+    def _publish_model_step_finished_event(self, *, request: LLMRequest) -> None:
+        self._publish_model_step_finished_event(request=request)
+
+    async def _handle_retry_scheduled(
+        self,
+        *,
+        request: LLMRequest,
+        schedule: LlmRetrySchedule,
+    ) -> None:
+        payload = {
+            "role_id": request.role_id,
+            "instance_id": request.instance_id,
+            "attempt_number": schedule.next_attempt_number,
+            "total_attempts": schedule.total_attempts,
+            "retry_in_ms": schedule.delay_ms,
+            "error_code": schedule.error.error_code or "",
+            "error_message": schedule.error.message,
+            "status_code": schedule.error.status_code,
+        }
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.LLM_RETRY_SCHEDULED,
+                payload_json=dumps(payload),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.request.retrying",
+            message="Scheduling LLM request retry",
+            payload={
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "retry_number": schedule.retry_number,
+                "next_attempt_number": schedule.next_attempt_number,
+                "total_attempts": schedule.total_attempts,
+                "delay_ms": schedule.delay_ms,
+                "status_code": schedule.error.status_code,
+                "error_code": schedule.error.error_code,
+                "transport_error": schedule.error.transport_error,
+                "timeout_error": schedule.error.timeout_error,
+            },
+        )
 
     def _usage_field_int(self, usage_obj: object, field_name: str) -> int:
         value = getattr(usage_obj, field_name, 0)
@@ -1097,6 +1303,22 @@ class AgentLlmSession:
                 if isinstance(part, (ToolReturnPart, RetryPromptPart)):
                     pending_tool_call_ids.pop(tool_call_id, None)
         return list(pending_tool_call_ids.items())
+
+    def _has_tool_side_effect_messages(
+        self,
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> bool:
+        for msg in messages:
+            if isinstance(msg, ModelResponse):
+                if any(isinstance(part, ToolCallPart) for part in msg.parts):
+                    return True
+                continue
+            if any(
+                isinstance(part, (ToolReturnPart, RetryPromptPart))
+                for part in msg.parts
+            ):
+                return True
+        return False
 
     def _truncate_history_to_safe_boundary(
         self,

@@ -106,6 +106,74 @@ export function appendRoundUserMessage(runId, text) {
     els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
 }
 
+export function appendRoundRetryEvent(runId, retryEvent) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId || !retryEvent || typeof retryEvent !== 'object') return;
+
+    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+        if (round.run_id !== safeRunId) {
+            return round;
+        }
+        return {
+            ...round,
+            retry_events: [retryEvent],
+        };
+    });
+    if (roundsState.currentRound?.run_id === safeRunId) {
+        roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
+    }
+    syncExportedState();
+    patchRoundRetryEvents(safeRunId);
+}
+
+export function updateRoundRetryEvent(runId, retryEventId, updates) {
+    const safeRunId = String(runId || '').trim();
+    const safeRetryEventId = String(retryEventId || '').trim();
+    if (!safeRunId || !safeRetryEventId || !updates || typeof updates !== 'object') return;
+
+    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+        if (round.run_id !== safeRunId) {
+            return round;
+        }
+        const existing = Array.isArray(round.retry_events) ? round.retry_events : [];
+        return {
+            ...round,
+            retry_events: existing.map(event => (
+                event?.event_id === safeRetryEventId
+                    ? { ...event, ...updates }
+                    : event
+            )),
+        };
+    });
+    if (roundsState.currentRound?.run_id === safeRunId) {
+        roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
+    }
+    syncExportedState();
+    patchRoundRetryEvents(safeRunId);
+}
+
+export function removeRoundRetryEvent(runId, retryEventId) {
+    const safeRunId = String(runId || '').trim();
+    const safeRetryEventId = String(retryEventId || '').trim();
+    if (!safeRunId || !safeRetryEventId) return;
+
+    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+        if (round.run_id !== safeRunId) {
+            return round;
+        }
+        const existing = Array.isArray(round.retry_events) ? round.retry_events : [];
+        return {
+            ...round,
+            retry_events: existing.filter(event => event?.event_id !== safeRetryEventId),
+        };
+    });
+    if (roundsState.currentRound?.run_id === safeRunId) {
+        roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
+    }
+    syncExportedState();
+    patchRoundRetryEvents(safeRunId);
+}
+
 export function overlayRoundRecoveryState(runId, overlay = {}) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
@@ -203,6 +271,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
             </div>
             <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
         section.appendChild(header);
+        renderRoundRetryEvents(section, round.retry_events || []);
 
         const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
             const roleId = item?.role_id || '';
@@ -480,9 +549,71 @@ function patchRoundHeader(round, roundIndex) {
     }
 }
 
+function patchRoundRetryEvents(runId) {
+    const round = roundsState.currentRounds.find(item => item.run_id === runId);
+    const section = document.querySelector(`.session-round-section[data-run-id="${runId}"]`);
+    if (!round || !section) return;
+    const existing = section.querySelector('.round-retry-timeline');
+    if (existing) {
+        existing.remove();
+    }
+    renderRoundRetryEvents(section, round.retry_events || []);
+}
+
 function renderRoundBadges(round, stateLabel, stateTone, approvalCount) {
     return `
         ${stateLabel ? `<span class="round-state-pill round-state-${stateTone}">${esc(stateLabel)}</span>` : ''}
         ${approvalCount > 0 ? `<span class="round-state-pill round-state-warning">${approvalCount} approval${approvalCount === 1 ? '' : 's'}</span>` : ''}
+    `;
+}
+
+function renderRoundRetryEvents(section, retryEvents) {
+    const items = Array.isArray(retryEvents) ? retryEvents : [];
+    if (items.length === 0) {
+        return;
+    }
+    const host = document.createElement('div');
+    host.className = 'round-retry-timeline';
+    host.innerHTML = items.map(renderRetryEventMarkup).join('');
+    section.appendChild(host);
+}
+
+function renderRetryEventMarkup(event) {
+    const attemptNumber = Number(event?.attempt_number || 0);
+    const totalAttempts = Number(event?.total_attempts || 0);
+    const isActive = event?.is_active === true;
+    const phase = String(event?.phase || '').trim() || 'scheduled';
+    const activeRemainingMs = Number(event?.remaining_ms || 0);
+    const retryInMs = Number(event?.retry_in_ms || 0);
+    const displayRetryMs = isActive ? activeRemainingMs : retryInMs;
+    const retrySeconds = displayRetryMs > 0
+        ? `${(displayRetryMs / 1000).toFixed(displayRetryMs >= 10000 ? 0 : 1)}s`
+        : '0s';
+    const errorCode = String(event?.error_code || '').trim();
+    const errorMessage = String(event?.error_message || '').trim();
+    const occurredAt = String(event?.occurred_at || '').trim();
+    const occurredLabel = occurredAt ? new Date(occurredAt).toLocaleTimeString() : '';
+    const copy = phase === 'retrying'
+        ? `Attempt ${attemptNumber}/${totalAttempts} in progress`
+        : phase === 'failed'
+            ? `Attempt ${attemptNumber}/${totalAttempts} failed`
+            : `Attempt ${attemptNumber}/${totalAttempts} in ${retrySeconds}`;
+    const label = phase === 'retrying'
+        ? 'Retrying'
+        : phase === 'failed'
+            ? 'Retry failed'
+            : 'Retry scheduled';
+    return `
+        <div class="round-retry-item${isActive ? ' round-retry-item-active' : ''}${phase === 'failed' ? ' round-retry-item-failed' : ''}">
+            <div class="round-retry-main">
+                <span class="round-retry-label">${label}</span>
+                <span class="round-retry-copy">${copy}</span>
+            </div>
+            <div class="round-retry-meta">
+                ${errorCode ? `<span class="round-retry-code">${esc(errorCode)}</span>` : ''}
+                ${occurredLabel ? `<span class="round-retry-time">${esc(occurredLabel)}</span>` : ''}
+            </div>
+            ${errorMessage ? `<div class="round-retry-detail">${esc(errorMessage)}</div>` : ''}
+        </div>
     `;
 }

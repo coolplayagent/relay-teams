@@ -22,6 +22,7 @@ class InjectionSource(str, Enum):
 class RunEventType(str, Enum):
     RUN_STARTED = "run_started"
     RUN_RESUMED = "run_resumed"
+    LLM_RETRY_SCHEDULED = "llm_retry_scheduled"
     MODEL_STEP_STARTED = "model_step_started"
     MODEL_STEP_FINISHED = "model_step_finished"
     TEXT_DELTA = "text_delta"

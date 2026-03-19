@@ -24,7 +24,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.logger import get_logger, log_event
 from agent_teams.net.llm_client import build_llm_http_client
-from agent_teams.providers.model_config import ModelEndpointConfig
+from agent_teams.providers.llm_retry import run_with_llm_retry
+from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from agent_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
@@ -79,11 +80,13 @@ class SubagentReflectionService:
         self,
         *,
         config: ModelEndpointConfig,
+        retry_config: LlmRetryConfig,
         message_repo: MessageRepository,
         role_memory_service: RoleMemoryService,
         strategy: SubagentCompactionStrategy | None = None,
     ) -> None:
         self._config = config
+        self._retry_config = retry_config
         self._message_repo = message_repo
         self._role_memory_service = role_memory_service
         self._strategy = strategy or DefaultSubagentCompactionStrategy()
@@ -213,7 +216,12 @@ class SubagentReflectionService:
             f"Existing reflection memory:\n{existing_summary or '(empty)'}\n\n"
             f"Transcript to absorb:\n{transcript}"
         )
-        result = await agent.run(prompt)
+        result = await run_with_llm_retry(
+            operation=lambda: agent.run(prompt),
+            config=self._retry_config,
+            is_retry_allowed=lambda: True,
+            on_retry_scheduled=lambda _schedule: None,
+        )
         return result.output.strip()
 
     def _build_model(self) -> OpenAIChatModel:

@@ -5,12 +5,13 @@ from collections.abc import Mapping
 from json import loads
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.env import load_merged_env_vars
 from agent_teams.paths import get_app_config_dir
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    LlmRetryConfig,
     ModelEndpointConfig,
     ProviderType,
     SamplingConfig,
@@ -42,6 +43,7 @@ class RuntimeConfig(BaseModel):
 
     paths: RuntimePaths
     llm_profiles: dict[str, ModelEndpointConfig]
+    llm_retry: LlmRetryConfig = Field(default_factory=LlmRetryConfig)
     default_model_profile: str | None = None
     model_status: ModelConfigStatus = ModelConfigStatus(loaded=True)
 
@@ -95,7 +97,6 @@ def load_runtime_config(
         )
     else:
         default_model_profile = loaded_profiles.default_profile_name
-
     return RuntimeConfig(
         paths=RuntimePaths(
             config_dir=resolved_config_dir,
@@ -104,6 +105,7 @@ def load_runtime_config(
             roles_dir=resolved_roles_dir,
         ),
         llm_profiles=llm_profiles,
+        llm_retry=LlmRetryConfig(),
         default_model_profile=default_model_profile,
         model_status=model_status,
     )

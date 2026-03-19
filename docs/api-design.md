@@ -220,6 +220,18 @@ Response shape:
       "role_instance_map": {"spec_coder": "inst-2"},
       "task_instance_map": {"task-2": "inst-2"},
       "task_status_map": {"task-2": "completed"},
+      "retry_events": [
+        {
+          "occurred_at": "2026-03-11T12:00:04Z",
+          "instance_id": "inst-2",
+          "role_id": "spec_coder",
+          "attempt_number": 2,
+          "total_attempts": 6,
+          "retry_in_ms": 1000,
+          "error_code": "429",
+          "error_message": "Rate limited"
+        }
+      ],
       "pending_tool_approvals": [],
       "pending_tool_approval_count": 0,
       "run_status": "running",
@@ -235,6 +247,7 @@ Response shape:
 Notes:
 - `tasks` contains delegated task summaries only. The root coordinator task is omitted.
 - `task_instance_map` is the authoritative mapping when multiple tasks use the same `role_id`.
+- `retry_events` reflects the current active retry card for the run timeline. The array is empty when no retry backoff is currently pending and contains at most one entry.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
 
@@ -359,6 +372,15 @@ Thinking events:
 - `thinking_started`: payload includes `part_index`, `role_id`, `instance_id`.
 - `thinking_delta`: payload includes `part_index`, `text`, `role_id`, `instance_id`.
 - `thinking_finished`: payload includes `part_index`, `role_id`, `instance_id`.
+
+Retry events:
+- `llm_retry_scheduled`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `retry_in_ms`, `error_code`, and `error_message`.
+
+Frontend behavior:
+- The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
+- Later retry events replace the same card instead of stacking multiple historical cards.
+- Once a retried model attempt produces successful output, the retry card is removed.
+- If the run still fails after retries are exhausted, the retry card remains visible as the final failed retry state.
 
 ### `POST /runs/{run_id}/inject`
 

@@ -7,7 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
+from openai import APIError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -1542,3 +1544,111 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
     assert tool_returns[0].tool_call_id == "call-once"
     assert isinstance(tool_returns[0].content, dict)
     assert tool_returns[0].content.get("time") == "2026-03-07T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_provider_coded_error_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "retry_success.db", fake_hub)
+    provider._session._retry_config.jitter = False
+    request_error = APIError(
+        "provider error",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={"error": {"code": "2062", "message": "busy"}},
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after retry")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after retry")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-retry-success",
+        trace_id="run-retry-success",
+        task_id="task-retry-success",
+        session_id="session-retry-success",
+        workspace_id="default",
+        instance_id="inst-retry-success",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after retry"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.count(RunEventType.MODEL_STEP_STARTED) == 2
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+    history = message_repo.get_history("inst-retry-success")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_retry_after_streamed_text_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _ = _build_provider(tmp_path / "retry_blocked.db", fake_hub)
+    provider._session._retry_config.jitter = False
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_StreamingTextNode(["partial "])],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=APIError(
+                    "provider error",
+                    request=httpx.Request(
+                        "POST",
+                        "https://example.test/v1/chat/completions",
+                    ),
+                    body={"error": {"code": "2062", "message": "busy"}},
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _StreamingTextNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-retry-blocked",
+        trace_id="run-retry-blocked",
+        task_id="task-retry-blocked",
+        session_id="session-retry-blocked",
+        workspace_id="default",
+        instance_id="inst-retry-blocked",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(APIError):
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types

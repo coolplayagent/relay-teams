@@ -6,6 +6,7 @@ from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.sessions.session_rounds_projection import build_session_rounds
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -198,3 +199,90 @@ def test_build_session_rounds_includes_task_instance_map() -> None:
         "task-second": "created",
         "task-unassigned": "created",
     }
+
+
+def test_build_session_rounds_only_keeps_active_retry_card() -> None:
+    session_id = "session-1"
+    run_id = "run-1"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="root",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+    runtime = RunRuntimeRecord(
+        run_id=run_id,
+        session_id=session_id,
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:00Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":6,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:01Z",
+                "payload_json": '{"attempt_number":3,"total_attempts":6,"retry_in_ms":2000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.MODEL_STEP_STARTED.value,
+                "occurred_at": "2026-03-19T12:00:02Z",
+                "payload_json": "{}",
+            },
+        ],
+    )
+
+    assert len(rounds) == 1
+    assert rounds[0]["retry_events"] == []
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:00Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":6,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:01Z",
+                "payload_json": '{"attempt_number":3,"total_attempts":6,"retry_in_ms":2000,"error_code":"network_error"}',
+            },
+        ],
+    )
+
+    retry_events = cast(list[dict[str, object]], rounds[0]["retry_events"])
+    assert len(retry_events) == 1
+    assert retry_events[0]["attempt_number"] == 3
+    assert retry_events[0]["retry_in_ms"] == 2000

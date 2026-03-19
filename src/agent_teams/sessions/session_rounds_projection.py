@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+import json
 from typing import cast
 
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 
@@ -18,10 +20,12 @@ def build_session_rounds(
     approval_tickets_by_run: dict[str, list[dict[str, object]]],
     run_runtime_repo: RunRuntimeRepository,
     get_session_messages: Callable[[str], list[dict[str, object]]],
+    get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
 ) -> list[dict[str, object]]:
     session_tasks = task_repo.list_by_session(session_id)
     session_agents = agent_repo.list_session_role_instances(session_id)
     session_messages = get_session_messages(session_id)
+    session_events = get_session_events(session_id) if get_session_events else []
     run_runtime = {
         record.run_id: record for record in run_runtime_repo.list_by_session(session_id)
     }
@@ -79,8 +83,45 @@ def build_session_rounds(
                 message["role_id"] = role_id
         messages_by_run[run_id].append(message)
 
+    retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    retry_clear_events = {
+        RunEventType.MODEL_STEP_STARTED.value,
+        RunEventType.MODEL_STEP_FINISHED.value,
+        RunEventType.RUN_COMPLETED.value,
+        RunEventType.RUN_FAILED.value,
+        RunEventType.RUN_STOPPED.value,
+    }
+    active_retry_by_run: dict[str, dict[str, object]] = {}
+    sorted_session_events = sorted(
+        session_events,
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    for event in sorted_session_events:
+        event_type = str(event.get("event_type") or "")
+        run_id = str(event.get("trace_id") or "")
+        if not run_id:
+            continue
+        if event_type == RunEventType.LLM_RETRY_SCHEDULED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": payload.get("retry_in_ms", 0),
+                "error_code": payload.get("error_code", ""),
+                "error_message": payload.get("error_message", ""),
+            }
+            continue
+        if event_type in retry_clear_events:
+            active_retry_by_run.pop(run_id, None)
+    for run_id, retry_event in active_retry_by_run.items():
+        retry_events_by_run[run_id] = [retry_event]
+
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
+    run_ids.update(retry_events_by_run.keys())
     run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
 
@@ -110,6 +151,7 @@ def build_session_rounds(
             "created_at": created_at,
             "intent": _round_intent(root_task, run_messages),
             "coordinator_messages": coordinator_messages,
+            "retry_events": retry_events_by_run.get(run_id, []),
             "has_user_messages": has_user_messages,
             "tasks": delegated_tasks_by_run.get(run_id, []),
             "instance_role_map": instance_role_by_run.get(run_id, {}),
@@ -267,3 +309,15 @@ def _is_tool_outcome_message(message: object) -> bool:
             continue
         return False
     return True
+
+
+def _parse_event_payload(payload_json: object) -> dict[str, object]:
+    if not isinstance(payload_json, str) or not payload_json:
+        return {}
+    try:
+        decoded = json.loads(payload_json)
+    except Exception:
+        return {}
+    if not isinstance(decoded, dict):
+        return {}
+    return {str(key): value for key, value in decoded.items() if isinstance(key, str)}

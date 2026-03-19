@@ -45,8 +45,6 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     assert profiles["default"]["max_tokens"] == 2000
     assert profiles["default"]["context_window"] == 128000
     assert profiles["default"]["connect_timeout_seconds"] == 45.0
-
-
 def test_get_model_profiles_uses_default_connect_timeout_when_missing(
     tmp_path: Path,
 ) -> None:

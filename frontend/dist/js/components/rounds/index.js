@@ -4,6 +4,9 @@
  */
 export {
     appendRoundUserMessage,
+    appendRoundRetryEvent,
+    removeRoundRetryEvent,
+    updateRoundRetryEvent,
     currentRound,
     currentRounds,
     createLiveRound,

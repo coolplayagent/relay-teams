@@ -12,6 +12,13 @@ import {
     markRunTerminalState,
 } from '../../app/recovery.js';
 import {
+    beginLlmRetryAttempt,
+    clearLlmRetryStatus,
+    markLlmRetryFailed,
+    markLlmRetrySucceeded,
+    showLlmRetryStatus,
+} from '../../app/retryStatus.js';
+import {
     markSubagentStatus,
     rememberLiveSubagent,
 } from '../../components/subagentRail.js';
@@ -45,6 +52,7 @@ export function handleRunStarted(eventMeta) {
 }
 
 export function handleModelStepStarted(instanceId, roleId) {
+    beginLlmRetryAttempt();
     if (instanceId && roleId) {
         if (!state.instanceRoleMap) state.instanceRoleMap = {};
         if (!state.roleInstanceMap) state.roleInstanceMap = {};
@@ -65,6 +73,7 @@ export function handleModelStepStarted(instanceId, roleId) {
 }
 
 export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
+    markLlmRetrySucceeded();
     const coordinatorRoleId = getCoordinatorRoleId();
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
@@ -87,6 +96,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
+    markLlmRetrySucceeded();
     const coordinatorRoleId = getCoordinatorRoleId();
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
@@ -182,6 +192,7 @@ export function handleModelStepFinished(instanceId) {
 
 export function handleRunCompleted() {
     sysLog('Run completed.');
+    markLlmRetrySucceeded();
     if (state.activeRunId) {
         markRunTerminalState(state.activeRunId, {
             status: 'completed',
@@ -206,6 +217,7 @@ export function handleRunCompleted() {
 
 export function handleRunStopped(payload) {
     sysLog(`Run stopped: ${payload?.reason || 'stopped_by_user'}`, 'log-info');
+    clearLlmRetryStatus();
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'stopped');
     }
@@ -234,6 +246,7 @@ export function handleRunStopped(payload) {
 
 export function handleRunFailed(payload) {
     sysLog(`Run failed: ${payload?.error || ''}`, 'log-error');
+    markLlmRetryFailed(payload?.error || '');
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'failed');
     }
@@ -253,4 +266,13 @@ export function handleRunFailed(payload) {
         els.stopBtn.style.display = 'none';
     }
     if (els.promptInput) els.promptInput.disabled = false;
+}
+
+export function handleLlmRetryScheduled(payload, eventMeta) {
+    const delaySeconds = Number(payload?.retry_in_ms || 0) / 1000;
+    sysLog(
+        `Model retry scheduled: attempt ${payload?.attempt_number || '?'} of ${payload?.total_attempts || '?'} in ${delaySeconds.toFixed(delaySeconds >= 10 ? 0 : 1)}s`,
+        'log-info',
+    );
+    showLlmRetryStatus(payload, eventMeta);
 }

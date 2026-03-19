@@ -102,6 +102,7 @@ def create_provider_factory(
                 tool_approval_policy=tool_approval_policy,
                 notification_service=notification_service,
                 token_usage_repo=token_usage_repo,
+                retry_config=runtime.llm_retry,
             ),
         )
         return provider_registry.create(config_to_use)

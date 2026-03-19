@@ -7,10 +7,18 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent_teams.providers.provider_contracts import EchoProvider, LLMProvider
     from agent_teams.providers.model_config import (
+        LlmRetryConfig,
         ModelEndpointConfig,
         ProviderModelInfo,
         ProviderType,
         SamplingConfig,
+    )
+    from agent_teams.providers.llm_retry import (
+        LlmRetryErrorInfo,
+        LlmRetrySchedule,
+        compute_retry_delay_ms,
+        extract_retry_error_info,
+        run_with_llm_retry,
     )
     from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
     from agent_teams.providers.model_config_manager import ModelConfigManager
@@ -40,6 +48,9 @@ __all__ = [
     "AgentTokenSummary",
     "EchoProvider",
     "LLMProvider",
+    "LlmRetryConfig",
+    "LlmRetryErrorInfo",
+    "LlmRetrySchedule",
     "ModelEndpointConfig",
     "ModelConfigManager",
     "ModelConfigService",
@@ -58,8 +69,11 @@ __all__ = [
     "SessionTokenUsage",
     "TokenUsageRecord",
     "TokenUsageRepository",
+    "compute_retry_delay_ms",
     "create_default_provider_registry",
+    "extract_retry_error_info",
     "list_provider_models",
+    "run_with_llm_retry",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -69,6 +83,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     ),
     "EchoProvider": ("agent_teams.providers.provider_contracts", "EchoProvider"),
     "LLMProvider": ("agent_teams.providers.provider_contracts", "LLMProvider"),
+    "LlmRetryConfig": ("agent_teams.providers.model_config", "LlmRetryConfig"),
+    "LlmRetryErrorInfo": (
+        "agent_teams.providers.llm_retry",
+        "LlmRetryErrorInfo",
+    ),
+    "LlmRetrySchedule": ("agent_teams.providers.llm_retry", "LlmRetrySchedule"),
     "ModelEndpointConfig": (
         "agent_teams.providers.model_config",
         "ModelEndpointConfig",
@@ -132,14 +152,23 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.providers.token_usage_repo",
         "TokenUsageRepository",
     ),
+    "compute_retry_delay_ms": (
+        "agent_teams.providers.llm_retry",
+        "compute_retry_delay_ms",
+    ),
     "create_default_provider_registry": (
         "agent_teams.providers.provider_registry",
         "create_default_provider_registry",
+    ),
+    "extract_retry_error_info": (
+        "agent_teams.providers.llm_retry",
+        "extract_retry_error_info",
     ),
     "list_provider_models": (
         "agent_teams.providers.provider_registry",
         "list_provider_models",
     ),
+    "run_with_llm_retry": ("agent_teams.providers.llm_retry", "run_with_llm_retry"),
 }
 
 

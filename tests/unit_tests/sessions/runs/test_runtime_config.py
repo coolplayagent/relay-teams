@@ -37,6 +37,8 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.env_file == (config_dir / ".env").resolve()
     assert resolved.paths.roles_dir == (config_dir / "roles")
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
+    assert resolved.llm_retry.max_retries == 5
+    assert resolved.llm_retry.initial_delay_ms == 1000
 
 
 def test_load_runtime_config_ignores_roles_dir_env_override(
@@ -81,6 +83,7 @@ def test_load_runtime_config_reports_missing_model_config_without_raising(
     assert resolved.llm_profiles == {}
     assert resolved.model_status.loaded is False
     assert resolved.model_status.error is not None
+    assert resolved.llm_retry.max_retries == 5
 
 
 def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None:

@@ -163,6 +163,7 @@ def apply_run_event_to_state(
         phase = RunStatePhase.STREAMING
         recoverable = True
     elif event_type in {
+        RunEventType.LLM_RETRY_SCHEDULED,
         RunEventType.MODEL_STEP_STARTED,
         RunEventType.TEXT_DELTA,
         RunEventType.THINKING_STARTED,

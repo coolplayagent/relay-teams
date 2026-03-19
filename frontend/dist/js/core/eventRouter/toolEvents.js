@@ -2,6 +2,7 @@
  * core/eventRouter/toolEvents.js
  * Handlers for tool call/result/approval events.
  */
+import { markLlmRetrySucceeded } from '../../app/retryStatus.js';
 import {
     markToolApprovalRequested,
     markToolApprovalResolved as markRecoveryToolApprovalResolved,
@@ -26,6 +27,7 @@ import {
 import { coordinatorContainerFor } from './utils.js';
 
 export function handleToolCall(payload, eventMeta, instanceId, roleId) {
+    markLlmRetrySucceeded();
     const coordinatorRoleId = getCoordinatorRoleId();
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
@@ -47,6 +49,7 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleToolInputValidationFailed(payload, instanceId, eventMeta = null, roleId = '') {
+    markLlmRetrySucceeded();
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const streamKey = isCoordinator ? 'coordinator' : (instanceId || roleId);
@@ -64,6 +67,7 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
 }
 
 export function handleToolResult(payload, instanceId, eventMeta = null, roleId = '') {
+    markLlmRetrySucceeded();
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
     const streamKey = isCoordinator ? 'coordinator' : (instanceId || roleId);

@@ -327,6 +327,7 @@ class SessionService:
             ),
             run_runtime_repo=self._run_runtime_repo,
             get_session_messages=self.get_session_messages,
+            get_session_events=self.get_global_events,
         )
         for round_item in rounds:
             runtime = self._run_runtime_repo.get(str(round_item.get("run_id") or ""))

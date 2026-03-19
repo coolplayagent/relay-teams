@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
+DEFAULT_LLM_RETRY_MAX_RETRIES = 5
+DEFAULT_LLM_RETRY_INITIAL_DELAY_MS = 1000
+DEFAULT_LLM_RETRY_MAX_DELAY_MS = 30000
+DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER = 2.0
 
 
 class ProviderType(StrEnum):
@@ -55,3 +59,27 @@ class ProviderModelInfo(BaseModel):
     provider: ProviderType
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
+
+
+class LlmRetryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_retries: int = Field(default=DEFAULT_LLM_RETRY_MAX_RETRIES, ge=0, le=10)
+    initial_delay_ms: int = Field(
+        default=DEFAULT_LLM_RETRY_INITIAL_DELAY_MS,
+        ge=0,
+        le=300000,
+    )
+    max_delay_ms: int = Field(
+        default=DEFAULT_LLM_RETRY_MAX_DELAY_MS,
+        ge=0,
+        le=300000,
+    )
+    backoff_multiplier: float = Field(
+        default=DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER,
+        ge=1.0,
+        le=10.0,
+    )
+    jitter: bool = True
+    respect_retry_after: bool = True

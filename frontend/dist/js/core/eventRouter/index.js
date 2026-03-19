@@ -7,6 +7,7 @@ import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenU
 import { state } from '../state.js';
 import { sysLog } from '../../utils/logger.js';
 import {
+    handleLlmRetryScheduled,
     handleModelStepFinished,
     handleModelStepStarted,
     handleRunCompleted,
@@ -65,6 +66,8 @@ export function routeEvent(evType, payload, eventMeta) {
         handleRunStarted(eventMeta);
     } else if (evType === 'model_step_started') {
         handleModelStepStarted(instanceId, roleId);
+    } else if (evType === 'llm_retry_scheduled') {
+        handleLlmRetryScheduled(payload, eventMeta);
     } else if (evType === 'text_delta') {
         handleTextDelta(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'thinking_started') {
@@ -139,7 +142,8 @@ function scheduleContinuityRefreshForEvent(evType) {
     }
 
     if (
-        evType === 'tool_result'
+        evType === 'llm_retry_scheduled'
+        || evType === 'tool_result'
         || evType === 'tool_approval_requested'
         || evType === 'tool_approval_resolved'
         || evType === 'subagent_stopped'

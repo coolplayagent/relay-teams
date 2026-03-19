@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     )
     from agent_teams.mcp.mcp_registry import McpRegistry
     from agent_teams.notifications import NotificationService
-    from agent_teams.providers.model_config import ModelEndpointConfig
+    from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
     from agent_teams.roles.memory_service import RoleMemoryService
     from agent_teams.agents.execution.subagent_reflection import (
         SubagentReflectionService,
@@ -79,6 +79,7 @@ class OpenAICompatibleProvider(LLMProvider):
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
+        retry_config: LlmRetryConfig | None = None,
     ) -> None:
         self._session = AgentLlmSession(
             config=config,
@@ -109,6 +110,7 @@ class OpenAICompatibleProvider(LLMProvider):
             tool_approval_policy=tool_approval_policy,
             notification_service=notification_service,
             token_usage_repo=token_usage_repo,
+            retry_config=retry_config,
         )
 
     @override
