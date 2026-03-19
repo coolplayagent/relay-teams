@@ -1,35 +1,9 @@
 from __future__ import annotations
 
-import re
-
 DEFAULT_TIMEOUT_SECONDS = 120
 MAX_TIMEOUT_SECONDS = 1200
 
 MAX_COMMAND_LENGTH = 16_000
-
-BANNED_PATTERNS = (
-    r"(^|\s)vim(\s|$)",
-    r"(^|\s)nano(\s|$)",
-    r"(^|\s)less(\s|$)",
-    r"(^|\s)more(\s|$)",
-    r"(^|\s)top(\s|$)",
-    r"(^|\s)watch(\s|$)",
-    r"(^|\s)ssh(\s|$)",
-    r"(^|\s)sftp(\s|$)",
-    r"(^|\s)ftp(\s|$)",
-    r"(^|\s)start(\s|$)",
-    r"(^|\s)explorer(\s|$)",
-    r"xdg-open",
-    r"(^|\s)open(\s|$)",
-    r"cmd\s*/c\s*start",
-    r"rm\s+-rf\s+/",
-    r"(^|\s)del\s+/f\s+/s\s+/q(\s|$)",
-    r"(^|\s)format(\s|$)",
-    r"(^|\s)shutdown(\s|$)",
-    r"(^|\s)reboot(\s|$)",
-    r"(^|\s)mkfs",
-    r"(^|\s)dd\s+if=",
-)
 
 
 def normalize_timeout(timeout_seconds: int | None) -> int:
@@ -50,8 +24,3 @@ def validate_shell_command(command: str) -> None:
         raise ValueError(
             f"command is too long ({len(text)} chars, max {MAX_COMMAND_LENGTH})"
         )
-
-    lower = text.lower()
-    for pattern in BANNED_PATTERNS:
-        if re.search(pattern, lower):
-            raise ValueError(f"command is blocked by policy: {pattern}")
