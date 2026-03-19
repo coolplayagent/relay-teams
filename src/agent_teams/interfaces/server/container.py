@@ -407,7 +407,9 @@ class ServerContainer:
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
         self.subagent_reflection_service = self._build_subagent_reflection_service()
-        self.session_service._subagent_reflection_service = self.subagent_reflection_service
+        self.session_service._subagent_reflection_service = (
+            self.subagent_reflection_service
+        )
         self._refresh_coordinator_runtime()
 
     def _on_roles_reloaded(self, role_registry: RoleRegistry) -> None:

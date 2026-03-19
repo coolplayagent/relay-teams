@@ -124,6 +124,8 @@ class SWEBenchLoader(DatasetLoader):
             reference_patch = (
                 str(reference_patch_raw) if reference_patch_raw is not None else None
             )
+            test_patch_raw = raw.get("test_patch")
+            test_patch = str(test_patch_raw) if test_patch_raw is not None else None
             fail_to_pass = _parse_test_list(raw.get("FAIL_TO_PASS", []))
             pass_to_pass = _parse_test_list(raw.get("PASS_TO_PASS", []))
             hints_text_raw = raw.get("hints_text")
@@ -147,6 +149,7 @@ class SWEBenchLoader(DatasetLoader):
                 repo_url=repo_url,
                 base_commit=base_commit,
                 reference_patch=reference_patch,
+                test_patch=test_patch,
                 fail_to_pass=fail_to_pass,
                 pass_to_pass=pass_to_pass,
                 extra_fields=extra_fields,

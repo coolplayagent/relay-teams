@@ -23,6 +23,7 @@ class ArtifactCollector:
     - ``metadata.json``  -- item id, run/session ids, outcome, timing, etc.
     - ``patch.diff``     -- the generated patch (git diff)
     - ``agent_output.txt`` -- full agent text output
+    - ``scorer_log.txt`` -- verbose scorer output (e.g. pytest stdout/stderr)
     - ``agent_teams.db`` -- the container's SQLite database (docker mode)
     - ``container.log``  -- container stdout/stderr (docker mode)
     """
@@ -42,6 +43,7 @@ class ArtifactCollector:
         self._write_metadata(artifact_dir, item, result)
         self._write_patch(artifact_dir, result)
         self._write_agent_output(artifact_dir, result)
+        self._write_scorer_log(artifact_dir, result)
 
         if workspace is not None and workspace.container_id is not None:
             self._collect_container_db(artifact_dir, workspace)
@@ -88,6 +90,11 @@ class ArtifactCollector:
         if result.agent_output:
             path = artifact_dir / "agent_output.txt"
             path.write_text(result.agent_output, encoding="utf-8")
+
+    def _write_scorer_log(self, artifact_dir: Path, result: EvalResult) -> None:
+        if result.scorer_log:
+            path = artifact_dir / "scorer_log.txt"
+            path.write_text(result.scorer_log, encoding="utf-8")
 
     def _collect_container_db(
         self, artifact_dir: Path, workspace: PreparedWorkspace

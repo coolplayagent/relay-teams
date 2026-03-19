@@ -15,7 +15,9 @@ def test_patch_extractor_ignores_untracked_files(tmp_path: Path) -> None:
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
 
-    subprocess.run(["git", "-C", str(repo_path), "init"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo_path), "init"], check=True, capture_output=True
+    )
     subprocess.run(
         ["git", "-C", str(repo_path), "config", "user.email", "evals@example.com"],
         check=True,
@@ -29,7 +31,11 @@ def test_patch_extractor_ignores_untracked_files(tmp_path: Path) -> None:
 
     tracked_file = repo_path / "tracked.txt"
     tracked_file.write_text("before\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo_path), "add", "tracked.txt"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo_path), "add", "tracked.txt"],
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(
         ["git", "-C", str(repo_path), "commit", "-m", "init"],
         check=True,

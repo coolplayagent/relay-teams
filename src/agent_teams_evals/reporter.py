@@ -141,7 +141,7 @@ tr.fail td {{ background: #ffe6e6; }}
 <p>Results: {report.passed}/{report.total} passed ({report.pass_rate * 100:.1f}%)</p>
 <p>Outcomes: completed={report.outcome_completed} failed={report.outcome_failed} timed_out={report.outcome_timed_out} stopped={report.outcome_stopped}</p>
 <p>Mean score: {report.mean_score:.3f}</p>
-<p>Auxiliary scores: {_format_auxiliary_scores({name: AuxiliaryScore(score=score) for name, score in sorted(report.auxiliary_score_means.items())}) or 'none'}</p>
+<p>Auxiliary scores: {_format_auxiliary_scores({name: AuxiliaryScore(score=score) for name, score in sorted(report.auxiliary_score_means.items())}) or "none"}</p>
 <p>Duration: mean={report.mean_duration_seconds:.1f}s p50={report.p50_duration_seconds:.1f}s p95={report.p95_duration_seconds:.1f}s</p>
 <p>Tokens: in={report.total_input_tokens:,} out={report.total_output_tokens:,} est_cost=${report.estimated_cost_usd:.4f}</p>
 <p>Generated: {report.generated_at.isoformat()}</p>

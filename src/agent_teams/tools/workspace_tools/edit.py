@@ -475,9 +475,7 @@ def edit_file_with_guard(
 
 
 def _project_edit_result(result: dict[str, str]) -> ToolResultProjection:
-    internal_data: dict[str, JsonValue] = {
-        key: value for key, value in result.items()
-    }
+    internal_data: dict[str, JsonValue] = {key: value for key, value in result.items()}
     return ToolResultProjection(
         visible_data={
             "output": result["output"],

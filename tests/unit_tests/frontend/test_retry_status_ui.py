@@ -10,14 +10,7 @@ def test_retry_status_updates_single_round_card_and_clears_live_state(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    source_path = (
-        repo_root
-        / "frontend"
-        / "dist"
-        / "js"
-        / "app"
-        / "retryStatus.js"
-    )
+    source_path = repo_root / "frontend" / "dist" / "js" / "app" / "retryStatus.js"
     module_under_test_path = tmp_path / "retryStatus.mjs"
     mock_rounds_path = tmp_path / "mockRounds.mjs"
     runner_path = tmp_path / "runner.mjs"

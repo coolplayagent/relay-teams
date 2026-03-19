@@ -37,6 +37,7 @@ class EvalItem(BaseModel):
     expected_keywords: tuple[str, ...] = ()
     expected_patterns: tuple[str, ...] = ()
     reference_patch: str | None = None
+    test_patch: str | None = None
     fail_to_pass: tuple[str, ...] = ()
     pass_to_pass: tuple[str, ...] = ()
     repo_url: str | None = None
@@ -56,6 +57,7 @@ class EvalResult(BaseModel):
     score: float = Field(ge=0.0, le=1.0)
     scorer_name: str
     scorer_detail: str = ""
+    scorer_log: str = ""
     auxiliary_scores: dict[str, AuxiliaryScore] = Field(default_factory=dict)
     agent_output: str = ""
     generated_patch: str = ""

@@ -122,7 +122,10 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "### writer_agent" in prompt
     assert "Do not implement it directly." in prompt
     assert "rely on each tool description for exact usage and constraints." in prompt
-    assert "Write self-contained objectives with concrete outcomes and constraints." in prompt
+    assert (
+        "Write self-contained objectives with concrete outcomes and constraints."
+        in prompt
+    )
     assert "dispatch targets, not your own capabilities." in prompt
     assert "- Description: Drafts release notes." in prompt
     assert "- Tools: read, write" in prompt

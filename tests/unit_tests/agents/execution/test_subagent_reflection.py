@@ -37,7 +37,9 @@ class _FakeAgent:
         if _FakeAgent.attempts < 3:
             raise APIError(
                 "provider error",
-                request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+                request=httpx.Request(
+                    "POST", "https://example.test/v1/chat/completions"
+                ),
                 body={"error": {"code": "2062", "message": "busy"}},
             )
         return type("_Result", (), {"output": "- stable memory"})()

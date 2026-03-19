@@ -64,3 +64,49 @@ def test_loader_injects_structured_swebench_intent(tmp_path) -> None:
     assert "- tests.test_fix" in item.intent
     assert "- tests.test_keep" in item.intent
     assert "<!--" not in item.intent
+
+
+def test_loader_extracts_test_patch(tmp_path) -> None:
+    tp = "diff --git a/tests/t.py b/tests/t.py\n+new test\n"
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "demo-tp",
+                "repo": "org/repo",
+                "base_commit": "abc123",
+                "problem_statement": "Fix it.",
+                "patch": "diff --git a/a.py b/a.py\n",
+                "test_patch": tp,
+                "FAIL_TO_PASS": ["tests.test_fix"],
+                "PASS_TO_PASS": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [item] = SWEBenchLoader().load(dataset_path)
+
+    assert item.test_patch == tp
+
+
+def test_loader_test_patch_absent_yields_none(tmp_path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "demo-no-tp",
+                "repo": "org/repo",
+                "base_commit": "abc123",
+                "problem_statement": "Fix it.",
+                "patch": "diff --git a/a.py b/a.py\n",
+                "FAIL_TO_PASS": ["tests.test_fix"],
+                "PASS_TO_PASS": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [item] = SWEBenchLoader().load(dataset_path)
+
+    assert item.test_patch is None
