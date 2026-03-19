@@ -69,8 +69,9 @@ class DockerConfig(BaseModel):
     # Base image that provides /opt/agent-runtime/ via --volumes-from.
     # Build once with: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
     agent_runtime_image: str = "agent-teams-runtime:latest"
-    # Path to the agent-teams binary inside agent_runtime_image.
-    agent_runtime_bin: str = "/opt/agent-runtime/venv/bin/agent-teams"
+    # Path to the wrapper inside agent_runtime_image that creates a local
+    # container venv and starts agent-teams from there.
+    agent_runtime_bin: str = "/opt/agent-runtime/bin/agent-teams"
     # Port the agent-teams server listens on inside the container.
     container_server_port: int = 8000
     # Path inside each eval container where the repo is checked out.
@@ -211,7 +212,8 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             "-p",
             f"{port}:{self._docker_cfg.container_server_port}",
             # Mount /opt/agent-runtime/ from the runtime data container.
-            # Python 3.12 + agent-teams live here, NOT on system PATH.
+            # The mounted runtime contains uv, a managed Python 3.12, and an
+            # offline wheelhouse. The wrapper creates a local venv per container.
             "--volumes-from",
             self._runtime_container,
         ]

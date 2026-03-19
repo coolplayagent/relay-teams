@@ -1,9 +1,12 @@
 # Agent-teams runtime base image.
-# Contains Python 3.12 + agent-teams fully bundled in /opt/agent-runtime/
-# so it can be mounted into any x86_64 Linux container via --volumes-from.
+# Contains a self-contained uv toolchain under /opt/agent-runtime/ that can be
+# mounted into any x86_64 Linux container via --volumes-from.
 #
-# Uses python:3.12-slim-bullseye (Debian 11, glibc 2.31) which is compatible
-# with SWE-bench eval containers (Ubuntu 22.04, glibc 2.35).
+# The mounted runtime provides:
+# - /opt/agent-runtime/bin/uv           standalone uv binary
+# - /opt/agent-runtime/bin/python3.12   uv-managed Python 3.12 interpreter
+# - /opt/agent-runtime/wheels/          offline wheelhouse for agent-teams
+# - /opt/agent-runtime/bin/agent-teams  wrapper that creates a container-local venv
 #
 # Build:
 #   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
@@ -11,29 +14,44 @@
 # Usage (data container pattern):
 #   docker create --name agent-runtime agent-teams-runtime:latest
 #   docker run --volumes-from agent-runtime <swebench-image> \
-#       /opt/agent-runtime/venv/bin/agent-teams server start ...
+#       /opt/agent-runtime/bin/agent-teams server start ...
 
 FROM python:3.12-slim-bullseye
 
-# Create venv with --copies so the python3 binary is a real file.
-RUN python3 -m venv --copies /opt/agent-runtime/venv
-
 WORKDIR /build
 COPY pyproject.toml ./
+COPY README.md ./
 COPY src/ src/
 COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
-RUN /opt/agent-runtime/venv/bin/pip install . --quiet --no-cache-dir
 
-# Replace the entry point with a wrapper that invokes the bundled Python
-# executable directly without exporting Python runtime environment variables.
-RUN cp /opt/agent-runtime/venv/bin/agent-teams \
-       /opt/agent-runtime/venv/bin/agent-teams-script.py && \
-    printf '#!/bin/sh\n\
-cd /opt/agent-runtime\n\
-exec /opt/agent-runtime/venv/bin/python3 \\\n\
-    /opt/agent-runtime/venv/bin/agent-teams-script.py "$@"\n' \
-    > /opt/agent-runtime/venv/bin/agent-teams && \
-    chmod +x /opt/agent-runtime/venv/bin/agent-teams
+RUN python3 -m pip install --quiet --no-cache-dir uv
+
+RUN mkdir -p /opt/agent-runtime/bin /opt/agent-runtime/python /opt/agent-runtime/wheels && \
+    cp /usr/local/bin/uv /opt/agent-runtime/bin/uv
+
+RUN /opt/agent-runtime/bin/uv python install 3.12 --install-dir /opt/agent-runtime/python && \
+    MANAGED_PY="$(find /opt/agent-runtime/python -path '*/bin/python3.12' -type f | head -n 1)" && \
+    test -n "$MANAGED_PY" && \
+    ln -s "$MANAGED_PY" /opt/agent-runtime/bin/python3.12
+
+RUN python3 -m pip wheel --quiet --no-cache-dir --wheel-dir /opt/agent-runtime/wheels .
+
+RUN printf '#!/bin/sh\n\
+set -eu\n\
+RUNTIME_ROOT=/opt/agent-runtime\n\
+WORK_ROOT=/tmp/agent-runtime\n\
+VENV_PATH=$WORK_ROOT/venv\n\
+mkdir -p "$WORK_ROOT"\n\
+"$RUNTIME_ROOT/bin/uv" -q venv --clear --no-project \\\n\
+    --python "$RUNTIME_ROOT/bin/python3.12" "$VENV_PATH"\n\
+"$RUNTIME_ROOT/bin/uv" -q pip install --offline --no-index --no-build \\\n\
+    --python "$VENV_PATH/bin/python" \\\n\
+    --find-links "$RUNTIME_ROOT/wheels" agent-teams\n\
+exec "$VENV_PATH/bin/agent-teams" "$@"\n' \
+    > /opt/agent-runtime/bin/agent-teams && \
+    chmod +x /opt/agent-runtime/bin/agent-teams && \
+    mkdir -p /opt/agent-runtime/venv/bin && \
+    ln -s /opt/agent-runtime/bin/agent-teams /opt/agent-runtime/venv/bin/agent-teams
 
 # Eval entrypoint: copies host config (excluding .db) so each container
 # gets its own SQLite database. Falls through to exec "$@" when no
@@ -41,8 +59,8 @@ exec /opt/agent-runtime/venv/bin/python3 \\\n\
 COPY docker/eval-entrypoint.sh /opt/agent-runtime/eval-entrypoint.sh
 RUN chmod +x /opt/agent-runtime/eval-entrypoint.sh
 
-# Smoke-test inside the build environment
-RUN /opt/agent-runtime/venv/bin/agent-teams --help > /dev/null
+# Smoke-test the wrapper inside the build environment.
+RUN /opt/agent-runtime/bin/agent-teams --help > /dev/null
 
-# Declare volume so --volumes-from mounts /opt/agent-runtime/ into eval containers
+# Declare volume so --volumes-from mounts /opt/agent-runtime/ into eval containers.
 VOLUME /opt/agent-runtime

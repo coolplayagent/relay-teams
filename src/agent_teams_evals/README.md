@@ -58,8 +58,8 @@ docker:
   #   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
 
-  # Path to the agent-teams binary inside agent_runtime_image.
-  agent_runtime_bin: "/opt/agent-runtime/venv/bin/agent-teams"
+  # Wrapper that creates a container-local venv with uv, then starts agent-teams.
+  agent_runtime_bin: "/opt/agent-runtime/bin/agent-teams"
 
   # Port the agent-teams server listens on inside each container.
   container_server_port: 8000
@@ -86,7 +86,7 @@ docker:
   build_instance_images: false
 ```
 
-The runtime image is a data container -- it is created once (`docker create`) and mounted into every eval container via `--volumes-from`. It provides Python 3.12 and the agent-teams venv at `/opt/agent-runtime/`.
+The runtime image is a data container -- it is created once (`docker create`) and mounted into every eval container via `--volumes-from`. It provides a standalone `uv` binary, a uv-managed Python 3.12, and an offline wheelhouse at `/opt/agent-runtime/`. Each eval container creates its own local venv under `/tmp/agent-runtime/venv` before starting the server.
 
 ## Config file reference
 

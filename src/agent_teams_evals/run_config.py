@@ -41,9 +41,11 @@ git_clone_timeout_seconds: 120
 
 docker:
   image_prefix: "swebench/sweb.eval.x86_64"
-  # Runtime base image: provides /opt/agent-runtime/venv/ via --volumes-from.
+  # Runtime base image: provides uv, a managed Python 3.12, and an offline
+  # wheelhouse via /opt/agent-runtime/ through --volumes-from.
   # Build once: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
+  agent_runtime_bin: "/opt/agent-runtime/bin/agent-teams"
   container_startup_timeout_seconds: 60
   forward_env_vars:
     - ANTHROPIC_API_KEY
