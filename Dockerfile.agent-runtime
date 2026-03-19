@@ -47,6 +47,7 @@ mkdir -p "$WORK_ROOT"\n\
 "$RUNTIME_ROOT/bin/uv" -q pip install --offline --no-index --no-build \\\n\
     --python "$VENV_PATH/bin/python" \\\n\
     --find-links "$RUNTIME_ROOT/wheels" agent-teams\n\
+cd "$RUNTIME_ROOT"\n\
 exec "$VENV_PATH/bin/agent-teams" "$@"\n' \
     > /opt/agent-runtime/bin/agent-teams && \
     chmod +x /opt/agent-runtime/bin/agent-teams && \

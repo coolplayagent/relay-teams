@@ -29,6 +29,8 @@ def _run_pytest(container_id: str, tests: list[str], timeout: float = 180.0) -> 
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
     return result.returncode == 0

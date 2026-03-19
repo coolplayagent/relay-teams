@@ -114,6 +114,8 @@ class ArtifactCollector:
                 ["docker", "logs", container_id],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             output = result.stdout or ""
             if result.stderr:

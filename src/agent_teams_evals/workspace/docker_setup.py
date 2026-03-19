@@ -45,6 +45,8 @@ def _create_runtime_container(image: str) -> str:
         ["docker", "create", "--name", name, image],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     )
     return name
@@ -249,7 +251,14 @@ class DockerWorkspaceSetup(WorkspaceSetup):
         ]
 
         _log(item.item_id, f"starting container {image} on port {port} ...")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
         container_id = result.stdout.strip()
         _log(item.item_id, f"container: {container_id[:12]}")
 
