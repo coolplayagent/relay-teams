@@ -23,7 +23,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 if not ctx.deps.role_registry.is_coordinator_role(role.role_id)
             ]
             return {
-                "ok": True,
                 "roles": [
                     {
                         "role_id": role.role_id,

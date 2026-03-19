@@ -10,7 +10,12 @@ from pathlib import Path
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool,
+)
 
 
 def generate_diff(old_path: str, old_content: str, new_content: str) -> str:
@@ -79,6 +84,24 @@ def atomic_write(
 DESCRIPTION = load_tool_description(__file__)
 
 
+def _project_write_result(
+    *,
+    output: str,
+    diff_summary: str,
+    path: str,
+    created: bool,
+) -> ToolResultProjection:
+    return ToolResultProjection(
+        visible_data={"output": output},
+        internal_data={
+            "output": output,
+            "diff_summary": diff_summary,
+            "path": path,
+            "created": created,
+        },
+    )
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def write(
@@ -94,10 +117,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             content: Content to write.
         """
 
-        async def _action() -> str:
+        async def _action() -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
 
             old_content = ""
+            created = not file_path.exists()
             if file_path.exists():
                 if file_path.is_dir():
                     raise ValueError(f"Path is a directory: {path}")
@@ -105,7 +129,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
             diff_summary = format_diff_summary(old_content, content)
             atomic_write(file_path, content, encoding="utf-8")
-            return "Wrote file successfully.\n\nDiff:\n" + diff_summary
+            output = "Wrote file successfully.\n\nDiff:\n" + diff_summary
+            return _project_write_result(
+                output=output,
+                diff_summary=diff_summary,
+                path=path,
+                created=created,
+            )
 
         return await execute_tool(
             ctx,

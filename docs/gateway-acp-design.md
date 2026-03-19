@@ -257,6 +257,8 @@ Tool results should have two separate representations:
 Rules:
 
 - ACP and frontend must render the same tool result payload the model receives
+- visible tool results should be output-first, with only a small number of
+  top-level state fields that materially affect the next model step
 - runtime-only fields such as approval bookkeeping, duration, and raw debug output must not appear in the visible result
 - approval denial and approval timeout must be returned as normal tool errors in the visible result, with the message written for model consumption rather than human operator instructions
 

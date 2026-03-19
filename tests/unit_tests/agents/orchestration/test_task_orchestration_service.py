@@ -154,8 +154,8 @@ async def test_create_tasks_auto_dispatch_binds_new_instance(tmp_path: Path) -> 
     created_task = cast(dict[str, JsonValue], tasks_payload[0])
     task_id = str(created_task["task_id"])
     record = task_repo.get(task_id)
+    dispatched_task = cast(dict[str, JsonValue], payload["dispatched_task"])
 
-    assert payload["ok"] is True
     assert payload["created_count"] == 1
     assert record.envelope.parent_task_id == "task-root"
     assert record.envelope.role_id == "spec_coder"
@@ -167,6 +167,9 @@ async def test_create_tasks_auto_dispatch_binds_new_instance(tmp_path: Path) -> 
     ]
     agent = agent_repo.get_instance(str(record.assigned_instance_id))
     assert agent.role_id == "spec_coder"
+    assert dispatched_task["task_id"] == task_id
+    assert dispatched_task["result"] == f"done:{task_id}"
+    assert "task" not in dispatched_task
 
 
 def test_update_task_allows_created_only(tmp_path: Path) -> None:
@@ -196,11 +199,13 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
         ),
     )
     updated_record = task_repo.get(created.envelope.task_id)
+    updated_task = cast(dict[str, JsonValue], updated["task"])
 
-    assert updated["ok"] is True
     assert updated_record.envelope.role_id == "reviewer"
     assert updated_record.envelope.objective == "Review the implementation"
     assert updated_record.envelope.title == "Code review"
+    assert updated_task["role_id"] == "reviewer"
+    assert updated_task["title"] == "Code review"
 
     task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
     with pytest.raises(ValueError, match="only created tasks can be updated"):
@@ -236,13 +241,12 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
     first_dispatch = await service.dispatch_task(run_id="run-1", task_id="task-1")
     first_task = cast(dict[str, JsonValue], first_dispatch["task"])
     bound_instance_id = str(first_task["instance_id"])
-    second_dispatch = await service.dispatch_task(
+    await service.dispatch_task(
         run_id=None,
         task_id="task-1",
         feedback="Add pagination to the response.",
     )
 
-    assert second_dispatch["ok"] is True
     assert execution_service.calls == [
         (bound_instance_id, "spec_coder", created.envelope.task_id),
         (bound_instance_id, "spec_coder", created.envelope.task_id),
@@ -281,7 +285,6 @@ async def test_dispatch_task_returns_result_only_inside_task_projection(
     payload = await service.dispatch_task(run_id="run-1", task_id="task-1")
 
     task_payload = cast(dict[str, JsonValue], payload["task"])
-    assert payload["ok"] is True
     assert "result" not in payload
     assert task_payload["result"] == "done:task-1"
 
@@ -399,8 +402,16 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
             "",
             "feedback is required to re-dispatch a completed task",
         ),
-        (TaskStatus.FAILED, "", "Use create_tasks to create a replacement task"),
-        (TaskStatus.TIMEOUT, "", "Use create_tasks to create a replacement task"),
+        (
+            TaskStatus.FAILED,
+            "",
+            "Create a replacement task instead of re-dispatching this one",
+        ),
+        (
+            TaskStatus.TIMEOUT,
+            "",
+            "Create a replacement task instead of re-dispatching this one",
+        ),
     ],
 )
 async def test_dispatch_task_rejects_invalid_statuses(
@@ -436,3 +447,27 @@ async def test_dispatch_task_rejects_invalid_statuses(
             task_id=created.envelope.task_id,
             feedback=feedback,
         )
+
+
+def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_list.db"
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    payload = service.list_run_tasks(run_id="run-1")
+
+    assert "ok" not in payload
+    tasks = cast(list[JsonValue], payload["tasks"])
+    assert len(tasks) == 1

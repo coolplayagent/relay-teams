@@ -6,10 +6,32 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool,
+)
 from agent_teams.tools.workspace_tools import ripgrep
 
 DESCRIPTION = load_tool_description(__file__)
+
+
+def _project_grep_result(
+    *,
+    output: str,
+    truncated: bool,
+    matches: int,
+) -> ToolResultProjection:
+    visible_data: dict[str, JsonValue] = {
+        "output": output,
+        "truncated": truncated,
+        "matches": matches,
+    }
+    return ToolResultProjection(
+        visible_data=visible_data,
+        internal_data=dict(visible_data),
+    )
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
@@ -23,7 +45,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Search file contents under a workspace path using a regex pattern."""
 
-        async def _action() -> str:
+        async def _action() -> ToolResultProjection:
             root = ctx.deps.workspace.resolve_path(path, write=False)
 
             result = await ripgrep.grep_search(
@@ -33,7 +55,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 case_sensitive=case_sensitive,
             )
 
-            return result.format()
+            return _project_grep_result(
+                output=result.format(),
+                truncated=result.truncated,
+                matches=result.total,
+            )
 
         return await execute_tool(
             ctx,

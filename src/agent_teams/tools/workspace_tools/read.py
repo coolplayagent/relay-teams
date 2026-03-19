@@ -8,7 +8,12 @@ from pathlib import Path
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool,
+)
 from agent_teams.tools.workspace_tools.edit_state import record_file_read
 
 DEFAULT_READ_LIMIT = 2000
@@ -154,6 +159,23 @@ def read_directory(
     return sliced, len(entries), truncated
 
 
+def _project_read_result(
+    *,
+    output: str,
+    truncated: bool,
+    next_offset: int | None,
+) -> ToolResultProjection:
+    visible_data: dict[str, JsonValue] = {
+        "output": output,
+        "truncated": truncated,
+        "next_offset": next_offset,
+    }
+    return ToolResultProjection(
+        visible_data=visible_data,
+        internal_data=dict(visible_data),
+    )
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def read(
@@ -171,7 +193,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             limit: Maximum number of lines or entries to return.
         """
 
-        async def _action() -> str:
+        async def _action() -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=False)
 
             if not file_path.exists():
@@ -185,17 +207,22 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output.append("<entries>")
                 output.append("\n".join(entries))
 
+                next_offset: int | None = None
                 if truncated:
-                    offset_info = offset + len(entries)
+                    next_offset = offset + len(entries)
                     output.append(
                         f"\n(Showing {len(entries)} of {total} entries. "
-                        f"Use offset={offset_info} to continue.)"
+                        f"Use offset={next_offset} to continue.)"
                     )
                 else:
                     output.append(f"\n({total} entries)")
                 output.append("</entries>")
 
-                return "\n".join(output)
+                return _project_read_result(
+                    output="\n".join(output),
+                    truncated=truncated,
+                    next_offset=next_offset,
+                )
 
             if not file_path.is_file():
                 raise ValueError(f"Not a file: {path}")
@@ -223,20 +250,21 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             output.append("\n".join(numbered_lines))
 
             last_read_line = offset + len(lines) - 1
-            next_offset = last_read_line + 1
+            continuation_offset: int | None = last_read_line + 1
 
             if truncated_by_bytes:
                 output.append(
                     f"\n\n(Output capped at {MAX_BYTES_LABEL}. "
                     f"Showing lines {offset}-{last_read_line}. "
-                    f"Use offset={next_offset} to continue.)"
+                    f"Use offset={continuation_offset} to continue.)"
                 )
             elif truncated_by_lines:
                 output.append(
                     f"\n\n(Showing lines {offset}-{last_read_line} of {total_lines}. "
-                    f"Use offset={next_offset} to continue.)"
+                    f"Use offset={continuation_offset} to continue.)"
                 )
             else:
+                continuation_offset = None
                 output.append(f"\n\n(End of file - total {total_lines} lines)")
 
             output.append("</content>")
@@ -246,7 +274,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 path=file_path,
             )
 
-            return "\n".join(output)
+            return _project_read_result(
+                output="\n".join(output),
+                truncated=truncated_by_lines or truncated_by_bytes,
+                next_offset=continuation_offset,
+            )
 
         return await execute_tool(
             ctx,

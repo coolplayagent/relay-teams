@@ -90,7 +90,6 @@ class TaskOrchestrationService:
             )
 
         response: dict[str, JsonValue] = {
-            "ok": True,
             "created_count": len(created_records),
             "tasks": [_task_projection(record) for record in created_records],
         }
@@ -99,7 +98,7 @@ class TaskOrchestrationService:
                 run_id=run_id,
                 task_id=created_records[0].envelope.task_id,
             )
-            response["dispatched_task"] = dispatched
+            response["dispatched_task"] = dispatched["task"]
         return response
 
     def update_task(
@@ -148,7 +147,7 @@ class TaskOrchestrationService:
                 }
             ),
         )
-        return {"ok": True, "task": _task_projection(updated)}
+        return {"task": _task_projection(updated)}
 
     def list_run_tasks(
         self,
@@ -162,7 +161,6 @@ class TaskOrchestrationService:
             if include_root or record.envelope.parent_task_id is not None
         ]
         return {
-            "ok": True,
             "tasks": [_task_projection(record) for record in records],
         }
 
@@ -202,8 +200,9 @@ class TaskOrchestrationService:
         elif record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}:
             raise ValueError(
                 f"Task '{record.envelope.title}' (role={record.envelope.role_id}) "
-                f"{record.status.value}: {record.error_message or 'unknown error'}. "
-                f"Use create_tasks to create a replacement task."
+                f"is {record.status.value}: "
+                f"{record.error_message or 'unknown error'}. "
+                "Create a replacement task instead of re-dispatching this one."
             )
 
         if not instance_id:
@@ -227,7 +226,6 @@ class TaskOrchestrationService:
         )
         refreshed = self._task_repo.get(task_id)
         return {
-            "ok": True,
             "task": _task_projection(refreshed),
         }
 

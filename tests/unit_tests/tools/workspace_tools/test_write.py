@@ -141,3 +141,24 @@ class TestFormatDiffShort:
 
         assert "-" in result
         assert "deleted" in result
+
+
+def test_project_write_result_keeps_only_output_visible() -> None:
+    from agent_teams.tools.workspace_tools.write import _project_write_result
+
+    projected = _project_write_result(
+        output="Wrote file successfully.\n\nDiff:\nNo changes",
+        diff_summary="No changes",
+        path="demo.txt",
+        created=True,
+    )
+
+    assert projected.visible_data == {
+        "output": "Wrote file successfully.\n\nDiff:\nNo changes"
+    }
+    assert projected.internal_data == {
+        "output": "Wrote file successfully.\n\nDiff:\nNo changes",
+        "diff_summary": "No changes",
+        "path": "demo.txt",
+        "created": True,
+    }

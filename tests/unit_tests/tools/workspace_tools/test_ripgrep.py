@@ -366,3 +366,45 @@ class TestRipgrepSubprocessEncoding:
         assert kwargs["errors"] == "replace"
         assert truncated is False
         assert files == [Path("a.py"), Path("b.py")]
+
+
+def test_project_glob_result_keeps_output_first_shape() -> None:
+    from agent_teams.tools.workspace_tools.glob import _project_glob_result
+
+    projected = _project_glob_result(
+        output="a.py\nb.py",
+        truncated=True,
+        count=2,
+    )
+
+    assert projected.visible_data == {
+        "output": "a.py\nb.py",
+        "truncated": True,
+        "count": 2,
+    }
+    assert projected.internal_data == {
+        "output": "a.py\nb.py",
+        "truncated": True,
+        "count": 2,
+    }
+
+
+def test_project_grep_result_keeps_output_first_shape() -> None:
+    from agent_teams.tools.workspace_tools.grep import _project_grep_result
+
+    projected = _project_grep_result(
+        output="Found 2 matches",
+        truncated=False,
+        matches=2,
+    )
+
+    assert projected.visible_data == {
+        "output": "Found 2 matches",
+        "truncated": False,
+        "matches": 2,
+    }
+    assert projected.internal_data == {
+        "output": "Found 2 matches",
+        "truncated": False,
+        "matches": 2,
+    }

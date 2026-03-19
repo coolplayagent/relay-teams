@@ -143,3 +143,24 @@ class TestReadDirectory:
         assert entries[0] == "a.txt"
         assert entries[1] == "m.txt"
         assert entries[2] == "z.txt"
+
+
+def test_project_read_result_keeps_output_first_shape() -> None:
+    from agent_teams.tools.workspace_tools.read import _project_read_result
+
+    projected = _project_read_result(
+        output="<content>\n1: hello\n</content>",
+        truncated=True,
+        next_offset=2,
+    )
+
+    assert projected.visible_data == {
+        "output": "<content>\n1: hello\n</content>",
+        "truncated": True,
+        "next_offset": 2,
+    }
+    assert projected.internal_data == {
+        "output": "<content>\n1: hello\n</content>",
+        "truncated": True,
+        "next_offset": 2,
+    }
