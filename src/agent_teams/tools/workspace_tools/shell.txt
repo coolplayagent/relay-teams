@@ -1,0 +1,9 @@
+Run a shell command inside the workspace.
+
+Usage:
+- `command` is executed in the workspace root unless `workdir` is provided.
+- Use `workdir` instead of embedding `cd ... && ...` in the command.
+- Prefer dedicated tools (`read`, `glob`, `grep`, `edit`, `write`) for file inspection and editing.
+- Use this tool for build, test, git, package manager, and other terminal workflows.
+- `timeout_ms` controls command runtime; timed out commands return partial output and a timeout marker.
+- Large stdout or stderr is truncated in the response and the full output is saved to a workspace file.

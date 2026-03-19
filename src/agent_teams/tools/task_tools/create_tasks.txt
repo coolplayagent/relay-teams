@@ -1,0 +1,8 @@
+Create one or more run-scoped tasks for specialist roles.
+
+Usage:
+- Each task entry must include a concrete `role_id` and a clear `objective`; `title` is optional.
+- Use this tool when work should be delegated rather than handled directly in the current turn.
+- Write objectives as actionable briefs for the target role, not as vague copies of the user request.
+- `auto_dispatch=true` is only for the single-task case and immediately starts that new task.
+- The result returns task identifiers; use those ids with `update_task` or `dispatch_task`.

@@ -1,0 +1,9 @@
+Write full file contents to the workspace.
+
+Usage:
+- `path` is resolved relative to the workspace root.
+- This tool creates a file or fully replaces an existing file.
+- Prefer `edit` when you only need a targeted change inside an existing file.
+- Avoid using this tool for partial updates; provide the complete desired file content.
+- If the target path is a directory, the tool fails.
+- The result includes a short diff summary of what changed.

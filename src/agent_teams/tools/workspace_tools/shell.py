@@ -9,6 +9,7 @@ from pydantic import JsonValue
 import asyncio
 from pydantic_ai import Agent
 
+from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from agent_teams.tools.workspace_tools.shell_executor import (
     normalize_timeout,
@@ -19,6 +20,7 @@ from agent_teams.workspace import WorkspaceHandle
 
 MAX_OUTPUT_CHARS = 64_000
 MAX_METADATA_LENGTH = 30_000
+DESCRIPTION = load_tool_description(__file__)
 
 
 def _format_timeout_metadata(timeout_ms: int) -> str:
@@ -49,7 +51,7 @@ def _save_overflow_output(
 
 
 def register(Agent: Agent[ToolDeps, str]) -> None:
-    @Agent.tool
+    @Agent.tool(description=DESCRIPTION)
     async def shell(
         ctx: ToolContext,
         command: str,
@@ -57,6 +59,8 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
         workdir: str | None = None,
         description: str | None = None,
     ) -> dict[str, JsonValue]:
+        """Run a shell command in the workspace and return stdout/stderr metadata."""
+
         async def _action() -> dict[str, JsonValue]:
             validate_shell_command(command)
 

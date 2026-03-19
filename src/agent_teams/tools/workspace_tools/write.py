@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 
+from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 
@@ -75,8 +76,11 @@ def atomic_write(
         raise
 
 
+DESCRIPTION = load_tool_description(__file__)
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
-    @agent.tool
+    @agent.tool(description=DESCRIPTION)
     async def write(
         ctx: ToolContext,
         path: str,

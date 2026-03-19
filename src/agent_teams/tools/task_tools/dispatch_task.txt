@@ -1,0 +1,7 @@
+Start a created task or send follow-up feedback to a completed task.
+
+Usage:
+- `task_id` must be a task created in the current run.
+- Use `feedback` for follow-up work on a completed task; leave it empty for the first dispatch.
+- If a task failed or timed out, create a replacement task instead of redispatching it.
+- If the target role is currently busy, wait for that task to finish before dispatching another one.

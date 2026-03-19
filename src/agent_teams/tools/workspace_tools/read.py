@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 
+from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from agent_teams.tools.workspace_tools.edit_state import record_file_read
 
@@ -15,6 +16,7 @@ MAX_LINE_LENGTH = 2000
 MAX_LINE_SUFFIX = "... (line truncated)"
 MAX_BYTES = 50 * 1024
 MAX_BYTES_LABEL = "50 KB"
+DESCRIPTION = load_tool_description(__file__)
 
 BINARY_EXTENSIONS = {
     ".zip",
@@ -153,7 +155,7 @@ def read_directory(
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
-    @agent.tool
+    @agent.tool(description=DESCRIPTION)
     async def read(
         ctx: ToolContext,
         path: str,

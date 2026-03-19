@@ -1,0 +1,11 @@
+Read a file or directory from the workspace.
+
+Usage:
+- `path` is resolved relative to the workspace root.
+- Files are returned with line numbers in the format `<line>: <content>`.
+- Directories are returned as one entry per line, with `/` appended for subdirectories.
+- Use `offset` and `limit` to page through large files or directories.
+- Text output is capped by line length, line count, and total bytes; the response tells you how to continue.
+- Binary files are rejected.
+- Use `glob` to find candidate file paths and `grep` to locate specific content before reading large files.
+- Read larger windows instead of many tiny slices when you need surrounding context.

@@ -53,6 +53,8 @@ where = ["src"]
   "skills/*/SKILL.md",
   "skills/*/scripts/*.py",
 ]
+"agent_teams.tools.task_tools" = ["*.txt"]
+"agent_teams.tools.workspace_tools" = ["*.txt"]
 
 [dependency-groups]
 evals = [

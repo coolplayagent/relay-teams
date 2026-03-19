@@ -5,15 +5,20 @@ from pydantic import JsonValue
 
 from pydantic_ai import Agent
 
+from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+
+DESCRIPTION = load_tool_description(__file__)
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
-    @agent.tool
+    @agent.tool(description=DESCRIPTION)
     async def list_run_tasks(
         ctx: ToolContext,
         include_root: bool = False,
     ) -> dict[str, JsonValue]:
+        """List tasks associated with the current run."""
+
         def _action() -> dict[str, JsonValue]:
             return ctx.deps.task_service.list_run_tasks(
                 run_id=ctx.deps.run_id,

@@ -1,0 +1,6 @@
+List non-coordinator roles available for delegation.
+
+Usage:
+- Use this tool when you need the current set of worker roles and their local tool access.
+- The result excludes the coordinator role itself.
+- Prefer this tool when selecting a role for `create_tasks`.

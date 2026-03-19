@@ -562,6 +562,82 @@ async def test_execute_coordinator_receives_task_runtime_contract(
 
 
 @pytest.mark.asyncio
+async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
+    tmp_path: Path,
+) -> None:
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="coordinator_agent",
+            name="Coordinator Agent",
+            description="Coordinates delegated work.",
+            version="1",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    role_registry.register(
+        RoleDefinition(
+            role_id="writer_agent",
+            name="Writer Agent",
+            description="Writes implementation changes.",
+            version="1",
+            tools=("read", "write"),
+            mcp_servers=(),
+            skills=(),
+            system_prompt="Write tasks.",
+        )
+    )
+    db_path = tmp_path / "task_execution_service_snapshot.db"
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=TaskRepository(db_path),
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=AgentInstanceRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=lambda _: _CapturingProvider(),
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+    )
+
+    coordinator_snapshot = await service._build_runtime_tools_snapshot(
+        role_registry.get("coordinator_agent")
+    )
+    writer_snapshot = await service._build_runtime_tools_snapshot(
+        role_registry.get("writer_agent")
+    )
+
+    coordinator_tools = {
+        entry.name: entry.description for entry in coordinator_snapshot.local_tools
+    }
+    writer_tools = {
+        entry.name: entry.description for entry in writer_snapshot.local_tools
+    }
+
+    assert coordinator_tools["create_tasks"].startswith(
+        "Create one or more run-scoped tasks for specialist roles."
+    )
+    assert writer_tools["read"].startswith(
+        "Read a file or directory from the workspace."
+    )
+    assert writer_tools["write"].startswith(
+        "Write full file contents to the workspace."
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) -> None:
     provider = _CapturingProvider()
     project_root = tmp_path / "project"

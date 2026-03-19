@@ -10,6 +10,7 @@ from typing import Generator
 from pydantic_ai import Agent
 
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from agent_teams.tools.workspace_tools.edit_state import (
     assert_file_unchanged_since_read,
@@ -24,6 +25,7 @@ from agent_teams.tools.workspace_tools.write import (
 MAX_DIFF_CHARS = 24_000
 SINGLE_CANDIDATE_SIMILARITY_THRESHOLD = 0.0
 MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD = 0.3
+DESCRIPTION = load_tool_description(__file__)
 
 Replacer = Generator[str, None, None]
 
@@ -443,7 +445,7 @@ def edit_file_with_guard(
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
-    @agent.tool
+    @agent.tool(description=DESCRIPTION)
     async def edit(
         ctx: ToolContext,
         path: str,

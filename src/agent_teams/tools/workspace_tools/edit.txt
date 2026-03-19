@@ -1,0 +1,10 @@
+Perform exact string replacements in a workspace file.
+
+Usage:
+- `path` is resolved relative to the workspace root.
+- You must read an existing file before editing it; edits are guarded against changes since the last read.
+- `old_string` must match the current file content exactly, including whitespace and line endings.
+- Use `replace_all=true` only when every matching occurrence should change.
+- To create a new file, pass `old_string=""` and provide the full initial contents in `new_string`.
+- Prefer `edit` for surgical changes and `write` for full-file replacement.
+- If the match is missing or ambiguous, the tool fails and you should provide more context.
