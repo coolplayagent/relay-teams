@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 
-DEFAULT_TIMEOUT_SECONDS = 30
-MAX_TIMEOUT_SECONDS = 120
+DEFAULT_TIMEOUT_SECONDS = 120
+MAX_TIMEOUT_SECONDS = 1200
+
+MAX_COMMAND_LENGTH = 16_000
 
 BANNED_PATTERNS = (
     r"(^|\s)vim(\s|$)",
@@ -44,8 +46,10 @@ def validate_shell_command(command: str) -> None:
     text = command.strip()
     if not text:
         raise ValueError("command must not be empty")
-    if len(text) > 2000:
-        raise ValueError("command is too long")
+    if len(text) > MAX_COMMAND_LENGTH:
+        raise ValueError(
+            f"command is too long ({len(text)} chars, max {MAX_COMMAND_LENGTH})"
+        )
 
     lower = text.lower()
     for pattern in BANNED_PATTERNS:

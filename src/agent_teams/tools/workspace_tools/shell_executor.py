@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import shlex
 import shutil
 import subprocess
@@ -161,13 +162,75 @@ def extract_paths_from_command(command: str) -> list[str]:
     return paths
 
 
+_SIGKILL_GRACE_SECONDS = 5
+
+
+def _creation_flags() -> int:
+    """Return Windows process-creation flags (0 on non-Windows)."""
+    if _is_windows():
+        return int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    return 0
+
+
+def _start_new_session() -> bool:
+    """Return True on non-Windows to create a new process group."""
+    return not _is_windows()
+
+
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Terminate the process and its entire process tree."""
+    if proc.returncode is not None:
+        return
+    pid = proc.pid
+    if pid is None:
+        return
+
+    if _is_windows():
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/f",
+                "/t",
+                "/pid",
+                str(pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+        except (OSError, asyncio.TimeoutError):
+            proc.kill()
+        await proc.wait()
+    else:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+
 async def spawn_shell(
     command: str,
     cwd: Path,
     timeout_ms: int = 30000,
     env: dict[str, str] | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
-    """Run shell command with streaming stdout/stderr chunks."""
+    """Run shell command with streaming stdout/stderr chunks.
+
+    Yields ``("stdout", data)`` and ``("stderr", data)`` tuples as output
+    arrives, followed by a final ``("exit_code", "<code>")`` sentinel once the
+    process exits.
+    """
     bash = resolve_bash_path()
 
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
@@ -180,6 +243,8 @@ async def spawn_shell(
         env=shell_env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=_start_new_session(),
+        creationflags=_creation_flags(),
     )
     stdout = proc.stdout
     stderr = proc.stderr
@@ -212,6 +277,7 @@ async def spawn_shell(
                     await asyncio.wait_for(proc.wait(), timeout=remaining)
                 except asyncio.TimeoutError as exc:
                     raise asyncio.TimeoutError from exc
+                yield ("exit_code", str(proc.returncode or 0))
                 break
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=remaining)
@@ -225,13 +291,7 @@ async def spawn_shell(
         for task in (stdout_task, stderr_task):
             if not task.done():
                 task.cancel()
-        if proc.returncode is None:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+        await _kill_process_tree(proc)
 
 
 def run_git_bash(
@@ -253,6 +313,8 @@ def run_git_bash(
             errors="replace",
             timeout=timeout_seconds,
             check=False,
+            start_new_session=_start_new_session(),
+            creationflags=_creation_flags(),
         )
         return proc.returncode, proc.stdout, proc.stderr, False
     except subprocess.TimeoutExpired as exc:
