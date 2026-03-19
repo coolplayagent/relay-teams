@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from agent_teams_evals.models import EvalReport, EvalResult, RunOutcome
+from agent_teams_evals.models import AuxiliaryScore, EvalReport, EvalResult, RunOutcome
 
 _COL_WIDTHS = (30, 12, 8, 8, 10, 14, 8)
 _HEADERS = (
@@ -30,6 +30,14 @@ def _row(result: EvalResult) -> tuple[str, ...]:
         f"{result.duration_seconds:.1f}",
         f"{in_k:.1f}k/{out_k:.1f}k",
         result.scorer_name,
+    )
+
+
+def _format_auxiliary_scores(scores: dict[str, AuxiliaryScore]) -> str:
+    if not scores:
+        return ""
+    return "; ".join(
+        f"aux.{name}={score.score:.3f}" for name, score in sorted(scores.items())
     )
 
 
@@ -67,6 +75,12 @@ class EvalReporter:
             f"  p50={report.p50_duration_seconds:.1f}s"
             f"  p95={report.p95_duration_seconds:.1f}s"
         )
+        if report.auxiliary_score_means:
+            aux_summary = ", ".join(
+                f"{name}={score:.3f}"
+                for name, score in sorted(report.auxiliary_score_means.items())
+            )
+            typer.echo(f"Aux     : {aux_summary}")
         typer.echo("")
         typer.echo(hr)
         typer.echo(_line(_HEADERS, _COL_WIDTHS))
@@ -85,6 +99,7 @@ class EvalReporter:
         for r in report.results:
             status_class = "pass" if r.passed else "fail"
             error_cell = r.error or ""
+            aux_cell = _format_auxiliary_scores(r.auxiliary_scores)
             in_k = r.token_usage.input_tokens / 1000
             out_k = r.token_usage.output_tokens / 1000
             rows_html += (
@@ -97,6 +112,7 @@ class EvalReporter:
                 f"<td>{in_k:.1f}k / {out_k:.1f}k</td>"
                 f"<td>{r.scorer_name}</td>"
                 f"<td>{r.scorer_detail}</td>"
+                f"<td>{aux_cell}</td>"
                 f"<td>{error_cell}</td>"
                 "</tr>\n"
             )
@@ -125,6 +141,7 @@ tr.fail td {{ background: #ffe6e6; }}
 <p>Results: {report.passed}/{report.total} passed ({report.pass_rate * 100:.1f}%)</p>
 <p>Outcomes: completed={report.outcome_completed} failed={report.outcome_failed} timed_out={report.outcome_timed_out} stopped={report.outcome_stopped}</p>
 <p>Mean score: {report.mean_score:.3f}</p>
+<p>Auxiliary scores: {_format_auxiliary_scores({name: AuxiliaryScore(score=score) for name, score in sorted(report.auxiliary_score_means.items())}) or 'none'}</p>
 <p>Duration: mean={report.mean_duration_seconds:.1f}s p50={report.p50_duration_seconds:.1f}s p95={report.p95_duration_seconds:.1f}s</p>
 <p>Tokens: in={report.total_input_tokens:,} out={report.total_output_tokens:,} est_cost=${report.estimated_cost_usd:.4f}</p>
 <p>Generated: {report.generated_at.isoformat()}</p>
@@ -133,7 +150,7 @@ tr.fail td {{ background: #ffe6e6; }}
 <thead>
 <tr>
 <th>item_id</th><th>outcome</th><th>passed</th><th>score</th>
-<th>duration</th><th>tok_in/out(k)</th><th>scorer</th><th>detail</th><th>error</th>
+<th>duration</th><th>tok_in/out(k)</th><th>scorer</th><th>detail</th><th>aux</th><th>error</th>
 </tr>
 </thead>
 <tbody>
@@ -159,6 +176,13 @@ def build_report(
     failed = total - passed
     pass_rate = passed / total if total > 0 else 0.0
     mean_score = sum(r.score for r in results) / total if total > 0 else 0.0
+    auxiliary_score_means: dict[str, float] = {}
+    auxiliary_score_values: dict[str, list[float]] = {}
+    for result in results:
+        for name, aux_score in result.auxiliary_scores.items():
+            auxiliary_score_values.setdefault(name, []).append(aux_score.score)
+    for name, scores in auxiliary_score_values.items():
+        auxiliary_score_means[name] = sum(scores) / len(scores)
 
     durations = sorted(r.duration_seconds for r in results)
     mean_duration = sum(durations) / total if total > 0 else 0.0
@@ -187,6 +211,7 @@ def build_report(
         errored=errored,
         pass_rate=pass_rate,
         mean_score=mean_score,
+        auxiliary_score_means=auxiliary_score_means,
         mean_duration_seconds=mean_duration,
         p50_duration_seconds=p50,
         p95_duration_seconds=p95,

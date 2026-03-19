@@ -20,7 +20,7 @@ dataset_path: .agent_teams/evals/datasets/custom.jsonl
 
 # --- Scorer ---
 scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker
-swebench_pass_threshold: 0.8            # used by swebench scorer (Jaccard threshold)
+swebench_pass_threshold: 0.8            # patch Jaccard threshold (primary for swebench, auxiliary for swebench_docker)
 
 # --- Backend ---
 backend: agent_teams

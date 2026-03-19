@@ -24,32 +24,11 @@ COPY src/ src/
 COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
 RUN /opt/agent-runtime/venv/bin/pip install . --quiet --no-cache-dir
 
-# Bundle the complete Python stdlib so PYTHONHOME works in any container.
-# PYTHONHOME=/opt/agent-runtime/python-home makes Python look for stdlib at
-# /opt/agent-runtime/python-home/lib/python3.12/ — we copy it there.
-RUN mkdir -p /opt/agent-runtime/python-home/lib && \
-    cp -r /usr/local/lib/python3.12 /opt/agent-runtime/python-home/lib/
-
-# Bundle libpython and Debian-specific shared libraries that differ from
-# Ubuntu 22.04 (used by SWE-bench containers):
-#   libffi.so.7   -> Ubuntu 22.04 only has libffi.so.8
-#   libssl.so.1.1 -> Ubuntu 22.04 only has libssl.so.3
-#   libcrypto.so.1.1 -> Ubuntu 22.04 only has libcrypto.so.3
-RUN find /usr/local/lib -name "libpython*.so*" \
-        -exec cp {} /opt/agent-runtime/python-home/lib/ \; && \
-    cp /usr/lib/x86_64-linux-gnu/libffi.so.7 \
-       /usr/lib/x86_64-linux-gnu/libssl.so.1.1 \
-       /usr/lib/x86_64-linux-gnu/libcrypto.so.1.1 \
-       /opt/agent-runtime/python-home/lib/
-
-# Replace the pip entry point with a wrapper that sets up the portable
-# Python environment before invoking the real script.
+# Replace the entry point with a wrapper that invokes the bundled Python
+# executable directly without exporting Python runtime environment variables.
 RUN cp /opt/agent-runtime/venv/bin/agent-teams \
        /opt/agent-runtime/venv/bin/agent-teams-script.py && \
     printf '#!/bin/sh\n\
-export PYTHONHOME=/opt/agent-runtime/python-home\n\
-export PYTHONPATH=/opt/agent-runtime/venv/lib/python3.12/site-packages\n\
-export LD_LIBRARY_PATH=/opt/agent-runtime/python-home/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n\
 cd /opt/agent-runtime\n\
 exec /opt/agent-runtime/venv/bin/python3 \\\n\
     /opt/agent-runtime/venv/bin/agent-teams-script.py "$@"\n' \
@@ -57,7 +36,7 @@ exec /opt/agent-runtime/venv/bin/python3 \\\n\
     chmod +x /opt/agent-runtime/venv/bin/agent-teams
 
 # Eval entrypoint: copies host config (excluding .db) so each container
-# gets its own SQLite database.  Falls through to exec "$@" when no
+# gets its own SQLite database. Falls through to exec "$@" when no
 # host config is mounted.
 COPY docker/eval-entrypoint.sh /opt/agent-runtime/eval-entrypoint.sh
 RUN chmod +x /opt/agent-runtime/eval-entrypoint.sh

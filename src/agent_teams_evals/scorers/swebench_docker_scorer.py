@@ -3,8 +3,9 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
-from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+from agent_teams_evals.models import AuxiliaryScore, EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
+from agent_teams_evals.scorers.swebench_scorer import build_patch_jaccard_score
 
 if TYPE_CHECKING:
     from agent_teams_evals.workspace.base import PreparedWorkspace
@@ -36,8 +37,13 @@ def _run_pytest(container_id: str, tests: list[str], timeout: float = 180.0) -> 
 class SWEBenchDockerScorer(Scorer):
     """Score by running fail_to_pass and pass_to_pass tests inside the container."""
 
-    def __init__(self, pytest_timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        pytest_timeout: float = 180.0,
+        patch_pass_threshold: float = 0.8,
+    ) -> None:
         self._pytest_timeout = pytest_timeout
+        self._patch_pass_threshold = patch_pass_threshold
 
     @property
     def name(self) -> str:
@@ -57,6 +63,17 @@ class SWEBenchDockerScorer(Scorer):
         workspace: PreparedWorkspace | None = None,
         error: str | None = None,
     ) -> EvalResult:
+        auxiliary_scores: dict[str, AuxiliaryScore] = {}
+        patch_score = build_patch_jaccard_score(
+            reference_patch=item.reference_patch,
+            generated_patch=generated_patch,
+            agent_output=agent_output,
+            pass_threshold=self._patch_pass_threshold,
+        )
+        if patch_score is not None:
+            aux_name, aux_score = patch_score
+            auxiliary_scores[aux_name] = aux_score
+
         if workspace is None or workspace.container_id is None:
             return EvalResult(
                 item_id=item.item_id,
@@ -68,6 +85,7 @@ class SWEBenchDockerScorer(Scorer):
                 score=0.0,
                 scorer_name=self.name,
                 scorer_detail="no container available for docker scorer",
+                auxiliary_scores=auxiliary_scores,
                 agent_output=agent_output,
                 token_usage=token_usage,
                 duration_seconds=duration_seconds,
@@ -96,6 +114,10 @@ class SWEBenchDockerScorer(Scorer):
             score_val = 0.0
             detail = f"f2p={len(f2p_tests)} FAILED"
 
+        patch_aux = auxiliary_scores.get("patch_jaccard")
+        if patch_aux is not None:
+            detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"
+
         return EvalResult(
             item_id=item.item_id,
             dataset=item.dataset,
@@ -106,6 +128,7 @@ class SWEBenchDockerScorer(Scorer):
             score=score_val,
             scorer_name=self.name,
             scorer_detail=detail,
+            auxiliary_scores=auxiliary_scores,
             agent_output=agent_output,
             generated_patch=generated_patch,
             token_usage=token_usage,

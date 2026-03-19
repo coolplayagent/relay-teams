@@ -4,7 +4,7 @@
 dataset: swebench
 dataset_path: .agent_teams/evals/datasets/swebench-verified-10.jsonl
 
-scorer: swebench
+scorer: swebench_docker
 swebench_pass_threshold: 0.8
 
 backend: agent_teams

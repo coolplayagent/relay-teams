@@ -3,7 +3,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+from agent_teams_evals.models import (
+    AuxiliaryScore,
+    EvalItem,
+    EvalResult,
+    RunOutcome,
+    TokenUsage,
+)
 from agent_teams_evals.scorers.base import Scorer
 
 if TYPE_CHECKING:
@@ -35,6 +41,44 @@ def _try_extract_patch_from_output(agent_output: str) -> str:
     return ""
 
 
+def build_patch_jaccard_score(
+    *,
+    reference_patch: str | None,
+    generated_patch: str,
+    agent_output: str,
+    pass_threshold: float,
+) -> tuple[str, AuxiliaryScore] | None:
+    if reference_patch is None:
+        return None
+
+    patch = generated_patch or _try_extract_patch_from_output(agent_output)
+    if patch:
+        ref_lines = _extract_changed_lines(reference_patch)
+        gen_lines = _extract_changed_lines(patch)
+        score_val = _jaccard(ref_lines, gen_lines)
+        detail = (
+            f"jaccard={score_val:.3f} (threshold={pass_threshold}); "
+            f"ref_lines={len(ref_lines)}, gen_lines={len(gen_lines)}"
+        )
+        return (
+            "patch_jaccard",
+            AuxiliaryScore(
+                score=score_val,
+                passed=score_val >= pass_threshold,
+                detail=detail,
+            ),
+        )
+
+    return (
+        "patch_jaccard",
+        AuxiliaryScore(
+            score=0.0,
+            passed=False,
+            detail="no patch generated; reference patch exists",
+        ),
+    )
+
+
 class SWEBenchScorer(Scorer):
     def __init__(self, pass_threshold: float = 0.8) -> None:
         self._threshold = pass_threshold
@@ -58,20 +102,20 @@ class SWEBenchScorer(Scorer):
         error: str | None = None,
     ) -> EvalResult:
         patch = generated_patch or _try_extract_patch_from_output(agent_output)
+        auxiliary_scores: dict[str, AuxiliaryScore] = {}
+        patch_score = build_patch_jaccard_score(
+            reference_patch=item.reference_patch,
+            generated_patch=patch,
+            agent_output=agent_output,
+            pass_threshold=self._threshold,
+        )
 
-        if item.reference_patch and patch:
-            ref_lines = _extract_changed_lines(item.reference_patch)
-            gen_lines = _extract_changed_lines(patch)
-            score_val = _jaccard(ref_lines, gen_lines)
-            passed = score_val >= self._threshold
-            detail = (
-                f"jaccard={score_val:.3f} (threshold={self._threshold}); "
-                f"ref_lines={len(ref_lines)}, gen_lines={len(gen_lines)}"
-            )
-        elif item.reference_patch and not patch:
-            score_val = 0.0
-            passed = False
-            detail = "no patch generated; reference patch exists"
+        if patch_score is not None:
+            aux_name, aux_score = patch_score
+            auxiliary_scores[aux_name] = aux_score
+            score_val = aux_score.score
+            passed = bool(aux_score.passed)
+            detail = aux_score.detail
         else:
             passed = outcome == RunOutcome.COMPLETED
             score_val = 1.0 if passed else 0.0
@@ -87,6 +131,7 @@ class SWEBenchScorer(Scorer):
             score=score_val,
             scorer_name=self.name,
             scorer_detail=detail,
+            auxiliary_scores=auxiliary_scores,
             agent_output=agent_output,
             generated_patch=patch,
             token_usage=token_usage,

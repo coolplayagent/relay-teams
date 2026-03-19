@@ -18,6 +18,7 @@ class PatchExtractor:
                     "-C",
                     workspace.container_repo_path or "/testbed",
                     "diff",
+                    "--",
                 ],
                 capture_output=True,
                 text=True,
@@ -25,8 +26,7 @@ class PatchExtractor:
             )
         else:
             result = subprocess.run(
-                ["git", "diff"],
-                cwd=workspace.repo_path,
+                ["git", "-C", str(workspace.repo_path), "diff", "--"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

@@ -64,6 +64,10 @@ class ArtifactCollector:
             "score": result.score,
             "scorer_name": result.scorer_name,
             "scorer_detail": result.scorer_detail,
+            "auxiliary_scores": {
+                name: score.model_dump()
+                for name, score in sorted(result.auxiliary_scores.items())
+            },
             "duration_seconds": result.duration_seconds,
             "input_tokens": result.token_usage.input_tokens,
             "output_tokens": result.token_usage.output_tokens,

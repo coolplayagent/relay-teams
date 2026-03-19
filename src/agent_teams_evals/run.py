@@ -94,7 +94,11 @@ def run(
     # Scorer
     match cfg.scorer:
         case "swebench_docker":
-            scorer = SWEBenchDockerScorer()
+            scorer = SWEBenchDockerScorer(
+                patch_pass_threshold=cfg.swebench_pass_threshold
+            )
+            if patch_extractor is None and workspace_setup is not None:
+                patch_extractor = PatchExtractor()
         case "swebench":
             scorer = SWEBenchScorer(cfg.swebench_pass_threshold)
             if patch_extractor is None and workspace_setup is not None:

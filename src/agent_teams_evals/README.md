@@ -99,7 +99,7 @@ dataset_path: .agent_teams/evals/datasets/custom.jsonl
 
 # --- Scorer ---
 scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker
-swebench_pass_threshold: 0.8            # used by swebench scorer (Jaccard threshold)
+swebench_pass_threshold: 0.8            # patch Jaccard threshold (primary for swebench, auxiliary for swebench_docker)
 
 # --- Backend ---
 backend: agent_teams
@@ -173,6 +173,13 @@ Example:
 
 Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified) and save the file under `.agent_teams/evals/datasets/`. Set `dataset: swebench` in config -- the loader maps SWE-bench fields automatically.
 
+The initial intent preserves the original `problem_statement` content and only normalizes formatting:
+
+- HTML comments are removed
+- line endings and trailing spaces are normalized
+- extra blank lines are compacted
+- `hints_text`, `FAIL_TO_PASS`, and `PASS_TO_PASS` are appended as structured sections when present
+
 ## Scorers
 
 | Scorer | Passes when | Requires |
@@ -183,7 +190,10 @@ Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE
 | `swebench` | Jaccard similarity of generated vs reference patch >= threshold | git diff, `reference_patch` |
 | `swebench_docker` | `fail_to_pass` tests pass and `pass_to_pass` tests do not regress | docker mode, `fail_to_pass`/`pass_to_pass` |
 
-`swebench_docker` runs `pytest` directly inside the eval container via `docker exec` -- no patch extraction needed.
+For SWE-bench, `swebench_docker` is the recommended primary scorer. It runs `pytest`
+directly inside the eval container via `docker exec`. Patch extraction still runs so
+artifacts can include `patch.diff`, and `patch_jaccard` is recorded as an auxiliary
+diagnostic score.
 
 ## How workspace isolation works
 
@@ -207,8 +217,8 @@ Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE
 
 Results land in `output_dir` (default `.agent_teams/evals/results/`):
 
-- `report.json` -- full structured report (all item results + summary stats)
-- `report.html` -- self-contained HTML report with per-item table
+- `report.json` -- full structured report (all item results + summary stats, including auxiliary scores)
+- `report.html` -- self-contained HTML report with per-item table and auxiliary scores
 
 Summary printed to stdout after each run:
 
@@ -219,6 +229,7 @@ Results : 3/10 passed (30.0%)
 Outcomes: completed=8  failed=1  timed_out=1  stopped=0
 Tokens  : in=524,000  out=31,000  est_cost=$1.6370
 Duration: mean=187.3s  p50=165.2s  p95=310.8s
+Aux     : patch_jaccard=0.167
 ```
 
 ## Re-rendering a report

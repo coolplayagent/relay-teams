@@ -20,6 +20,14 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class AuxiliaryScore(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    score: float = Field(ge=0.0, le=1.0)
+    passed: bool | None = None
+    detail: str = ""
+
+
 class EvalItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -48,6 +56,7 @@ class EvalResult(BaseModel):
     score: float = Field(ge=0.0, le=1.0)
     scorer_name: str
     scorer_detail: str = ""
+    auxiliary_scores: dict[str, AuxiliaryScore] = Field(default_factory=dict)
     agent_output: str = ""
     generated_patch: str = ""
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
@@ -68,6 +77,7 @@ class EvalReport(BaseModel):
     errored: int
     pass_rate: float = Field(ge=0.0, le=1.0)
     mean_score: float
+    auxiliary_score_means: dict[str, float] = Field(default_factory=dict)
     mean_duration_seconds: float
     p50_duration_seconds: float = 0.0
     p95_duration_seconds: float = 0.0
