@@ -120,7 +120,10 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "## Role Usage" in prompt
     assert "## Available Roles" in prompt
     assert "### writer_agent" in prompt
-    assert "### Delegation guidelines" in prompt
+    assert "Do not implement it directly." in prompt
+    assert "rely on each tool description for exact usage and constraints." in prompt
+    assert "Write self-contained objectives with concrete outcomes and constraints." in prompt
+    assert "dispatch targets, not your own capabilities." in prompt
     assert "- Description: Drafts release notes." in prompt
     assert "- Tools: read, write" in prompt
     assert "- MCP Tools: docs/search" in prompt
@@ -189,4 +192,5 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
 
     assert "### writer_agent" in prompt
     assert "## Role Usage" in prompt
-    assert "### Delegation guidelines" in prompt
+    assert "Do not implement it directly." in prompt
+    assert "Choose roles by their Description, Tools, MCP Tools, and Skills." in prompt

@@ -180,7 +180,14 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
     assert "## Role Usage" in payload["runtime_system_prompt"]
     assert "## Available Roles" in payload["runtime_system_prompt"]
-    assert "### Delegation guidelines" in payload["runtime_system_prompt"]
+    assert (
+        "rely on each tool description for exact usage and constraints."
+        in payload["runtime_system_prompt"]
+    )
+    assert (
+        "The roles listed below are dispatch targets, not your own capabilities."
+        in payload["runtime_system_prompt"]
+    )
     assert "### writer_agent" in payload["runtime_system_prompt"]
     assert (
         "- Description: Drafts release notes and summaries."
