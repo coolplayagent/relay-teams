@@ -10,7 +10,12 @@ import asyncio
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool,
+)
 from agent_teams.tools.workspace_tools.shell_executor import (
     normalize_timeout,
     spawn_shell,
@@ -50,6 +55,40 @@ def _save_overflow_output(
     return file_path
 
 
+def _project_shell_result(
+    *,
+    exit_code: int,
+    timed_out: bool,
+    stdout: str,
+    stderr: str,
+    output: str,
+    stdout_overflow: Path | None,
+    stderr_overflow: Path | None,
+) -> ToolResultProjection:
+    truncated = stdout_overflow is not None or stderr_overflow is not None
+    internal_data: dict[str, JsonValue] = {
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "stdout": stdout[:MAX_OUTPUT_CHARS],
+        "stderr": stderr[:MAX_OUTPUT_CHARS],
+        "output": output,
+    }
+    if stdout_overflow:
+        internal_data["stdout_overflow_path"] = str(stdout_overflow)
+    if stderr_overflow:
+        internal_data["stderr_overflow_path"] = str(stderr_overflow)
+
+    return ToolResultProjection(
+        visible_data={
+            "output": output,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "truncated": truncated,
+        },
+        internal_data=internal_data,
+    )
+
+
 def register(Agent: Agent[ToolDeps, str]) -> None:
     @Agent.tool(description=DESCRIPTION)
     async def shell(
@@ -61,7 +100,7 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Run a shell command in the workspace and return stdout/stderr metadata."""
 
-        async def _action() -> dict[str, JsonValue]:
+        async def _action() -> ToolResultProjection:
             validate_shell_command(command)
 
             if workdir:
@@ -125,19 +164,15 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
             if timed_out:
                 output += _format_timeout_metadata(timeout)
 
-            result: dict[str, JsonValue] = {
-                "ok": exit_code == 0,
-                "exit_code": exit_code,
-                "timed_out": timed_out,
-                "stdout": stdout[:MAX_OUTPUT_CHARS],
-                "stderr": stderr[:MAX_OUTPUT_CHARS],
-                "output": output,
-            }
-            if stdout_overflow:
-                result["stdout_overflow_path"] = str(stdout_overflow)
-            if stderr_overflow:
-                result["stderr_overflow_path"] = str(stderr_overflow)
-            return result
+            return _project_shell_result(
+                exit_code=exit_code,
+                timed_out=timed_out,
+                stdout=stdout,
+                stderr=stderr,
+                output=output,
+                stdout_overflow=stdout_overflow,
+                stderr_overflow=stderr_overflow,
+            )
 
         return await execute_tool(
             ctx,

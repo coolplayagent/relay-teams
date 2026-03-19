@@ -247,6 +247,19 @@ The gateway command flow should be:
 
 This keeps the business truth in one place while allowing multiple channels.
 
+### 8.1 Tool Result Visibility Rule
+
+Tool results should have two separate representations:
+
+- a visible result used by the model, ACP, and frontend
+- an internal runtime record used for audit, recovery, and diagnostics
+
+Rules:
+
+- ACP and frontend must render the same tool result payload the model receives
+- runtime-only fields such as approval bookkeeping, duration, and raw debug output must not appear in the visible result
+- approval denial and approval timeout must be returned as normal tool errors in the visible result, with the message written for model consumption rather than human operator instructions
+
 ## 9. MCP-over-ACP
 
 MCP-over-ACP must be treated as a first-class capability.

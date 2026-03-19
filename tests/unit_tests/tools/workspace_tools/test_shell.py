@@ -434,6 +434,38 @@ def test_format_timeout_metadata_uses_normalized_timeout() -> None:
     assert "Nonems" not in metadata
 
 
+def test_project_shell_result_hides_raw_streams_from_visible_payload(
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools.shell import _project_shell_result
+
+    stdout_path = tmp_path / "stdout.txt"
+    result = _project_shell_result(
+        exit_code=1,
+        timed_out=False,
+        stdout="stdout text",
+        stderr="stderr text",
+        output="combined output",
+        stdout_overflow=stdout_path,
+        stderr_overflow=None,
+    )
+
+    assert result.visible_data == {
+        "output": "combined output",
+        "exit_code": 1,
+        "timed_out": False,
+        "truncated": True,
+    }
+    assert result.internal_data == {
+        "exit_code": 1,
+        "timed_out": False,
+        "stdout": "stdout text",
+        "stderr": "stderr text",
+        "output": "combined output",
+        "stdout_overflow_path": str(stdout_path),
+    }
+
+
 def test_run_git_bash_uses_current_proxy_env(monkeypatch) -> None:
     from agent_teams.tools.workspace_tools import shell_executor
 

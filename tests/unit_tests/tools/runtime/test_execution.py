@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.enums import ApprovalMode
 from agent_teams.notifications import NotificationService, default_notification_config
 from agent_teams.roles.role_models import RoleDefinition
@@ -25,7 +26,13 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.tools.runtime import ToolApprovalPolicy, ToolContext, execute_tool
+from agent_teams.tools.runtime import (
+    ToolApprovalPolicy,
+    ToolContext,
+    ToolResultProjection,
+    execute_tool,
+)
+from agent_teams.tools.runtime.persisted_state import load_tool_call_state
 
 
 class _FakeRunEventHub:
@@ -104,6 +111,7 @@ class _FakeDeps:
         self.notification_service = _build_notification_service(self.run_event_hub)
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
+        self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
         self.run_runtime_repo.ensure(
             run_id=self.run_id,
             session_id=self.session_id,
@@ -153,6 +161,7 @@ def test_execute_tool_returns_standard_envelope() -> None:
         policy=_FakePolicy(needs_approval=False),
     )
     ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-1"
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
@@ -161,13 +170,22 @@ def test_execute_tool_returns_standard_envelope() -> None:
             action=lambda: "hello",
         )
     )
-    meta = cast(dict[str, JsonValue], result["meta"])
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-read-1",
+    )
     runtime = deps.run_runtime_repo.get(deps.run_id)
     assert result["ok"] is True
-    assert result["tool"] == "read"
     assert result["data"] == "hello"
     assert result["error"] is None
-    assert meta["approval_required"] is False
+    assert state is not None
+    assert state.result_envelope is not None
+    record = cast(dict[str, JsonValue], state.result_envelope)
+    assert record["tool"] == "read"
+    assert cast(dict[str, JsonValue], record["visible_result"]) == result
+    runtime_meta = cast(dict[str, JsonValue], record["runtime_meta"])
+    assert runtime_meta["approval_required"] is False
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.RUNNING
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
@@ -193,11 +211,21 @@ def test_execute_tool_skips_approval_flow_in_yolo_mode() -> None:
         )
     )
 
-    meta = cast(dict[str, JsonValue], result["meta"])
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-model-yolo",
+    )
     assert result["ok"] is True
     assert result["data"] == {"stdout": "/tmp"}
-    assert meta["approval_required"] is False
-    assert meta["approval_status"] == "not_required"
+    assert state is not None
+    assert state.result_envelope is not None
+    runtime_meta = cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], state.result_envelope)["runtime_meta"],
+    )
+    assert runtime_meta["approval_required"] is False
+    assert runtime_meta["approval_status"] == "not_required"
     assert deps.approval_ticket_repo.get("call-model-yolo") is None
     assert manager.last_open is None
     assert not any(
@@ -222,12 +250,23 @@ def test_execute_tool_returns_denied_error_when_approval_rejected() -> None:
         )
     )
     error = cast(dict[str, JsonValue], result["error"])
-    meta = cast(dict[str, JsonValue], result["meta"])
     ticket = deps.approval_ticket_repo.get("call-model-deny")
     assert result["ok"] is False
     assert error["type"] == "approval_denied"
-    assert meta["approval_required"] is True
-    assert meta["approval_status"] == "deny"
+    assert "suggested_fix" not in error
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-model-deny",
+    )
+    assert state is not None
+    assert state.result_envelope is not None
+    runtime_meta = cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], state.result_envelope)["runtime_meta"],
+    )
+    assert runtime_meta["approval_required"] is True
+    assert runtime_meta["approval_status"] == "deny"
     assert any(
         event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
         for event in deps.run_event_hub.events
@@ -260,11 +299,22 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
         )
     )
     error = cast(dict[str, JsonValue], result["error"])
-    meta = cast(dict[str, JsonValue], result["meta"])
     ticket = deps.approval_ticket_repo.get("call-model-123")
     assert result["ok"] is False
     assert error["type"] == "approval_timeout"
-    assert meta["approval_status"] == "timeout"
+    assert "suggested_fix" not in error
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-model-123",
+    )
+    assert state is not None
+    assert state.result_envelope is not None
+    runtime_meta = cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], state.result_envelope)["runtime_meta"],
+    )
+    assert runtime_meta["approval_status"] == "timeout"
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.TIMED_OUT
 
@@ -375,3 +425,45 @@ def test_execute_tool_republishes_requested_ticket_when_reopened() -> None:
     )
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.COMPLETED
+
+
+def test_execute_tool_supports_projection_with_separate_visible_and_internal_data() -> (
+    None
+):
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-projection-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "pwd"},
+            action=lambda: ToolResultProjection(
+                visible_data={"output": "/tmp", "exit_code": 0},
+                internal_data={"stdout": "/tmp\n", "stderr": "", "exit_code": 0},
+            ),
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-projection-1",
+    )
+
+    assert result == {
+        "ok": True,
+        "data": {"output": "/tmp", "exit_code": 0},
+        "error": None,
+    }
+    assert state is not None
+    assert state.result_envelope is not None
+    internal_data = cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], state.result_envelope)["internal_data"],
+    )
+    assert internal_data["stdout"] == "/tmp\n"

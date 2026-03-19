@@ -11,7 +11,12 @@ from pydantic_ai import Agent
 
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from agent_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool,
+)
 from agent_teams.tools.workspace_tools.edit_state import (
     assert_file_unchanged_since_read,
     record_file_read,
@@ -49,7 +54,9 @@ def trim_diff(diff: str) -> str:
     content_lines = [
         line
         for line in lines
-        if line[:1] in {"+", "-", " "} and not line.startswith("---") and not line.startswith("+++")
+        if line[:1] in {"+", "-", " "}
+        and not line.startswith("---")
+        and not line.startswith("+++")
     ]
     if not content_lines:
         return diff
@@ -68,7 +75,11 @@ def trim_diff(diff: str) -> str:
 
     trimmed_lines = []
     for line in lines:
-        if line[:1] in {"+", "-", " "} and not line.startswith("---") and not line.startswith("+++"):
+        if (
+            line[:1] in {"+", "-", " "}
+            and not line.startswith("---")
+            and not line.startswith("+++")
+        ):
             trimmed_lines.append(line[0] + line[1 + min_indent :])
         else:
             trimmed_lines.append(line)
@@ -104,7 +115,10 @@ def line_trimmed_replacer(content: str, find: str) -> Replacer:
     if search_lines and search_lines[-1] == "":
         search_lines.pop()
     for i in range(len(original_lines) - len(search_lines) + 1):
-        if all(original_lines[i + j].strip() == search_lines[j].strip() for j in range(len(search_lines))):
+        if all(
+            original_lines[i + j].strip() == search_lines[j].strip()
+            for j in range(len(search_lines))
+        ):
             start = sum(len(original_lines[k]) + 1 for k in range(i))
             end = start
             for k in range(len(search_lines)):
@@ -154,7 +168,10 @@ def block_anchor_replacer(content: str, find: str) -> Replacer:
 
     if len(candidates) == 1:
         start_line, end_line = candidates[0]
-        if candidate_similarity(start_line, end_line) >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD:
+        if (
+            candidate_similarity(start_line, end_line)
+            >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD
+        ):
             yield slice_block(content, original_lines, start_line, end_line)
         return
 
@@ -204,7 +221,9 @@ def indentation_flexible_replacer(content: str, find: str) -> Replacer:
         if not non_empty:
             return text
         min_indent = min(len(line) - len(line.lstrip()) for line in non_empty)
-        return "\n".join(line if not line.strip() else line[min_indent:] for line in lines)
+        return "\n".join(
+            line if not line.strip() else line[min_indent:] for line in lines
+        )
 
     normalized_find = remove_indentation(find)
     content_lines = content.split("\n")
@@ -323,7 +342,9 @@ def replace_content(
     replace_all: bool = False,
 ) -> str:
     if old_string == new_string:
-        raise ValueError("No changes to apply: old_string and new_string are identical.")
+        raise ValueError(
+            "No changes to apply: old_string and new_string are identical."
+        )
 
     not_found = True
     replacers = (
@@ -371,17 +392,24 @@ def apply_edit(
     replace_all: bool = False,
 ) -> dict[str, str]:
     if old_string == new_string:
-        raise ValueError("No changes to apply: old_string and new_string are identical.")
+        raise ValueError(
+            "No changes to apply: old_string and new_string are identical."
+        )
 
     if old_string == "":
         if file_path.exists():
-            raise ValueError("Empty old_string is only allowed when creating a new file.")
+            raise ValueError(
+                "Empty old_string is only allowed when creating a new file."
+            )
         new_content = new_string
         atomic_write(file_path, new_content, encoding="utf-8", newline="")
-        diff = trim_diff(generate_diff(str(file_path), "", normalize_line_endings(new_content)))
+        diff = trim_diff(
+            generate_diff(str(file_path), "", normalize_line_endings(new_content))
+        )
         return {
             "path": str(file_path),
-            "output": "Edit applied successfully.\n\nDiff:\n" + format_diff_summary("", new_content),
+            "output": "Edit applied successfully.\n\nDiff:\n"
+            + format_diff_summary("", new_content),
             "diff": diff[:MAX_DIFF_CHARS],
             "diff_summary": format_diff_summary("", new_content),
         }
@@ -395,7 +423,9 @@ def apply_edit(
     ending = detect_line_ending(old_content)
     normalized_old = convert_to_line_ending(normalize_line_endings(old_string), ending)
     normalized_new = convert_to_line_ending(normalize_line_endings(new_string), ending)
-    new_content = replace_content(old_content, normalized_old, normalized_new, replace_all)
+    new_content = replace_content(
+        old_content, normalized_old, normalized_new, replace_all
+    )
 
     atomic_write(file_path, new_content, encoding="utf-8", newline="")
     diff = trim_diff(
@@ -444,6 +474,18 @@ def edit_file_with_guard(
     return result
 
 
+def _project_edit_result(result: dict[str, str]) -> ToolResultProjection:
+    internal_data: dict[str, JsonValue] = {
+        key: value for key, value in result.items()
+    }
+    return ToolResultProjection(
+        visible_data={
+            "output": result["output"],
+        },
+        internal_data=internal_data,
+    )
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def edit(
@@ -453,9 +495,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         new_string: str,
         replace_all: bool = False,
     ) -> dict[str, JsonValue]:
-        async def _action() -> dict[str, str]:
+        async def _action() -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
-            return edit_file_with_guard(
+            result = edit_file_with_guard(
                 shared_store=ctx.deps.shared_store,
                 task_id=ctx.deps.task_id,
                 file_path=file_path,
@@ -463,6 +505,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 new_string=new_string,
                 replace_all=replace_all,
             )
+            return _project_edit_result(result)
 
         return await execute_tool(
             ctx,

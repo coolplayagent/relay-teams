@@ -7,6 +7,7 @@ import pytest
 
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.tools.workspace_tools.edit import (
+    _project_edit_result,
     apply_edit,
     edit_file_with_guard,
     replace_content,
@@ -123,11 +124,15 @@ def test_edit_file_with_guard_succeeds_after_read(tmp_path: Path) -> None:
 
     assert file_path.read_text(encoding="utf-8") == "updated"
     assert "Edit applied successfully." in result["output"]
-    state = load_file_read_state(shared_store=shared_store, task_id="task-1", path=file_path)
+    state = load_file_read_state(
+        shared_store=shared_store, task_id="task-1", path=file_path
+    )
     assert state is not None
 
 
-def test_edit_file_with_guard_rejects_external_change_after_read(tmp_path: Path) -> None:
+def test_edit_file_with_guard_rejects_external_change_after_read(
+    tmp_path: Path,
+) -> None:
     shared_store = SharedStateRepository(tmp_path / "state.db")
     file_path = tmp_path / "file.txt"
     file_path.write_text("content", encoding="utf-8")
@@ -144,7 +149,9 @@ def test_edit_file_with_guard_rejects_external_change_after_read(tmp_path: Path)
         )
 
 
-def test_edit_file_with_guard_allows_new_file_without_prior_read(tmp_path: Path) -> None:
+def test_edit_file_with_guard_allows_new_file_without_prior_read(
+    tmp_path: Path,
+) -> None:
     shared_store = SharedStateRepository(tmp_path / "state.db")
     file_path = tmp_path / "new.txt"
 
@@ -158,3 +165,22 @@ def test_edit_file_with_guard_allows_new_file_without_prior_read(tmp_path: Path)
 
     assert file_path.read_text(encoding="utf-8") == "created"
     assert_file_was_read(shared_store=shared_store, task_id="task-1", path=file_path)
+
+
+def test_project_edit_result_keeps_only_output_visible() -> None:
+    projected = _project_edit_result(
+        {
+            "path": "demo.txt",
+            "output": "Edit applied successfully.",
+            "diff": "@@ -1 +1 @@",
+            "diff_summary": "  ~ 1: 1 line(s) changed",
+        }
+    )
+
+    assert projected.visible_data == {"output": "Edit applied successfully."}
+    assert projected.internal_data == {
+        "path": "demo.txt",
+        "output": "Edit applied successfully.",
+        "diff": "@@ -1 +1 @@",
+        "diff_summary": "  ~ 1: 1 line(s) changed",
+    }

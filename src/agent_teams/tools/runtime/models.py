@@ -10,14 +10,27 @@ class ToolError(BaseModel):
     type: str = Field(min_length=1)
     message: str = Field(min_length=1)
     retryable: bool = False
-    suggested_fix: str | None = None
 
 
 class ToolResultEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool
-    tool: str = Field(min_length=1)
     data: JsonValue | None = None
     error: ToolError | None = None
-    meta: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class ToolInternalRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str = Field(min_length=1)
+    visible_result: ToolResultEnvelope
+    internal_data: JsonValue | None = None
+    runtime_meta: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class ToolResultProjection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visible_data: JsonValue | None = None
+    internal_data: JsonValue | None = None

@@ -17,7 +17,9 @@ if TYPE_CHECKING:
         ToolContext,
         ToolDeps,
         ToolError,
+        ToolInternalRecord,
         ToolResultEnvelope,
+        ToolResultProjection,
         execute_tool,
     )
 
@@ -28,9 +30,11 @@ __all__ = [
     "ToolContext",
     "ToolDeps",
     "ToolError",
+    "ToolInternalRecord",
     "ToolRegister",
     "ToolRegistry",
     "ToolResultEnvelope",
+    "ToolResultProjection",
     "build_default_registry",
     "execute_tool",
 ]
@@ -51,11 +55,16 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolContext": ("agent_teams.tools.runtime", "ToolContext"),
     "ToolDeps": ("agent_teams.tools.runtime", "ToolDeps"),
     "ToolError": ("agent_teams.tools.runtime", "ToolError"),
+    "ToolInternalRecord": ("agent_teams.tools.runtime", "ToolInternalRecord"),
     "ToolRegister": ("agent_teams.tools.registry", "ToolRegister"),
     "ToolRegistry": ("agent_teams.tools.registry", "ToolRegistry"),
     "ToolResultEnvelope": (
         "agent_teams.tools.runtime",
         "ToolResultEnvelope",
+    ),
+    "ToolResultProjection": (
+        "agent_teams.tools.runtime",
+        "ToolResultProjection",
     ),
     "build_default_registry": (
         "agent_teams.tools.registry",

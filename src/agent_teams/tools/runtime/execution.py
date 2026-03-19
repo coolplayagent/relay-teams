@@ -22,7 +22,17 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime.context import ToolContext
-from agent_teams.tools.runtime.models import ToolError, ToolResultEnvelope
+from agent_teams.tools.runtime.models import (
+    ToolError,
+    ToolInternalRecord,
+    ToolResultEnvelope,
+    ToolResultProjection,
+)
+from agent_teams.tools.runtime.persisted_state import (
+    ToolApprovalStatus,
+    ToolExecutionStatus,
+    merge_tool_call_state,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -75,11 +85,19 @@ async def execute_tool(
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
-            envelope = _envelope(
+            envelope = _visible_envelope(
                 ok=False,
-                tool_name=tool_name,
                 error=approval_error,
-                meta=meta,
+            )
+            _persist_tool_record(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=None,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.FAILED,
             )
             return envelope
 
@@ -111,7 +129,7 @@ async def execute_tool(
             if inspect.isawaitable(result):
                 result = await result
             _raise_if_stopped(ctx)
-            normalized_result = _normalize_json_value(result)
+            visible_data, internal_data = _normalize_result_payload(result)
 
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
@@ -125,11 +143,19 @@ async def execute_tool(
                 payload={"tool_name": tool_name},
             )
 
-            envelope = _envelope(
+            envelope = _visible_envelope(
                 ok=True,
+                data=visible_data,
+            )
+            _persist_tool_record(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
                 tool_name=tool_name,
-                data=normalized_result,
-                meta=meta,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=internal_data,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.COMPLETED,
             )
             if approval_ticket_id:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
@@ -160,11 +186,19 @@ async def execute_tool(
                     "retryable": error.retryable,
                 },
             )
-            envelope = _envelope(
+            envelope = _visible_envelope(
                 ok=False,
-                tool_name=tool_name,
                 error=error,
-                meta=meta,
+            )
+            _persist_tool_record(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=None,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.FAILED,
             )
             if approval_ticket_id:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
@@ -174,29 +208,35 @@ async def execute_tool(
 def _error_payload(exc: Exception) -> ToolError:
     err_type = "internal_error"
     retryable = False
-    suggested_fix: str | None = "Retry with corrected tool parameters."
     message = str(exc) or exc.__class__.__name__
 
     if isinstance(exc, ValueError):
         err_type = "validation_error"
         retryable = True
-        if "scope_type" in message:
-            suggested_fix = "Use one of allowed_values for scope_type."
     elif isinstance(exc, KeyError):
         err_type = "not_found"
         retryable = True
-        suggested_fix = "Check IDs and ensure target exists before retrying."
     elif isinstance(exc, PermissionError):
         err_type = "permission_error"
         retryable = True
-        suggested_fix = "Use a path within workspace or permitted scope."
 
     return ToolError(
         type=err_type,
         message=message,
         retryable=retryable,
-        suggested_fix=suggested_fix,
     )
+
+
+def _normalize_result_payload(
+    result: object,
+) -> tuple[JsonValue | None, JsonValue | None]:
+    if isinstance(result, ToolResultProjection):
+        return (
+            _normalize_json_value(result.visible_data),
+            _normalize_json_value(result.internal_data),
+        )
+    normalized = _normalize_json_value(result)
+    return normalized, normalized
 
 
 def _safe_json(value: object) -> str:
@@ -276,7 +316,6 @@ async def _handle_tool_approval(
                 type="approval_denied",
                 message="Tool call was denied by user.",
                 retryable=True,
-                suggested_fix="Adjust the approach and request a safer tool call.",
             )
         if reusable_ticket.status == ApprovalTicketStatus.TIMED_OUT:
             meta["approval_status"] = "timeout"
@@ -284,7 +323,6 @@ async def _handle_tool_approval(
                 type="approval_timeout",
                 message="Tool approval timed out.",
                 retryable=True,
-                suggested_fix="Approve or deny this tool call via tool-approvals API and retry.",
             )
     ticket = ctx.deps.approval_ticket_repo.upsert_requested(
         tool_call_id=tool_call_id,
@@ -428,7 +466,6 @@ async def _wait_for_ticket_resolution(
             type="approval_timeout",
             message="Tool approval timed out.",
             retryable=True,
-            suggested_fix="Approve or deny this tool call via tool-approvals API and retry.",
         )
 
     ctx.deps.tool_approval_manager.close_approval(
@@ -486,7 +523,6 @@ async def _wait_for_ticket_resolution(
             type="approval_denied",
             message="Tool call was denied by user.",
             retryable=True,
-            suggested_fix="Adjust the approach and request a safer tool call.",
         )
 
     return ticket_id, None
@@ -542,19 +578,78 @@ def _publish_tool_approval_event(
     )
 
 
-def _envelope(
+def _visible_envelope(
     *,
     ok: bool,
-    tool_name: str,
     data: JsonValue = None,
     error: ToolError | None = None,
-    meta: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     envelope = ToolResultEnvelope(
         ok=ok,
-        tool=tool_name,
         data=data,
         error=error,
-        meta=meta or {},
     )
     return cast(dict[str, JsonValue], envelope.model_dump(mode="json"))
+
+
+def _internal_record(
+    *,
+    tool_name: str,
+    visible_envelope: dict[str, JsonValue],
+    internal_data: JsonValue | None,
+    runtime_meta: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    record = ToolInternalRecord(
+        tool=tool_name,
+        visible_result=ToolResultEnvelope.model_validate(visible_envelope),
+        internal_data=internal_data,
+        runtime_meta=runtime_meta,
+    )
+    return cast(dict[str, JsonValue], record.model_dump(mode="json"))
+
+
+def _persist_tool_record(
+    *,
+    ctx: ToolContext,
+    tool_call_id: str,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    visible_envelope: dict[str, JsonValue],
+    internal_data: JsonValue | None,
+    runtime_meta: dict[str, JsonValue],
+    execution_status: ToolExecutionStatus,
+) -> None:
+    approval_status = _approval_status_from_meta(runtime_meta)
+    merge_tool_call_state(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
+        args_preview=_safe_json(args_summary),
+        approval_status=approval_status,
+        approval_feedback=str(runtime_meta.get("approval_feedback") or ""),
+        execution_status=execution_status,
+        result_envelope=_internal_record(
+            tool_name=tool_name,
+            visible_envelope=visible_envelope,
+            internal_data=internal_data,
+            runtime_meta=runtime_meta,
+        ),
+    )
+
+
+def _approval_status_from_meta(
+    runtime_meta: dict[str, JsonValue],
+) -> ToolApprovalStatus | None:
+    approval_text = str(runtime_meta.get("approval_status") or "").strip().lower()
+    if approval_text == ToolApprovalStatus.APPROVE.value:
+        return ToolApprovalStatus.APPROVE
+    if approval_text == ToolApprovalStatus.DENY.value:
+        return ToolApprovalStatus.DENY
+    if approval_text == ToolApprovalStatus.TIMEOUT.value:
+        return ToolApprovalStatus.TIMEOUT
+    if approval_text == ToolApprovalStatus.NOT_REQUIRED.value:
+        return ToolApprovalStatus.NOT_REQUIRED
+    return None
