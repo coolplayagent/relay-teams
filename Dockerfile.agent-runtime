@@ -4,6 +4,7 @@
 #
 # The mounted runtime provides:
 # - /opt/agent-runtime/bin/uv           standalone uv binary
+# - /opt/agent-runtime/bin/rg           ripgrep binary for workspace tools
 # - /opt/agent-runtime/bin/python3.12   uv-managed Python 3.12 interpreter
 # - /opt/agent-runtime/wheels/          offline wheelhouse for agent-teams
 # - /opt/agent-runtime/bin/agent-teams  wrapper that creates a container-local venv
@@ -24,10 +25,15 @@ COPY README.md ./
 COPY src/ src/
 COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
 
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m pip install --quiet --no-cache-dir uv
 
 RUN mkdir -p /opt/agent-runtime/bin /opt/agent-runtime/python /opt/agent-runtime/wheels && \
-    cp /usr/local/bin/uv /opt/agent-runtime/bin/uv
+    cp /usr/local/bin/uv /opt/agent-runtime/bin/uv && \
+    cp "$(command -v rg)" /opt/agent-runtime/bin/rg
 
 RUN /opt/agent-runtime/bin/uv python install 3.12 --install-dir /opt/agent-runtime/python && \
     MANAGED_PY="$(find /opt/agent-runtime/python -path '*/bin/python3.12' -type f | head -n 1)" && \
@@ -41,6 +47,8 @@ set -eu\n\
 RUNTIME_ROOT=/opt/agent-runtime\n\
 WORK_ROOT=/tmp/agent-runtime\n\
 VENV_PATH=$WORK_ROOT/venv\n\
+PATH="$RUNTIME_ROOT/bin:$PATH"\n\
+export PATH\n\
 mkdir -p "$WORK_ROOT"\n\
 "$RUNTIME_ROOT/bin/uv" -q venv --clear --no-project \\\n\
     --python "$RUNTIME_ROOT/bin/python3.12" "$VENV_PATH"\n\
@@ -61,7 +69,8 @@ COPY docker/eval-entrypoint.sh /opt/agent-runtime/eval-entrypoint.sh
 RUN chmod +x /opt/agent-runtime/eval-entrypoint.sh
 
 # Smoke-test the wrapper inside the build environment.
-RUN /opt/agent-runtime/bin/agent-teams --help > /dev/null
+RUN /opt/agent-runtime/bin/rg --version > /dev/null && \
+    /opt/agent-runtime/bin/agent-teams --help > /dev/null
 
 # Declare volume so --volumes-from mounts /opt/agent-runtime/ into eval containers.
 VOLUME /opt/agent-runtime
