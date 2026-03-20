@@ -13,6 +13,7 @@ from agent_teams_evals.scorers.base import Scorer
 from agent_teams_evals.workspace.artifact_collector import ArtifactCollector
 from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
+from agent_teams_evals.workspace.patch_filter import filter_patch_for_swebench
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -50,6 +51,7 @@ class EvalRunner:
         started_at = datetime.now(tz=timezone.utc)
         t_start = time.monotonic()
         prepared: PreparedWorkspace | None = None
+        scoring_workspace: PreparedWorkspace | None = None
         result: EvalResult | None = None
 
         try:
@@ -103,9 +105,29 @@ class EvalRunner:
             )
 
             generated_patch = ""
+            raw_generated_patch = ""
+            filtered_generated_files: tuple[str, ...] = ()
             if self._patch_extractor is not None and prepared is not None:
-                generated_patch = self._patch_extractor.extract(prepared)
+                raw_generated_patch = self._patch_extractor.extract(prepared)
+                generated_patch = raw_generated_patch
+                if self._scorer.name == "swebench_docker":
+                    filtered_patch = filter_patch_for_swebench(item, raw_generated_patch)
+                    generated_patch = filtered_patch.scored_patch
+                    filtered_generated_files = filtered_patch.filtered_files
+                    if filtered_generated_files:
+                        _log(
+                            item.item_id,
+                            f"filtered {len(filtered_generated_files)} benchmark test file change(s)",
+                        )
                 _log(item.item_id, f"generated patch: {len(generated_patch)} chars")
+
+            if (
+                self._scorer.name == "swebench_docker"
+                and prepared is not None
+                and self._workspace_setup is not None
+            ):
+                scoring_workspace = self._workspace_setup.prepare_score(item)
+                _log(item.item_id, f"score repo ready: {scoring_workspace.repo_path}")
 
             duration = time.monotonic() - t_start
 
@@ -116,9 +138,11 @@ class EvalRunner:
                 outcome=outcome,
                 agent_output=agent_output,
                 generated_patch=generated_patch,
+                raw_generated_patch=raw_generated_patch,
+                filtered_generated_files=filtered_generated_files,
                 token_usage=token_usage,
                 duration_seconds=duration,
-                workspace=prepared,
+                workspace=scoring_workspace or prepared,
                 error=None,
             )
 
@@ -135,6 +159,9 @@ class EvalRunner:
                 score=0.0,
                 scorer_name=self._scorer.name,
                 scorer_detail="exception during run",
+                generated_patch="",
+                raw_generated_patch="",
+                filtered_generated_files=(),
                 duration_seconds=duration,
                 started_at=started_at,
                 error=str(exc),
@@ -146,6 +173,17 @@ class EvalRunner:
                     self._artifact_collector.collect(item, result, prepared)
                 except Exception:
                     _log(item.item_id, "failed to collect artifacts")
+
+            if (
+                not self._keep_workspaces
+                and scoring_workspace is not None
+                and scoring_workspace != prepared
+                and self._workspace_setup is not None
+            ):
+                try:
+                    self._workspace_setup.cleanup(scoring_workspace)
+                except Exception:
+                    pass
 
             if (
                 not self._keep_workspaces

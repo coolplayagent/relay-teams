@@ -20,6 +20,8 @@ class Scorer(ABC):
         outcome: RunOutcome,
         agent_output: str,
         generated_patch: str,
+        raw_generated_patch: str,
+        filtered_generated_files: tuple[str, ...],
         token_usage: TokenUsage,
         duration_seconds: float,
         workspace: PreparedWorkspace | None = None,

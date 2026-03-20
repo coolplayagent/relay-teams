@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -18,6 +19,14 @@ if TYPE_CHECKING:
     from agent_teams_evals.workspace.base import PreparedWorkspace
 
 
+_TESTBED_PYTHON = "/opt/miniconda3/envs/testbed/bin/python"
+_PYTEST_STDIN_RUNNER = (
+    "import json, sys, pytest; "
+    "tests = json.loads(sys.stdin.read()); "
+    "raise SystemExit(pytest.main([*tests, '-x', '--tb=short', '-q']))"
+)
+
+
 @dataclass(frozen=True)
 class PytestOutcome:
     passed: bool
@@ -26,11 +35,12 @@ class PytestOutcome:
 
 def _apply_test_patch(
     container_id: str,
-    test_patch: str,
+    patch: str,
     repo_path: str = "/testbed",
     timeout: float = 30.0,
 ) -> tuple[bool, str]:
-    """Apply the SWE-bench test_patch inside the container via ``git apply``."""
+    """Apply a unified diff inside the container via ``git apply``."""
+    patch_bytes = patch.encode("utf-8")
     result = subprocess.run(
         [
             "docker",
@@ -41,24 +51,21 @@ def _apply_test_patch(
             "-C",
             repo_path,
             "apply",
-            "--allow-empty",
             "-",
         ],
-        input=test_patch,
+        input=patch_bytes,
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=timeout,
     )
     if result.returncode == 0:
         return True, ""
-    return False, result.stderr.strip()
+    return False, result.stderr.decode("utf-8", errors="replace").strip()
 
 
 def _run_pytest(
     container_id: str,
     tests: list[str],
+    repo_path: str = "/testbed",
     timeout: float = 180.0,
 ) -> PytestOutcome:
     if not tests:
@@ -67,15 +74,15 @@ def _run_pytest(
         [
             "docker",
             "exec",
+            "-i",
+            "-w",
+            repo_path,
             container_id,
-            "python",
-            "-m",
-            "pytest",
-            *tests,
-            "-x",
-            "--tb=short",
-            "-q",
+            _TESTBED_PYTHON,
+            "-c",
+            _PYTEST_STDIN_RUNNER,
         ],
+        input=json.dumps(tests),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -112,6 +119,8 @@ class SWEBenchDockerScorer(Scorer):
         outcome: RunOutcome,
         agent_output: str,
         generated_patch: str,
+        raw_generated_patch: str,
+        filtered_generated_files: tuple[str, ...],
         token_usage: TokenUsage,
         duration_seconds: float,
         workspace: PreparedWorkspace | None = None,
@@ -141,30 +150,48 @@ class SWEBenchDockerScorer(Scorer):
                 scorer_detail="no container available for docker scorer",
                 auxiliary_scores=auxiliary_scores,
                 agent_output=agent_output,
+                generated_patch=generated_patch,
+                raw_generated_patch=raw_generated_patch,
+                filtered_generated_files=filtered_generated_files,
                 token_usage=token_usage,
                 duration_seconds=duration_seconds,
                 error=error,
             )
 
         container_id = workspace.container_id
+        repo = workspace.container_repo_path or "/testbed"
         f2p_tests = list(item.fail_to_pass)
         p2p_tests = list(item.pass_to_pass)
         scorer_log = ""
+        candidate_patch_err = ""
 
         try:
+            candidate_patch_ok = True
+            if generated_patch:
+                candidate_patch_ok, candidate_patch_err = _apply_test_patch(
+                    container_id,
+                    generated_patch,
+                    repo,
+                )
+
             # Apply the SWE-bench test_patch (adds/modifies test cases) before
             # running pytest so that fail_to_pass tests actually exist.
             test_patch_ok = True
             test_patch_err = ""
-            if item.test_patch:
-                repo = workspace.container_repo_path or "/testbed"
+            if candidate_patch_ok and item.test_patch:
                 test_patch_ok, test_patch_err = _apply_test_patch(
                     container_id,
                     item.test_patch,
                     repo,
                 )
 
-            if not test_patch_ok:
+            if not candidate_patch_ok:
+                f2p_result = PytestOutcome(
+                    passed=False,
+                    output=f"candidate patch apply failed: {candidate_patch_err}",
+                )
+                p2p_result = PytestOutcome(passed=True, output="")
+            elif not test_patch_ok:
                 f2p_result = PytestOutcome(
                     passed=False,
                     output=f"test_patch apply failed: {test_patch_err}",
@@ -174,11 +201,13 @@ class SWEBenchDockerScorer(Scorer):
                 f2p_result = _run_pytest(
                     container_id,
                     f2p_tests,
+                    repo,
                     self._pytest_timeout,
                 )
                 p2p_result = _run_pytest(
                     container_id,
                     p2p_tests,
+                    repo,
                     self._pytest_timeout,
                 )
 
@@ -186,6 +215,16 @@ class SWEBenchDockerScorer(Scorer):
             p2p_ok = p2p_result.passed
 
             log_parts: list[str] = []
+            if filtered_generated_files:
+                filtered_listing = "\n".join(filtered_generated_files)
+                log_parts.append(
+                    "=== filtered benchmark test file changes ===\n"
+                    f"{filtered_listing}"
+                )
+            if candidate_patch_err:
+                log_parts.append(
+                    f"=== candidate_patch apply error ===\n{candidate_patch_err}"
+                )
             if test_patch_err:
                 log_parts.append(f"=== test_patch apply error ===\n{test_patch_err}")
             if f2p_tests:
@@ -206,7 +245,10 @@ class SWEBenchDockerScorer(Scorer):
             scorer_log = f"pytest timed out after {self._pytest_timeout}s"
 
         passed = f2p_ok and p2p_ok
-        if passed:
+        if candidate_patch_err:
+            score_val = 0.0
+            detail = "candidate_patch apply failed"
+        elif passed:
             score_val = 1.0
             detail = f"f2p={len(f2p_tests)} passed, p2p={len(p2p_tests)} passed"
         elif f2p_ok:
@@ -216,6 +258,8 @@ class SWEBenchDockerScorer(Scorer):
             score_val = 0.0
             detail = f"f2p={len(f2p_tests)} FAILED"
 
+        if filtered_generated_files:
+            detail = f"{detail}; filtered_test_files={len(filtered_generated_files)}"
         patch_aux = auxiliary_scores.get("patch_jaccard")
         if patch_aux is not None:
             detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"
@@ -234,6 +278,8 @@ class SWEBenchDockerScorer(Scorer):
             auxiliary_scores=auxiliary_scores,
             agent_output=agent_output,
             generated_patch=generated_patch,
+            raw_generated_patch=raw_generated_patch,
+            filtered_generated_files=filtered_generated_files,
             token_usage=token_usage,
             duration_seconds=duration_seconds,
             workspace_path=str(workspace.repo_path) if workspace else None,

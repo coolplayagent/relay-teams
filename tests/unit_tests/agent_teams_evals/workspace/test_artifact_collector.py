@@ -39,6 +39,36 @@ def test_artifact_collector_writes_auxiliary_scores(tmp_path) -> None:
     assert metadata["auxiliary_scores"]["patch_jaccard"]["detail"] == "aux"
 
 
+def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(tmp_path) -> None:
+    collector = ArtifactCollector(tmp_path)
+    item = EvalItem(item_id="demo-filtered", dataset="swebench", intent="demo")
+    result = EvalResult(
+        item_id="demo-filtered",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=False,
+        score=0.0,
+        scorer_name="swebench_docker",
+        generated_patch="diff --git a/src/app.py b/src/app.py\n",
+        raw_generated_patch=(
+            "diff --git a/src/app.py b/src/app.py\n"
+            "diff --git a/tests/test_app.py b/tests/test_app.py\n"
+        ),
+        filtered_generated_files=("tests/test_app.py",),
+        token_usage=TokenUsage(),
+    )
+
+    collector.collect(item, result, workspace=None)
+
+    artifact_dir = tmp_path / "artifacts" / "demo-filtered"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["filtered_generated_files"] == ["tests/test_app.py"]
+    assert (artifact_dir / "patch.diff").read_text(encoding="utf-8") == result.generated_patch
+    assert (artifact_dir / "raw_patch.diff").read_text(encoding="utf-8") == result.raw_generated_patch
+
+
 def test_artifact_collector_writes_scorer_log(tmp_path) -> None:
     collector = ArtifactCollector(tmp_path)
     item = EvalItem(item_id="demo-log", dataset="swebench", intent="demo")

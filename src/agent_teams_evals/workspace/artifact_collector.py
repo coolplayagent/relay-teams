@@ -21,7 +21,8 @@ class ArtifactCollector:
     Artifacts are written to ``<output_dir>/artifacts/<item_id>/`` and include:
 
     - ``metadata.json``  -- item id, run/session ids, outcome, timing, etc.
-    - ``patch.diff``     -- the generated patch (git diff)
+    - ``patch.diff``     -- the scored patch after benchmark test-file filtering
+    - ``raw_patch.diff`` -- the original extracted patch when different
     - ``agent_output.txt`` -- full agent text output
     - ``scorer_log.txt`` -- verbose scorer output (e.g. pytest stdout/stderr)
     - ``agent_teams.db`` -- the container's SQLite database (docker mode)
@@ -66,6 +67,7 @@ class ArtifactCollector:
             "score": result.score,
             "scorer_name": result.scorer_name,
             "scorer_detail": result.scorer_detail,
+            "filtered_generated_files": list(result.filtered_generated_files),
             "auxiliary_scores": {
                 name: score.model_dump()
                 for name, score in sorted(result.auxiliary_scores.items())
@@ -85,6 +87,9 @@ class ArtifactCollector:
         if result.generated_patch:
             path = artifact_dir / "patch.diff"
             path.write_text(result.generated_patch, encoding="utf-8")
+        if result.raw_generated_patch and result.raw_generated_patch != result.generated_patch:
+            raw_path = artifact_dir / "raw_patch.diff"
+            raw_path.write_text(result.raw_generated_patch, encoding="utf-8")
 
     def _write_agent_output(self, artifact_dir: Path, result: EvalResult) -> None:
         if result.agent_output:

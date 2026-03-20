@@ -28,6 +28,9 @@ class WorkspaceSetup(ABC):
     @abstractmethod
     def prepare(self, item: EvalItem) -> PreparedWorkspace: ...
 
+    def prepare_score(self, item: EvalItem) -> PreparedWorkspace:
+        return self.prepare(item)
+
     @abstractmethod
     def cleanup(self, workspace: PreparedWorkspace) -> None: ...
 

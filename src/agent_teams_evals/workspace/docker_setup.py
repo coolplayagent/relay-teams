@@ -195,6 +195,12 @@ class DockerWorkspaceSetup(WorkspaceSetup):
         )
 
     def prepare(self, item: EvalItem) -> PreparedWorkspace:
+        return self._prepare_agent_workspace(item)
+
+    def prepare_score(self, item: EvalItem) -> PreparedWorkspace:
+        return self._prepare_score_workspace(item)
+
+    def _prepare_agent_workspace(self, item: EvalItem) -> PreparedWorkspace:
         if item.base_commit is None:
             raise ValueError(f"Item {item.item_id} has no base_commit")
 
@@ -206,60 +212,23 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             )
 
         port = _find_free_port()
-
-        cmd = [
-            "docker",
-            "run",
-            "-d",
-            "-p",
-            f"{port}:{self._docker_cfg.container_server_port}",
-            # Mount /opt/agent-runtime/ from the runtime data container.
-            # The mounted runtime contains uv, a managed Python 3.12, and an
-            # offline wheelhouse. The wrapper creates a local venv per container.
-            "--volumes-from",
-            self._runtime_container,
-        ]
-
-        # Mount host config (model.json, roles/ etc.) read-only to a staging
-        # path.  The eval-entrypoint.sh (baked into the runtime image) copies
-        # config files into the real location and strips .db files so each
-        # container gets its own SQLite database.
-        if self._config_dir is not None:
-            host_cfg = self._config_dir.expanduser().resolve()
-            cmd += ["-v", f"{host_cfg}:/tmp/agent-config-host:ro"]
-
-        # Forward selected host environment variables.
-        for var in self._docker_cfg.forward_env_vars:
-            val = os.environ.get(var)
-            if val:
-                cmd += ["-e", f"{var}={val}"]
-
-        # Apply extra_env overrides (verbatim, no host-env lookup).
-        for key, val in self._docker_cfg.extra_env.items():
-            cmd += ["-e", f"{key}={val}"]
-
-        cmd += [
-            image,
-            "/opt/agent-runtime/eval-entrypoint.sh",
-            self._docker_cfg.agent_runtime_bin,
-            "server",
-            "start",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            str(self._docker_cfg.container_server_port),
-        ]
-
-        _log(item.item_id, f"starting container {image} on port {port} ...")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
+        container_id = self._run_container(
+            item=item,
+            image=image,
+            port=port,
+            command=[
+                "/opt/agent-runtime/eval-entrypoint.sh",
+                self._docker_cfg.agent_runtime_bin,
+                "server",
+                "start",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(self._docker_cfg.container_server_port),
+            ],
+            with_runtime=True,
+            log_msg=f"starting container {image} on port {port} ...",
         )
-        container_id = result.stdout.strip()
         _log(item.item_id, f"container: {container_id[:12]}")
 
         agent_base_url = f"http://localhost:{port}"
@@ -277,6 +246,85 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             agent_base_url=agent_base_url,
             container_repo_path=self._docker_cfg.container_repo_path,
         )
+
+    def _prepare_score_workspace(self, item: EvalItem) -> PreparedWorkspace:
+        if item.base_commit is None:
+            raise ValueError(f"Item {item.item_id} has no base_commit")
+
+        image = f"{self._docker_cfg.image_prefix}.{item.item_id}:latest"
+
+        if self._docker_cfg.build_instance_images:
+            _ensure_instance_image(
+                item.item_id, image, self._docker_cfg.swebench_dataset
+            )
+
+        container_id = self._run_container(
+            item=item,
+            image=image,
+            port=None,
+            command=["tail", "-f", "/dev/null"],
+            with_runtime=False,
+            log_msg=f"starting scoring container {image} ...",
+        )
+        _log(item.item_id, f"score container: {container_id[:12]}")
+
+        return PreparedWorkspace(
+            item_id=item.item_id,
+            repo_path=Path("."),
+            base_commit=item.base_commit,
+            container_id=container_id,
+            container_repo_path=self._docker_cfg.container_repo_path,
+        )
+
+    def _run_container(
+        self,
+        *,
+        item: EvalItem,
+        image: str,
+        port: int | None,
+        command: list[str],
+        with_runtime: bool,
+        log_msg: str,
+    ) -> str:
+        cmd = ["docker", "run", "-d"]
+        if port is not None:
+            cmd += [
+                "-p",
+                f"{port}:{self._docker_cfg.container_server_port}",
+            ]
+        if with_runtime:
+            # Mount /opt/agent-runtime/ from the runtime data container.
+            # The mounted runtime contains uv, a managed Python 3.12, and an
+            # offline wheelhouse. The wrapper creates a local venv per container.
+            cmd += ["--volumes-from", self._runtime_container]
+
+            # Mount host config (model.json, roles/ etc.) read-only to a staging
+            # path. The eval-entrypoint.sh copies config files into place and
+            # strips .db files so each container gets its own SQLite database.
+            if self._config_dir is not None:
+                host_cfg = self._config_dir.expanduser().resolve()
+                cmd += ["-v", f"{host_cfg}:/tmp/agent-config-host:ro"]
+
+        for var in self._docker_cfg.forward_env_vars:
+            val = os.environ.get(var)
+            if val:
+                cmd += ["-e", f"{var}={val}"]
+
+        for key, val in self._docker_cfg.extra_env.items():
+            cmd += ["-e", f"{key}={val}"]
+
+        cmd += [image, *command]
+
+        _log(item.item_id, log_msg)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+        return result.stdout.strip()
 
     def cleanup(self, workspace: PreparedWorkspace) -> None:
         if workspace.container_id:

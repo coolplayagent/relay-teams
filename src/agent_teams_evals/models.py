@@ -61,6 +61,8 @@ class EvalResult(BaseModel):
     auxiliary_scores: dict[str, AuxiliaryScore] = Field(default_factory=dict)
     agent_output: str = ""
     generated_patch: str = ""
+    raw_generated_patch: str = ""
+    filtered_generated_files: tuple[str, ...] = ()
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     duration_seconds: float = 0.0
     workspace_path: str | None = None

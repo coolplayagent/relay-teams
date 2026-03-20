@@ -188,12 +188,16 @@ The initial intent preserves the original `problem_statement` content and only n
 | `regex` | all `expected_patterns` match agent output | -- |
 | `event_status` | run outcome is `completed` (baseline) | -- |
 | `swebench` | Jaccard similarity of generated vs reference patch >= threshold | git diff, `reference_patch` |
-| `swebench_docker` | `fail_to_pass` tests pass and `pass_to_pass` tests do not regress | docker mode, `fail_to_pass`/`pass_to_pass` |
+| `swebench_docker` | filtered candidate patch applies, `test_patch` applies, `fail_to_pass` tests pass, and `pass_to_pass` tests do not regress | docker mode, `fail_to_pass`/`pass_to_pass` |
 
 For SWE-bench, `swebench_docker` is the recommended primary scorer. It runs `pytest`
-directly inside the eval container via `docker exec`. Patch extraction still runs so
-artifacts can include `patch.diff`, and `patch_jaccard` is recorded as an auxiliary
-diagnostic score.
+inside a fresh scoring container started from the same SWE-bench instance image used
+for the agent run. The agent container only produces a candidate patch; the scoring
+container replays that patch, then applies `test_patch`, then runs pytest. Candidate
+changes that touch benchmark-managed test files are filtered out before scoring and
+recorded as warnings. Artifacts include the scored `patch.diff`; when filtering occurs,
+the original extracted diff is also saved as `raw_patch.diff`. `patch_jaccard` is
+recorded as an auxiliary diagnostic score for the scored patch.
 
 ## How workspace isolation works
 
@@ -219,6 +223,8 @@ Results land in `output_dir` (default `.agent_teams/evals/results/`):
 
 - `report.json` -- full structured report (all item results + summary stats, including auxiliary scores)
 - `report.html` -- self-contained HTML report with per-item table and auxiliary scores
+- `artifacts/<item_id>/patch.diff` -- scored patch after benchmark test-file filtering
+- `artifacts/<item_id>/raw_patch.diff` -- original extracted patch when different
 
 Summary printed to stdout after each run:
 
