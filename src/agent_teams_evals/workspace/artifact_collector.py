@@ -73,6 +73,7 @@ class ArtifactCollector:
                 for name, score in sorted(result.auxiliary_scores.items())
             },
             "duration_seconds": result.duration_seconds,
+            "token_usage": result.token_usage.model_dump(),
             "input_tokens": result.token_usage.input_tokens,
             "output_tokens": result.token_usage.output_tokens,
             "error": result.error,

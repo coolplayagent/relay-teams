@@ -23,7 +23,11 @@ class AgentEvent:
     ]
     text: str = ""
     input_tokens: int = 0
+    cached_input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    requests: int = 0
+    tool_calls: int = 0
     # populated by a "metadata" event emitted at run start
     run_id: str = ""
     session_id: str = ""

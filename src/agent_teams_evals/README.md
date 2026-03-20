@@ -141,7 +141,9 @@ report_format: json                     # json | html | both
 
 # --- Cost estimation (USD per 1M tokens) ---
 cost_per_million_input_tokens: 3.0
+cost_per_million_cached_input_tokens: 0.3
 cost_per_million_output_tokens: 15.0
+cost_per_million_reasoning_output_tokens: 15.0
 ```
 
 ## Datasets
@@ -228,6 +230,18 @@ Results land in `output_dir` (default `.agent_teams/evals/results/`):
 - `artifacts/<item_id>/patch.diff` -- scored patch after benchmark test-file filtering
 - `artifacts/<item_id>/raw_patch.diff` -- original extracted patch when different
 
+Token usage is recorded in detail for each result and the final report:
+
+- `input_tokens`
+- `cached_input_tokens`
+- `output_tokens`
+- `reasoning_output_tokens`
+- `total_requests`
+- `total_tool_calls`
+
+`estimated_cost_usd` prices token dimensions only. `requests` and `tool_calls`
+are surfaced as counters and are not converted into dollars.
+
 Summary printed to stdout after each run:
 
 ```
@@ -235,7 +249,9 @@ Dataset : swebench
 Scorer  : swebench_docker
 Results : 3/10 passed (30.0%)
 Outcomes: completed=8  failed=1  timed_out=1  stopped=0
-Tokens  : in=524,000  out=31,000  est_cost=$1.6370
+Tokens  : in=524,000  cache=37,000  out=31,000  reason=6,000  total=555,000
+Usage   : requests=184  tool_calls=59
+Cost    : in=$1.5720  cache=$0.0111  out=$0.4650  reason=$0.0900  total=$2.1381
 Duration: mean=187.3s  p50=165.2s  p95=310.8s
 Aux     : patch_jaccard=0.167
 ```

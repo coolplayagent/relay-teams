@@ -16,8 +16,12 @@ class TokenUsage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input_tokens: int = 0
+    cached_input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_output_tokens: int = 0
     total_tokens: int = 0
+    total_requests: int = 0
+    total_tool_calls: int = 0
 
 
 class AuxiliaryScore(BaseModel):
@@ -90,7 +94,15 @@ class EvalReport(BaseModel):
     outcome_timed_out: int = 0
     outcome_stopped: int = 0
     total_input_tokens: int
+    total_cached_input_tokens: int
     total_output_tokens: int
+    total_reasoning_output_tokens: int
+    total_requests: int
+    total_tool_calls: int
+    estimated_input_cost_usd: float = 0.0
+    estimated_cached_input_cost_usd: float = 0.0
+    estimated_output_cost_usd: float = 0.0
+    estimated_reasoning_output_cost_usd: float = 0.0
     estimated_cost_usd: float = 0.0
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc)

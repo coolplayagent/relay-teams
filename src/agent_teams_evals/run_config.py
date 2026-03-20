@@ -74,7 +74,9 @@ report_format: json                     # json | html | both
 
 # --- Cost estimation (USD per 1M tokens) ---
 cost_per_million_input_tokens: 3.0      # Claude Sonnet input price
+cost_per_million_cached_input_tokens: 0.3  # cache-read price when reported
 cost_per_million_output_tokens: 15.0    # Claude Sonnet output price
+cost_per_million_reasoning_output_tokens: 15.0  # reasoning output price when reported
 """
 
 
@@ -112,7 +114,9 @@ class RunConfig(BaseModel):
     output_dir: Path = Path(".agent_teams/evals/results")
     report_format: Literal["json", "html", "both"] = "json"
     cost_per_million_input_tokens: float = 3.0
+    cost_per_million_cached_input_tokens: float = 0.3
     cost_per_million_output_tokens: float = 15.0
+    cost_per_million_reasoning_output_tokens: float = 15.0
 
 
 def load_run_config(path: Path) -> RunConfig:

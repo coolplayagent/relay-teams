@@ -147,6 +147,21 @@ def run(
     results: list = []
     completed = 0
 
+    def _format_usage_for_progress(result: object) -> str:
+        from agent_teams_evals.models import EvalResult as _EvalResult
+
+        assert isinstance(result, _EvalResult)
+        in_k = result.token_usage.input_tokens / 1000
+        cached_k = result.token_usage.cached_input_tokens / 1000
+        out_k = result.token_usage.output_tokens / 1000
+        reasoning_k = result.token_usage.reasoning_output_tokens / 1000
+        return (
+            f"i:{in_k:.1f}k c:{cached_k:.1f}k "
+            f"o:{out_k:.1f}k r:{reasoning_k:.1f}k "
+            f"q:{result.token_usage.total_requests} "
+            f"t:{result.token_usage.total_tool_calls}"
+        )
+
     def _print_result(result: object) -> None:
         from agent_teams_evals.models import EvalResult as _EvalResult
 
@@ -154,12 +169,10 @@ def run(
         nonlocal completed
         completed += 1
         status = "PASS" if result.passed else "FAIL"
-        in_k = result.token_usage.input_tokens / 1000
-        out_k = result.token_usage.output_tokens / 1000
         typer.echo(
             f"[{completed}/{total}] {result.item_id}  {status}"
             f"  score={result.score:.3f}"
-            f"  tokens=in:{in_k:.1f}k out:{out_k:.1f}k"
+            f"  usage={_format_usage_for_progress(result)}"
             f"  dur={result.duration_seconds:.1f}s"
             f"  {result.scorer_detail}"
         )
@@ -188,7 +201,11 @@ def run(
         dataset=cfg.dataset,
         scorer_name=scorer.name,
         cost_per_million_input=cfg.cost_per_million_input_tokens,
+        cost_per_million_cached_input=cfg.cost_per_million_cached_input_tokens,
         cost_per_million_output=cfg.cost_per_million_output_tokens,
+        cost_per_million_reasoning_output=(
+            cfg.cost_per_million_reasoning_output_tokens
+        ),
     )
     reporter = EvalReporter()
     reporter.print_summary(report)

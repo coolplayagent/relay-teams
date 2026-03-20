@@ -67,7 +67,11 @@ class EvalRunner:
             session_id = ""
             text_parts: list[str] = []
             input_tokens = 0
+            cached_input_tokens = 0
             output_tokens = 0
+            reasoning_output_tokens = 0
+            total_requests = 0
+            total_tool_calls = 0
             outcome = RunOutcome.TIMEOUT
 
             for event in self._backend.run(
@@ -81,7 +85,11 @@ class EvalRunner:
                         text_parts.append(event.text)
                     case "token_usage":
                         input_tokens += event.input_tokens
+                        cached_input_tokens += event.cached_input_tokens
                         output_tokens += event.output_tokens
+                        reasoning_output_tokens += event.reasoning_output_tokens
+                        total_requests += event.requests
+                        total_tool_calls += event.tool_calls
                     case "completed":
                         outcome = RunOutcome.COMPLETED
                         break
@@ -100,8 +108,12 @@ class EvalRunner:
 
             token_usage = TokenUsage(
                 input_tokens=input_tokens,
+                cached_input_tokens=cached_input_tokens,
                 output_tokens=output_tokens,
+                reasoning_output_tokens=reasoning_output_tokens,
                 total_tokens=input_tokens + output_tokens,
+                total_requests=total_requests,
+                total_tool_calls=total_tool_calls,
             )
 
             generated_patch = ""

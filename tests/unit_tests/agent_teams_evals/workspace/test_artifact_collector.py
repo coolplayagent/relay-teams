@@ -37,6 +37,43 @@ def test_artifact_collector_writes_auxiliary_scores(tmp_path) -> None:
     )
     assert metadata["auxiliary_scores"]["patch_jaccard"]["score"] == 0.6
     assert metadata["auxiliary_scores"]["patch_jaccard"]["detail"] == "aux"
+    assert metadata["token_usage"] == TokenUsage().model_dump()
+
+
+def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> None:
+    collector = ArtifactCollector(tmp_path)
+    item = EvalItem(item_id="demo-usage", dataset="swebench", intent="demo")
+    usage = TokenUsage(
+        input_tokens=10,
+        cached_input_tokens=2,
+        output_tokens=5,
+        reasoning_output_tokens=1,
+        total_tokens=15,
+        total_requests=3,
+        total_tool_calls=4,
+    )
+    result = EvalResult(
+        item_id="demo-usage",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=True,
+        score=1.0,
+        scorer_name="swebench_docker",
+        token_usage=usage,
+    )
+
+    collector.collect(item, result, workspace=None)
+
+    metadata = json.loads(
+        (tmp_path / "artifacts" / "demo-usage" / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["token_usage"] == usage.model_dump()
+    assert metadata["input_tokens"] == 10
+    assert metadata["output_tokens"] == 5
 
 
 def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(tmp_path) -> None:

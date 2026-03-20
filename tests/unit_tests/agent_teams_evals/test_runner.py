@@ -20,6 +20,15 @@ class FakeBackend(AgentBackend):
         assert intent == "demo"
         assert workspace.container_id == "agent-container"
         yield AgentEvent(type="metadata", run_id="run-1", session_id="session-1")
+        yield AgentEvent(
+            type="token_usage",
+            input_tokens=120,
+            cached_input_tokens=30,
+            output_tokens=45,
+            reasoning_output_tokens=12,
+            requests=2,
+            tool_calls=1,
+        )
         yield AgentEvent(type="text_delta", text="done")
         yield AgentEvent(type="completed")
 
@@ -79,6 +88,7 @@ class FakeScorer(Scorer):
         self.received_patch = ""
         self.received_raw_patch = ""
         self.received_filtered_files: tuple[str, ...] = ()
+        self.received_token_usage = TokenUsage()
 
     @property
     def name(self) -> str:
@@ -104,6 +114,7 @@ class FakeScorer(Scorer):
         self.received_patch = generated_patch
         self.received_raw_patch = raw_generated_patch
         self.received_filtered_files = filtered_generated_files
+        self.received_token_usage = token_usage
         return EvalResult(
             item_id=item.item_id,
             dataset=item.dataset,
@@ -160,3 +171,12 @@ def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files()
     assert "tests/test_fix.py" not in scorer.received_patch
     assert "tests/test_fix.py" in scorer.received_raw_patch
     assert scorer.received_filtered_files == ("tests/test_fix.py",)
+    assert scorer.received_token_usage == TokenUsage(
+        input_tokens=120,
+        cached_input_tokens=30,
+        output_tokens=45,
+        reasoning_output_tokens=12,
+        total_tokens=165,
+        total_requests=2,
+        total_tool_calls=1,
+    )

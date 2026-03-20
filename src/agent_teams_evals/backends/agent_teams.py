@@ -18,6 +18,11 @@ def _log(item_id: str, msg: str) -> None:
     typer.echo(f"  [{item_id}] {msg}")
 
 
+def _event_int(data: dict[str, object], key: str) -> int:
+    value = data.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
 def _try_delete_workspace(client: AgentTeamsClient, workspace_id: str) -> None:
     try:
         client.delete_workspace(workspace_id)
@@ -98,18 +103,29 @@ class AgentTeamsBackend(AgentBackend):
 
                 elif event_type == "token_usage":
                     if isinstance(data, dict):
-                        in_val = data.get("input_tokens", 0)
-                        out_val = data.get("output_tokens", 0)
-                        in_tok = in_val if isinstance(in_val, int) else 0
-                        out_tok = out_val if isinstance(out_val, int) else 0
+                        in_tok = _event_int(data, "input_tokens")
+                        cached_in_tok = _event_int(data, "cached_input_tokens")
+                        out_tok = _event_int(data, "output_tokens")
+                        reasoning_out_tok = _event_int(
+                            data, "reasoning_output_tokens"
+                        )
+                        requests = _event_int(data, "requests")
+                        tool_calls = _event_int(data, "tool_calls")
                         _log(
                             workspace.item_id,
-                            f"[event #{event_count}] token_usage: in={in_tok} out={out_tok}",
+                            f"[event #{event_count}] token_usage: "
+                            f"in={in_tok} cache={cached_in_tok} out={out_tok} "
+                            f"reason={reasoning_out_tok} req={requests} "
+                            f"tool={tool_calls}",
                         )
                         yield AgentEvent(
                             type="token_usage",
                             input_tokens=in_tok,
+                            cached_input_tokens=cached_in_tok,
                             output_tokens=out_tok,
+                            reasoning_output_tokens=reasoning_out_tok,
+                            requests=requests,
+                            tool_calls=tool_calls,
                         )
 
                 else:
