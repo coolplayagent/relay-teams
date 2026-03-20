@@ -29,8 +29,10 @@ def test_build_swebench_intent_preserves_content_but_normalizes_formatting() -> 
     assert "### Description" in intent
     assert "### System Details" in intent
     assert "Windows 11" in intent
-    assert "Additional context:" in intent
+    assert "<hints_text>" in intent
+    assert "</hints_text>" in intent
     assert "try the transform graph first" in intent
+    assert "Additional context:" not in intent
     assert "Help ensure that the requirements in <pr_description>" in intent
     assert "Do not modify any test files or testing logic." in intent
     assert "FAIL_TO_PASS Tests" not in intent
@@ -64,13 +66,24 @@ def test_loader_injects_structured_swebench_intent(tmp_path) -> None:
     assert item.intent.startswith("Consider the following PR description:")
     assert "### Description" in item.intent
     assert "<pr_description>" in item.intent
-    assert "Additional context:" in item.intent
+    assert "<hints_text>" in item.intent
     assert "look at parser.py" in item.intent
+    assert "Additional context:" not in item.intent
     assert "FAIL_TO_PASS Tests" not in item.intent
     assert "PASS_TO_PASS Tests" not in item.intent
     assert "<!--" not in item.intent
     assert item.fail_to_pass == ("tests.test_fix",)
     assert item.pass_to_pass == ("tests.test_keep",)
+
+
+def test_build_swebench_intent_omits_hints_block_when_absent() -> None:
+    intent = build_swebench_intent(
+        problem_statement="Fix it.",
+        hints_text="",
+    )
+
+    assert "<pr_description>" in intent
+    assert "<hints_text>" not in intent
 
 
 def test_loader_extracts_test_patch(tmp_path) -> None:

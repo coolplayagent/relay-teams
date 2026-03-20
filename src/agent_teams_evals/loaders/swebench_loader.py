@@ -81,9 +81,13 @@ def build_swebench_intent(
 ) -> str:
     pr_description = _normalize_text_block(problem_statement)
     normalized_hints = _normalize_text_block(str(hints_text or ""))
+
+    hints_block = ""
     if normalized_hints:
-        pr_description = (
-            f"{pr_description}\n\nAdditional context:\n{normalized_hints}"
+        hints_block = (
+            "<hints_text>\n"
+            f"{normalized_hints}\n"
+            "</hints_text>\n\n"
         )
 
     return (
@@ -91,6 +95,7 @@ def build_swebench_intent(
         "<pr_description>\n"
         f"{pr_description}\n"
         "</pr_description>\n\n"
+        f"{hints_block}"
         "Help ensure that the requirements in <pr_description> are satisfied "
         "with the minimal necessary changes.\n\n"
         "All test-file changes described by the PR have already been handled. "

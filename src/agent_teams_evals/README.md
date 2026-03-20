@@ -181,7 +181,7 @@ from the original `problem_statement` content:
 - HTML comments are removed
 - line endings and trailing spaces are normalized
 - extra blank lines are compacted
-- `hints_text`, when present, is merged into the `<pr_description>` block under `Additional context:`
+- `hints_text`, when present, is emitted as a separate `<hints_text>` block
 - `FAIL_TO_PASS`, `PASS_TO_PASS`, and `test_patch` remain scorer-only metadata and are not included in the agent-facing intent
 
 ## Scorers
