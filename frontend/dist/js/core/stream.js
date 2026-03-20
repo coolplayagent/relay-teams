@@ -21,7 +21,7 @@ let pendingStopRequest = false;
 let creatingRun = false;
 
 export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
-    const approvalMode = options.approvalMode === 'standard' ? 'standard' : 'yolo';
+    const yolo = options.yolo === true;
     const thinking = options.thinking && typeof options.thinking === 'object'
         ? {
             enabled: options.thinking.enabled === true,
@@ -33,7 +33,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
     state.isGenerating = true;
     if (els.sendBtn) els.sendBtn.disabled = true;
     if (els.promptInput) els.promptInput.disabled = true;
-    if (els.yoloModeToggle) els.yoloModeToggle.disabled = true;
+    if (els.yoloToggle) els.yoloToggle.disabled = true;
     if (els.thinkingModeToggle) els.thinkingModeToggle.disabled = true;
     if (els.thinkingEffortSelect) els.thinkingEffortSelect.disabled = true;
     if (els.stopBtn) {
@@ -48,13 +48,13 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
 
     let runId = null;
     try {
-        const run = await sendUserPrompt(sessionId, promptText, approvalMode, thinking);
+        const run = await sendUserPrompt(sessionId, promptText, yolo, thinking);
         runId = run.run_id;
         state.activeRunId = runId;
         logInfo('frontend.run.created', 'Frontend run created', {
             run_id: runId,
             session_id: sessionId,
-            approval_mode: approvalMode,
+            yolo,
             thinking_enabled: thinking.enabled,
             thinking_effort: thinking.effort,
         });
@@ -111,8 +111,8 @@ export function endStream() {
         els.stopBtn.disabled = true;
         els.stopBtn.style.display = 'none';
     }
-    if (els.yoloModeToggle) {
-        els.yoloModeToggle.disabled = false;
+    if (els.yoloToggle) {
+        els.yoloToggle.disabled = false;
     }
     if (els.thinkingModeToggle) {
         els.thinkingModeToggle.disabled = false;

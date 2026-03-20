@@ -111,7 +111,7 @@ backend: agent_teams
 agent_teams:
   base_url: "http://127.0.0.1:8000"    # used in git mode; docker mode uses per-container port
   execution_mode: ai
-  approval_mode: yolo
+  yolo: true
   timeout_seconds: 600
   config_dir: null                      # host config staged into eval containers via a whitelist:
                                         # model.json, notifications.json, .env, mcp.json, logger.ini,

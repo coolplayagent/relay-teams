@@ -24,7 +24,6 @@ from agent_teams.interfaces.cli.run_prompt_cli import (
 from agent_teams.interfaces.server.cli import build_server_app
 from agent_teams.mcp.mcp_cli import mcp_app
 from agent_teams.roles.role_cli import build_roles_app
-from agent_teams.sessions.runs.enums import ApprovalMode
 from agent_teams.skills.skill_cli import skills_app
 from agent_teams.triggers.trigger_cli import build_triggers_app
 
@@ -232,24 +231,24 @@ def root_command(
         "--message",
         help="Run a single prompt with default settings.",
     ),
-    approval_mode: ApprovalMode = typer.Option(
-        ApprovalMode.YOLO,
-        "--approval-mode",
-        help="Tool approval mode for the run.",
+    yolo: bool = typer.Option(
+        True,
+        "--yolo/--no-yolo",
+        help="Skip tool approvals for the run.",
     ),
 ) -> None:
     _root_command_impl(
         ctx,
         message,
-        approval_mode,
+        yolo,
         run_single_prompt=_run_single_prompt,
     )
 
 
-def _run_single_prompt(message: str, approval_mode: ApprovalMode) -> None:
+def _run_single_prompt(message: str, yolo: bool) -> None:
     _run_single_prompt_impl(
         message,
-        approval_mode,
+        yolo,
         default_base_url=DEFAULT_BASE_URL,
         execute_prompt=_execute_prompt,
     )
@@ -261,7 +260,7 @@ def _execute_prompt(
     session_id: str | None = None,
     base_url: str = DEFAULT_BASE_URL,
     execution_mode: str = "ai",
-    approval_mode: str = ApprovalMode.STANDARD.value,
+    yolo: bool = False,
     autostart: bool = True,
     debug: bool = False,
 ) -> None:
@@ -270,7 +269,7 @@ def _execute_prompt(
         session_id,
         base_url,
         execution_mode,
-        approval_mode,
+        yolo,
         autostart,
         debug,
         auto_start_if_needed=_module_auto_start,

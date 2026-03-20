@@ -23,7 +23,7 @@ def _signature() -> EvalCheckpointSignature:
         backend="agent_teams",
         workspace_mode="git",
         agent_execution_mode="ai",
-        agent_approval_mode="yolo",
+        agent_yolo=True,
         agent_timeout_seconds=600.0,
         git_clone_timeout_seconds=120.0,
     )

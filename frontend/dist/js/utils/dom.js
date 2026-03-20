@@ -32,7 +32,7 @@ export const els = {
     subagentRoleMeta: qs('#subagent-role-meta'),
     promptInput: qs('#prompt-input'),
     promptInputHint: qs('#prompt-input-hint'),
-    yoloModeToggle: qs('#yolo-mode-toggle'),
+    yoloToggle: qs('#yolo-toggle'),
     thinkingModeToggle: qs('#thinking-mode-toggle'),
     thinkingEffortSelect: qs('#thinking-effort-select'),
     sessionTokenUsage: qs('#session-token-usage'),

@@ -42,7 +42,7 @@ from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConf
 from agent_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
-from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.logger import (
     close_model_stream,
@@ -1675,7 +1675,7 @@ class AgentLlmSession:
 
     def _resolve_tool_approval_policy(self, run_id: str) -> ToolApprovalPolicy:
         try:
-            approval_mode = self._run_intent_repo.get(run_id).approval_mode
+            yolo = self._run_intent_repo.get(run_id).yolo
         except KeyError:
-            approval_mode = ApprovalMode.STANDARD
-        return self._tool_approval_policy.with_mode(approval_mode)
+            yolo = False
+        return self._tool_approval_policy.with_yolo(yolo)

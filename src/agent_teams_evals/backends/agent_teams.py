@@ -401,7 +401,7 @@ class AgentTeamsBackend(AgentBackend):
                 intent=intent,
                 session_id=session_id,
                 execution_mode=self._config.execution_mode,
-                approval_mode=self._config.approval_mode,
+                yolo=self._config.yolo,
             )
             run_id = run_handle.run_id
             _log(workspace.item_id, f"run: {run_id}")

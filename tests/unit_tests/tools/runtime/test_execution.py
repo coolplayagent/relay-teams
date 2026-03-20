@@ -11,7 +11,6 @@ from tempfile import mkdtemp
 from typing import cast
 
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.sessions.runs.enums import ApprovalMode
 from agent_teams.notifications import NotificationService, default_notification_config
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
@@ -192,12 +191,12 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
 
 
-def test_execute_tool_skips_approval_flow_in_yolo_mode() -> None:
+def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     manager = _FakeApprovalManager(wait_result=("approve", ""))
     deps = _FakeDeps(
         manager=manager,
         policy=ToolApprovalPolicy(
-            approval_mode=ApprovalMode.YOLO,
+            yolo=True,
             timeout_seconds=0.01,
         ),
     )

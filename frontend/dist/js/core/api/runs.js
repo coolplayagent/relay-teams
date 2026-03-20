@@ -4,7 +4,7 @@
  */
 import { requestJson } from './request.js';
 
-export async function sendUserPrompt(sessionId, prompt, approvalMode = 'standard', thinking = null) {
+export async function sendUserPrompt(sessionId, prompt, yolo = false, thinking = null) {
     return requestJson(
         '/api/runs',
         {
@@ -14,7 +14,7 @@ export async function sendUserPrompt(sessionId, prompt, approvalMode = 'standard
                 intent: prompt,
                 session_id: sessionId,
                 execution_mode: 'ai',
-                approval_mode: approvalMode,
+                yolo: yolo === true,
                 thinking: thinking || { enabled: false, effort: null },
             }),
         },

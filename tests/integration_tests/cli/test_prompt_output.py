@@ -28,7 +28,7 @@ def test_root_message_prints_fake_llm_output(
     assert after_calls > before_calls
 
 
-def test_root_message_uses_yolo_approval_mode_by_default(monkeypatch) -> None:
+def test_root_message_uses_yolo_by_default(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -66,7 +66,7 @@ def test_root_message_uses_yolo_approval_mode_by_default(monkeypatch) -> None:
             "session_id": "session-1",
             "intent": "hello",
             "execution_mode": "ai",
-            "approval_mode": "yolo",
+            "yolo": True,
         },
     )
 

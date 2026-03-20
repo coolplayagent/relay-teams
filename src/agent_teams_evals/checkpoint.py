@@ -28,7 +28,7 @@ class EvalCheckpointSignature(BaseModel):
     backend: str
     workspace_mode: str
     agent_execution_mode: str
-    agent_approval_mode: str
+    agent_yolo: bool
     agent_timeout_seconds: float
     agent_config_dir: str | None = None
     git_clone_timeout_seconds: float | None = None
@@ -67,7 +67,7 @@ def build_checkpoint_signature(
         backend=cfg.backend,
         workspace_mode=cfg.workspace_mode,
         agent_execution_mode=cfg.agent_teams.execution_mode,
-        agent_approval_mode=cfg.agent_teams.approval_mode,
+        agent_yolo=cfg.agent_teams.yolo,
         agent_timeout_seconds=cfg.agent_teams.timeout_seconds,
         agent_config_dir=(
             str(cfg.agent_teams.config_dir.resolve())

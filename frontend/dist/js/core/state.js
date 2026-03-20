@@ -19,7 +19,7 @@ export const state = {
     currentRecoverySnapshot: null,
     sessionAgents: [],
     sessionTasks: [],
-    approvalMode: 'yolo',
+    yolo: true,
     thinking: {
         enabled: false,
         effort: 'medium',

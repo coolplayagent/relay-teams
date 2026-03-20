@@ -14,18 +14,17 @@ import { startIntentStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 
-const APPROVAL_MODE_STORAGE_KEY = 'agent_teams_approval_mode';
+const YOLO_STORAGE_KEY = 'agent_teams_yolo';
 const THINKING_MODE_STORAGE_KEY = 'agent_teams_thinking_enabled';
 const THINKING_EFFORT_STORAGE_KEY = 'agent_teams_thinking_effort';
 
-export function initializeApprovalModeToggle() {
-    const savedMode = readSavedApprovalMode();
-    applyApprovalMode(savedMode, { persist: false });
-    if (!els.yoloModeToggle) return;
-    els.yoloModeToggle.checked = savedMode === 'yolo';
-    els.yoloModeToggle.addEventListener('change', () => {
-        const nextMode = els.yoloModeToggle.checked ? 'yolo' : 'standard';
-        applyApprovalMode(nextMode);
+export function initializeYoloToggle() {
+    const savedYolo = readSavedYolo();
+    applyYolo(savedYolo, { persist: false });
+    if (!els.yoloToggle) return;
+    els.yoloToggle.checked = savedYolo;
+    els.yoloToggle.addEventListener('change', () => {
+        applyYolo(els.yoloToggle.checked);
     });
 }
 
@@ -98,7 +97,7 @@ export async function handleSend() {
         state.currentSessionId,
         async sid => hydrateSessionView(sid, { includeRounds: true, quiet: true }),
         {
-            approvalMode: state.approvalMode,
+            yolo: state.yolo,
             thinking: state.thinking,
             onRunCreated: (run) => {
                 createLiveRound(run.run_id, text);
@@ -108,24 +107,23 @@ export async function handleSend() {
     );
 }
 
-function readSavedApprovalMode() {
+function readSavedYolo() {
     try {
-        const stored = localStorage.getItem(APPROVAL_MODE_STORAGE_KEY);
-        return stored === 'standard' ? 'standard' : 'yolo';
+        return localStorage.getItem(YOLO_STORAGE_KEY) !== 'false';
     } catch (_error) {
-        return 'yolo';
+        return true;
     }
 }
 
-function applyApprovalMode(mode, { persist = true } = {}) {
-    const safeMode = mode === 'standard' ? 'standard' : 'yolo';
-    state.approvalMode = safeMode;
-    if (els.yoloModeToggle) {
-        els.yoloModeToggle.checked = safeMode === 'yolo';
+function applyYolo(nextValue, { persist = true } = {}) {
+    const safeYolo = nextValue === true;
+    state.yolo = safeYolo;
+    if (els.yoloToggle) {
+        els.yoloToggle.checked = safeYolo;
     }
     if (!persist) return;
     try {
-        localStorage.setItem(APPROVAL_MODE_STORAGE_KEY, safeMode);
+        localStorage.setItem(YOLO_STORAGE_KEY, safeYolo ? 'true' : 'false');
     } catch (_error) {
         return;
     }

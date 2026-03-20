@@ -64,7 +64,7 @@ def test_resume_route_marks_run_for_resume_without_starting_worker() -> None:
     assert fake_service.ensure_called is False
 
 
-def test_create_run_route_accepts_approval_mode() -> None:
+def test_create_run_route_accepts_yolo() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
 
@@ -74,14 +74,14 @@ def test_create_run_route_accepts_approval_mode() -> None:
             "session_id": "session-1",
             "intent": "hello",
             "execution_mode": "ai",
-            "approval_mode": "yolo",
+            "yolo": True,
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {"run_id": "run-1", "session_id": "session-1"}
     created = fake_service.created_run_inputs[0]
-    assert created.approval_mode.value == "yolo"
+    assert created.yolo is True
 
 
 def test_create_run_route_accepts_thinking_config() -> None:
@@ -94,7 +94,7 @@ def test_create_run_route_accepts_thinking_config() -> None:
             "session_id": "session-1",
             "intent": "hello",
             "execution_mode": "ai",
-            "approval_mode": "standard",
+            "yolo": False,
             "thinking": {"enabled": True, "effort": "high"},
         },
     )

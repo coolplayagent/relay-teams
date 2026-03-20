@@ -17,7 +17,7 @@ from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.providers.token_usage_repo import RunTokenUsage
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
 
@@ -211,7 +211,7 @@ async def test_session_prompt_streams_updates_and_usage(tmp_path: Path) -> None:
     assert run_manager.create_calls[0] == IntentInput(
         session_id="session-1",
         intent="Summarize README",
-        approval_mode=ApprovalMode.YOLO,
+        yolo=True,
     )
 
     session_updates = [_session_update_name(item) for item in notifications]

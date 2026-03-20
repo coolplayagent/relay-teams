@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode
+from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.persistence.db import open_sqlite
 
@@ -26,7 +26,7 @@ class RunIntentRepository:
                 session_id     TEXT NOT NULL,
                 intent         TEXT NOT NULL,
                 execution_mode TEXT NOT NULL,
-                approval_mode  TEXT NOT NULL DEFAULT 'standard',
+                yolo           TEXT NOT NULL DEFAULT 'false',
                 thinking_enabled TEXT NOT NULL DEFAULT 'false',
                 thinking_effort TEXT,
                 created_at     TEXT NOT NULL,
@@ -38,10 +38,20 @@ class RunIntentRepository:
             str(row["name"])
             for row in self._conn.execute("PRAGMA table_info(run_intents)").fetchall()
         ]
-        if "approval_mode" not in columns:
+        if "yolo" not in columns:
             self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'standard'"
+                "ALTER TABLE run_intents ADD COLUMN yolo TEXT NOT NULL DEFAULT 'false'"
             )
+            if "approval_mode" in columns:
+                self._conn.execute(
+                    """
+                    UPDATE run_intents
+                    SET yolo = CASE
+                        WHEN approval_mode = 'yolo' THEN 'true'
+                        ELSE 'false'
+                    END
+                    """
+                )
         if "thinking_enabled" not in columns:
             self._conn.execute(
                 "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"
@@ -64,7 +74,7 @@ class RunIntentRepository:
                 session_id,
                 intent,
                 execution_mode,
-                approval_mode,
+                yolo,
                 thinking_enabled,
                 thinking_effort,
                 created_at,
@@ -76,7 +86,7 @@ class RunIntentRepository:
                 session_id=excluded.session_id,
                 intent=excluded.intent,
                 execution_mode=excluded.execution_mode,
-                approval_mode=excluded.approval_mode,
+                yolo=excluded.yolo,
                 thinking_enabled=excluded.thinking_enabled,
                 thinking_effort=excluded.thinking_effort,
                 updated_at=excluded.updated_at
@@ -86,7 +96,7 @@ class RunIntentRepository:
                 session_id,
                 intent.intent,
                 intent.execution_mode.value,
-                intent.approval_mode.value,
+                "true" if intent.yolo else "false",
                 "true" if intent.thinking.enabled else "false",
                 intent.thinking.effort,
                 now,
@@ -117,7 +127,7 @@ class RunIntentRepository:
     def get(self, run_id: str) -> IntentInput:
         row = self._conn.execute(
             """
-            SELECT session_id, intent, execution_mode, approval_mode, thinking_enabled, thinking_effort
+            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort
             FROM run_intents
             WHERE run_id=?
             """,
@@ -129,7 +139,7 @@ class RunIntentRepository:
             session_id=str(row["session_id"]),
             intent=str(row["intent"]),
             execution_mode=ExecutionMode(str(row["execution_mode"])),
-            approval_mode=ApprovalMode(str(row["approval_mode"])),
+            yolo=str(row["yolo"]).strip().lower() == "true",
             thinking=RunThinkingConfig(
                 enabled=str(row["thinking_enabled"]).strip().lower() == "true",
                 effort=_coerce_thinking_effort(row["thinking_effort"]),

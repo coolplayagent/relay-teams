@@ -18,7 +18,7 @@ from agent_teams.notifications import (
 )
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.enums import ApprovalMode, InjectionSource, RunEventType
+from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -203,7 +203,7 @@ class RunManager:
             ):
                 pending = self._pending_runs[active_run_id]
                 pending.intent = self._merge_intent(pending.intent, intent.intent)
-                pending.approval_mode = intent.approval_mode
+                pending.yolo = intent.yolo
                 if self._run_intent_repo is not None:
                     self._run_intent_repo.upsert(
                         run_id=active_run_id,
@@ -247,10 +247,10 @@ class RunManager:
                 self._append_followup_to_coordinator(
                     active_run_id, intent.intent, enqueue=False
                 )
-                self._update_run_approval_mode(
+                self._update_run_yolo(
                     run_id=active_run_id,
                     session_id=session_id,
-                    approval_mode=intent.approval_mode,
+                    yolo=intent.yolo,
                 )
                 self._resume_requested_runs.add(active_run_id)
                 with bind_trace_context(
@@ -961,12 +961,12 @@ class RunManager:
                 raise
             self._run_intent_repo.append_followup(run_id=run_id, content=content)
 
-    def _update_run_approval_mode(
+    def _update_run_yolo(
         self,
         *,
         run_id: str,
         session_id: str,
-        approval_mode: ApprovalMode,
+        yolo: bool,
     ) -> None:
         if self._run_intent_repo is None:
             return
@@ -974,10 +974,10 @@ class RunManager:
             intent = self._run_intent_repo.get(run_id)
         except KeyError:
             return
-        if intent.approval_mode == approval_mode:
+        if intent.yolo == yolo:
             return
         intent.session_id = session_id
-        intent.approval_mode = approval_mode
+        intent.yolo = yolo
         self._run_intent_repo.upsert(
             run_id=run_id,
             session_id=session_id,

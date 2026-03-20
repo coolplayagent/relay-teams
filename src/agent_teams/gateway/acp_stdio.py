@@ -13,7 +13,7 @@ from pydantic import JsonValue
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.sessions import SessionService
-from agent_teams.sessions.runs.enums import ApprovalMode, RunEventType
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
 
@@ -225,7 +225,7 @@ class AcpGatewayServer:
             IntentInput(
                 session_id=record.internal_session_id,
                 intent=prompt_text,
-                approval_mode=ApprovalMode.YOLO,
+                yolo=True,
             )
         )
         self._active_runs[gateway_session_id] = run_id

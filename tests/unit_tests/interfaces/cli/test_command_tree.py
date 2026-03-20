@@ -52,7 +52,7 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
                 "session_id": "session-1",
                 "intent": "hello",
                 "execution_mode": "ai",
-                "approval_mode": "yolo",
+                "yolo": True,
             },
         ),
     ]
@@ -65,7 +65,7 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
     }
 
 
-def test_root_message_allows_standard_approval_mode_override(monkeypatch) -> None:
+def test_root_message_allows_no_yolo_override(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -95,7 +95,7 @@ def test_root_message_allows_standard_approval_mode_override(monkeypatch) -> Non
 
     result = runner.invoke(
         cli_app.app,
-        ["-m", "hello", "--approval-mode", "standard"],
+        ["-m", "hello", "--no-yolo"],
     )
 
     assert result.exit_code == 0
@@ -106,7 +106,7 @@ def test_root_message_allows_standard_approval_mode_override(monkeypatch) -> Non
             "session_id": "session-1",
             "intent": "hello",
             "execution_mode": "ai",
-            "approval_mode": "standard",
+            "yolo": False,
         },
     )
 

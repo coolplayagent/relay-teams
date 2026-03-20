@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
-from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode
+from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 
 
-def test_run_intent_repo_round_trips_approval_mode(tmp_path: Path) -> None:
+def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:
     db_path = tmp_path / "run_intent.db"
     repo = RunIntentRepository(db_path)
 
@@ -19,7 +20,7 @@ def test_run_intent_repo_round_trips_approval_mode(tmp_path: Path) -> None:
             session_id="session-1",
             intent="ship it",
             execution_mode=ExecutionMode.AI,
-            approval_mode=ApprovalMode.YOLO,
+            yolo=True,
         ),
     )
 
@@ -27,7 +28,41 @@ def test_run_intent_repo_round_trips_approval_mode(tmp_path: Path) -> None:
 
     assert record.intent == "ship it"
     assert record.execution_mode == ExecutionMode.AI
-    assert record.approval_mode == ApprovalMode.YOLO
+    assert record.yolo is True
+
+
+def test_run_intent_repo_backfills_yolo_from_legacy_approval_mode(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE run_intents (
+            run_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            execution_mode TEXT NOT NULL,
+            approval_mode TEXT NOT NULL DEFAULT 'standard',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO run_intents(
+            run_id, session_id, intent, execution_mode, approval_mode, created_at, updated_at
+        )
+        VALUES('run-1', 'session-1', 'ship it', 'ai', 'yolo', '2026-03-20T00:00:00Z', '2026-03-20T00:00:00Z')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    record = RunIntentRepository(db_path).get("run-1")
+
+    assert record.yolo is True
 
 
 def test_run_intent_repo_round_trips_thinking_config(tmp_path: Path) -> None:
@@ -41,7 +76,7 @@ def test_run_intent_repo_round_trips_thinking_config(tmp_path: Path) -> None:
             session_id="session-1",
             intent="ship it",
             execution_mode=ExecutionMode.AI,
-            approval_mode=ApprovalMode.STANDARD,
+            yolo=False,
             thinking=RunThinkingConfig(enabled=True, effort="medium"),
         ),
     )

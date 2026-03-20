@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.enums import ApprovalMode, ExecutionMode, InjectionSource
+from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.trace import bind_trace_context
 
@@ -26,7 +26,7 @@ class CreateRunRequest(BaseModel):
     intent: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     execution_mode: ExecutionMode = ExecutionMode.AI
-    approval_mode: ApprovalMode = ApprovalMode.STANDARD
+    yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
 
@@ -76,7 +76,7 @@ def create_run(
                 session_id=req.session_id,
                 intent=req.intent,
                 execution_mode=req.execution_mode,
-                approval_mode=req.approval_mode,
+                yolo=req.yolo,
                 thinking=req.thinking,
             )
         )
@@ -90,7 +90,7 @@ def create_run(
                 duration_ms=elapsed_ms,
                 payload={
                     "execution_mode": req.execution_mode.value,
-                    "approval_mode": req.approval_mode.value,
+                    "yolo": req.yolo,
                 },
             )
         return CreateRunResponse(run_id=run_id, session_id=session_id)

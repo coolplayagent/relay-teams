@@ -34,12 +34,12 @@ class _FakeClient:
         intent: str,
         session_id: str,
         execution_mode: str,
-        approval_mode: str,
+        yolo: bool,
     ) -> object:
         assert intent == "demo intent"
         assert session_id == "session-1"
         assert execution_mode == "ai"
-        assert approval_mode == "yolo"
+        assert yolo is True
 
         class _Handle:
             run_id = "run-1"
@@ -199,7 +199,11 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) ->
         "agent_teams_evals.backends.agent_teams.AgentTeamsClient", _FakeClient
     )
     backend = AgentTeamsBackend(
-        AgentTeamsConfig(base_url="http://localhost:8000", timeout_seconds=30.0)
+        AgentTeamsConfig(
+            base_url="http://localhost:8000",
+            timeout_seconds=30.0,
+            yolo=True,
+        )
     )
     workspace = PreparedWorkspace(
         item_id="demo",

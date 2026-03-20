@@ -9,12 +9,12 @@ import subprocess
 def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     html = Path("frontend/dist/index.html").read_text(encoding="utf-8")
 
-    assert 'id="yolo-mode-toggle"' in html
+    assert 'id="yolo-toggle"' in html
     assert 'id="thinking-mode-toggle"' in html
     assert 'id="thinking-effort-select"' in html
 
 
-def test_send_user_prompt_includes_approval_mode_and_thinking(tmp_path: Path) -> None:
+def test_send_user_prompt_includes_yolo_and_thinking(tmp_path: Path) -> None:
     source = Path("frontend/dist/js/core/api/runs.js").read_text(encoding="utf-8")
     temp_dir = tmp_path / "api"
     temp_dir.mkdir()
@@ -36,7 +36,7 @@ export async function requestJson(url, options, errorMessage) {
     runner = """
 import { sendUserPrompt } from "./runs.js";
 
-await sendUserPrompt("session-1", "ship it", "yolo", { enabled: true, effort: "high" });
+await sendUserPrompt("session-1", "ship it", true, { enabled: true, effort: "high" });
 console.log(JSON.stringify(globalThis.__captured));
 """.strip()
     result = subprocess.run(
@@ -50,6 +50,6 @@ console.log(JSON.stringify(globalThis.__captured));
     payload = json.loads(result.stdout)
     assert payload["url"] == "/api/runs"
     assert payload["method"] == "POST"
-    assert payload["body"]["approval_mode"] == "yolo"
+    assert payload["body"]["yolo"] is True
     assert payload["body"]["execution_mode"] == "ai"
     assert payload["body"]["thinking"] == {"enabled": True, "effort": "high"}

@@ -12,7 +12,7 @@ class AgentTeamsConfig(AgentConfig):
 
     base_url: str = "http://127.0.0.1:8000"
     execution_mode: str = "ai"
-    approval_mode: str = "yolo"
+    yolo: bool = True
     # Docker mode: mount this directory as ~/.config/agent-teams inside the container.
     # Controls which model, role and system prompt the agent uses.
     # None = use whatever config is already present in the container.
