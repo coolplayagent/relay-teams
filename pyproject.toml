@@ -58,6 +58,7 @@ where = ["src"]
 
 [dependency-groups]
 evals = [
+  "chardet<6",
   "swebench>=4.0.0",
   "docker>=7.0.0",
   "datasets>=2.14.0",
