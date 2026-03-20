@@ -31,10 +31,8 @@ def test_build_swebench_intent_preserves_content_but_normalizes_formatting() -> 
     assert "Windows 11" in intent
     assert "Additional context:" in intent
     assert "try the transform graph first" in intent
-    assert "Required task flow:" in intent
-    assert "dispatch Explorer" in intent
-    assert "dispatch Crafter" in intent
-    assert "dispatch Gater" in intent
+    assert "Help ensure that the requirements in <pr_description>" in intent
+    assert "Do not modify any test files or testing logic." in intent
     assert "FAIL_TO_PASS Tests" not in intent
     assert "PASS_TO_PASS Tests" not in intent
     assert "\r" not in intent

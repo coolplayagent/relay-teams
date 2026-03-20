@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_teams_evals.models import AuxiliaryScore, EvalResult, RunOutcome, TokenUsage
-from agent_teams_evals.reporter import build_report
+from agent_teams_evals.reporter import _format_usage_cell, build_report
 
 
 def test_build_report_aggregates_auxiliary_scores() -> None:
@@ -77,3 +77,30 @@ def test_build_report_aggregates_auxiliary_scores() -> None:
     assert report.estimated_output_cost_usd == pytest.approx(0.03)
     assert report.estimated_reasoning_output_cost_usd == pytest.approx(0.015)
     assert report.estimated_cost_usd == pytest.approx(0.076)
+
+
+def test_format_usage_cell_uses_readable_labels() -> None:
+    result = EvalResult(
+        item_id="demo",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=True,
+        score=1.0,
+        scorer_name="swebench_docker",
+        token_usage=TokenUsage(
+            input_tokens=1_209_700,
+            cached_input_tokens=1_076_200,
+            output_tokens=13_900,
+            reasoning_output_tokens=4_700,
+            total_tokens=1_223_600,
+            total_requests=95,
+            total_tool_calls=113,
+        ),
+    )
+
+    assert _format_usage_cell(result) == (
+        "input=1209.7k cached=1076.2k output=13.9k "
+        "reasoning=4.7k requests=95 tool_calls=113"
+    )

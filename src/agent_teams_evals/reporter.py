@@ -7,7 +7,7 @@ import typer
 
 from agent_teams_evals.models import AuxiliaryScore, EvalReport, EvalResult, RunOutcome
 
-_COL_WIDTHS = (30, 12, 8, 8, 10, 34, 8)
+_COL_WIDTHS = (30, 12, 8, 8, 10, 90, 8)
 _HEADERS = (
     "item_id",
     "outcome",
@@ -25,10 +25,12 @@ def _format_usage_cell(result: EvalResult) -> str:
     output_k = result.token_usage.output_tokens / 1000
     reasoning_k = result.token_usage.reasoning_output_tokens / 1000
     return (
-        f"i{input_k:.1f} c{cached_k:.1f} "
-        f"o{output_k:.1f} r{reasoning_k:.1f} "
-        f"q{result.token_usage.total_requests} "
-        f"t{result.token_usage.total_tool_calls}"
+        f"input={input_k:.1f}k "
+        f"cached={cached_k:.1f}k "
+        f"output={output_k:.1f}k "
+        f"reasoning={reasoning_k:.1f}k "
+        f"requests={result.token_usage.total_requests} "
+        f"tool_calls={result.token_usage.total_tool_calls}"
     )
 
 

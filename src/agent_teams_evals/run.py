@@ -156,10 +156,10 @@ def run(
         out_k = result.token_usage.output_tokens / 1000
         reasoning_k = result.token_usage.reasoning_output_tokens / 1000
         return (
-            f"i:{in_k:.1f}k c:{cached_k:.1f}k "
-            f"o:{out_k:.1f}k r:{reasoning_k:.1f}k "
-            f"q:{result.token_usage.total_requests} "
-            f"t:{result.token_usage.total_tool_calls}"
+            f"input:{in_k:.1f}k cached:{cached_k:.1f}k "
+            f"output:{out_k:.1f}k reasoning:{reasoning_k:.1f}k "
+            f"requests:{result.token_usage.total_requests} "
+            f"tool_calls:{result.token_usage.total_tool_calls}"
         )
 
     def _print_result(result: object) -> None:
