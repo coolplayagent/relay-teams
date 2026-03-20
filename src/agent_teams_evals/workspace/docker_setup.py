@@ -298,9 +298,10 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             # offline wheelhouse. The wrapper creates a local venv per container.
             cmd += ["--volumes-from", self._runtime_container]
 
-            # Mount host config (model.json, roles/ etc.) read-only to a staging
-            # path. The eval-entrypoint.sh copies config files into place and
-            # strips .db files so each container gets its own SQLite database.
+            # Mount host config read-only to a staging path. The eval entrypoint
+            # copies only a small whitelist of runtime config files/directories
+            # into place so host-local logs and other incidental files are not
+            # carried into eval containers.
             if self._config_dir is not None:
                 host_cfg = self._config_dir.expanduser().resolve()
                 cmd += ["-v", f"{host_cfg}:/tmp/agent-config-host:ro"]

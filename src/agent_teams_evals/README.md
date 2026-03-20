@@ -108,8 +108,9 @@ agent_teams:
   execution_mode: ai
   approval_mode: yolo
   timeout_seconds: 600
-  config_dir: null                      # path mounted as ~/.config/agent-teams in containers
-                                        # controls model, role, system prompt
+  config_dir: null                      # host config staged into eval containers via a whitelist:
+                                        # model.json, notifications.json, .env, mcp.json, logger.ini,
+                                        # roles/, skills/
                                         # null = use whatever config is in the container
 
 # --- Workspace ---
