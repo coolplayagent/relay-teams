@@ -12,12 +12,16 @@ import {
     toggleProjectSortMode,
 } from '../components/sidebar.js';
 import { fetchRoleConfigOptions } from '../core/api.js';
-import { setCoordinatorRoleId, state } from '../core/state.js';
+import { setCoordinatorRoleId, setMainAgentRoleId, state } from '../core/state.js';
 import { setupNavbarBindings } from '../components/navbar.js';
 import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
 import { resumeRecoverableRun } from './recovery.js';
-import { initializeThinkingControls, initializeYoloToggle } from './prompt.js';
+import {
+    initializeSessionTopologyControls,
+    initializeThinkingControls,
+    initializeYoloToggle,
+} from './prompt.js';
 import { requestStopCurrentRun } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import {
@@ -79,6 +83,7 @@ async function hydrateCoordinatorRoleId() {
     try {
         const options = await fetchRoleConfigOptions();
         setCoordinatorRoleId(options?.coordinator_role_id || '');
+        setMainAgentRoleId(options?.main_agent_role_id || '');
     } catch (error) {
         logError(
             'frontend.bootstrap.coordinator_role_failed',
@@ -86,6 +91,7 @@ async function hydrateCoordinatorRoleId() {
             errorToPayload(error),
         );
         setCoordinatorRoleId('');
+        setMainAgentRoleId('');
     }
 }
 
@@ -98,6 +104,7 @@ export async function initApp(selectSession, handleSend) {
     setupNavbarBindings();
     initializeYoloToggle();
     initializeThinkingControls();
+    await initializeSessionTopologyControls();
     initializeContextIndicators();
     initializeSessionTokenUsage();
     await hydrateCoordinatorRoleId();

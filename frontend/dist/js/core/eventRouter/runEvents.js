@@ -3,8 +3,9 @@
  * Handlers for run lifecycle and model-step events.
  */
 import {
-    getCoordinatorRoleId,
-    isCoordinatorRoleId,
+    getPrimaryRoleId,
+    getPrimaryRoleLabel,
+    isPrimaryRoleId,
     state,
 } from '../state.js';
 import {
@@ -47,7 +48,7 @@ export function handleRunStarted(eventMeta) {
     if (runId) {
         markRunStreamConnected(runId, { phase: 'running' });
     }
-    state.activeAgentRoleId = getCoordinatorRoleId() || null;
+    state.activeAgentRoleId = getPrimaryRoleId() || null;
     state.activeAgentInstanceId = null;
 }
 
@@ -59,7 +60,7 @@ export function handleModelStepStarted(instanceId, roleId) {
         if (!state.autoSwitchedSubagentInstances) state.autoSwitchedSubagentInstances = {};
         state.instanceRoleMap[instanceId] = roleId;
         state.roleInstanceMap[roleId] = instanceId;
-        if (!isCoordinatorRoleId(roleId)) {
+        if (!isPrimaryRoleId(roleId)) {
             rememberLiveSubagent(instanceId, roleId);
             getPanelScrollContainer(instanceId, roleId);
             if (!state.autoSwitchedSubagentInstances[instanceId]) {
@@ -74,16 +75,17 @@ export function handleModelStepStarted(instanceId, roleId) {
 
 export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
     markLlmRetrySucceeded();
-    const coordinatorRoleId = getCoordinatorRoleId();
-    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
-    const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
-    const streamKey = isCoordinator ? 'coordinator' : (instanceId || roleId);
+    const primaryRoleId = getPrimaryRoleId();
+    const primaryLabel = getPrimaryRoleLabel();
+    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const label = isPrimary ? primaryLabel : (roleId || 'Agent');
+    const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
 
-    if (isCoordinator) {
+    if (isPrimary) {
         const container = coordinatorContainerFor(eventMeta);
-        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
-        appendStreamChunk(streamKey, payload.text || '', runId, coordinatorRoleId, label);
+        getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
+        appendStreamChunk(streamKey, payload.text || '', runId, primaryRoleId, label);
     } else {
         const container = getPanelScrollContainer(instanceId, roleId);
         // Do not keep stealing focus from user-selected panel during streaming.
@@ -97,20 +99,20 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 
 export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
     markLlmRetrySucceeded();
-    const coordinatorRoleId = getCoordinatorRoleId();
-    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
-    const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
+    const primaryRoleId = getPrimaryRoleId();
+    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const label = isPrimary ? getPrimaryRoleLabel() : (roleId || 'Agent');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const partIndex = payload?.part_index ?? 0;
 
-    if (isCoordinator) {
+    if (isPrimary) {
         const container = coordinatorContainerFor(eventMeta);
-        const streamKey = 'coordinator';
-        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
+        const streamKey = 'primary';
+        getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         startThinkingBlock(streamKey, partIndex, {
             container,
             runId,
-            roleId: coordinatorRoleId,
+            roleId: primaryRoleId,
             label,
         });
         return;
@@ -130,21 +132,21 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
-    const coordinatorRoleId = getCoordinatorRoleId();
-    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
-    const label = isCoordinator ? 'Coordinator' : (roleId || 'Agent');
+    const primaryRoleId = getPrimaryRoleId();
+    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const label = isPrimary ? getPrimaryRoleLabel() : (roleId || 'Agent');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const partIndex = payload?.part_index ?? 0;
     const text = payload?.text || '';
 
-    if (isCoordinator) {
+    if (isPrimary) {
         const container = coordinatorContainerFor(eventMeta);
-        const streamKey = 'coordinator';
-        getOrCreateStreamBlock(container, streamKey, coordinatorRoleId, label, runId);
+        const streamKey = 'primary';
+        getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         appendThinkingChunk(streamKey, partIndex, text, {
             container,
             runId,
-            roleId: coordinatorRoleId,
+            roleId: primaryRoleId,
             label,
         });
         return;
@@ -164,24 +166,24 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
-    const coordinatorRoleId = getCoordinatorRoleId();
-    const isCoordinator = !roleId || isCoordinatorRoleId(roleId);
+    const primaryRoleId = getPrimaryRoleId();
+    const isPrimary = !roleId || isPrimaryRoleId(roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const partIndex = payload?.part_index ?? 0;
 
-    const streamKey = isCoordinator ? 'coordinator' : instanceId;
+    const streamKey = isPrimary ? 'primary' : instanceId;
     finalizeThinking(streamKey, partIndex, {
         runId,
-        roleId: isCoordinator ? coordinatorRoleId : roleId,
+        roleId: isPrimary ? primaryRoleId : roleId,
     });
 }
 
 export function handleModelStepFinished(instanceId) {
     const roleId = state.instanceRoleMap?.[instanceId] || '';
-    const isCoordinator = !instanceId || (!roleId && instanceId === 'coordinator') || isCoordinatorRoleId(roleId);
-    const key = isCoordinator ? 'coordinator' : instanceId;
-    finalizeStream(key, isCoordinator ? getCoordinatorRoleId() : roleId);
-    if (instanceId && !isCoordinator) {
+    const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isPrimaryRoleId(roleId);
+    const key = isPrimary ? 'primary' : instanceId;
+    finalizeStream(key, isPrimary ? getPrimaryRoleId() : roleId);
+    if (instanceId && !isPrimary) {
         markSubagentStatus(instanceId, 'completed');
     }
     if (!instanceId || state.activeAgentInstanceId === instanceId) {
@@ -212,7 +214,7 @@ export function handleRunCompleted() {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
-    finalizeStream('coordinator');
+    finalizeStream('primary', getPrimaryRoleId());
 }
 
 export function handleRunStopped(payload) {
@@ -241,7 +243,7 @@ export function handleRunStopped(payload) {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
-    finalizeStream('coordinator');
+    finalizeStream('primary', getPrimaryRoleId());
 }
 
 export function handleRunFailed(payload) {

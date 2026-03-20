@@ -10,6 +10,7 @@ from agent_teams.sessions.runs.enums import (
     InjectionSource,
     RunEventType,
 )
+from agent_teams.sessions.session_models import SessionMode
 
 
 class RunThinkingConfig(BaseModel):
@@ -17,6 +18,18 @@ class RunThinkingConfig(BaseModel):
 
     enabled: bool = False
     effort: Literal["minimal", "low", "medium", "high"] | None = None
+
+
+class RunTopologySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_mode: SessionMode
+    main_agent_role_id: str = Field(min_length=1)
+    coordinator_role_id: str = Field(min_length=1)
+    main_agent_prompt: str = Field(min_length=1)
+    orchestration_preset_id: str | None = None
+    orchestration_prompt: str = ""
+    allowed_role_ids: tuple[str, ...] = ()
 
 
 class IntentInput(BaseModel):
@@ -27,6 +40,8 @@ class IntentInput(BaseModel):
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    session_mode: SessionMode = SessionMode.NORMAL
+    topology: RunTopologySnapshot | None = None
 
 
 class RunResult(BaseModel):

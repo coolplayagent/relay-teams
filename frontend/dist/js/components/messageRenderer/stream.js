@@ -2,7 +2,7 @@
  * components/messageRenderer/stream.js
  * Streaming message mutation helpers plus a durable in-browser overlay cache.
  */
-import { isCoordinatorRoleId } from '../../core/state.js';
+import { isPrimaryRoleId } from '../../core/state.js';
 import {
     applyToolReturn,
     appendThinkingText,
@@ -18,7 +18,7 @@ import {
 
 const streamState = new Map();
 const overlayState = new Map();
-const COORDINATOR_KEY = 'coordinator';
+const PRIMARY_KEY = 'primary';
 
 export function getOrCreateStreamBlock(
     container,
@@ -139,10 +139,10 @@ export function getRunStreamOverlaySnapshot(runId) {
     if (!runOverlay) {
         return { coordinator: null, byInstance: {} };
     }
-    const coordinator = cloneOverlayEntry(runOverlay.entries.get(COORDINATOR_KEY) || null);
+    const coordinator = cloneOverlayEntry(runOverlay.entries.get(PRIMARY_KEY) || null);
     const byInstance = {};
     runOverlay.entries.forEach((entry, key) => {
-        if (key === COORDINATOR_KEY) return;
+        if (key === PRIMARY_KEY) return;
         if (!entry.instanceId) return;
         byInstance[entry.instanceId] = cloneOverlayEntry(entry);
     });
@@ -453,10 +453,11 @@ function ensureApprovalState(toolBlock) {
 
 function resolveStreamKey(instanceId, roleId) {
     const safeInstanceId = String(instanceId || '').trim();
+    if (isPrimaryRoleId(roleId) || !roleId || safeInstanceId === PRIMARY_KEY || safeInstanceId === 'coordinator') {
+        return PRIMARY_KEY;
+    }
     if (safeInstanceId) return safeInstanceId;
-    return isCoordinatorRoleId(roleId) || !roleId
-        ? COORDINATOR_KEY
-        : `role:${String(roleId || '').trim()}`;
+    return `role:${String(roleId || '').trim()}`;
 }
 
 function endActiveText(st) {

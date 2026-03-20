@@ -16,6 +16,11 @@ from agent_teams.roles.role_models import (
     RoleValidationResult,
 )
 from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
+from agent_teams.roles.role_registry import (
+    COORDINATOR_REQUIRED_TOOLS,
+    is_coordinator_role_definition,
+    is_reserved_system_role_definition,
+)
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.roles.memory_models import default_memory_profile
@@ -92,6 +97,12 @@ class RoleSettingsService:
         source_role_id = normalized.source_role_id or role_id
         source_record = self._find_role_record_optional(source_role_id)
         source_path = None if source_record is None else source_record[0]
+        if source_path is not None:
+            source_definition = self._loader.load_one(source_path)
+            self._validate_reserved_role_mutation(
+                source_definition=source_definition,
+                draft=normalized,
+            )
         validated = self.validate_role_document(normalized).role
         target_path = self._roles_dir / f"{normalized.role_id}.md"
         if source_record is None and normalized.source_role_id:
@@ -216,6 +227,34 @@ class RoleSettingsService:
         self._get_tool_registry().validate_known(definition.tools)
         self._get_mcp_registry().validate_known(definition.mcp_servers)
         self._get_skill_registry().validate_known(definition.skills)
+        if is_reserved_system_role_definition(definition):
+            missing_tools = COORDINATOR_REQUIRED_TOOLS.difference(definition.tools)
+            if missing_tools and is_coordinator_role_definition(definition):
+                missing = ", ".join(sorted(missing_tools))
+                raise ValueError(
+                    f"Coordinator role must keep required tools: {missing}"
+                )
+
+    def _validate_reserved_role_mutation(
+        self,
+        *,
+        source_definition: RoleDefinition,
+        draft: RoleDocumentDraft,
+    ) -> None:
+        if not is_reserved_system_role_definition(source_definition):
+            return
+        locked_pairs = (
+            ("role_id", source_definition.role_id, draft.role_id),
+            ("name", source_definition.name, draft.name),
+            ("description", source_definition.description, draft.description),
+            ("version", source_definition.version, draft.version),
+            ("system_prompt", source_definition.system_prompt, draft.system_prompt),
+        )
+        for field_name, source_value, next_value in locked_pairs:
+            if str(source_value) != str(next_value):
+                raise ValueError(
+                    f"{field_name} is locked for reserved system role {source_definition.role_id}"
+                )
 
     def _find_role_record(self, role_id: str) -> tuple[Path, RoleConfigSource]:
         role_record = self._find_role_record_optional(role_id)

@@ -4,6 +4,7 @@
  */
 import { sendUserPrompt, stopRun } from './api.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
+import { refreshSessionTopologyControls } from '../app/prompt.js';
 import { state } from './state.js';
 import { els } from '../utils/dom.js';
 import { markBackendOnline, refreshBackendStatus } from '../utils/backendStatus.js';
@@ -124,6 +125,7 @@ export function endStream() {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
+    refreshSessionTopologyControls();
     refreshVisibleContextIndicators({ immediate: true });
 }
 
@@ -147,6 +149,7 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
             els.stopBtn.style.display = 'inline-flex';
             els.stopBtn.disabled = false;
         }
+        refreshSessionTopologyControls();
     }
 
     if (state.activeEventSource) {

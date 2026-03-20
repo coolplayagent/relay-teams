@@ -16,9 +16,11 @@ const { state } = await import("./mockState.mjs");
 
 state.currentSessionId = "session-1";
 state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
 
 await refreshSubagentRail("session-1");
 rememberLiveSubagent("coord-2", "Coordinator");
+rememberLiveSubagent("main-2", "MainAgent");
 rememberLiveSubagent("writer-2", "writer");
 
 console.log(JSON.stringify({
@@ -68,6 +70,7 @@ console.log(JSON.stringify({
     open_agent_panel_calls = cast(list[object], payload["openAgentPanelCalls"])
 
     assert "Coordinator" not in selector_html
+    assert "MainAgent" not in selector_html
     assert "writer" in selector_html
     assert meta_html == ""
     assert payload["metaHidden"] is True
@@ -107,6 +110,13 @@ export async function fetchSessionAgents() {
             updated_at: "2026-03-13T00:00:00Z",
         },
         {
+            instance_id: "main-1",
+            role_id: "MainAgent",
+            status: "running",
+            created_at: "2026-03-13T00:00:30Z",
+            updated_at: "2026-03-13T00:00:30Z",
+        },
+        {
             instance_id: "writer-1",
             role_id: "writer",
             status: "running",
@@ -128,6 +138,14 @@ export async function fetchSessionTasks() {
             role_id: "Coordinator",
             status: "completed",
             instance_id: "coord-1",
+            run_id: "run-1",
+        },
+        {
+            task_id: "task-main",
+            title: "Handle task",
+            role_id: "MainAgent",
+            status: "completed",
+            instance_id: "main-1",
             run_id: "run-1",
         },
         {
@@ -156,13 +174,18 @@ export const state = {
     currentRecoverySnapshot: null,
     activeAgentRoleId: null,
     coordinatorRoleId: null,
+    mainAgentRoleId: null,
     rightRailExpanded: true,
 };
 
-export function isCoordinatorRoleId(roleId) {
+export function isReservedSystemRoleId(roleId) {
     const safeRoleId = String(roleId || "").trim();
     const coordinatorRoleId = String(state.coordinatorRoleId || "").trim();
-    return !!safeRoleId && !!coordinatorRoleId && safeRoleId === coordinatorRoleId;
+    const mainAgentRoleId = String(state.mainAgentRoleId || "").trim();
+    return !!safeRoleId && (
+        (!!coordinatorRoleId && safeRoleId === coordinatorRoleId)
+        || (!!mainAgentRoleId && safeRoleId === mainAgentRoleId)
+    );
 }
 """.strip(),
         encoding="utf-8",

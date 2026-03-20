@@ -37,7 +37,10 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.runs.run_models import RunThinkingConfig
+from agent_teams.sessions.runs.run_models import (
+    RunThinkingConfig,
+    RunTopologySnapshot,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -423,6 +426,14 @@ class TaskExecutionService(BaseModel):
         except KeyError:
             return RunThinkingConfig()
 
+    def _topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
+        if self.run_intent_repo is None:
+            return None
+        try:
+            return self.run_intent_repo.get(run_id).topology
+        except KeyError:
+            return None
+
     def _role_with_memory(
         self,
         *,
@@ -450,6 +461,7 @@ class TaskExecutionService(BaseModel):
             PromptBuildInput(
                 role=role,
                 task=task,
+                topology=self._topology_for_run(task.trace_id),
                 shared_state_snapshot=shared_state_snapshot,
                 working_directory=working_directory,
             )

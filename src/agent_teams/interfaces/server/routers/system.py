@@ -23,8 +23,12 @@ from agent_teams.interfaces.server.deps import (
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
+    get_orchestration_settings_service,
     get_proxy_config_service,
     get_skills_config_reload_service,
+)
+from agent_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
 )
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
@@ -260,6 +264,12 @@ class NotificationConfigRequest(BaseModel):
     config: dict[str, JsonValue]
 
 
+class OrchestrationConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: dict[str, JsonValue]
+
+
 @router.put("/configs/notifications")
 def save_notification_config(
     req: NotificationConfigRequest,
@@ -270,6 +280,25 @@ def save_notification_config(
         return {"status": "ok"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/orchestration")
+def get_orchestration_config(
+    service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
+) -> dict[str, JsonValue]:
+    return service.get_orchestration_config()
+
+
+@router.put("/configs/orchestration")
+def save_orchestration_config(
+    req: OrchestrationConfigRequest,
+    service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
+) -> dict[str, str]:
+    try:
+        service.save_orchestration_config(req.config)
+        return {"status": "ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/model:reload")

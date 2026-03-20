@@ -17,6 +17,8 @@ from agent_teams.agents.execution.user_prompts import (
 )
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.sessions.runs.run_models import RunTopologySnapshot
+from agent_teams.sessions.session_models import SessionMode
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -109,6 +111,15 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
             RuntimePromptBuildInput(
                 role=_role("coordinator_agent"),
                 task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    coordinator_role_id="coordinator_agent",
+                    main_agent_prompt="Handle it directly.",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
                 shared_state_snapshot=(("status", "ready"),),
             ),
             role_registry=_coordinator_registry(),
@@ -117,11 +128,15 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     )
 
     assert prompt.startswith("You are a focused agent.")
-    assert "## Role Usage" in prompt
+    assert "## Runtime Rules" in prompt
+    assert "## Orchestration Rules" in prompt
+    assert "## Orchestration Prompt" in prompt
     assert "## Available Roles" in prompt
     assert "### writer_agent" in prompt
-    assert "Do not implement it directly." in prompt
-    assert "rely on each tool description for exact usage and constraints." in prompt
+    assert (
+        "Delegate only when another role is a better fit than continuing yourself."
+        in prompt
+    )
     assert (
         "Create tasks as durable contracts with concrete outcomes and constraints."
         in prompt
@@ -191,6 +206,15 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
             RuntimePromptBuildInput(
                 role=_role("coordinator_agent"),
                 task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    coordinator_role_id="coordinator_agent",
+                    main_agent_prompt="Handle it directly.",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
                 shared_state_snapshot=(),
             ),
             role_registry=_coordinator_registry(),
@@ -199,6 +223,34 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     )
 
     assert "### writer_agent" in prompt
-    assert "## Role Usage" in prompt
-    assert "Do not implement it directly." in prompt
+    assert "## Orchestration Rules" in prompt
+    assert "Orchestration Prompt" in prompt
     assert "Choose roles by their Description, Tools, MCP Tools, and Skills." in prompt
+
+
+def test_runtime_system_prompt_for_main_agent_includes_normal_mode_prompt() -> None:
+    prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=_role("MainAgent"),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.NORMAL,
+                    main_agent_role_id="MainAgent",
+                    coordinator_role_id="Coordinator",
+                    main_agent_prompt="Solve the task directly and avoid delegation unless explicitly switched.",
+                    orchestration_preset_id=None,
+                    orchestration_prompt="",
+                    allowed_role_ids=(),
+                ),
+                shared_state_snapshot=(),
+            )
+        )
+    )
+
+    assert "## Runtime Rules" in prompt
+    assert "## Normal Mode" in prompt
+    assert (
+        "Solve the task directly and avoid delegation unless explicitly switched."
+        in prompt
+    )
+    assert "## Available Roles" not in prompt

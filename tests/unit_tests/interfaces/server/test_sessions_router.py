@@ -6,12 +6,13 @@ from fastapi.testclient import TestClient
 from agent_teams.interfaces.server.deps import get_session_service
 from agent_teams.interfaces.server.routers import sessions
 from agent_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
 
 class _FakeSessionService:
     def __init__(self) -> None:
         self.updated_calls: list[tuple[str, dict[str, str]]] = []
+        self.topology_update_calls: list[tuple[str, str, str | None]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
         self.reflection_update_calls: list[tuple[str, str, str]] = []
         self.reflection_delete_calls: list[tuple[str, str]] = []
@@ -39,6 +40,23 @@ class _FakeSessionService:
 
     def delete_session(self, session_id: str) -> None:  # pragma: no cover
         raise AssertionError(f"not used: {session_id}")
+
+    def update_session_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        orchestration_preset_id: str | None,
+    ) -> SessionRecord:
+        self.topology_update_calls.append(
+            (session_id, session_mode.value, orchestration_preset_id)
+        )
+        return SessionRecord(
+            session_id=session_id,
+            workspace_id="workspace-1",
+            session_mode=session_mode,
+            orchestration_preset_id=orchestration_preset_id,
+        )
 
     def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
         return SessionTokenUsage(
@@ -179,6 +197,27 @@ def test_update_session_route_returns_not_found_for_missing_session() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Session not found"}
+
+
+def test_update_session_topology_route_returns_updated_session() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1/topology",
+        json={
+            "session_mode": "orchestration",
+            "orchestration_preset_id": "default",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_mode"] == "orchestration"
+    assert payload["orchestration_preset_id"] == "default"
+    assert fake_service.topology_update_calls == [
+        ("session-1", "orchestration", "default")
+    ]
 
 
 def test_get_session_token_usage_route_returns_extended_totals() -> None:

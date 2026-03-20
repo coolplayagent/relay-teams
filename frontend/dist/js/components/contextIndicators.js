@@ -3,7 +3,7 @@
  * Provider-reported token usage badges for coordinator and subagent composers.
  */
 import { fetchModelProfiles, fetchRunTokenUsage } from '../core/api.js';
-import { state, getCoordinatorRoleId } from '../core/state.js';
+import { state, getPrimaryRoleId } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { currentRounds } from './rounds.js';
 import {
@@ -69,7 +69,7 @@ async function refreshCoordinatorContextPreview() {
         return;
     }
     const runId = resolveUsageRunId();
-    const roleId = getCoordinatorRoleId();
+    const roleId = getPrimaryRoleId();
     if (!runId || !roleId) {
         renderIdle(indicator);
         return;

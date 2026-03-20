@@ -6,6 +6,9 @@ from fastapi import Request
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from agent_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.container import ServerContainer
@@ -59,6 +62,12 @@ def get_model_config_service(request: Request) -> ModelConfigService:
 
 def get_notification_settings_service(request: Request) -> NotificationSettingsService:
     return get_container(request).notification_settings_service
+
+
+def get_orchestration_settings_service(
+    request: Request,
+) -> OrchestrationSettingsService:
+    return get_container(request).orchestration_settings_service
 
 
 def get_mcp_config_reload_service(request: Request) -> McpConfigReloadService:

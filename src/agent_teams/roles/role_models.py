@@ -72,6 +72,7 @@ class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     coordinator_role_id: str = Field(min_length=1)
+    main_agent_role_id: str = Field(min_length=1)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()

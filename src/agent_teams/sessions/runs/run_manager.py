@@ -16,6 +16,9 @@ from agent_teams.notifications import (
     NotificationService,
     NotificationType,
 )
+from agent_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -67,6 +70,7 @@ class RunManager:
         run_intent_repo: RunIntentRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
         notification_service: NotificationService | None = None,
+        orchestration_settings_service: OrchestrationSettingsService | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._injection_manager: RunInjectionManager = injection_manager
@@ -86,6 +90,7 @@ class RunManager:
         self._run_intent_repo: RunIntentRepository | None = run_intent_repo
         self._run_state_repo: RunStateRepository | None = run_state_repo
         self._notification_service: NotificationService | None = notification_service
+        self._orchestration_settings_service = orchestration_settings_service
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -93,6 +98,18 @@ class RunManager:
     def _ensure_session(self, session_id: str) -> str:
         _ = self._session_repo.get(session_id)
         return session_id
+
+    def _prepare_intent(self, intent: IntentInput) -> IntentInput:
+        session = self._session_repo.get(intent.session_id)
+        if self._orchestration_settings_service is None:
+            return intent.model_copy(update={"session_mode": session.session_mode})
+        topology = self._orchestration_settings_service.resolve_run_topology(session)
+        return intent.model_copy(
+            update={
+                "session_mode": session.session_mode,
+                "topology": topology,
+            }
+        )
 
     def _runtime_for_run(self, run_id: str) -> RunRuntimeRecord | None:
         if self._run_runtime_repo is not None:
@@ -124,7 +141,9 @@ class RunManager:
     async def run_intent(self, intent: IntentInput) -> RunResult:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
+        intent = self._prepare_intent(intent)
         self._run_control_manager.assert_session_allows_main_input(session_id)
+        _ = self._session_repo.mark_started(session_id)
         run_id = new_trace_id().value
         if self._run_runtime_repo is not None:
             self._run_runtime_repo.ensure(
@@ -191,7 +210,9 @@ class RunManager:
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
+        intent = self._prepare_intent(intent)
         self._run_control_manager.assert_session_allows_main_input(session_id)
+        _ = self._session_repo.mark_started(session_id)
 
         existing = self._active_recoverable_run(session_id)
         if existing is not None:
@@ -912,9 +933,7 @@ class RunManager:
                 session_id=session_id,
             )
             if not instance_id:
-                raise KeyError(
-                    f"No coordinator instance found for session {session_id}"
-                )
+                raise KeyError(f"No root agent instance found for session {session_id}")
             record = self._require_agent_repo().get_instance(instance_id)
             self._require_message_repo().append(
                 session_id=session_id,
@@ -949,7 +968,7 @@ class RunManager:
                     logger,
                     logging.INFO,
                     event="run.followup.attached",
-                    message="Follow-up appended to coordinator conversation",
+                    message="Follow-up appended to root agent conversation",
                     payload={
                         "enqueue": enqueue,
                         "length": len(content),

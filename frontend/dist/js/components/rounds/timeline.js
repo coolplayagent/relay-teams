@@ -3,7 +3,7 @@
  * Session timeline rendering, scroll-sync, and paging orchestration.
  */
 import { els } from '../../utils/dom.js';
-import { isCoordinatorRoleId, getCoordinatorRoleId, state } from '../../core/state.js';
+import { getPrimaryRoleId, getPrimaryRoleLabel, isPrimaryRoleId, state } from '../../core/state.js';
 import { fetchRunTokenUsage } from '../../core/api.js';
 import { setRoundPendingApprovals } from '../agentPanel.js';
 import {
@@ -100,9 +100,10 @@ export function appendRoundUserMessage(runId, text) {
     const empty = section.querySelector('.panel-empty');
     if (empty) empty.remove();
 
-    const coordinatorRoleId = getCoordinatorRoleId();
-    getOrCreateStreamBlock(section, 'coordinator', coordinatorRoleId, 'Coordinator', safeRunId);
-    appendStreamChunk('coordinator', '', safeRunId, coordinatorRoleId, 'Coordinator');
+    const primaryRoleId = getPrimaryRoleId();
+    const primaryRoleLabel = getPrimaryRoleLabel();
+    getOrCreateStreamBlock(section, 'primary', primaryRoleId, primaryRoleLabel, safeRunId);
+    appendStreamChunk('primary', '', safeRunId, primaryRoleId, primaryRoleLabel);
 
     els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
 }
@@ -281,7 +282,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
 
         const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
             const roleId = item?.role_id || '';
-            return roleId === '' || isCoordinatorRoleId(roleId);
+            return roleId === '' || isPrimaryRoleId(roleId);
         });
         const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
 
@@ -300,7 +301,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         } else if (!round.has_user_messages) {
             const empty = document.createElement('div');
             empty.className = 'panel-empty';
-            empty.textContent = 'No coordinator messages in this round.';
+            empty.textContent = `No ${getPrimaryRoleLabel().toLowerCase()} messages in this round.`;
             section.appendChild(empty);
         }
 

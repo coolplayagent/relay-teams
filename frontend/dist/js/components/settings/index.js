@@ -8,6 +8,10 @@ import {
     loadNotificationSettingsPanel,
 } from './notifications.js';
 import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from './environmentVariables.js';
+import {
+    bindOrchestrationSettingsHandlers,
+    loadOrchestrationSettingsPanel,
+} from './orchestrationSettings.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
@@ -32,6 +36,10 @@ const TAB_METADATA = {
     roles: {
         title: 'Roles',
         description: 'Edit role metadata, allowed tools, memory profile, and prompt text.',
+    },
+    orchestration: {
+        title: 'Orchestration',
+        description: 'Configure 普通模式 main-agent prompt and 编排模式 preset routing.',
     },
     notifications: {
         title: 'Notifications',
@@ -76,6 +84,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="roles">
                         <span class="settings-tab-label">Roles</span>
+                    </button>
+                    <button class="settings-tab" data-tab="orchestration">
+                        <span class="settings-tab-label">Orchestration</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label">Notifications</span>
@@ -298,6 +309,46 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="orchestration-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack orchestration-settings-stack">
+                                <section class="orchestration-settings-block">
+                                    <div class="settings-section-header">
+                                        <div class="settings-section-copy">
+                                            <h3>Main Agent</h3>
+                                            <p>普通模式 uses a fixed main role. Only the prompt is edited here.</p>
+                                        </div>
+                                    </div>
+                                    <div id="orchestration-main-agent-card"></div>
+                                </section>
+                                <section class="orchestration-settings-block">
+                                    <div class="settings-section-header orchestration-section-header">
+                                        <div class="settings-section-copy">
+                                            <h3>Orchestration Presets</h3>
+                                            <p>编排模式 attaches the selected preset to Coordinator and limits which roles may be delegated.</p>
+                                        </div>
+                                        <button class="secondary-btn section-action-btn" id="add-orchestration-preset-btn" type="button">Add Preset</button>
+                                    </div>
+                                    <div class="orchestration-default-row">
+                                        <div class="form-group">
+                                            <label for="orchestration-default-preset-select">Default Preset</label>
+                                            <select id="orchestration-default-preset-select"></select>
+                                        </div>
+                                    </div>
+                                    <div class="orchestration-layout">
+                                        <div class="orchestration-preset-list" id="orchestration-preset-list"></div>
+                                        <div class="orchestration-preset-editor-shell">
+                                            <div class="orchestration-preset-toolbar">
+                                                <button class="secondary-btn section-action-btn" id="delete-orchestration-preset-btn" type="button">Delete Preset</button>
+                                            </div>
+                                            <div id="orchestration-preset-editor"></div>
+                                        </div>
+                                    </div>
+                                </section>
+                                <div class="role-editor-status" id="orchestration-editor-status" style="display:none;"></div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="notifications-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack notifications-panel-body">
@@ -476,6 +527,7 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-orchestration-btn" type="button" style="display:none;">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;">Cancel</button>
@@ -512,6 +564,7 @@ function setupEventListeners() {
     });
 
     bindModelProfileHandlers();
+    bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
@@ -535,6 +588,7 @@ async function showPanel(tab) {
     document.getElementById('settings-panel-description').textContent = meta.description;
     renderPanelActions(tab);
     bindModelProfileHandlers();
+    bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindProxySettingsHandlers();
@@ -544,6 +598,8 @@ async function showPanel(tab) {
         await loadModelProfilesPanel();
     } else if (tab === 'roles') {
         await loadRoleSettingsPanel();
+    } else if (tab === 'orchestration') {
+        await loadOrchestrationSettingsPanel();
     } else if (tab === 'environment') {
         await loadEnvironmentVariablesPanel();
     } else if (tab === 'notifications') {
@@ -573,6 +629,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'roles') {
         document.getElementById('add-role-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'orchestration') {
+        document.getElementById('save-orchestration-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'environment') {

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import get_session_service
 from agent_teams.sessions import SessionService
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
@@ -22,6 +22,13 @@ class UpdateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata: dict[str, str]
+
+
+class UpdateSessionTopologyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_mode: SessionMode
+    orchestration_preset_id: str | None = None
 
 
 class UpdateAgentReflectionRequest(BaseModel):
@@ -71,6 +78,26 @@ def update_session(
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.patch("/{session_id}/topology", response_model=SessionRecord)
+def update_session_topology(
+    session_id: str,
+    req: UpdateSessionTopologyRequest,
+    service: SessionService = Depends(get_session_service),
+) -> SessionRecord:
+    try:
+        return service.update_session_topology(
+            session_id,
+            session_mode=req.session_mode,
+            orchestration_preset_id=req.orchestration_preset_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.delete("/{session_id}")

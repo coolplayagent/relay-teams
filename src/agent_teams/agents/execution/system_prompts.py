@@ -10,19 +10,29 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.agents.tasks.models import TaskEnvelope
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry, is_coordinator_role_definition
+from agent_teams.roles.role_registry import (
+    RoleRegistry,
+    is_coordinator_role_definition,
+    is_main_agent_role_definition,
+)
 
-ROLE_USAGE_PROMPT = (
-    "## Role Usage\n"
-    "- Orchestrate work. Do not implement it directly.\n"
-    "- Use orchestration tools directly and rely on each tool description for exact usage and constraints.\n"
-    "- Delegate only when another role is a better fit than answering directly.\n"
+COMMON_MODE_PROMPT = (
+    "## Runtime Rules\n"
+    "- Understand the user's goal before you act.\n"
+    "- Keep instructions concrete and restate the subject instead of relying on vague references.\n"
+    "- Use the available tools deliberately and respect each tool's contract.\n"
+    "- Finish with a concrete outcome instead of stopping at partial analysis."
+)
+ORCHESTRATION_USAGE_PROMPT = (
+    "## Orchestration Rules\n"
+    "- Orchestrate delegated work and avoid implementing the task directly.\n"
+    "- Delegate only when another role is a better fit than continuing yourself.\n"
     "- Choose roles by their Description, Tools, MCP Tools, and Skills.\n"
     "- Create tasks as durable contracts with concrete outcomes and constraints.\n"
     "- Choose the executing role in `dispatch_task`.\n"
     "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
-    "- Avoid vague references like this, that, it, or the task without restating the subject.\n"
     "- The roles listed below are dispatch targets, not your own capabilities."
 )
 SKILL_USAGE_PROMPT = (
@@ -49,6 +59,7 @@ class RuntimePromptBuildInput(BaseModel):
 
     role: RoleDefinition
     task: TaskEnvelope | None = None
+    topology: RunTopologySnapshot | None = None
     shared_state_snapshot: tuple[tuple[str, str], ...]
     working_directory: Path | None = None
 
@@ -127,14 +138,18 @@ async def build_runtime_system_prompt(
     role_registry: RoleRegistry | None = None,
     mcp_registry: McpRegistry | None = None,
 ) -> str:
-    prompt = data.role.system_prompt
+    prompt_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
+    topology = data.topology
 
     # Include environment information for all roles
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
-    prompt = f"{prompt}\n\n{env_prompt}"
+    prompt_sections.append(env_prompt)
 
+    if is_main_agent_role_definition(data.role) and topology is not None:
+        prompt_sections.append("## Normal Mode\n" + topology.main_agent_prompt)
+        return "\n\n".join(prompt_sections)
     if not is_coordinator_role_definition(data.role):
-        return prompt
+        return "\n\n".join(prompt_sections)
     if role_registry is None or mcp_registry is None:
         raise RuntimeError(
             "Coordinator runtime prompt generation requires role_registry and mcp_registry"
@@ -142,22 +157,32 @@ async def build_runtime_system_prompt(
     roles_prompt = await build_available_roles_prompt(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
+        allowed_role_ids=topology.allowed_role_ids if topology is not None else (),
     )
-    if not roles_prompt:
-        return prompt
-    return f"{prompt}\n\n{roles_prompt}"
+    prompt_sections.append(ORCHESTRATION_USAGE_PROMPT)
+    if topology is not None and topology.orchestration_prompt.strip():
+        prompt_sections.append(
+            "## Orchestration Prompt\n" + topology.orchestration_prompt.strip()
+        )
+    if roles_prompt:
+        prompt_sections.append(roles_prompt)
+    return "\n\n".join(prompt_sections)
 
 
 async def build_available_roles_prompt(
     *,
     role_registry: RoleRegistry,
     mcp_registry: McpRegistry,
+    allowed_role_ids: tuple[str, ...] = (),
 ) -> str:
+    allowed_role_id_set = {role_id for role_id in allowed_role_ids if role_id}
     roles = sorted(
         (
             role
             for role in role_registry.list_roles()
             if not is_coordinator_role_definition(role)
+            and not is_main_agent_role_definition(role)
+            and (not allowed_role_id_set or role.role_id in allowed_role_id_set)
         ),
         key=lambda role: (role.name, role.role_id),
     )
@@ -170,13 +195,7 @@ async def build_available_roles_prompt(
             for role in roles
         ]
     )
-    return (
-        ROLE_USAGE_PROMPT
-        + "\n\n"
-        + AVAILABLE_ROLES_HEADING
-        + "\n\n"
-        + "\n\n".join(role_blocks)
-    )
+    return AVAILABLE_ROLES_HEADING + "\n\n" + "\n\n".join(role_blocks)
 
 
 def build_skill_instructions_prompt(

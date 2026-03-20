@@ -556,9 +556,12 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     assert result == "ok"
     assert provider.system_prompts
     assert "Coordinate tasks." in provider.system_prompts[0]
-    assert "## Role Usage" in provider.system_prompts[0]
+    assert "## Orchestration Rules" in provider.system_prompts[0]
     assert "## Available Roles" in provider.system_prompts[0]
-    assert "Do not implement it directly." in provider.system_prompts[0]
+    assert (
+        "Delegate only when another role is a better fit than continuing yourself."
+        in provider.system_prompts[0]
+    )
     assert (
         "The roles listed below are dispatch targets, not your own capabilities."
         in provider.system_prompts[0]

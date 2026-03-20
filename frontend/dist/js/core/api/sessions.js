@@ -36,6 +36,18 @@ export async function updateSession(sessionId, metadata) {
     );
 }
 
+export async function updateSessionTopology(sessionId, payload) {
+    return requestJson(
+        `/api/sessions/${sessionId}/topology`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to update session topology',
+    );
+}
+
 export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null } = {}) {
     const params = new URLSearchParams();
     params.set('limit', String(limit));

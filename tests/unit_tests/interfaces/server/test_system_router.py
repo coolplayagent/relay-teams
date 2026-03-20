@@ -12,6 +12,7 @@ from agent_teams.interfaces.server.deps import (
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
+    get_orchestration_settings_service,
     get_proxy_config_service,
     get_skills_config_reload_service,
 )
@@ -26,6 +27,7 @@ from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
 class _FakeSystemService:
     def __init__(self) -> None:
         self.saved_notification_config: dict[str, object] | None = None
+        self.saved_orchestration_config: dict[str, object] | None = None
         self.saved_model_profile: tuple[str, dict[str, object], str | None] | None = (
             None
         )
@@ -107,6 +109,24 @@ class _FakeSystemService:
 
     def save_notification_config(self, config: dict[str, object]) -> None:
         self.saved_notification_config = config
+
+    def get_orchestration_config(self) -> dict[str, object]:
+        return {
+            "main_agent_prompt": "Handle the task directly unless orchestration is enabled.",
+            "default_orchestration_preset_id": "default",
+            "presets": [
+                {
+                    "preset_id": "default",
+                    "name": "Default",
+                    "description": "General delegation flow.",
+                    "role_ids": ["writer", "reviewer"],
+                    "orchestration_prompt": "Delegate by capability and keep the final answer concise.",
+                }
+            ],
+        }
+
+    def save_orchestration_config(self, config: dict[str, object]) -> None:
+        self.saved_orchestration_config = config
 
     def get_provider_models(
         self,
@@ -206,6 +226,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_config_status_service] = lambda: fake_service
     app.dependency_overrides[get_model_config_service] = lambda: fake_service
     app.dependency_overrides[get_notification_settings_service] = lambda: fake_service
+    app.dependency_overrides[get_orchestration_settings_service] = lambda: fake_service
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
@@ -270,6 +291,48 @@ def test_save_notification_config() -> None:
     run_completed = service.saved_notification_config["run_completed"]
     assert isinstance(run_completed, dict)
     assert run_completed["enabled"] is True
+
+
+def test_get_orchestration_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/orchestration")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default_orchestration_preset_id"] == "default"
+    assert payload["presets"][0]["role_ids"] == ["writer", "reviewer"]
+
+
+def test_save_orchestration_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/orchestration",
+        json={
+            "config": {
+                "main_agent_prompt": "Normal mode prompt.",
+                "default_orchestration_preset_id": "shipping",
+                "presets": [
+                    {
+                        "preset_id": "shipping",
+                        "name": "Shipping",
+                        "description": "Release work.",
+                        "role_ids": ["writer"],
+                        "orchestration_prompt": "Use writer for outward-facing updates.",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_orchestration_config is not None
+    assert service.saved_orchestration_config["default_orchestration_preset_id"] == (
+        "shipping"
+    )
 
 
 def test_get_provider_models() -> None:

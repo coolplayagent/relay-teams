@@ -3,7 +3,7 @@
  * Session-level subagent rail state, selector, and visibility controls.
  */
 import { fetchSessionAgents, fetchSessionTasks } from '../core/api.js';
-import { isCoordinatorRoleId, state } from '../core/state.js';
+import { isReservedSystemRoleId, state } from '../core/state.js';
 import { openAgentPanel } from './agentPanel.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
@@ -61,7 +61,7 @@ export async function refreshSubagentRail(
 export function rememberLiveSubagent(instanceId, roleId) {
     const safeInstanceId = String(instanceId || '').trim();
     const safeRoleId = String(roleId || '').trim();
-    if (!safeInstanceId || !safeRoleId || isCoordinatorRoleId(safeRoleId)) return;
+    if (!safeInstanceId || !safeRoleId || isReservedSystemRoleId(safeRoleId)) return;
 
     const nowIso = new Date().toISOString();
     const nextAgents = [...(state.sessionAgents || [])];
@@ -134,7 +134,7 @@ export function focusSubagent(instanceId, roleId) {
 
 export function syncSelectedRoleByInstance(instanceId, roleId) {
     const safeRoleId = String(roleId || '').trim();
-    if (!safeRoleId || isCoordinatorRoleId(safeRoleId)) return;
+    if (!safeRoleId || isReservedSystemRoleId(safeRoleId)) return;
     state.selectedRoleId = safeRoleId;
     if (els.subagentRoleSelect && els.subagentRoleSelect.value !== safeRoleId) {
         els.subagentRoleSelect.value = safeRoleId;
@@ -260,7 +260,7 @@ function normalizeSessionAgents(payload) {
         if (!item || typeof item !== 'object') return;
         const roleId = String(item.role_id || '').trim();
         const instanceId = String(item.instance_id || '').trim();
-        if (!roleId || !instanceId || isCoordinatorRoleId(roleId)) return;
+        if (!roleId || !instanceId || isReservedSystemRoleId(roleId)) return;
         const record = {
             instance_id: instanceId,
             role_id: roleId,
@@ -288,7 +288,7 @@ function normalizeSessionTasks(payload) {
         .filter(item => {
             if (!item || typeof item !== 'object') return false;
             const assignedRoleId = String(item.assigned_role_id || item.role_id || '').trim();
-            return !assignedRoleId || !isCoordinatorRoleId(assignedRoleId);
+            return !assignedRoleId || !isReservedSystemRoleId(assignedRoleId);
         })
         .map(item => ({
             task_id: String(item.task_id || ''),

@@ -9,6 +9,10 @@ from agent_teams.builtin import (
     get_builtin_roles_dir,
 )
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
+from agent_teams.agents.orchestration import (
+    OrchestrationSettingsConfigManager,
+    OrchestrationSettingsService,
+)
 from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
 from agent_teams.agents.orchestration.human_gate import GateManager
 from agent_teams.agents.orchestration.task_orchestration_service import (
@@ -102,6 +106,9 @@ class ServerContainer:
         self.notification_config_manager: NotificationConfigManager = (
             NotificationConfigManager(config_dir=config_dir)
         )
+        self.orchestration_settings_config_manager = OrchestrationSettingsConfigManager(
+            config_dir=config_dir
+        )
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
@@ -160,6 +167,13 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.session_repo: SessionRepository = SessionRepository(runtime.paths.db_path)
+        self.orchestration_settings_service: OrchestrationSettingsService = (
+            OrchestrationSettingsService(
+                config_manager=self.orchestration_settings_config_manager,
+                session_repo=self.session_repo,
+                get_role_registry=lambda: self.role_registry,
+            )
+        )
         self.token_usage_repo: TokenUsageRepository = TokenUsageRepository(
             runtime.paths.db_path
         )
@@ -244,6 +258,7 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             run_state_repo=self.run_state_repo,
             notification_service=self.notification_service,
+            orchestration_settings_service=self.orchestration_settings_service,
         )
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
@@ -264,6 +279,7 @@ class ServerContainer:
             role_registry=self.role_registry,
             skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
             get_runtime=lambda: self.runtime,
         )
         self.config_status_service: ConfigStatusService = ConfigStatusService(

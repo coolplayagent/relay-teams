@@ -29,6 +29,10 @@ def get_builtin_notifications_config_path() -> Path:
     return get_builtin_root() / "config" / "notifications.json"
 
 
+def get_builtin_orchestration_config_path() -> Path:
+    return get_builtin_root() / "config" / "orchestration.json"
+
+
 def ensure_app_config_bootstrap(config_dir: Path) -> None:
     resolved_config_dir = config_dir.expanduser().resolve()
     resolved_config_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +51,10 @@ def ensure_app_config_bootstrap(config_dir: Path) -> None:
     copy_builtin_file_if_missing(
         source_path=get_builtin_notifications_config_path(),
         target_path=resolved_config_dir / "notifications.json",
+    )
+    copy_builtin_file_if_missing(
+        source_path=get_builtin_orchestration_config_path(),
+        target_path=resolved_config_dir / "orchestration.json",
     )
 
 

@@ -6,8 +6,13 @@ from pathlib import Path
 from typing import Literal
 
 from agent_teams.sessions.runs.enums import ExecutionMode
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunThinkingConfig,
+    RunTopologySnapshot,
+)
 from agent_teams.persistence.db import open_sqlite
+from agent_teams.sessions.session_models import SessionMode
 
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 
@@ -29,6 +34,8 @@ class RunIntentRepository:
                 yolo           TEXT NOT NULL DEFAULT 'false',
                 thinking_enabled TEXT NOT NULL DEFAULT 'false',
                 thinking_effort TEXT,
+                session_mode TEXT NOT NULL DEFAULT 'normal',
+                topology_json TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL
             )
@@ -60,6 +67,12 @@ class RunIntentRepository:
             self._conn.execute(
                 "ALTER TABLE run_intents ADD COLUMN thinking_effort TEXT"
             )
+        if "session_mode" not in columns:
+            self._conn.execute(
+                "ALTER TABLE run_intents ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
+            )
+        if "topology_json" not in columns:
+            self._conn.execute("ALTER TABLE run_intents ADD COLUMN topology_json TEXT")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
         )
@@ -77,10 +90,12 @@ class RunIntentRepository:
                 yolo,
                 thinking_enabled,
                 thinking_effort,
+                session_mode,
+                topology_json,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
@@ -89,6 +104,8 @@ class RunIntentRepository:
                 yolo=excluded.yolo,
                 thinking_enabled=excluded.thinking_enabled,
                 thinking_effort=excluded.thinking_effort,
+                session_mode=excluded.session_mode,
+                topology_json=excluded.topology_json,
                 updated_at=excluded.updated_at
             """,
             (
@@ -99,6 +116,12 @@ class RunIntentRepository:
                 "true" if intent.yolo else "false",
                 "true" if intent.thinking.enabled else "false",
                 intent.thinking.effort,
+                intent.session_mode.value,
+                (
+                    intent.topology.model_dump_json()
+                    if intent.topology is not None
+                    else None
+                ),
                 now,
                 now,
             ),
@@ -127,7 +150,7 @@ class RunIntentRepository:
     def get(self, run_id: str) -> IntentInput:
         row = self._conn.execute(
             """
-            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort
+            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort, session_mode, topology_json
             FROM run_intents
             WHERE run_id=?
             """,
@@ -144,6 +167,8 @@ class RunIntentRepository:
                 enabled=str(row["thinking_enabled"]).strip().lower() == "true",
                 effort=_coerce_thinking_effort(row["thinking_effort"]),
             ),
+            session_mode=SessionMode(str(row["session_mode"] or "normal")),
+            topology=_coerce_topology(row["topology_json"]),
         )
 
 
@@ -162,3 +187,9 @@ def _coerce_thinking_effort(
     if normalized == "high":
         return "high"
     return None
+
+
+def _coerce_topology(value: object) -> RunTopologySnapshot | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return RunTopologySnapshot.model_validate_json(value)

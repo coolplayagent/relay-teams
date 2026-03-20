@@ -18,12 +18,20 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id   TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
     metadata     TEXT NOT NULL,
+    session_mode TEXT NOT NULL DEFAULT 'normal',
+    orchestration_preset_id TEXT,
+    started_at   TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
 ```
 
 Purpose: session metadata, lifecycle, and bound execution workspace identity.
+
+Notes:
+- `session_mode` is `normal` or `orchestration`.
+- `orchestration_preset_id` stores the session-selected preset for orchestration mode.
+- `started_at` is written when the first run is created and locks further mode switching for that session.
 
 ---
 
@@ -397,9 +405,11 @@ CREATE TABLE IF NOT EXISTS run_intents (
     session_id     TEXT NOT NULL,
     intent         TEXT NOT NULL,
     execution_mode TEXT NOT NULL,
+    session_mode   TEXT NOT NULL DEFAULT 'normal',
     yolo           TEXT NOT NULL DEFAULT 'false',
     thinking_enabled TEXT NOT NULL DEFAULT 'false',
     thinking_effort TEXT,
+    topology_json  TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
@@ -407,7 +417,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `session_mode` and `topology_json` snapshot the resolved root-agent topology used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 
 ---
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_teams.persistence.db import open_sqlite
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
 
 class SessionRepository:
@@ -22,6 +22,9 @@ class SessionRepository:
                 session_id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL DEFAULT '',
                 metadata   TEXT NOT NULL,
+                session_mode TEXT NOT NULL DEFAULT 'normal',
+                orchestration_preset_id TEXT,
+                started_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -35,6 +38,16 @@ class SessionRepository:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''"
             )
+        if "session_mode" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
+            )
+        if "orchestration_preset_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN orchestration_preset_id TEXT"
+            )
+        if "started_at" not in columns:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN started_at TEXT")
         self._conn.commit()
 
     def create(
@@ -43,6 +56,8 @@ class SessionRepository:
         session_id: str,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode = SessionMode.NORMAL,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         metadata_dict = metadata or {}
@@ -50,25 +65,67 @@ class SessionRepository:
             session_id=session_id,
             workspace_id=workspace_id,
             metadata=metadata_dict,
+            session_mode=session_mode,
+            orchestration_preset_id=orchestration_preset_id,
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
         )
 
         self._conn.execute(
             """
-            INSERT INTO sessions(session_id, workspace_id, metadata, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?)
+            INSERT INTO sessions(
+                session_id,
+                workspace_id,
+                metadata,
+                session_mode,
+                orchestration_preset_id,
+                started_at,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.session_id,
                 record.workspace_id,
                 json.dumps(record.metadata),
+                record.session_mode.value,
+                record.orchestration_preset_id,
+                None,
                 now,
                 now,
             ),
         )
         self._conn.commit()
         return record
+
+    def update_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        orchestration_preset_id: str | None,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE sessions
+            SET session_mode=?, orchestration_preset_id=?, updated_at=?
+            WHERE session_id=? AND started_at IS NULL
+            """,
+            (
+                session_mode.value,
+                orchestration_preset_id,
+                now,
+                session_id,
+            ),
+        )
+        self._conn.commit()
+        if cursor.rowcount == 0:
+            existing = self.get(session_id)
+            if existing.started_at is not None:
+                raise RuntimeError("Session mode can no longer be changed")
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def update_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -83,6 +140,54 @@ class SessionRepository:
         self._conn.commit()
         if cursor.rowcount == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
+
+    def mark_started(self, session_id: str) -> SessionRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE sessions
+            SET started_at=COALESCE(started_at, ?), updated_at=?
+            WHERE session_id=?
+            """,
+            (now, now, session_id),
+        )
+        self._conn.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
+        return self.get(session_id)
+
+    def reconcile_orchestration_presets(
+        self,
+        *,
+        valid_preset_ids: tuple[str, ...],
+        default_preset_id: str | None,
+    ) -> None:
+        valid_ids = set(valid_preset_ids)
+        rows = self._conn.execute(
+            """
+            SELECT session_id, session_mode, orchestration_preset_id, started_at
+            FROM sessions
+            """
+        ).fetchall()
+        for row in rows:
+            started_at = str(row["started_at"] or "").strip()
+            if started_at:
+                continue
+            session_id = str(row["session_id"])
+            session_mode = SessionMode(str(row["session_mode"] or "normal"))
+            preset_id = str(row["orchestration_preset_id"] or "").strip() or None
+            next_mode = session_mode
+            next_preset_id = preset_id
+            if preset_id and preset_id not in valid_ids:
+                next_preset_id = default_preset_id
+            if next_mode == SessionMode.ORCHESTRATION and next_preset_id is None:
+                next_mode = SessionMode.NORMAL
+            if next_mode != session_mode or next_preset_id != preset_id:
+                self.update_topology(
+                    session_id,
+                    session_mode=next_mode,
+                    orchestration_preset_id=next_preset_id,
+                )
 
     def get(self, session_id: str) -> SessionRecord:
         row = self._conn.execute(
@@ -107,6 +212,15 @@ class SessionRepository:
             session_id=str(row["session_id"]),
             workspace_id=str(row["workspace_id"]),
             metadata=json.loads(str(row["metadata"])),
+            session_mode=SessionMode(str(row["session_mode"] or "normal")),
+            orchestration_preset_id=str(row["orchestration_preset_id"] or "").strip()
+            or None,
+            started_at=(
+                datetime.fromisoformat(str(row["started_at"]))
+                if row["started_at"] is not None
+                else None
+            ),
+            can_switch_mode=row["started_at"] is None,
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )

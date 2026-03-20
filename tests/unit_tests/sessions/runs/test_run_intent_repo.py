@@ -5,8 +5,13 @@ import sqlite3
 from pathlib import Path
 
 from agent_teams.sessions.runs.enums import ExecutionMode
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunThinkingConfig,
+    RunTopologySnapshot,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.session_models import SessionMode
 
 
 def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:
@@ -85,3 +90,35 @@ def test_run_intent_repo_round_trips_thinking_config(tmp_path: Path) -> None:
 
     assert record.thinking.enabled is True
     assert record.thinking.effort == "medium"
+
+
+def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_intent_topology.db"
+    repo = RunIntentRepository(db_path)
+
+    repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            intent="ship it",
+            execution_mode=ExecutionMode.AI,
+            session_mode=SessionMode.ORCHESTRATION,
+            topology=RunTopologySnapshot(
+                session_mode=SessionMode.ORCHESTRATION,
+                main_agent_role_id="MainAgent",
+                coordinator_role_id="Coordinator",
+                main_agent_prompt="Normal mode prompt.",
+                orchestration_preset_id="default",
+                orchestration_prompt="Delegate by capability.",
+                allowed_role_ids=("writer", "reviewer"),
+            ),
+        ),
+    )
+
+    record = repo.get("run-1")
+
+    assert record.session_mode == SessionMode.ORCHESTRATION
+    assert record.topology is not None
+    assert record.topology.orchestration_preset_id == "default"
+    assert record.topology.allowed_role_ids == ("writer", "reviewer")

@@ -3,10 +3,89 @@
 .input-controls {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 0.75rem;
     padding: 0.4rem 1.25rem 0;
     flex-wrap: wrap;
+}
+
+.composer-topology {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-height: 36px;
+    flex-wrap: wrap;
+}
+
+.composer-topology-label,
+.composer-preset-label {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.composer-segmented {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-surface);
+}
+
+.composer-segmented-btn {
+    min-height: 32px;
+    padding: 0.35rem 0.85rem;
+    border: none;
+    border-right: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.composer-segmented-btn:last-child {
+    border-right: none;
+}
+
+.composer-segmented-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.composer-segmented-btn.active {
+    background: var(--bg-hover-strong);
+    color: var(--text-primary);
+}
+
+.composer-segmented-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.composer-preset-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.composer-preset-select {
+    min-height: 32px;
+    min-width: 168px;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+
+.composer-preset-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .gate-label {

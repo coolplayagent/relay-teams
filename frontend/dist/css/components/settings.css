@@ -726,6 +726,147 @@
     color: #f2aaaa;
 }
 
+.orchestration-settings-stack {
+    gap: 1.25rem;
+}
+
+.orchestration-settings-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--settings-divider);
+}
+
+.orchestration-settings-block:last-of-type {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.orchestration-fixed-role {
+    border: 1px solid var(--settings-border-soft);
+    border-radius: 10px;
+    background: var(--settings-surface-bg);
+    padding: 1rem;
+}
+
+.orchestration-fixed-role-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+}
+
+.orchestration-fixed-role-title {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.orchestration-fixed-role-meta {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+}
+
+.orchestration-fixed-role-copy {
+    margin: 0.35rem 0 0.9rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+
+.orchestration-prompt-textarea {
+    min-height: 220px;
+}
+
+.orchestration-section-header {
+    align-items: center;
+}
+
+.orchestration-default-row {
+    max-width: 320px;
+}
+
+.orchestration-layout {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 1rem;
+    min-height: 0;
+}
+
+.orchestration-preset-list {
+    min-height: 180px;
+}
+
+.orchestration-preset-records {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.orchestration-preset-record {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    width: 100%;
+    padding: 0.7rem 0.8rem;
+    border: 1px solid var(--settings-border-soft);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.orchestration-preset-record:hover {
+    background: var(--settings-row-hover-bg);
+}
+
+.orchestration-preset-record.active {
+    border-color: var(--settings-border-default);
+    background: var(--settings-surface-bg);
+}
+
+.orchestration-preset-record-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.orchestration-preset-record-meta {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    font-family: var(--font-mono);
+}
+
+.orchestration-preset-editor-shell {
+    min-width: 0;
+}
+
+.orchestration-preset-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.85rem;
+}
+
+.orchestration-preset-form {
+    border: 1px solid var(--settings-border-soft);
+    border-radius: 10px;
+    background: var(--settings-surface-bg);
+    padding: 1rem 1rem 0;
+}
+
+.orchestration-role-section {
+    padding-top: 0.9rem;
+}
+
+.orchestration-role-section .role-option-label em {
+    margin-left: 0.35rem;
+    color: var(--text-secondary);
+    font-style: normal;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
 .status-list {
     display: flex;
     flex-direction: column;
@@ -2008,6 +2149,10 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     }
 
     .roles-panel-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .orchestration-layout {
         grid-template-columns: 1fr;
     }
 

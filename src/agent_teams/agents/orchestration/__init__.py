@@ -5,6 +5,16 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.agents.orchestration.settings_config_manager import (
+        OrchestrationSettingsConfigManager,
+    )
+    from agent_teams.agents.orchestration.settings_models import (
+        OrchestrationPreset,
+        OrchestrationSettings,
+    )
+    from agent_teams.agents.orchestration.settings_service import (
+        OrchestrationSettingsService,
+    )
     from agent_teams.agents.orchestration.human_gate import GateAction, GateManager
     from agent_teams.agents.orchestration.meta_agent import MetaAgent
     from agent_teams.agents.orchestration.role_communication import (
@@ -36,6 +46,10 @@ __all__ = [
     "GateAction",
     "GateManager",
     "MetaAgent",
+    "OrchestrationPreset",
+    "OrchestrationSettings",
+    "OrchestrationSettingsConfigManager",
+    "OrchestrationSettingsService",
     "RoleAgentBinding",
     "RoleCommunicationExchange",
     "RoleCommunicationValidation",
@@ -68,6 +82,22 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "GateAction": ("agent_teams.agents.orchestration.human_gate", "GateAction"),
     "GateManager": ("agent_teams.agents.orchestration.human_gate", "GateManager"),
     "MetaAgent": ("agent_teams.agents.orchestration.meta_agent", "MetaAgent"),
+    "OrchestrationPreset": (
+        "agent_teams.agents.orchestration.settings_models",
+        "OrchestrationPreset",
+    ),
+    "OrchestrationSettings": (
+        "agent_teams.agents.orchestration.settings_models",
+        "OrchestrationSettings",
+    ),
+    "OrchestrationSettingsConfigManager": (
+        "agent_teams.agents.orchestration.settings_config_manager",
+        "OrchestrationSettingsConfigManager",
+    ),
+    "OrchestrationSettingsService": (
+        "agent_teams.agents.orchestration.settings_service",
+        "OrchestrationSettingsService",
+    ),
     "RoleAgentBinding": (
         "agent_teams.agents.orchestration.role_communication",
         "RoleAgentBinding",

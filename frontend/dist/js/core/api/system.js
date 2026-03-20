@@ -170,6 +170,10 @@ export async function fetchNotificationConfig() {
     return requestJson('/api/system/configs/notifications', undefined, 'Failed to fetch notification config');
 }
 
+export async function fetchOrchestrationConfig() {
+    return requestJson('/api/system/configs/orchestration', undefined, 'Failed to fetch orchestration config');
+}
+
 export async function saveNotificationConfig(config) {
     return requestJson(
         '/api/system/configs/notifications',
@@ -179,6 +183,18 @@ export async function saveNotificationConfig(config) {
             body: JSON.stringify({ config }),
         },
         'Failed to save notification config',
+    );
+}
+
+export async function saveOrchestrationConfig(config) {
+    return requestJson(
+        '/api/system/configs/orchestration',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        },
+        'Failed to save orchestration config',
     );
 }
 

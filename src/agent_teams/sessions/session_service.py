@@ -8,6 +8,9 @@ from typing import cast
 
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
+from agent_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
@@ -32,7 +35,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -72,6 +75,7 @@ class SessionService:
         role_registry: RoleRegistry | None = None,
         skill_registry: SkillRegistry | None = None,
         mcp_registry: McpRegistry | None = None,
+        orchestration_settings_service: OrchestrationSettingsService | None = None,
         get_runtime: Callable[[], RuntimeConfig] | None = None,
     ) -> None:
         self._session_repo = session_repo
@@ -92,6 +96,7 @@ class SessionService:
         self._role_registry = role_registry
         self._skill_registry = skill_registry
         self._mcp_registry = mcp_registry
+        self._orchestration_settings_service = orchestration_settings_service
         self._get_runtime = get_runtime
 
     def create_session(
@@ -105,14 +110,51 @@ class SessionService:
             session_id = f"session-{uuid.uuid4().hex[:8]}"
         if self._workspace_service is not None:
             self._workspace_service.require_workspace(workspace_id)
+        session_mode = SessionMode.NORMAL
+        orchestration_preset_id: str | None = None
+        if self._orchestration_settings_service is not None:
+            session_mode = self._orchestration_settings_service.default_session_mode()
+            orchestration_preset_id = (
+                self._orchestration_settings_service.default_orchestration_preset_id()
+            )
         return self._session_repo.create(
             session_id=session_id,
             workspace_id=workspace_id,
             metadata=metadata,
+            session_mode=session_mode,
+            orchestration_preset_id=orchestration_preset_id,
         )
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
         self._session_repo.update_metadata(session_id, metadata)
+
+    def update_session_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        orchestration_preset_id: str | None,
+    ) -> SessionRecord:
+        session = self._session_repo.get(session_id)
+        if session.started_at is not None:
+            raise RuntimeError("Session mode can no longer be changed")
+        if (
+            session_mode == SessionMode.ORCHESTRATION
+            and self._orchestration_settings_service is not None
+        ):
+            probe = session.model_copy(
+                update={
+                    "session_mode": SessionMode.ORCHESTRATION,
+                    "orchestration_preset_id": orchestration_preset_id,
+                }
+            )
+            _ = self._orchestration_settings_service.resolve_run_topology(probe)
+        self._session_repo.update_topology(
+            session_id,
+            session_mode=session_mode,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+        return self.get_session(session_id)
 
     def delete_session(self, session_id: str) -> None:
         session = self._session_repo.get(session_id)

@@ -45,6 +45,7 @@ from agent_teams.agents.tasks.models import (
     VerificationPlan,
     VerificationResult,
 )
+from agent_teams.sessions.session_models import SessionMode
 
 MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
@@ -85,17 +86,19 @@ class CoordinatorGraph(BaseModel):
             message="Coordinator run started",
             payload={
                 "execution_mode": intent.execution_mode.value,
+                "session_mode": intent.session_mode.value,
                 "session_id": session_id,
                 "intent_preview": intent.intent[:120],
             },
         )
+        root_role_id = self._root_role_id(intent)
 
         root_task = TaskEnvelope(
             task_id=new_task_id().value,
             session_id=session_id,
             parent_task_id=None,
             trace_id=trace_id,
-            role_id=self.role_registry.get_coordinator_role_id(),
+            role_id=root_role_id,
             objective=intent.intent,
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -116,16 +119,23 @@ class CoordinatorGraph(BaseModel):
                 trace_id=trace_id, root_task=root_task
             )
         elif mode == ExecutionMode.AI:
-            coordinator_instance_id = self._ensure_coordinator_instance(
+            root_instance_id = self._ensure_root_instance(
                 session_id=session_id,
                 trace_id=trace_id,
                 root_task=root_task,
             )
-            result = await self._run_ai_mode(
-                trace_id=trace_id,
-                root_task=root_task,
-                coordinator_instance_id=coordinator_instance_id,
-            )
+            if intent.session_mode == SessionMode.NORMAL:
+                result = await self._task_executor(
+                    instance_id=root_instance_id,
+                    role_id=root_role_id,
+                    task=root_task,
+                )
+            else:
+                result = await self._run_ai_mode(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=root_instance_id,
+                )
         else:
             raise ValueError(f"Unknown execution mode: {mode}")
 
@@ -158,15 +168,32 @@ class CoordinatorGraph(BaseModel):
     ) -> tuple[str, str, Literal["completed", "failed"], str]:
         root_task_record = self._get_root_task_by_trace(trace_id)
         root_task = root_task_record.envelope
-        coordinator_instance_id = self._ensure_coordinator_instance(
+        root_instance_id = self._ensure_root_instance(
             session_id=root_task.session_id,
             trace_id=trace_id,
             root_task=root_task,
         )
         self._prepare_recovery(
             trace_id=trace_id,
-            coordinator_instance_id=coordinator_instance_id,
+            coordinator_instance_id=root_instance_id,
         )
+        root_role_id = _require_task_role_id(root_task)
+        if self.role_registry.is_main_agent_role(root_role_id):
+            result = await self._task_executor(
+                instance_id=root_instance_id,
+                role_id=root_role_id,
+                task=root_task,
+            )
+            verification = verify_task(
+                self.task_repo, self.event_bus, root_task.task_id
+            )
+            status = self._terminal_status_from_verification(
+                trace_id=trace_id,
+                root_task=root_task,
+                verification=verification,
+                output=result,
+            )
+            return trace_id, root_task.task_id, status, result
         runtime = self.run_runtime_repo.get(trace_id)
         coordinator_first = not self._has_resumable_delegated_work(
             trace_id=trace_id,
@@ -180,7 +207,7 @@ class CoordinatorGraph(BaseModel):
         result = await self._run_ai_mode(
             trace_id=trace_id,
             root_task=root_task,
-            coordinator_instance_id=coordinator_instance_id,
+            coordinator_instance_id=root_instance_id,
             coordinator_first=coordinator_first,
             initial_result=root_task_record.result or "",
         )
@@ -460,18 +487,16 @@ class CoordinatorGraph(BaseModel):
             return True
         return False
 
-    def _ensure_coordinator_instance(
+    def _ensure_root_instance(
         self,
         *,
         session_id: str,
         trace_id: str,
         root_task: TaskEnvelope,
     ) -> str:
-        coordinator_role_id = _require_task_role_id(root_task)
-        _ = self.role_registry.get(coordinator_role_id)
-        existing = self.agent_repo.get_session_role_instance(
-            session_id, coordinator_role_id
-        )
+        root_role_id = _require_task_role_id(root_task)
+        _ = self.role_registry.get(root_role_id)
+        existing = self.agent_repo.get_session_role_instance(session_id, root_role_id)
         if existing is not None:
             coordinator_instance_id = existing.instance_id
             _ = self.agent_repo.mark_status(
@@ -482,7 +507,7 @@ class CoordinatorGraph(BaseModel):
                 trace_id=trace_id,
                 session_id=session_id,
                 instance_id=coordinator_instance_id,
-                role_id=coordinator_role_id,
+                role_id=root_role_id,
                 workspace_id=existing.workspace_id,
                 conversation_id=existing.conversation_id,
                 status=InstanceStatus.IDLE,
@@ -510,9 +535,9 @@ class CoordinatorGraph(BaseModel):
                 "CoordinatorGraph requires session_repo to resolve workspace"
             )
         workspace_id = session.workspace_id
-        conversation_id = build_conversation_id(session_id, coordinator_role_id)
+        conversation_id = build_conversation_id(session_id, root_role_id)
         instance = create_subagent_instance(
-            coordinator_role_id,
+            root_role_id,
             workspace_id=workspace_id,
             conversation_id=conversation_id,
         )
@@ -526,7 +551,7 @@ class CoordinatorGraph(BaseModel):
             trace_id=trace_id,
             session_id=session_id,
             instance_id=instance.instance_id,
-            role_id=coordinator_role_id,
+            role_id=root_role_id,
             workspace_id=instance.workspace_id,
             conversation_id=instance.conversation_id,
             status=InstanceStatus.IDLE,
@@ -552,6 +577,14 @@ class CoordinatorGraph(BaseModel):
             )
         )
         return instance.instance_id
+
+    def _root_role_id(self, intent: IntentInput) -> str:
+        topology = intent.topology
+        if topology is None:
+            return self.role_registry.get_coordinator_role_id()
+        if topology.session_mode == SessionMode.NORMAL:
+            return topology.main_agent_role_id
+        return topology.coordinator_role_id
 
     def _publish_run_event(
         self,

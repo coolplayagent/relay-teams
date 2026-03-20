@@ -115,6 +115,17 @@ def _create_test_client() -> TestClient:
     )
     registry.register(
         RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
             role_id="writer",
             name="Writer",
             description="Drafts user-facing content.",
@@ -197,6 +208,7 @@ def test_get_role_config_options() -> None:
     assert response.status_code == 200
     assert response.json() == RoleConfigOptions(
         coordinator_role_id="Coordinator",
+        main_agent_role_id="MainAgent",
         tools=("create_tasks", "dispatch_task"),
         mcp_servers=("docs",),
         skills=("diff", "time"),

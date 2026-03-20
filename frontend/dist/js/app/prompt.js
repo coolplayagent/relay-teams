@@ -6,17 +6,31 @@ import { appendRoundUserMessage, createLiveRound } from '../components/rounds.js
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import {
+    fetchOrchestrationConfig,
+    updateSessionTopology,
+} from '../core/api.js';
+import {
     hydrateSessionView,
     startSessionContinuity,
 } from './recovery.js';
-import { state } from '../core/state.js';
+import {
+    applyCurrentSessionRecord,
+    state,
+} from '../core/state.js';
 import { startIntentStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
+import { showToast } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 
 const YOLO_STORAGE_KEY = 'agent_teams_yolo';
 const THINKING_MODE_STORAGE_KEY = 'agent_teams_thinking_enabled';
 const THINKING_EFFORT_STORAGE_KEY = 'agent_teams_thinking_effort';
+let orchestrationConfig = {
+    main_agent_prompt: '',
+    default_orchestration_preset_id: '',
+    presets: [],
+};
+let topologyControlsBound = false;
 
 export function initializeYoloToggle() {
     const savedYolo = readSavedYolo();
@@ -48,6 +62,60 @@ export function initializeThinkingControls() {
                 effort: String(els.thinkingEffortSelect.value || 'medium'),
             });
         });
+    }
+}
+
+export async function initializeSessionTopologyControls() {
+    await refreshOrchestrationConfig({ refreshControls: false });
+    bindSessionTopologyControls();
+    refreshSessionTopologyControls();
+}
+
+export function refreshSessionTopologyControls() {
+    if (!els.sessionModeLock || !els.sessionModeNormalBtn || !els.sessionModeOrchestrationBtn) {
+        return;
+    }
+
+    const mode = state.currentSessionMode === 'orchestration' ? 'orchestration' : 'normal';
+    const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
+    const hasPresets = presets.length > 0;
+    const canSwitch = !!state.currentSessionId && state.currentSessionCanSwitchMode === true && !state.isGenerating;
+    const disabledReason = resolveTopologyDisabledReason({ canSwitch, hasPresets });
+    const orchestrationDisabled = !canSwitch || !hasPresets;
+
+    els.sessionModeLock.title = disabledReason;
+    els.sessionModeNormalBtn.disabled = !canSwitch;
+    els.sessionModeOrchestrationBtn.disabled = orchestrationDisabled;
+    els.sessionModeNormalBtn.classList.toggle('active', mode === 'normal');
+    els.sessionModeOrchestrationBtn.classList.toggle('active', mode === 'orchestration');
+
+    if (els.sessionModeLabel) {
+        els.sessionModeLabel.textContent = mode === 'orchestration' ? '编排模式' : '普通模式';
+    }
+
+    if (els.orchestrationPresetField) {
+        els.orchestrationPresetField.hidden = mode !== 'orchestration';
+    }
+    if (els.orchestrationPresetSelect) {
+        const selectedPresetId = resolveSelectedPresetId();
+        els.orchestrationPresetSelect.innerHTML = buildPresetOptions(selectedPresetId);
+        els.orchestrationPresetSelect.disabled = !canSwitch || mode !== 'orchestration' || !hasPresets;
+        if (selectedPresetId) {
+            els.orchestrationPresetSelect.value = selectedPresetId;
+        }
+    }
+}
+
+export async function refreshOrchestrationConfig({ refreshControls = true } = {}) {
+    try {
+        const config = await fetchOrchestrationConfig();
+        orchestrationConfig = normalizeOrchestrationConfig(config);
+    } catch (error) {
+        orchestrationConfig = normalizeOrchestrationConfig(null);
+        sysLog(error.message || 'Failed to load orchestration settings', 'log-error');
+    }
+    if (refreshControls) {
+        refreshSessionTopologyControls();
     }
 }
 
@@ -87,6 +155,7 @@ export async function handleSend() {
         els.stopBtn.style.display = 'inline-flex';
         els.stopBtn.disabled = false;
     }
+    refreshSessionTopologyControls();
     refreshVisibleContextIndicators({ immediate: true });
     clearAllStreamState();
 
@@ -100,11 +169,158 @@ export async function handleSend() {
             yolo: state.yolo,
             thinking: state.thinking,
             onRunCreated: (run) => {
+                state.currentSessionCanSwitchMode = false;
+                refreshSessionTopologyControls();
                 createLiveRound(run.run_id, text);
                 appendRoundUserMessage(run.run_id, text);
             },
         },
     );
+}
+
+function bindSessionTopologyControls() {
+    if (topologyControlsBound) {
+        return;
+    }
+    topologyControlsBound = true;
+
+    if (els.sessionModeNormalBtn) {
+        els.sessionModeNormalBtn.addEventListener('click', () => {
+            void handleTopologyModeChange('normal');
+        });
+    }
+    if (els.sessionModeOrchestrationBtn) {
+        els.sessionModeOrchestrationBtn.addEventListener('click', () => {
+            void handleTopologyModeChange('orchestration');
+        });
+    }
+    if (els.orchestrationPresetSelect) {
+        els.orchestrationPresetSelect.addEventListener('change', event => {
+            const nextPresetId = String(event?.target?.value || '').trim();
+            if (!nextPresetId) {
+                refreshSessionTopologyControls();
+                return;
+            }
+            void persistSessionTopology('orchestration', nextPresetId);
+        });
+    }
+    document.addEventListener('orchestration-settings-updated', () => {
+        void refreshOrchestrationConfig({ refreshControls: true });
+    });
+}
+
+async function handleTopologyModeChange(nextMode) {
+    const normalizedMode = nextMode === 'orchestration' ? 'orchestration' : 'normal';
+    if (normalizedMode === state.currentSessionMode) {
+        return;
+    }
+    if (!state.currentSessionId) {
+        return;
+    }
+    if (normalizedMode === 'orchestration' && !resolveSelectedPresetId()) {
+        showToast({
+            title: 'No Preset Available',
+            message: 'Create an orchestration preset in Settings before switching to orchestration mode.',
+            tone: 'warning',
+        });
+        return;
+    }
+    await persistSessionTopology(
+        normalizedMode,
+        normalizedMode === 'orchestration' ? resolveSelectedPresetId() : null,
+    );
+}
+
+async function persistSessionTopology(sessionMode, orchestrationPresetId) {
+    if (!state.currentSessionId) {
+        return;
+    }
+    try {
+        const updated = await updateSessionTopology(state.currentSessionId, {
+            session_mode: sessionMode,
+            orchestration_preset_id: sessionMode === 'orchestration' ? orchestrationPresetId : null,
+        });
+        applyCurrentSessionRecord(updated);
+        refreshSessionTopologyControls();
+        sysLog(`Session mode updated: ${sessionMode === 'orchestration' ? '编排模式' : '普通模式'}`);
+    } catch (error) {
+        refreshSessionTopologyControls();
+        showToast({
+            title: 'Mode Update Failed',
+            message: error.message || 'Failed to update session mode.',
+            tone: 'danger',
+        });
+    }
+}
+
+function resolveTopologyDisabledReason({ canSwitch, hasPresets }) {
+    if (!state.currentSessionId) {
+        return 'Select a session before changing the run mode.';
+    }
+    if (state.isGenerating) {
+        return 'The session mode is locked while a run is active.';
+    }
+    if (!canSwitch) {
+        return 'Only sessions that have not started their first run can switch mode.';
+    }
+    if (!hasPresets) {
+        return 'Create an orchestration preset in Settings before enabling orchestration mode.';
+    }
+    return 'Only sessions that have not started their first run can switch mode.';
+}
+
+function resolveSelectedPresetId() {
+    const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
+    const currentPresetId = String(state.currentOrchestrationPresetId || '').trim();
+    if (currentPresetId && presets.some(preset => preset?.preset_id === currentPresetId)) {
+        return currentPresetId;
+    }
+    const defaultPresetId = String(orchestrationConfig?.default_orchestration_preset_id || '').trim();
+    if (defaultPresetId && presets.some(preset => preset?.preset_id === defaultPresetId)) {
+        return defaultPresetId;
+    }
+    return String(presets[0]?.preset_id || '').trim();
+}
+
+function buildPresetOptions(selectedPresetId) {
+    const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
+    if (presets.length === 0) {
+        return '<option value="">No presets</option>';
+    }
+    return presets.map(preset => {
+        const presetId = String(preset?.preset_id || '').trim();
+        const name = String(preset?.name || presetId || 'Preset');
+        const selected = presetId === selectedPresetId ? ' selected' : '';
+        return `<option value="${escapeHtml(presetId)}"${selected}>${escapeHtml(name)}</option>`;
+    }).join('');
+}
+
+function normalizeOrchestrationConfig(config) {
+    const presets = Array.isArray(config?.presets)
+        ? config.presets.map(preset => ({
+            preset_id: String(preset?.preset_id || '').trim(),
+            name: String(preset?.name || '').trim(),
+            description: String(preset?.description || '').trim(),
+            role_ids: Array.isArray(preset?.role_ids)
+                ? preset.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
+                : [],
+            orchestration_prompt: String(preset?.orchestration_prompt || '').trim(),
+        })).filter(preset => preset.preset_id)
+        : [];
+    return {
+        main_agent_prompt: String(config?.main_agent_prompt || '').trim(),
+        default_orchestration_preset_id: String(config?.default_orchestration_preset_id || '').trim(),
+        presets,
+    };
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 
 function readSavedYolo() {

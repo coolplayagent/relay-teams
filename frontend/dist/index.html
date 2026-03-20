@@ -106,6 +106,19 @@
                         </div>
                     </form>
                     <div class="input-controls">
+                        <div class="composer-topology" id="session-mode-lock" title="Select a session before changing the run mode.">
+                            <span class="composer-topology-label" id="session-mode-label">普通模式</span>
+                            <div class="composer-segmented" role="group" aria-label="Session mode">
+                                <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn">普通模式</button>
+                                <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn">编排模式</button>
+                            </div>
+                            <label class="composer-preset-field" id="orchestration-preset-field" hidden>
+                                <span class="composer-preset-label">预设</span>
+                                <select id="orchestration-preset-select" class="composer-preset-select">
+                                    <option value="">No presets</option>
+                                </select>
+                            </label>
+                        </div>
                         <label class="composer-mode-toggle" for="yolo-toggle" title="开启后所有工具调用都不需审核">
                             <input type="checkbox" id="yolo-toggle" checked>
                             <span class="composer-mode-check" aria-hidden="true"></span>

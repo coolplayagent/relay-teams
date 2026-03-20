@@ -42,6 +42,7 @@ def get_role_config_options(
 ) -> RoleConfigOptions:
     return RoleConfigOptions(
         coordinator_role_id=role_registry.get_coordinator_role_id(),
+        main_agent_role_id=role_registry.get_main_agent_role_id(),
         tools=tool_registry.list_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),

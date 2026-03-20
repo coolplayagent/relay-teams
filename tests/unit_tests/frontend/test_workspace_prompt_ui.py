@@ -57,6 +57,18 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     state_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "state.js"
     ).read_text(encoding="utf-8")
+    settings_index_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+    orchestration_settings_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "orchestrationSettings.js"
+    ).read_text(encoding="utf-8")
     request_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
     ).read_text(encoding="utf-8")
@@ -90,6 +102,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
     assert 'id="main-context-indicator"' in index_html
+    assert 'id="session-mode-lock"' in index_html
+    assert 'id="session-mode-normal-btn"' in index_html
+    assert 'id="session-mode-orchestration-btn"' in index_html
+    assert 'id="orchestration-preset-select"' in index_html
     assert 'id="prompt-input-hint"' in index_html
     assert 'id="session-token-usage"' in index_html
     assert "Latest provider context usage" in index_html
@@ -121,6 +137,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "requestAnimationFrame" in navbar_script
     assert "initBackendStatusMonitor" in bootstrap_script
     assert "initializeSessionTokenUsage" in bootstrap_script
+    assert "initializeSessionTopologyControls" in bootstrap_script
     assert "is-resizing-rails" in navbar_script
     assert "marked.setOptions" not in state_script
     assert "fetch('/api/system/health'" in backend_status_script
@@ -128,6 +145,11 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "fetchSessionContextPreview" not in context_indicator_script
     assert "main-context-indicator" in context_indicator_script
     assert "panel-context-indicator" in context_indicator_script
+    assert 'data-tab="orchestration"' in settings_index_script
+    assert 'id="orchestration-panel"' in settings_index_script
+    assert "loadOrchestrationSettingsPanel" in settings_index_script
+    assert "main_agent_prompt" in orchestration_settings_script
+    assert "default_orchestration_preset_id" in orchestration_settings_script
     assert "fetchSessionTokenUsage" in session_token_usage_script
     assert "Token usage: total=" in session_token_usage_script
     assert "session-token-usage" in session_token_usage_script

@@ -12,6 +12,7 @@ export {
     fetchSessionRounds,
     fetchSessions,
     fetchSessionTasks,
+    updateSessionTopology,
     refreshAgentReflection,
     updateAgentReflection,
     deleteAgentReflection,
@@ -47,6 +48,7 @@ export {
     fetchModelConfig,
     fetchModelProfiles,
     fetchNotificationConfig,
+    fetchOrchestrationConfig,
     fetchProxyConfig,
     fetchSystemHealth,
     discoverModelCatalog,
@@ -60,6 +62,7 @@ export {
     saveModelConfig,
     saveModelProfile,
     saveNotificationConfig,
+    saveOrchestrationConfig,
     saveProxyConfig,
 } from './system.js';
 

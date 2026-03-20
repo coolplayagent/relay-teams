@@ -18,6 +18,7 @@ import {
     forceScrollBottom,
     setToolValidationFailureState,
 } from './helpers.js';
+import { getPrimaryRoleLabel } from '../../core/state.js';
 
 export function renderHistoricalMessageList(container, messages, options = {}) {
     const pendingToolApprovals = Array.isArray(options.pendingToolApprovals)
@@ -87,7 +88,7 @@ function applyPendingApprovalsToHistory(container, approvals, runId) {
     });
 
     if (missing.length === 0) return;
-    const { contentEl } = renderMessageBlock(container, 'model', 'Coordinator', []);
+    const { contentEl } = renderMessageBlock(container, 'model', getPrimaryRoleLabel(), []);
     missing.forEach(approval => {
         const toolBlock = buildToolBlock(
             approval?.tool_name || 'unknown_tool',

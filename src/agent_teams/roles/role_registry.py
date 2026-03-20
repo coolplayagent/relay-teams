@@ -16,9 +16,11 @@ COORDINATOR_REQUIRED_TOOLS = frozenset(
         "dispatch_task",
     )
 )
+MAIN_AGENT_ROLE_ID = "MainAgent"
 LEGACY_COORDINATOR_IDENTIFIERS = frozenset(
     ("coordinator", "coordinator agent", "coordinator_agent")
 )
+MAIN_AGENT_IDENTIFIERS = frozenset(("mainagent", "main agent", "main_agent"))
 
 
 def is_coordinator_role_definition(role: RoleDefinition) -> bool:
@@ -34,6 +36,16 @@ def _looks_like_legacy_coordinator(role: RoleDefinition) -> bool:
         role_id in LEGACY_COORDINATOR_IDENTIFIERS
         or name in LEGACY_COORDINATOR_IDENTIFIERS
     )
+
+
+def is_main_agent_role_definition(role: RoleDefinition) -> bool:
+    role_id = role.role_id.strip().casefold()
+    name = role.name.strip().casefold()
+    return role_id in MAIN_AGENT_IDENTIFIERS or name in MAIN_AGENT_IDENTIFIERS
+
+
+def is_reserved_system_role_definition(role: RoleDefinition) -> bool:
+    return is_coordinator_role_definition(role) or is_main_agent_role_definition(role)
 
 
 class RoleRegistry:
@@ -79,9 +91,29 @@ class RoleRegistry:
     def get_coordinator_role_id(self) -> str:
         return self.get_coordinator().role_id
 
+    def get_main_agent(self) -> RoleDefinition:
+        candidates = [
+            role for role in self._roles if is_main_agent_role_definition(role)
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            role_ids = ", ".join(sorted(role.role_id for role in candidates))
+            raise ValueError(f"Multiple main agent role candidates found: {role_ids}")
+        raise KeyError("Main agent role could not be resolved from loaded roles")
+
+    def get_main_agent_role_id(self) -> str:
+        return self.get_main_agent().role_id
+
     def is_coordinator_role(self, role_id: str) -> bool:
         try:
             return self.get_coordinator_role_id() == role_id
+        except (KeyError, ValueError):
+            return False
+
+    def is_main_agent_role(self, role_id: str) -> bool:
+        try:
+            return self.get_main_agent_role_id() == role_id
         except (KeyError, ValueError):
             return False
 

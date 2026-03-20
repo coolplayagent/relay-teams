@@ -17,7 +17,11 @@ Common status codes:
 
 ## Core Concepts
 
-- A run starts from one root coordinator task.
+- A run starts from one root task.
+- Sessions have a run mode:
+  - `normal`: one fixed root role (`MainAgent`) handles the run directly.
+  - `orchestration`: the root role is `Coordinator`, and delegation is limited by the selected orchestration preset.
+- Session mode and orchestration preset can be changed only before the session starts its first run.
 - Every delegated task is a persisted task record under that root task.
 - A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
 - Re-dispatching the same task reuses its bound instance.
@@ -129,6 +133,30 @@ Returns notification rules by event type.
 
 Replaces notification rules.
 
+### `GET /system/configs/orchestration`
+
+Returns global orchestration settings.
+
+Response fields:
+- `main_agent_prompt`
+- `default_orchestration_preset_id`
+- `presets[]`
+  - `preset_id`
+  - `name`
+  - `description`
+  - `role_ids`
+  - `orchestration_prompt`
+
+### `PUT /system/configs/orchestration`
+
+Replaces global orchestration settings.
+
+Rules:
+- `presets[].role_ids` may contain only normal roles; reserved system roles are rejected.
+- The default preset id must match one existing preset.
+- `main_agent_prompt` is used only in `normal` session mode.
+- `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
+
 ### `GET /system/configs/environment-variables`
 
 Returns environment variables grouped by `system` and `app` scope.
@@ -176,6 +204,10 @@ Request:
 }
 ```
 
+Notes:
+- New sessions default to `session_mode = "normal"`.
+- New sessions also store the current default orchestration preset id so they can be switched to orchestration before the first run.
+
 ### `GET /sessions`
 
 Lists sessions.
@@ -184,9 +216,33 @@ Lists sessions.
 
 Gets one session.
 
+Response fields also include:
+- `session_mode`
+- `orchestration_preset_id`
+- `started_at`
+- `can_switch_mode`
+
 ### `PATCH /sessions/{session_id}`
 
 Updates session metadata.
+
+### `PATCH /sessions/{session_id}/topology`
+
+Updates session run mode and orchestration preset.
+
+Request:
+
+```json
+{
+  "session_mode": "orchestration",
+  "orchestration_preset_id": "default"
+}
+```
+
+Rules:
+- Only sessions that have not started their first run may be changed.
+- `orchestration_preset_id` is required when `session_mode = "orchestration"`.
+- `orchestration_preset_id` is ignored when `session_mode = "normal"`.
 
 ### `DELETE /sessions/{session_id}`
 
@@ -363,6 +419,7 @@ Notes:
 - `thinking` is optional.
 - `thinking.enabled` enables model thinking streams for providers that emit thinking parts.
 - `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
+- The backend resolves the session mode at run creation time and snapshots the chosen root topology into the run intent for queued and recoverable resume flows.
 
 Response:
 
@@ -527,6 +584,8 @@ Lists loaded role definitions.
 Returns editor options for role settings.
 
 Response fields:
+- `coordinator_role_id`
+- `main_agent_role_id`
 - `tools`
 - `mcp_servers`
 - `skills`
@@ -592,6 +651,7 @@ Rules:
 - Unknown tools, MCP servers, or skills are rejected.
 - When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
+- Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`) and fixed `system_prompt` through this API.
 
 ### `POST /roles:validate`
 

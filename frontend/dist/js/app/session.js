@@ -7,15 +7,17 @@ import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../co
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
 import { setRoundsMode } from '../components/sidebar.js';
+import { fetchSessionHistory } from '../core/api.js';
 import {
     clearSessionRecovery,
     hydrateSessionView,
     stopSessionContinuity,
 } from './recovery.js';
-import { state } from '../core/state.js';
+import { applyCurrentSessionRecord, resetCurrentSessionTopology, state } from '../core/state.js';
 import { endStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
+import { refreshSessionTopologyControls } from './prompt.js';
 
 export async function selectSession(sessionId) {
     const isSameSession = state.currentSessionId === sessionId;
@@ -53,6 +55,7 @@ export async function selectSession(sessionId) {
     state.sessionAgents = [];
     state.sessionTasks = [];
     state.selectedRoleId = null;
+    resetCurrentSessionTopology();
     clearSessionRecovery();
 
     document.querySelectorAll('.session-item').forEach(el => {
@@ -67,7 +70,14 @@ export async function selectSession(sessionId) {
     clearContextIndicators();
     clearSessionTokenUsage();
     clearAllStreamState();
+    refreshSessionTopologyControls();
 
+    const sessionRecord = await fetchSessionHistory(sessionId);
+    if (state.currentSessionId !== sessionId) {
+        return;
+    }
+    applyCurrentSessionRecord(sessionRecord);
+    refreshSessionTopologyControls();
     await hydrateSessionView(sessionId, { includeRounds: true, quiet: true });
     scheduleCoordinatorContextPreview({ immediate: true });
     scheduleSessionTokenUsageRefresh({ immediate: true });

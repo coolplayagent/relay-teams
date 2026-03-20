@@ -2,7 +2,7 @@
  * components/messageRenderer/helpers/block.js
  * Message block and part rendering helpers.
  */
-import { isCoordinatorRoleId } from '../../../core/state.js';
+import { getPrimaryRoleLabel, isCoordinatorRoleId, isMainAgentRoleId } from '../../../core/state.js';
 import { parseMarkdown } from '../../../utils/markdown.js';
 import {
     applyToolReturn,
@@ -103,6 +103,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
 export function labelFromRole(role, roleId, instanceId) {
     if (role === 'user') return 'System';
     if (isCoordinatorRoleId(roleId)) return 'Coordinator';
+    if (isMainAgentRoleId(roleId)) return 'Main Agent';
     if (roleId) return roleId;
     return instanceId ? instanceId.slice(0, 8) : 'Agent';
 }
@@ -169,7 +170,9 @@ export function syncStreamingCursor(textEl, active) {
 }
 
 function roleClassName(role, label) {
-    if (label?.toLowerCase().includes('coordinator')) return 'role-coordinator';
+    const safeLabel = String(label || '').toLowerCase();
+    if (safeLabel === String(getPrimaryRoleLabel()).toLowerCase()) return 'role-coordinator';
+    if (safeLabel.includes('coordinator') || safeLabel.includes('main agent')) return 'role-coordinator';
     if (role === 'user') return 'role-user';
     return 'role-agent';
 }

@@ -19,6 +19,8 @@ let roleConfigOptions = {
     tools: [],
     mcp_servers: [],
     skills: [],
+    coordinator_role_id: '',
+    main_agent_role_id: '',
 };
 let availableModelProfiles = [];
 let defaultModelProfileName = '';
@@ -93,6 +95,8 @@ function bindActionButton(id, handler) {
 
 function normalizeRoleConfigOptions(options) {
     return {
+        coordinator_role_id: String(options?.coordinator_role_id || '').trim(),
+        main_agent_role_id: String(options?.main_agent_role_id || '').trim(),
         tools: Array.isArray(options?.tools) ? options.tools : [],
         mcp_servers: Array.isArray(options?.mcp_servers) ? options.mcp_servers : [],
         skills: Array.isArray(options?.skills) ? options.skills : [],
@@ -220,6 +224,33 @@ function applyRoleRecord(record) {
         fileMetaEl.textContent = record.file_name ? `File: ${record.file_name}` : 'New role';
     }
     renderRoleStatus('', '');
+    applyReservedRoleUi(record);
+}
+
+function applyReservedRoleUi(record) {
+    const roleId = String(record?.role_id || '').trim();
+    const isReservedRole = isReservedSystemRoleId(roleId);
+    setReadonly('role-id-input', isReservedRole);
+    setReadonly('role-name-input', isReservedRole);
+    setReadonly('role-description-input', isReservedRole);
+    setReadonly('role-version-input', isReservedRole);
+    setReadonly('role-system-prompt-input', isReservedRole);
+
+    const promptInput = document.getElementById('role-system-prompt-input');
+    if (promptInput) {
+        promptInput.title = isReservedRole
+            ? 'System role prompts are managed in the Orchestration settings panel.'
+            : '';
+    }
+    const statusEl = document.getElementById('role-editor-status');
+    if (!statusEl || !isReservedRole) {
+        return;
+    }
+    statusEl.style.display = 'block';
+    statusEl.className = 'role-editor-status';
+    statusEl.textContent = roleId === roleConfigOptions.main_agent_role_id
+        ? 'Main Agent keeps a fixed identity here. Edit its prompt in Settings > Orchestration.'
+        : 'Coordinator keeps a fixed identity here. Edit orchestration prompts in Settings > Orchestration.';
 }
 
 function renderOptionPicker(containerId, availableValues, selectedValues, emptyMessage) {
@@ -548,6 +579,13 @@ function setInputValue(id, value) {
     }
 }
 
+function setReadonly(id, readonly) {
+    const element = document.getElementById(id);
+    if (element) {
+        element.readOnly = readonly === true;
+    }
+}
+
 function resolveSelectedModelProfile() {
     const selectedValue = String(getInputValue('role-model-profile-input')).trim();
     if (selectedValue) {
@@ -586,6 +624,12 @@ function formatDefaultProfileOptionLabel() {
         return 'default';
     }
     return `default (current: ${defaultModelProfileName})`;
+}
+
+function isReservedSystemRoleId(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    return safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()
+        || safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim();
 }
 
 function toggleRoleActions(visibility) {
