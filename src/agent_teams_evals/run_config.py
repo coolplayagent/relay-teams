@@ -6,13 +6,16 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams_evals.backends.agent_teams import AgentTeamsConfig
+from agent_teams_evals.backends.agent_teams_config import AgentTeamsConfig
 from agent_teams_evals.workspace.docker_setup import DockerConfig
 
 _SAMPLE_YAML = """\
 # Agent Teams Eval Config
 # Generate this file: agent-teams-evals init-config
 # Run with:           agent-teams-evals run --config eval.yaml
+# Resume is automatic when output_dir already has checkpoint files.
+# Force a fresh run with:
+#   agent-teams-evals run --config eval.yaml --restart
 
 # --- Dataset ---
 dataset: jsonl                          # jsonl | swebench
@@ -71,6 +74,7 @@ save_artifacts: true                    # persist replay data (patch, output, db
 # --- Output ---
 output_dir: .agent_teams/evals/results
 report_format: json                     # json | html | both
+                                        # report.json is refreshed during the run
 
 # --- Cost estimation (USD per 1M tokens) ---
 cost_per_million_input_tokens: 3.0      # Claude Sonnet input price

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import typer
-from pydantic import ConfigDict
 
-from agent_teams.interfaces.sdk.client import AgentTeamsClient
-from agent_teams_evals.backends.base import AgentBackend, AgentConfig, AgentEvent
+from agent_teams_evals.backends.agent_teams_config import AgentTeamsConfig
+from agent_teams_evals.backends.base import AgentBackend, AgentEvent
 from agent_teams_evals.workspace.base import PreparedWorkspace
+
+if TYPE_CHECKING:
+    from agent_teams.interfaces.sdk.client import (
+        AgentTeamsClient as AgentTeamsClientType,
+    )
+else:
+    AgentTeamsClientType = object
+
+AgentTeamsClient: type[AgentTeamsClientType] | None = None
 
 _TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
 
@@ -341,23 +348,20 @@ def _log_run_event(
     _log(item_id, f"[event #{event_count}] {event_type}")
 
 
-def _try_delete_workspace(client: AgentTeamsClient, workspace_id: str) -> None:
+def _try_delete_workspace(client: AgentTeamsClientType, workspace_id: str) -> None:
     try:
         client.delete_workspace(workspace_id)
     except Exception:
         pass
 
 
-class AgentTeamsConfig(AgentConfig):
-    model_config = ConfigDict(extra="forbid")
+def _get_agent_teams_client() -> type[AgentTeamsClientType]:
+    global AgentTeamsClient
+    if AgentTeamsClient is None:
+        from agent_teams.interfaces.sdk.client import AgentTeamsClient as _Client
 
-    base_url: str = "http://127.0.0.1:8000"
-    execution_mode: str = "ai"
-    approval_mode: str = "yolo"
-    # Docker mode: mount this directory as ~/.config/agent-teams inside the container.
-    # Controls which model, role and system prompt the agent uses.
-    # None = use whatever config is already present in the container.
-    config_dir: Path | None = None
+        AgentTeamsClient = _Client
+    return AgentTeamsClient
 
 
 class AgentTeamsBackend(AgentBackend):
@@ -371,7 +375,8 @@ class AgentTeamsBackend(AgentBackend):
         keep_workspace: bool = False,
     ) -> Iterator[AgentEvent]:
         base_url = workspace.agent_base_url or self._config.base_url
-        client = AgentTeamsClient(
+        client_cls = _get_agent_teams_client()
+        client = client_cls(
             base_url=base_url,
             stream_timeout_seconds=self._config.timeout_seconds,
         )

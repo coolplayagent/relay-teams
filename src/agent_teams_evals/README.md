@@ -25,10 +25,15 @@ agent-teams-evals init-config --output eval.yaml
 agent-teams-evals run --config eval.yaml
 ```
 
+Runs resume by default when `output_dir` already contains `checkpoint.meta.json`
+and `checkpoint.results.jsonl` for the same eval definition. Use `--restart`
+to archive the previous `output_dir` and start fresh.
+
 CLI overrides are available for quick one-offs without editing the file:
 
 ```bash
 agent-teams-evals run --config eval.yaml --limit 5 --concurrency 2
+agent-teams-evals run --config eval.yaml --restart
 ```
 
 ## Workspace modes
@@ -226,10 +231,18 @@ recorded as an auxiliary diagnostic score for the scored patch.
 
 Results land in `output_dir` (default `.agent_teams/evals/results/`):
 
+- `checkpoint.meta.json` -- resumable eval signature (dataset/config/item set)
+- `checkpoint.results.jsonl` -- append-only per-item results used for resume
 - `report.json` -- full structured report (all item results + summary stats, including auxiliary scores)
 - `report.html` -- self-contained HTML report with per-item table and auxiliary scores
 - `artifacts/<item_id>/patch.diff` -- scored patch after benchmark test-file filtering
 - `artifacts/<item_id>/raw_patch.diff` -- original extracted patch when different
+
+`report.json` is refreshed after each completed item. If a run is interrupted,
+rerunning the same command resumes from the checkpoint and rebuilds the report
+from the saved results. If the new command changes the dataset, filtered item
+set, scorer, backend execution settings, or workspace mode, resume is rejected
+and you should rerun with `--restart`.
 
 Token usage is recorded in detail for each result and the final report:
 
