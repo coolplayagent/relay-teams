@@ -8,6 +8,7 @@ from agent_teams_evals.scorers import swebench_docker_scorer
 from agent_teams_evals.scorers.swebench_docker_scorer import (
     PytestOutcome,
     SWEBenchDockerScorer,
+    _sanitize_test_ids,
 )
 from agent_teams_evals.workspace.base import PreparedWorkspace
 
@@ -286,6 +287,40 @@ def test_scorer_log_captures_pytest_output(monkeypatch) -> None:
     assert "FAILED tests.test_fix" in result.scorer_log
     assert "pass_to_pass" in result.scorer_log
     assert "1 passed" in result.scorer_log
+
+
+class TestSanitizeTestIds:
+    def test_valid_ids_unchanged(self) -> None:
+        ids = [
+            "tests/test_table.py::TestMeta::test_mapping_init[meta0]",
+            "tests/test_table.py::TestMeta::test_plain",
+        ]
+        assert _sanitize_test_ids(ids) == ids
+
+    def test_truncated_bracket_falls_back_to_base_name(self) -> None:
+        ids = [
+            "tests/test_table.py::TestMeta::test_non_mapping_init[ceci",
+            "tests/test_table.py::TestMeta::test_non_mapping_set[ceci",
+        ]
+        assert _sanitize_test_ids(ids) == [
+            "tests/test_table.py::TestMeta::test_non_mapping_init",
+            "tests/test_table.py::TestMeta::test_non_mapping_set",
+        ]
+
+    def test_mixed_valid_and_truncated(self) -> None:
+        ids = [
+            "tests/test_a.py::test_ok[param]",
+            "tests/test_b.py::test_broken[ceci",
+            "tests/test_c.py::test_plain",
+        ]
+        assert _sanitize_test_ids(ids) == [
+            "tests/test_a.py::test_ok[param]",
+            "tests/test_b.py::test_broken",
+            "tests/test_c.py::test_plain",
+        ]
+
+    def test_empty_list(self) -> None:
+        assert _sanitize_test_ids([]) == []
 
 
 def test_filtered_test_files_are_reported(monkeypatch) -> None:

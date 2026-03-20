@@ -95,6 +95,25 @@ def _run_pytest(
     return PytestOutcome(passed=result.returncode == 0, output=output)
 
 
+def _sanitize_test_ids(tests: list[str]) -> list[str]:
+    """Fix truncated parametrized test IDs with unclosed brackets.
+
+    Some upstream SWE-bench entries contain IDs like ``test_foo[ceci`` where
+    the closing ``]`` was lost during dataset export (e.g. the parameter value
+    ``ceci n'est pas un meta`` was truncated at the single-quote).  These
+    cause pytest collection errors that abort the entire test run.
+
+    Replace such IDs with the base test name so that all parametrizations of
+    that test are collected instead.
+    """
+    result: list[str] = []
+    for tid in tests:
+        if "[" in tid and "]" not in tid:
+            tid = tid[: tid.index("[")]
+        result.append(tid)
+    return result
+
+
 class SWEBenchDockerScorer(Scorer):
     """Score by running fail_to_pass and pass_to_pass tests inside the container."""
 
@@ -160,8 +179,8 @@ class SWEBenchDockerScorer(Scorer):
 
         container_id = workspace.container_id
         repo = workspace.container_repo_path or "/testbed"
-        f2p_tests = list(item.fail_to_pass)
-        p2p_tests = list(item.pass_to_pass)
+        f2p_tests = _sanitize_test_ids(list(item.fail_to_pass))
+        p2p_tests = _sanitize_test_ids(list(item.pass_to_pass))
         scorer_log = ""
         candidate_patch_err = ""
 
