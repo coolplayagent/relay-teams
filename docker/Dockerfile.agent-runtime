@@ -10,7 +10,7 @@
 # - /opt/agent-runtime/bin/agent-teams  wrapper that creates a container-local venv
 #
 # Build:
-#   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+#   docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
 #
 # Usage (data container pattern):
 #   docker create --name agent-runtime agent-teams-runtime:latest
@@ -23,6 +23,7 @@ WORKDIR /build
 COPY pyproject.toml ./
 COPY README.md ./
 COPY src/ src/
+COPY src/agent_teams/builtin/config/orchestration.json /opt/agent-runtime/config/orchestration.json
 COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
 
 RUN apt-get update && \

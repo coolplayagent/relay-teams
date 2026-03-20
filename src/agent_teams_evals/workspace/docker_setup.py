@@ -69,7 +69,7 @@ class DockerConfig(BaseModel):
     # SWE-bench image prefix; full image = {image_prefix}.{instance_id}:latest
     image_prefix: str = "swebench/sweb.eval.x86_64"
     # Base image that provides /opt/agent-runtime/ via --volumes-from.
-    # Build once with: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+    # Build once with: docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
     agent_runtime_image: str = "agent-teams-runtime:latest"
     # Path to the wrapper inside agent_runtime_image that creates a local
     # container venv and starts agent-teams from there.
@@ -89,7 +89,7 @@ class DockerConfig(BaseModel):
     # The build context is the current working directory.
     build_runtime_image: bool = False
     # Dockerfile used when build_runtime_image is true.
-    runtime_dockerfile: str = "Dockerfile.agent-runtime"
+    runtime_dockerfile: str = "docker/Dockerfile.agent-runtime"
     # When true, automatically build missing SWE-bench instance images before
     # each eval item runs. Requires the swebench and docker Python packages.
     build_instance_images: bool = False

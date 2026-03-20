@@ -34,8 +34,10 @@ agent_teams:
   orchestration_preset_id: null         # null = use server default when session_mode=orchestration
   yolo: true
   timeout_seconds: 600
-  config_dir: null                      # docker mode: mount this as ~/.config/agent-teams
-                                        # controls model, role, system prompt
+  config_dir: null                      # docker mode: stage this config dir into the container
+                                        # whitelist: model.json, notifications.json,
+                                        # orchestration.json, .env, mcp.json, logger.ini,
+                                        # roles/, skills/
                                         # e.g. ./eval_configs/claude-sonnet
                                         # null = use whatever config is in the container
 
@@ -48,7 +50,7 @@ docker:
   image_prefix: "swebench/sweb.eval.x86_64"
   # Runtime base image: provides uv, a managed Python 3.12, and an offline
   # wheelhouse via /opt/agent-runtime/ through --volumes-from.
-  # Build once: docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+  # Build once: docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
   agent_runtime_bin: "/opt/agent-runtime/bin/agent-teams"
   container_startup_timeout_seconds: 60

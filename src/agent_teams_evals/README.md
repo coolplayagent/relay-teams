@@ -60,7 +60,7 @@ docker:
   image_prefix: "swebench/sweb.eval.x86_64"
 
   # Runtime base image -- build once before running evals:
-  #   docker build -f Dockerfile.agent-runtime -t agent-teams-runtime:latest .
+  #   docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
 
   # Wrapper that creates a container-local venv with uv, then starts agent-teams.
@@ -116,7 +116,8 @@ agent_teams:
   yolo: true
   timeout_seconds: 600
   config_dir: null                      # host config staged into eval containers via a whitelist:
-                                        # model.json, notifications.json, .env, mcp.json, logger.ini,
+                                        # model.json, notifications.json, orchestration.json,
+                                        # .env, mcp.json, logger.ini,
                                         # roles/, skills/
                                         # null = use whatever config is in the container
 

@@ -17,7 +17,7 @@ CONFIG_TARGET="${AGENT_TEAMS_CONFIG_TARGET:-/root/.config/agent-teams}"
 
 if [ -d "$CONFIG_STAGING" ]; then
     mkdir -p "$CONFIG_TARGET"
-    for entry in model.json notifications.json .env mcp.json logger.ini; do
+    for entry in model.json notifications.json orchestration.json .env mcp.json logger.ini; do
         if [ -f "$CONFIG_STAGING/$entry" ]; then
             cp -a "$CONFIG_STAGING/$entry" "$CONFIG_TARGET/$entry"
         fi
