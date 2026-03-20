@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic import JsonValue
 
 import asyncio
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
@@ -467,3 +468,28 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
         cast(dict[str, JsonValue], state.result_envelope)["internal_data"],
     )
     assert internal_data["stdout"] == "/tmp\n"
+
+
+def test_execute_tool_marks_sqlite_lock_error_as_retryable() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-db-lock-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="dispatch_task",
+            args_summary={"task_id": "task-2"},
+            action=lambda: (_ for _ in ()).throw(
+                sqlite3.OperationalError("database is locked")
+            ),
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    assert result["ok"] is False
+    assert error["type"] == "internal_error"
+    assert error["retryable"] is True

@@ -5,10 +5,11 @@ import sqlite3
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from threading import RLock
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 
 
 class ApprovalTicketStatus(str, Enum):
@@ -62,41 +63,52 @@ def approval_signature_key(
 
 class ApprovalTicketRepository:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS approval_tickets (
-                tool_call_id   TEXT PRIMARY KEY,
-                signature_key  TEXT NOT NULL,
-                run_id         TEXT NOT NULL,
-                session_id     TEXT NOT NULL,
-                task_id        TEXT NOT NULL,
-                instance_id    TEXT NOT NULL,
-                role_id        TEXT NOT NULL,
-                tool_name      TEXT NOT NULL,
-                args_preview   TEXT NOT NULL DEFAULT '',
-                status         TEXT NOT NULL,
-                feedback       TEXT NOT NULL DEFAULT '',
-                created_at     TEXT NOT NULL,
-                updated_at     TEXT NOT NULL,
-                resolved_at    TEXT
+        def operation() -> None:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS approval_tickets (
+                    tool_call_id   TEXT PRIMARY KEY,
+                    signature_key  TEXT NOT NULL,
+                    run_id         TEXT NOT NULL,
+                    session_id     TEXT NOT NULL,
+                    task_id        TEXT NOT NULL,
+                    instance_id    TEXT NOT NULL,
+                    role_id        TEXT NOT NULL,
+                    tool_name      TEXT NOT NULL,
+                    args_preview   TEXT NOT NULL DEFAULT '',
+                    status         TEXT NOT NULL,
+                    feedback       TEXT NOT NULL DEFAULT '',
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL,
+                    resolved_at    TEXT
+                )
+                """
             )
-            """
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_run_status ON approval_tickets(run_id, status, created_at ASC)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_session_status ON approval_tickets(session_id, status, created_at ASC)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_signature ON approval_tickets(signature_key, updated_at DESC)"
+            )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="ApprovalTicketRepository",
+            operation_name="init_tables",
         )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_approval_tickets_run_status ON approval_tickets(run_id, status, created_at ASC)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_approval_tickets_session_status ON approval_tickets(session_id, status, created_at ASC)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_approval_tickets_signature ON approval_tickets(signature_key, updated_at DESC)"
-        )
-        self._conn.commit()
 
     def upsert_requested(
         self,
@@ -119,49 +131,61 @@ class ApprovalTicketRepository:
             tool_name=tool_name,
             args_preview=args_preview,
         )
-        existing = self.get(tool_call_id)
-        created_at = existing.created_at.isoformat() if existing is not None else now
-        resolved_at = (
-            existing.resolved_at.isoformat()
-            if existing and existing.resolved_at
-            else None
+
+        def operation() -> None:
+            existing = self.get(tool_call_id)
+            created_at = (
+                existing.created_at.isoformat() if existing is not None else now
+            )
+            resolved_at = (
+                existing.resolved_at.isoformat()
+                if existing and existing.resolved_at
+                else None
+            )
+            self._conn.execute(
+                """
+                INSERT INTO approval_tickets(tool_call_id, signature_key, run_id, session_id, task_id, instance_id,
+                                             role_id, tool_name, args_preview, status, feedback, created_at, updated_at, resolved_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tool_call_id)
+                DO UPDATE SET
+                    signature_key=excluded.signature_key,
+                    run_id=excluded.run_id,
+                    session_id=excluded.session_id,
+                    task_id=excluded.task_id,
+                    instance_id=excluded.instance_id,
+                    role_id=excluded.role_id,
+                    tool_name=excluded.tool_name,
+                    args_preview=excluded.args_preview,
+                    status=excluded.status,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    tool_call_id,
+                    signature_key,
+                    run_id,
+                    session_id,
+                    task_id,
+                    instance_id,
+                    role_id,
+                    tool_name,
+                    args_preview,
+                    ApprovalTicketStatus.REQUESTED.value,
+                    "",
+                    created_at,
+                    now,
+                    resolved_at,
+                ),
+            )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="ApprovalTicketRepository",
+            operation_name="upsert_requested",
         )
-        self._conn.execute(
-            """
-            INSERT INTO approval_tickets(tool_call_id, signature_key, run_id, session_id, task_id, instance_id,
-                                         role_id, tool_name, args_preview, status, feedback, created_at, updated_at, resolved_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(tool_call_id)
-            DO UPDATE SET
-                signature_key=excluded.signature_key,
-                run_id=excluded.run_id,
-                session_id=excluded.session_id,
-                task_id=excluded.task_id,
-                instance_id=excluded.instance_id,
-                role_id=excluded.role_id,
-                tool_name=excluded.tool_name,
-                args_preview=excluded.args_preview,
-                status=excluded.status,
-                updated_at=excluded.updated_at
-            """,
-            (
-                tool_call_id,
-                signature_key,
-                run_id,
-                session_id,
-                task_id,
-                instance_id,
-                role_id,
-                tool_name,
-                args_preview,
-                ApprovalTicketStatus.REQUESTED.value,
-                "",
-                created_at,
-                now,
-                resolved_at,
-            ),
-        )
-        self._conn.commit()
         record = self.get(tool_call_id)
         if record is None:
             raise RuntimeError(f"Failed to persist approval ticket {tool_call_id}")
@@ -176,15 +200,21 @@ class ApprovalTicketRepository:
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_at = now if status != ApprovalTicketStatus.REQUESTED else None
-        self._conn.execute(
-            """
-            UPDATE approval_tickets
-            SET status=?, feedback=?, updated_at=?, resolved_at=?
-            WHERE tool_call_id=?
-            """,
-            (status.value, feedback, now, resolved_at, tool_call_id),
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                """
+                UPDATE approval_tickets
+                SET status=?, feedback=?, updated_at=?, resolved_at=?
+                WHERE tool_call_id=?
+                """,
+                (status.value, feedback, now, resolved_at, tool_call_id),
+            ),
+            lock=self._lock,
+            repository_name="ApprovalTicketRepository",
+            operation_name="resolve",
         )
-        self._conn.commit()
         record = self.get(tool_call_id)
         if record is None:
             raise KeyError(f"Unknown approval ticket: {tool_call_id}")
@@ -201,26 +231,29 @@ class ApprovalTicketRepository:
         )
 
     def get(self, tool_call_id: str) -> ApprovalTicketRecord | None:
-        row = self._conn.execute(
-            "SELECT * FROM approval_tickets WHERE tool_call_id=?",
-            (tool_call_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM approval_tickets WHERE tool_call_id=?",
+                (tool_call_id,),
+            ).fetchone()
         if row is None:
             return None
         return self._to_record(row)
 
     def list_open_by_run(self, run_id: str) -> tuple[ApprovalTicketRecord, ...]:
-        rows = self._conn.execute(
-            "SELECT * FROM approval_tickets WHERE run_id=? AND status=? ORDER BY created_at ASC",
-            (run_id, ApprovalTicketStatus.REQUESTED.value),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM approval_tickets WHERE run_id=? AND status=? ORDER BY created_at ASC",
+                (run_id, ApprovalTicketStatus.REQUESTED.value),
+            ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
     def list_open_by_session(self, session_id: str) -> tuple[ApprovalTicketRecord, ...]:
-        rows = self._conn.execute(
-            "SELECT * FROM approval_tickets WHERE session_id=? AND status=? ORDER BY created_at ASC",
-            (session_id, ApprovalTicketStatus.REQUESTED.value),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM approval_tickets WHERE session_id=? AND status=? ORDER BY created_at ASC",
+                (session_id, ApprovalTicketStatus.REQUESTED.value),
+            ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
     def find_reusable(
@@ -241,29 +274,36 @@ class ApprovalTicketRepository:
             tool_name=tool_name,
             args_preview=args_preview,
         )
-        row = self._conn.execute(
-            """
-            SELECT * FROM approval_tickets
-            WHERE signature_key=?
-              AND status IN (?, ?)
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (
-                signature_key,
-                ApprovalTicketStatus.REQUESTED.value,
-                ApprovalTicketStatus.APPROVED.value,
-            ),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM approval_tickets
+                WHERE signature_key=?
+                  AND status IN (?, ?)
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (
+                    signature_key,
+                    ApprovalTicketStatus.REQUESTED.value,
+                    ApprovalTicketStatus.APPROVED.value,
+                ),
+            ).fetchone()
         if row is None:
             return None
         return self._to_record(row)
 
     def delete_by_session(self, session_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM approval_tickets WHERE session_id=?", (session_id,)
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM approval_tickets WHERE session_id=?", (session_id,)
+            ),
+            lock=self._lock,
+            repository_name="ApprovalTicketRepository",
+            operation_name="delete_by_session",
         )
-        self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> ApprovalTicketRecord:
         resolved_at_raw = row["resolved_at"]

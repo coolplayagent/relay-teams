@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from typing import cast
 
 import pytest
@@ -76,6 +77,26 @@ class _EventBus:
 
 
 class _RunRuntimeRepo:
+    def list_by_session(self, session_id: str):
+        _ = session_id
+        return ()
+
+
+class _FailingRunEventHub:
+    def publish(self, event) -> None:
+        _ = event
+        raise sqlite3.OperationalError("database is locked")
+
+
+class _FailingRunRuntimeRepo:
+    def update(self, run_id: str, **changes) -> None:
+        _ = (run_id, changes)
+        raise sqlite3.OperationalError("database is locked")
+
+    def get(self, run_id: str):
+        _ = run_id
+        raise sqlite3.OperationalError("database is locked")
+
     def list_by_session(self, session_id: str):
         _ = session_id
         return ()
@@ -176,3 +197,34 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
     assert event.event_type == RunEventType.RUN_STOPPED
     notification_event = queue.get_nowait()
     assert notification_event.event_type == RunEventType.NOTIFICATION_REQUESTED
+
+
+def test_worker_swallows_cleanup_failures_after_runner_exception() -> None:
+    control = RunControlManager()
+    injection = RunInjectionManager()
+    manager = RunManager(
+        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
+        injection_manager=injection,
+        run_event_hub=cast(RunEventHub, cast(object, _FailingRunEventHub())),
+        run_control_manager=control,
+        tool_approval_manager=ToolApprovalManager(),
+        session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
+        active_run_registry=ActiveSessionRunRegistry(),
+        run_runtime_repo=cast(
+            RunRuntimeRepository, cast(object, _FailingRunRuntimeRepo())
+        ),
+    )
+    manager._running_run_ids.add("run-1")
+
+    async def runner():
+        raise RuntimeError("boom")
+
+    asyncio.run(
+        manager._worker(
+            run_id="run-1",
+            session_id="session-1",
+            runner=runner,
+        )
+    )
+
+    assert "run-1" not in manager._running_run_ids

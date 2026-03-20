@@ -5,15 +5,14 @@ from pydantic import JsonValue
 
 import json
 import sqlite3
-import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
 
 
@@ -21,13 +20,14 @@ class MessageRepository:
     """Persists conversation-safe LLM message history."""
 
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        with self._lock:
+        def operation() -> None:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -77,7 +77,15 @@ class MessageRepository:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id)"
             )
-            self._conn.commit()
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="init_tables",
+        )
 
     def append(
         self,
@@ -112,15 +120,18 @@ class MessageRepository:
             )
             for msg in messages
         ]
-        with self._lock:
-            self._run_write_with_retry(
-                lambda: self._conn.executemany(
-                    "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
-            )
-            self._run_write_with_retry(self._conn.commit)
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.executemany(
+                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            ),
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="append",
+        )
 
     def get_history(self, instance_id: str) -> list[ModelMessage]:
         return self._read_history(
@@ -191,13 +202,16 @@ class MessageRepository:
         return _dedupe_duplicate_objective_messages(results)
 
     def delete_by_session(self, session_id: str) -> None:
-        with self._lock:
-            self._run_write_with_retry(
-                lambda: self._conn.execute(
-                    "DELETE FROM messages WHERE session_id=?", (session_id,)
-                )
-            )
-            self._run_write_with_retry(self._conn.commit)
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM messages WHERE session_id=?", (session_id,)
+            ),
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="delete_by_session",
+        )
 
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
@@ -218,7 +232,8 @@ class MessageRepository:
         keep_message_count: int,
     ) -> None:
         safe_keep_count = max(1, int(keep_message_count))
-        with self._lock:
+
+        def operation() -> None:
             rows = self._conn.execute(
                 "SELECT id FROM messages WHERE conversation_id=? ORDER BY id ASC",
                 (conversation_id,),
@@ -233,13 +248,19 @@ class MessageRepository:
             if not stale_ids:
                 return
             placeholders = ",".join("?" for _ in stale_ids)
-            self._run_write_with_retry(
-                lambda: self._conn.execute(
-                    f"DELETE FROM messages WHERE id IN ({placeholders})",
-                    stale_ids,
-                )
+            self._conn.execute(
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                stale_ids,
             )
-            self._run_write_with_retry(self._conn.commit)
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="compact_conversation_history",
+        )
 
     def append_user_prompt_if_missing(
         self,
@@ -259,25 +280,62 @@ class MessageRepository:
         if not target:
             return False
         resolved_conversation_id = conversation_id or instance_id
-        with self._lock:
-            self.prune_conversation_history_to_safe_boundary(resolved_conversation_id)
+        now = datetime.now(tz=timezone.utc).isoformat()
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[UserPromptPart(content=target)])]
+            ).decode()
+        )
+
+        def operation() -> bool:
+            rows = self._conn.execute(
+                "SELECT id, message_json FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (resolved_conversation_id,),
+            ).fetchall()
+            allowed_ids = _safe_row_ids(rows)
+            stale_ids = [
+                int(row["id"])
+                for row in rows
+                if isinstance(row["id"], int) and int(row["id"]) not in allowed_ids
+            ]
+            if stale_ids:
+                placeholders = ",".join("?" for _ in stale_ids)
+                self._conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    stale_ids,
+                )
             history = self.get_history_for_conversation_task(
                 resolved_conversation_id,
                 task_id,
             )
             if _history_ends_with_user_prompt(history, target):
                 return False
-            self.append(
-                session_id=session_id,
-                workspace_id=workspace_id,
-                conversation_id=resolved_conversation_id,
-                agent_role_id=agent_role_id,
-                instance_id=instance_id,
-                task_id=task_id,
-                trace_id=trace_id,
-                messages=[ModelRequest(parts=[UserPromptPart(content=target)])],
+            self._conn.execute(
+                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    workspace_id,
+                    resolved_conversation_id,
+                    agent_role_id or "",
+                    instance_id,
+                    task_id,
+                    trace_id,
+                    "user",
+                    message_json,
+                    now,
+                ),
             )
             return True
+
+        return run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="append_user_prompt_if_missing",
+        )
 
     def get_history_for_task(
         self, instance_id: str, task_id: str
@@ -315,7 +373,7 @@ class MessageRepository:
         query: str,
         params: tuple[str, ...],
     ) -> None:
-        with self._lock:
+        def operation() -> None:
             rows = self._conn.execute(query, params).fetchall()
             if not rows:
                 return
@@ -328,35 +386,19 @@ class MessageRepository:
             if not stale_ids:
                 return
             placeholders = ",".join("?" for _ in stale_ids)
-            self._run_write_with_retry(
-                lambda: self._conn.execute(
-                    f"DELETE FROM messages WHERE id IN ({placeholders})",
-                    stale_ids,
-                )
+            self._conn.execute(
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                stale_ids,
             )
-            self._run_write_with_retry(self._conn.commit)
 
-    def _run_write_with_retry(self, op: Callable[[], object]) -> None:
-        max_retries = 8
-        delay = 0.01
-        for attempt in range(max_retries + 1):
-            try:
-                _ = op()
-                return
-            except sqlite3.OperationalError as exc:
-                if not _is_retryable_write_error(exc) or attempt >= max_retries:
-                    raise
-                time.sleep(delay)
-                delay = min(delay * 2, 0.2)
-
-
-def _is_retryable_write_error(exc: sqlite3.OperationalError) -> bool:
-    message = str(exc).lower()
-    return (
-        "database is locked" in message
-        or "database table is locked" in message
-        or "another row available" in message
-    )
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="prune_to_safe_boundary",
+        )
 
 
 def _role(msg: ModelMessage) -> str:

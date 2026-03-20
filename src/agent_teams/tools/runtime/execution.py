@@ -7,6 +7,7 @@ import asyncio
 import inspect
 import json
 import logging
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from json import dumps
@@ -15,6 +16,7 @@ from uuid import uuid4
 
 from agent_teams.logger import get_logger, log_event, log_tool_error
 from agent_teams.notifications import NotificationContext, NotificationType
+from agent_teams.persistence import is_retryable_sqlite_error
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_models import RunEvent
 
@@ -218,6 +220,8 @@ def _error_payload(exc: Exception) -> ToolError:
         retryable = True
     elif isinstance(exc, PermissionError):
         err_type = "permission_error"
+        retryable = True
+    elif isinstance(exc, sqlite3.OperationalError) and is_retryable_sqlite_error(exc):
         retryable = True
 
     return ToolError(

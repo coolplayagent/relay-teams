@@ -8,7 +8,7 @@ from threading import RLock
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 
 
 class RunRuntimeStatus(str, Enum):
@@ -58,13 +58,14 @@ class RunRuntimeRecord(BaseModel):
 
 class RunRuntimeRepository:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        with self._lock:
+        def operation() -> None:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_runtime (
@@ -89,10 +90,18 @@ class RunRuntimeRepository:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_run_runtime_status ON run_runtime(status, updated_at DESC)"
             )
-            self._conn.commit()
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="RunRuntimeRepository",
+            operation_name="init_tables",
+        )
 
     def upsert(self, record: RunRuntimeRecord) -> RunRuntimeRecord:
-        with self._lock:
+        def operation() -> None:
             existing = self.get(record.run_id)
             created_at = (
                 existing.created_at.isoformat()
@@ -134,11 +143,19 @@ class RunRuntimeRepository:
                     updated_at,
                 ),
             )
-            self._conn.commit()
-            next_record = self.get(record.run_id)
-            if next_record is None:
-                raise RuntimeError(f"Failed to persist run runtime {record.run_id}")
-            return next_record
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="RunRuntimeRepository",
+            operation_name="upsert",
+        )
+        next_record = self.get(record.run_id)
+        if next_record is None:
+            raise RuntimeError(f"Failed to persist run runtime {record.run_id}")
+        return next_record
 
     def ensure(
         self,
@@ -212,11 +229,16 @@ class RunRuntimeRepository:
             return tuple(self._to_record(row) for row in rows)
 
     def delete_by_session(self, session_id: str) -> None:
-        with self._lock:
-            self._conn.execute(
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
                 "DELETE FROM run_runtime WHERE session_id=?", (session_id,)
-            )
-            self._conn.commit()
+            ),
+            lock=self._lock,
+            repository_name="RunRuntimeRepository",
+            operation_name="delete_by_session",
+        )
 
     def _to_record(self, row: sqlite3.Row) -> RunRuntimeRecord:
         return RunRuntimeRecord(

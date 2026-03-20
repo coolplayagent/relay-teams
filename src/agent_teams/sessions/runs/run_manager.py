@@ -454,21 +454,20 @@ class RunManager:
                     else f"Run {run_id} failed."
                 )
             )
-            if self._run_runtime_repo is not None:
-                self._run_runtime_repo.update(
-                    run_id,
-                    root_task_id=result.root_task_id,
-                    status=terminal_status,
-                    phase=RunRuntimePhase.TERMINAL,
-                    active_instance_id=None,
-                    active_task_id=None,
-                    active_role_id=None,
-                    active_subagent_instance_id=None,
-                    last_error=result.output
-                    if terminal_status == RunRuntimeStatus.FAILED
-                    else None,
-                )
-            self._run_event_hub.publish(
+            self._safe_runtime_update(
+                run_id,
+                root_task_id=result.root_task_id,
+                status=terminal_status,
+                phase=RunRuntimePhase.TERMINAL,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error=result.output
+                if terminal_status == RunRuntimeStatus.FAILED
+                else None,
+            )
+            self._safe_publish_run_event(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
@@ -476,7 +475,8 @@ class RunManager:
                     task_id=result.root_task_id,
                     event_type=terminal_event_type,
                     payload_json=dumps(result.model_dump()),
-                )
+                ),
+                failure_event="run.event.publish_failed",
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id
@@ -502,17 +502,16 @@ class RunManager:
                 body=notification_body,
             )
         except asyncio.CancelledError:
-            if self._run_runtime_repo is not None:
-                self._run_runtime_repo.update(
-                    run_id,
-                    status=RunRuntimeStatus.STOPPED,
-                    phase=RunRuntimePhase.IDLE,
-                    active_instance_id=None,
-                    active_task_id=None,
-                    active_role_id=None,
-                    active_subagent_instance_id=None,
-                    last_error="stopped_by_user",
-                )
+            self._safe_runtime_update(
+                run_id,
+                status=RunRuntimeStatus.STOPPED,
+                phase=RunRuntimePhase.IDLE,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error="stopped_by_user",
+            )
             self._run_control_manager.publish_run_stopped(
                 session_id=session_id,
                 run_id=run_id,
@@ -537,18 +536,17 @@ class RunManager:
                 body=f"Run {run_id} was stopped by user.",
             )
         except Exception as exc:
-            if self._run_runtime_repo is not None:
-                self._run_runtime_repo.update(
-                    run_id,
-                    status=RunRuntimeStatus.FAILED,
-                    phase=RunRuntimePhase.TERMINAL,
-                    active_instance_id=None,
-                    active_task_id=None,
-                    active_role_id=None,
-                    active_subagent_instance_id=None,
-                    last_error=str(exc),
-                )
-            self._run_event_hub.publish(
+            self._safe_runtime_update(
+                run_id,
+                status=RunRuntimeStatus.FAILED,
+                phase=RunRuntimePhase.TERMINAL,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error=str(exc),
+            )
+            self._safe_publish_run_event(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
@@ -556,7 +554,8 @@ class RunManager:
                     task_id=None,
                     event_type=RunEventType.RUN_FAILED,
                     payload_json=dumps({"error": str(exc)}),
-                )
+                ),
+                failure_event="run.event.publish_failed",
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id
@@ -577,7 +576,7 @@ class RunManager:
                 body=f"Run {run_id} failed: {exc}",
             )
         finally:
-            self._finalize_run(run_id=run_id, session_id=session_id)
+            self._safe_finalize_run(run_id=run_id, session_id=session_id)
 
     def _finalize_run(self, *, run_id: str, session_id: str) -> None:
         self._injection_manager.deactivate(run_id)
@@ -590,6 +589,28 @@ class RunManager:
             self._remember_active_run(session_id, run_id)
             return
         self._drop_active_run(session_id, run_id)
+
+    def _safe_finalize_run(self, *, run_id: str, session_id: str) -> None:
+        try:
+            self._finalize_run(run_id=run_id, session_id=session_id)
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.finalize.failed",
+                    message="Run finalization failed",
+                    exc_info=exc,
+                )
+            self._injection_manager.deactivate(run_id)
+            self._run_control_manager.unregister_run_task(run_id)
+            self._running_run_ids.discard(run_id)
+            _ = self._pending_runs.pop(run_id, None)
+            self._resume_requested_runs.discard(run_id)
 
     async def stream_run_events(self, run_id: str):
         queue = self._run_event_hub.subscribe(run_id)
@@ -1010,13 +1031,80 @@ class RunManager:
     ) -> None:
         if self._notification_service is None:
             return
-        _ = self._notification_service.emit(
-            notification_type=notification_type,
-            title=title,
-            body=body,
-            context=NotificationContext(
-                session_id=session_id,
-                run_id=run_id,
+        try:
+            _ = self._notification_service.emit(
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                context=NotificationContext(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                ),
+            )
+        except Exception as exc:
+            with bind_trace_context(
                 trace_id=trace_id,
-            ),
-        )
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.notification.failed",
+                    message="Run notification failed",
+                    payload={"notification_type": notification_type.value},
+                    exc_info=exc,
+                )
+
+    def _safe_runtime_update(self, run_id: str, **changes: object) -> None:
+        if self._run_runtime_repo is None:
+            return
+        try:
+            self._run_runtime_repo.update(run_id, **changes)
+        except Exception as exc:
+            session_id = ""
+            try:
+                runtime = self._runtime_for_run(run_id)
+                session_id = runtime.session_id if runtime is not None else ""
+            except Exception:
+                session_id = ""
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.runtime.update_failed",
+                    message="Run runtime update failed",
+                    payload={
+                        "change_count": len(changes),
+                        "change_keys": ",".join(sorted(changes.keys())),
+                    },
+                    exc_info=exc,
+                )
+
+    def _safe_publish_run_event(
+        self,
+        event: RunEvent,
+        *,
+        failure_event: str,
+    ) -> None:
+        try:
+            self._run_event_hub.publish(event)
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=event.trace_id,
+                run_id=event.run_id,
+                session_id=event.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event=failure_event,
+                    message="Run event publish failed",
+                    payload={"event_type": event.event_type.value},
+                    exc_info=exc,
+                )
