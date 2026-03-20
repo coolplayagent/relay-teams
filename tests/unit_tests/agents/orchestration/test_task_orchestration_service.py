@@ -245,27 +245,17 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
             bound_instance_id,
             "spec_coder",
             created.envelope.task_id,
-            "## Task Contract\n"
-            "Title: Implement endpoint\n"
-            "Objective: Implement the endpoint\n\n"
-            "## Coordinator Prompt\n"
-            "Execute this task contract and return the requested result.\n\n",
+            "Execute this task contract and return the requested result.",
         ),
         (
             bound_instance_id,
             "spec_coder",
             created.envelope.task_id,
-            "## Task Contract\n"
-            "Title: Implement endpoint\n"
-            "Objective: Implement the endpoint\n\n"
-            "## Coordinator Prompt\n"
-            "Add pagination to the response.\n\n",
+            "Add pagination to the response.",
         ),
     ]
     assert execution_service.calls[-1][3] is not None
-    prompt_part = str(execution_service.calls[-1][3])
-    assert prompt_part.startswith("## Task Contract")
-    assert "Add pagination to the response." in prompt_part
+    assert "Add pagination to the response." in str(execution_service.calls[-1][3])
 
 
 @pytest.mark.asyncio

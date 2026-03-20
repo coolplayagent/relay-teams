@@ -29,9 +29,7 @@ def resolve_workspace_tmp_path(
     candidate = (tmp_root / requested_path).resolve()
 
     if candidate == tmp_root:
-        raise ValueError(
-            "Path must point to a file inside the workspace tmp directory"
-        )
+        raise ValueError("Path must point to a file inside the workspace tmp directory")
     if tmp_root not in candidate.parents:
         raise ValueError(f"Path is outside workspace tmp directory: {relative_path}")
 

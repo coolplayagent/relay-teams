@@ -87,4 +87,6 @@ def test_resolve_workspace_tmp_path_rejects_absolute_paths(
     workspace = _build_workspace_handle(tmp_path)
 
     with pytest.raises(ValueError, match="relative to the workspace tmp directory"):
-        resolve_workspace_tmp_path(workspace, str((tmp_path / "tmp" / "file.txt").resolve()))
+        resolve_workspace_tmp_path(
+            workspace, str((tmp_path / "tmp" / "file.txt").resolve())
+        )

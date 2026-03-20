@@ -8,7 +8,6 @@ from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
-from agent_teams.agents.tasks.dispatch_prompts import build_dispatch_prompt
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -230,11 +229,9 @@ class TaskOrchestrationService:
 
         self._assert_instance_available(task=record, instance_id=instance_id)
 
-        effective_prompt = build_dispatch_prompt(
-            title=record.envelope.title
-            or _resolved_title(None, record.envelope.objective),
-            objective=record.envelope.objective,
-            prompt=normalized_prompt,
+        effective_prompt = (
+            normalized_prompt
+            or "Execute this task contract and return the requested result."
         )
 
         await self._task_execution_service.execute(
