@@ -161,12 +161,19 @@ class _FakeAgentRun:
 class _FakeAgent:
     def __init__(self) -> None:
         self.prompts: list[str | None] = []
+        self.usage_limits: list[object] = []
 
     def iter(
-        self, prompt: str | None, *, deps: object, message_history: object
+        self,
+        prompt: str | None,
+        *,
+        deps: object,
+        message_history: object,
+        usage_limits: object,
     ) -> _FakeAgentRun:
         _ = (deps, message_history)
         self.prompts.append(prompt)
+        self.usage_limits.append(usage_limits)
         return _FakeAgentRun()
 
 
@@ -287,9 +294,14 @@ class _SequentialAgent:
         self.histories: list[list[object]] = []
 
     def iter(
-        self, prompt: str | None, *, deps: object, message_history: object
+        self,
+        prompt: str | None,
+        *,
+        deps: object,
+        message_history: object,
+        usage_limits: object,
     ) -> _ScriptedAgentRun:
-        _ = deps
+        _ = (deps, usage_limits)
         self.prompts.append(prompt)
         self.histories.append(list(cast(list[object], message_history)))
         if not self._runs:
@@ -391,9 +403,14 @@ class _FakeAgentWithNode:
         self._node = node
 
     def iter(
-        self, prompt: str | None, *, deps: object, message_history: object
+        self,
+        prompt: str | None,
+        *,
+        deps: object,
+        message_history: object,
+        usage_limits: object,
     ) -> _FakeAgentRunWithNode:
-        _ = (prompt, deps, message_history)
+        _ = (prompt, deps, message_history, usage_limits)
         return _FakeAgentRunWithNode(self._node)
 
 
@@ -479,9 +496,14 @@ class _FakeAgentRunWithMutableUsage:
 
 class _FakeAgentWithMutableUsageNode:
     def iter(
-        self, prompt: str | None, *, deps: object, message_history: object
+        self,
+        prompt: str | None,
+        *,
+        deps: object,
+        message_history: object,
+        usage_limits: object,
     ) -> _FakeAgentRunWithMutableUsage:
-        _ = (prompt, deps, message_history)
+        _ = (prompt, deps, message_history, usage_limits)
         return _FakeAgentRunWithMutableUsage()
 
 
@@ -683,6 +705,10 @@ async def test_generate_persists_current_turn_prompt_even_with_existing_history(
 
     history = message_repo.get_history("inst-2")
     assert fake_agent.prompts == [None]
+    assert len(fake_agent.usage_limits) == 1
+    usage_limits = fake_agent.usage_limits[0]
+    assert isinstance(usage_limits, llm_module.UsageLimits)
+    assert usage_limits.request_limit == llm_module.LLM_REQUEST_LIMIT == 500
     assert isinstance(history[-1], ModelRequest)
     assert history[-1].parts[0].content == "current turn"
 

@@ -30,6 +30,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.usage import UsageLimits
 
 from agent_teams.providers.llm_retry import (
     LlmRetrySchedule,
@@ -99,6 +100,7 @@ if TYPE_CHECKING:
     from agent_teams.roles.role_registry import RoleRegistry
 
 LOGGER = get_logger(__name__)
+LLM_REQUEST_LIMIT = 500
 
 
 class _AgentRunResult(Protocol):
@@ -361,6 +363,7 @@ class AgentLlmSession:
                     None,
                     deps=deps,
                     message_history=history,
+                    usage_limits=UsageLimits(request_limit=LLM_REQUEST_LIMIT),
                 ) as agent_run:
                     async for node in agent_run:
                         control_ctx.raise_if_cancelled()

@@ -5,8 +5,10 @@ from pydantic import JsonValue
 
 import asyncio
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import cast
 
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.skill_models import SkillScope
 from agent_teams.roles.role_models import RoleDefinition
@@ -326,6 +328,7 @@ class _FakeDeps:
         self.tool_approval_policy = _FakePolicy()
         self.run_runtime_repo = _FakeRunRuntimeRepo()
         self.notification_service = None
+        self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
 
 
 class _FakeCtx:
