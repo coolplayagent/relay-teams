@@ -61,6 +61,9 @@ class _SessionRepo:
             metadata=metadata or {},
         )
 
+    def mark_started(self, session_id: str) -> SessionRecord:
+        return self.get(session_id)
+
 
 class _EventBus:
     def emit(self, event) -> None:

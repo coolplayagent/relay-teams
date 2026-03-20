@@ -799,6 +799,7 @@ Notes:
 - `objective` is optional.
 - `workspace_id` is optional.
 - When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
+- `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `~/.config/agent-teams/prompts.json`.
 - When `workspace_id` does not exist, the endpoint returns `404`.
 - When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
 

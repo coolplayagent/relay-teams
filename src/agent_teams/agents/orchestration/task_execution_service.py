@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
+from agent_teams.agents.execution.prompt_instruction_state import (
+    record_prompt_instruction_paths_loaded,
+)
 from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,
@@ -211,6 +214,7 @@ class TaskExecutionService(BaseModel):
                 role=role_for_run,
                 task=task,
                 working_directory=workspace.resolve_workdir(),
+                worktree_root=workspace.locations.worktree_root or workspace.root_path,
                 shared_state_snapshot=snapshot,
             )
             self.agent_repo.update_runtime_snapshot(
@@ -455,19 +459,26 @@ class TaskExecutionService(BaseModel):
         role: RoleDefinition,
         task: TaskEnvelope,
         working_directory: Path | None,
+        worktree_root: Path | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
     ) -> tuple[str, str]:
-        runtime_system_prompt = await self.prompt_builder.build(
+        prompt_result = await self.prompt_builder.build_details(
             PromptBuildInput(
                 role=role,
                 task=task,
                 topology=self._topology_for_run(task.trace_id),
                 shared_state_snapshot=shared_state_snapshot,
                 working_directory=working_directory,
+                worktree_root=worktree_root,
             )
         )
+        record_prompt_instruction_paths_loaded(
+            shared_store=self.shared_store,
+            task_id=task.task_id,
+            paths=prompt_result.local_instruction_paths,
+        )
         runtime_tools = await self._build_runtime_tools_snapshot(role)
-        return runtime_system_prompt, json.dumps(
+        return prompt_result.prompt, json.dumps(
             runtime_tools.model_dump(mode="json"),
             ensure_ascii=False,
             indent=2,

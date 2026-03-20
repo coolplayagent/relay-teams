@@ -37,6 +37,7 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.env_file == (config_dir / ".env").resolve()
     assert resolved.paths.roles_dir == (config_dir / "roles")
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
+    assert resolved.paths.prompts_file == (config_dir / "prompts.json").resolve()
     assert resolved.llm_retry.max_retries == 5
     assert resolved.llm_retry.initial_delay_ms == 2000
     assert resolved.llm_retry.jitter is False
@@ -85,6 +86,45 @@ def test_load_runtime_config_reports_missing_model_config_without_raising(
     assert resolved.model_status.loaded is False
     assert resolved.model_status.error is not None
     assert resolved.llm_retry.max_retries == 5
+
+
+def test_load_runtime_config_reads_prompt_instructions(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "default": {
+                    "model": "fake-model",
+                    "base_url": "http://localhost:8000/v1",
+                    "api_key": "test-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "prompts.json").write_text(
+        json.dumps({"instructions": ["docs/*.md"]}),
+        encoding="utf-8",
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert resolved.prompt_instructions.instructions == ("docs/*.md",)
+
+
+def test_load_runtime_config_rejects_invalid_prompts_config(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "prompts.json").write_text(
+        json.dumps({"instructions": [1]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert "Invalid prompts.json" in str(exc_info.value)
 
 
 def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None:

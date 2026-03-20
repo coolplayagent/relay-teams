@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
+from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.mcp.mcp_registry import McpRegistry
@@ -37,6 +39,8 @@ def create_task_execution_service(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
+    app_config_dir: Path | None,
+    prompt_instructions: tuple[str, ...] = (),
     provider_factory: Callable[[RoleDefinition], LLMProvider],
     tool_registry: ToolRegistry,
     skill_registry: SkillRegistry,
@@ -58,6 +62,10 @@ def create_task_execution_service(
         prompt_builder=RuntimePromptBuilder(
             role_registry=role_registry,
             mcp_registry=mcp_registry,
+            instruction_resolver=PromptInstructionResolver(
+                app_config_dir=app_config_dir,
+                instructions=prompt_instructions,
+            ),
         ),
         provider_factory=provider_factory,
         tool_registry=tool_registry,

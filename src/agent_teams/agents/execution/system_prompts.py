@@ -9,6 +9,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.agents.tasks.models import TaskEnvelope
+from agent_teams.agents.execution.prompt_instructions import (
+    LoadedPromptInstructions,
+    PromptInstructionResolver,
+)
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.roles.role_models import RoleDefinition
@@ -62,6 +66,7 @@ class RuntimePromptBuildInput(BaseModel):
     topology: RunTopologySnapshot | None = None
     shared_state_snapshot: tuple[tuple[str, str], ...]
     working_directory: Path | None = None
+    worktree_root: Path | None = None
 
 
 class PromptSkillInstruction(BaseModel):
@@ -69,6 +74,13 @@ class PromptSkillInstruction(BaseModel):
 
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
+
+
+class RuntimeSystemPromptResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    prompt: str = Field(min_length=1)
+    local_instruction_paths: tuple[Path, ...] = ()
 
 
 class SystemPromptBuildInput(BaseModel):
@@ -137,18 +149,47 @@ async def build_runtime_system_prompt(
     *,
     role_registry: RoleRegistry | None = None,
     mcp_registry: McpRegistry | None = None,
+    instruction_resolver: PromptInstructionResolver | None = None,
 ) -> str:
+    result = await build_runtime_system_prompt_result(
+        data,
+        role_registry=role_registry,
+        mcp_registry=mcp_registry,
+        instruction_resolver=instruction_resolver,
+    )
+    return result.prompt
+
+
+async def build_runtime_system_prompt_result(
+    data: RuntimePromptBuildInput,
+    *,
+    role_registry: RoleRegistry | None = None,
+    mcp_registry: McpRegistry | None = None,
+    instruction_resolver: PromptInstructionResolver | None = None,
+) -> RuntimeSystemPromptResult:
     prompt_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
     topology = data.topology
 
     # Include environment information for all roles
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
     prompt_sections.append(env_prompt)
+    loaded_instructions = await _load_runtime_prompt_instructions(
+        instruction_resolver=instruction_resolver,
+        working_directory=data.working_directory,
+        worktree_root=data.worktree_root,
+    )
+    prompt_sections.extend(loaded_instructions.sections)
 
     if is_main_agent_role_definition(data.role):
-        return "\n\n".join(prompt_sections)
+        return RuntimeSystemPromptResult(
+            prompt="\n\n".join(prompt_sections),
+            local_instruction_paths=loaded_instructions.local_paths,
+        )
     if not is_coordinator_role_definition(data.role):
-        return "\n\n".join(prompt_sections)
+        return RuntimeSystemPromptResult(
+            prompt="\n\n".join(prompt_sections),
+            local_instruction_paths=loaded_instructions.local_paths,
+        )
     if role_registry is None or mcp_registry is None:
         raise RuntimeError(
             "Coordinator runtime prompt generation requires role_registry and mcp_registry"
@@ -165,7 +206,10 @@ async def build_runtime_system_prompt(
         )
     if roles_prompt:
         prompt_sections.append(roles_prompt)
-    return "\n\n".join(prompt_sections)
+    return RuntimeSystemPromptResult(
+        prompt="\n\n".join(prompt_sections),
+        local_instruction_paths=loaded_instructions.local_paths,
+    )
 
 
 async def build_available_roles_prompt(
@@ -224,6 +268,23 @@ def build_system_prompt(data: SystemPromptBuildInput) -> str:
     return "\n\n".join(sections)
 
 
+async def _load_runtime_prompt_instructions(
+    *,
+    instruction_resolver: PromptInstructionResolver | None,
+    working_directory: Path | None,
+    worktree_root: Path | None,
+) -> LoadedPromptInstructions:
+    resolver = (
+        instruction_resolver
+        if instruction_resolver is not None
+        else PromptInstructionResolver()
+    )
+    return await resolver.load_initial_instructions(
+        working_directory=working_directory,
+        worktree_root=worktree_root,
+    )
+
+
 async def _build_available_role_block(
     *,
     role: RoleDefinition,
@@ -272,10 +333,19 @@ class RuntimePromptBuilder(BaseModel):
 
     role_registry: RoleRegistry | None = None
     mcp_registry: McpRegistry | None = None
+    instruction_resolver: PromptInstructionResolver | None = None
 
     async def build(self, data: PromptBuildInput) -> str:
-        return await build_runtime_system_prompt(
+        result = await self.build_details(data)
+        return result.prompt
+
+    async def build_details(
+        self,
+        data: PromptBuildInput,
+    ) -> RuntimeSystemPromptResult:
+        return await build_runtime_system_prompt_result(
             data,
             role_registry=self.role_registry,
             mcp_registry=self.mcp_registry,
+            instruction_resolver=self.instruction_resolver,
         )

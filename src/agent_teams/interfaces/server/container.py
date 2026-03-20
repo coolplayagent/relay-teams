@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -231,6 +232,10 @@ class ServerContainer:
             prompt_builder=RuntimePromptBuilder(
                 role_registry=self.role_registry,
                 mcp_registry=self.mcp_registry,
+                instruction_resolver=PromptInstructionResolver(
+                    app_config_dir=runtime.paths.config_dir,
+                    instructions=runtime.prompt_instructions.instructions,
+                ),
             ),
             provider_factory=self._provider_factory,
             task_execution_service=self.task_execution_service,
@@ -367,6 +372,8 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
+            app_config_dir=self.runtime.paths.config_dir,
+            prompt_instructions=self.runtime.prompt_instructions.instructions,
             provider_factory=self._provider_factory,
             tool_registry=self.tool_registry,
             skill_registry=self.skill_registry,
@@ -416,6 +423,10 @@ class ServerContainer:
         self.meta_agent.coordinator.prompt_builder = RuntimePromptBuilder(
             role_registry=self.role_registry,
             mcp_registry=self.mcp_registry,
+            instruction_resolver=PromptInstructionResolver(
+                app_config_dir=self.runtime.paths.config_dir,
+                instructions=self.runtime.prompt_instructions.instructions,
+            ),
         )
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service

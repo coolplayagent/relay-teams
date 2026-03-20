@@ -7,6 +7,11 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 
+from agent_teams.agents.execution.prompt_instruction_state import (
+    filter_unloaded_prompt_instruction_paths,
+    record_prompt_instruction_paths_loaded,
+)
+from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -176,6 +181,33 @@ def _project_read_result(
     )
 
 
+async def resolve_read_instruction_sections(
+    *,
+    deps: ToolDeps,
+    file_path: Path,
+) -> tuple[str, ...]:
+    workspace_root = deps.workspace.locations.worktree_root or deps.workspace.root_path
+    resolver = PromptInstructionResolver()
+    candidate_paths = resolver.resolve_dynamic_paths(
+        file_path=file_path,
+        workspace_root=workspace_root,
+    )
+    unresolved_paths = filter_unloaded_prompt_instruction_paths(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        paths=candidate_paths,
+    )
+    if not unresolved_paths:
+        return ()
+    loaded = await resolver.load_paths(unresolved_paths)
+    record_prompt_instruction_paths_loaded(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        paths=loaded.local_paths,
+    )
+    return loaded.sections
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def read(
@@ -244,6 +276,14 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
             output = [f"<path>{file_path}</path>"]
             output.append("<type>file</type>")
+            instruction_sections = await resolve_read_instruction_sections(
+                deps=ctx.deps,
+                file_path=file_path,
+            )
+            if instruction_sections:
+                output.append("<instructions>")
+                output.append("\n\n".join(instruction_sections))
+                output.append("</instructions>")
             output.append("<content>")
 
             numbered_lines = [f"{offset + i}: {line}" for i, line in enumerate(lines)]

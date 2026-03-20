@@ -118,6 +118,9 @@ class _SessionRepo:
             metadata=metadata or {},
         )
 
+    def mark_started(self, session_id: str) -> SessionRecord:
+        return self.get(session_id)
+
 
 def _make_run_manager(control: RunControlManager) -> RunManager:
     hub = RunEventHub()

@@ -8,6 +8,7 @@ from agent_teams.builtin.resources import (
     get_builtin_model_config_path,
     get_builtin_notifications_config_path,
     get_builtin_orchestration_config_path,
+    get_builtin_prompts_config_path,
     get_builtin_roles_dir,
     get_builtin_skills_dir,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "get_builtin_model_config_path",
     "get_builtin_notifications_config_path",
     "get_builtin_orchestration_config_path",
+    "get_builtin_prompts_config_path",
     "get_builtin_roles_dir",
     "get_builtin_skills_dir",
 ]

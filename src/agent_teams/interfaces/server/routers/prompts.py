@@ -7,6 +7,7 @@ from typing import Annotated, ClassVar
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.interfaces.server.deps import (
     get_mcp_registry,
     get_role_registry,
@@ -27,6 +28,7 @@ from agent_teams.agents.execution.user_prompts import (
     build_user_prompt,
 )
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.paths import get_app_config_dir
 from agent_teams.roles.role_registry import RoleRegistry
 
 from agent_teams.skills.skill_registry import SkillRegistry
@@ -89,27 +91,34 @@ async def preview_prompts(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     working_directory = None
+    worktree_root = None
     if req.workspace_id is not None:
         try:
             workspace_service.require_workspace(req.workspace_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Workspace not found") from exc
-        working_directory = workspace_manager.resolve(
+        workspace = workspace_manager.resolve(
             session_id="prompt-preview",
             role_id=role.role_id,
             instance_id=None,
             workspace_id=req.workspace_id,
             conversation_id="prompt-preview",
-        ).resolve_workdir()
+        )
+        working_directory = workspace.resolve_workdir()
+        worktree_root = workspace.locations.worktree_root or workspace.root_path
 
     runtime_system_prompt = await RuntimePromptBuilder(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
+        instruction_resolver=PromptInstructionResolver(
+            app_config_dir=get_app_config_dir()
+        ),
     ).build(
         RuntimePromptBuildInput(
             role=role,
             shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
             working_directory=working_directory,
+            worktree_root=worktree_root,
         )
     )
     skill_instructions = tuple(

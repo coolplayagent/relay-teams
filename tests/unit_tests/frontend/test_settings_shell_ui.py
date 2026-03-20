@@ -76,6 +76,7 @@ console.log(JSON.stringify({
     assert load_calls == {
         "model": 1,
         "roles": 0,
+        "orchestration": 0,
         "environment": 0,
         "notifications": 1,
         "proxy": 0,
@@ -333,6 +334,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
+    mock_orchestration_settings_path = tmp_path / "mockOrchestrationSettings.mjs"
     mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
@@ -371,6 +373,18 @@ export function bindNotificationSettingsHandlers() {
 
 export async function loadNotificationSettingsPanel() {
     globalThis.__loadCalls.notifications += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_orchestration_settings_path.write_text(
+        """
+export function bindOrchestrationSettingsHandlers() {
+    globalThis.__bindCalls.orchestration += 1;
+}
+
+export async function loadOrchestrationSettingsPanel() {
+    globalThis.__loadCalls.orchestration += 1;
 }
 """.strip(),
         encoding="utf-8",
@@ -421,6 +435,7 @@ export async function loadSkillsStatusPanel() {
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
+        .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
@@ -589,6 +604,7 @@ function createDocument() {{
 globalThis.__bindCalls = {{
     model: 0,
     roles: 0,
+    orchestration: 0,
     environment: 0,
     notifications: 0,
     proxy: 0,
@@ -597,6 +613,7 @@ globalThis.__bindCalls = {{
 globalThis.__loadCalls = {{
     model: 0,
     roles: 0,
+    orchestration: 0,
     environment: 0,
     notifications: 0,
     proxy: 0,

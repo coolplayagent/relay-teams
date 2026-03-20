@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
+    build_runtime_system_prompt_result,
     SystemPromptBuildInput,
     build_runtime_system_prompt,
     build_system_prompt,
@@ -248,3 +250,129 @@ def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> No
     assert "## Normal Mode" not in prompt
     assert "You are a focused agent." in prompt
     assert "## Available Roles" not in prompt
+
+
+def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent_teams.agents.execution import prompt_instructions
+
+    project_root = tmp_path / "project"
+    nested_dir = project_root / "src" / "feature"
+    config_dir = tmp_path / "config"
+    nested_dir.mkdir(parents=True)
+    config_dir.mkdir()
+    monkeypatch.setattr(
+        prompt_instructions,
+        "GLOBAL_CLAUDE_FILE",
+        tmp_path / "missing" / "CLAUDE.md",
+    )
+    monkeypatch.setattr(
+        prompt_instructions,
+        "GLOBAL_GEMINI_FILE",
+        tmp_path / "missing" / "GEMINI.md",
+    )
+    (project_root / "AGENTS.md").write_text(
+        "Root project instructions.", encoding="utf-8"
+    )
+    (project_root / "CLAUDE.md").write_text(
+        "Claude root instructions.", encoding="utf-8"
+    )
+    (project_root / "src" / "AGENTS.md").write_text(
+        "Nested project instructions.", encoding="utf-8"
+    )
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                shared_state_snapshot=(),
+                working_directory=nested_dir,
+                worktree_root=project_root,
+            ),
+            instruction_resolver=PromptInstructionResolver(app_config_dir=config_dir),
+        )
+    )
+
+    assert "Root project instructions." in result.prompt
+    assert "Nested project instructions." in result.prompt
+    assert "Claude root instructions." not in result.prompt
+    assert result.local_instruction_paths == (
+        (project_root / "src" / "AGENTS.md").resolve(),
+        (project_root / "AGENTS.md").resolve(),
+    )
+
+
+def test_runtime_system_prompt_falls_back_to_global_claude_before_gemini(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from agent_teams.agents.execution import prompt_instructions
+
+    config_dir = tmp_path / "config"
+    home_dir = tmp_path / "home"
+    claude_file = home_dir / ".claude" / "CLAUDE.md"
+    gemini_file = home_dir / ".gemini" / "GEMINI.md"
+    config_dir.mkdir()
+    claude_file.parent.mkdir(parents=True)
+    gemini_file.parent.mkdir(parents=True)
+    claude_file.write_text("Global Claude instructions.", encoding="utf-8")
+    gemini_file.write_text("Global Gemini instructions.", encoding="utf-8")
+    monkeypatch.setattr(prompt_instructions, "GLOBAL_CLAUDE_FILE", claude_file)
+    monkeypatch.setattr(prompt_instructions, "GLOBAL_GEMINI_FILE", gemini_file)
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                shared_state_snapshot=(),
+                working_directory=tmp_path,
+                worktree_root=tmp_path,
+            ),
+            instruction_resolver=PromptInstructionResolver(app_config_dir=config_dir),
+        )
+    )
+
+    assert "Global Claude instructions." in result.prompt
+    assert "Global Gemini instructions." not in result.prompt
+    assert result.local_instruction_paths == (claude_file.resolve(),)
+
+
+def test_runtime_system_prompt_loads_configured_instruction_sources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / "project"
+    working_dir = project_root / "src"
+    config_dir = tmp_path / "config"
+    configured_file = project_root / "notes" / "prompt.md"
+    working_dir.mkdir(parents=True)
+    config_dir.mkdir()
+    configured_file.parent.mkdir(parents=True)
+    configured_file.write_text("Configured local instructions.", encoding="utf-8")
+    resolver = PromptInstructionResolver(
+        app_config_dir=config_dir,
+        instructions=("notes/*.md", "https://example.test/prompt.md"),
+    )
+
+    async def fake_fetch(_url: str) -> str:
+        return "Configured remote instructions."
+
+    monkeypatch.setattr(resolver, "_fetch_url", fake_fetch)
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                shared_state_snapshot=(),
+                working_directory=working_dir,
+                worktree_root=project_root,
+            ),
+            instruction_resolver=resolver,
+        )
+    )
+
+    assert "Configured local instructions." in result.prompt
+    assert "Configured remote instructions." in result.prompt
+    assert configured_file.resolve() in result.local_instruction_paths

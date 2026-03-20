@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
+
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.tools.runtime.context import ToolDeps
 
 
 class TestIsBinaryFile:
@@ -164,3 +171,88 @@ def test_project_read_result_keeps_output_first_shape() -> None:
         "truncated": True,
         "next_offset": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_resolve_read_instruction_sections_injects_nested_agents_once(
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools.read import resolve_read_instruction_sections
+
+    workspace_root = tmp_path / "workspace"
+    source_dir = workspace_root / "src" / "components"
+    file_path = source_dir / "button.py"
+    db_path = tmp_path / "state.db"
+    workspace_root.mkdir()
+    source_dir.mkdir(parents=True)
+    (workspace_root / "AGENTS.md").write_text("Root instructions.", encoding="utf-8")
+    (workspace_root / "src" / "AGENTS.md").write_text(
+        "Nested instructions.",
+        encoding="utf-8",
+    )
+    file_path.write_text("print('hello')\n", encoding="utf-8")
+    shared_store = SharedStateRepository(db_path)
+    deps = SimpleNamespace(
+        shared_store=shared_store,
+        task_id="task-1",
+        workspace=SimpleNamespace(
+            root_path=workspace_root,
+            locations=SimpleNamespace(worktree_root=workspace_root),
+        ),
+    )
+
+    first = await resolve_read_instruction_sections(
+        deps=cast(ToolDeps, deps),
+        file_path=file_path,
+    )
+    second = await resolve_read_instruction_sections(
+        deps=cast(ToolDeps, deps),
+        file_path=file_path,
+    )
+
+    assert first == (
+        f"Instructions from: {(workspace_root / 'src' / 'AGENTS.md').resolve()}\n"
+        "Nested instructions.",
+    )
+    assert second == ()
+
+
+@pytest.mark.asyncio
+async def test_resolve_read_instruction_sections_skips_preloaded_paths(
+    tmp_path: Path,
+) -> None:
+    from agent_teams.agents.execution.prompt_instruction_state import (
+        record_prompt_instruction_loaded,
+    )
+    from agent_teams.tools.workspace_tools.read import resolve_read_instruction_sections
+
+    workspace_root = tmp_path / "workspace"
+    source_dir = workspace_root / "src"
+    file_path = source_dir / "worker.py"
+    db_path = tmp_path / "state.db"
+    workspace_root.mkdir()
+    source_dir.mkdir(parents=True)
+    instruction_path = source_dir / "AGENTS.md"
+    instruction_path.write_text("Nested instructions.", encoding="utf-8")
+    file_path.write_text("print('hello')\n", encoding="utf-8")
+    shared_store = SharedStateRepository(db_path)
+    record_prompt_instruction_loaded(
+        shared_store=shared_store,
+        task_id="task-1",
+        path=instruction_path,
+    )
+    deps = SimpleNamespace(
+        shared_store=shared_store,
+        task_id="task-1",
+        workspace=SimpleNamespace(
+            root_path=workspace_root,
+            locations=SimpleNamespace(worktree_root=workspace_root),
+        ),
+    )
+
+    sections = await resolve_read_instruction_sections(
+        deps=cast(ToolDeps, deps),
+        file_path=file_path,
+    )
+
+    assert sections == ()

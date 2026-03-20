@@ -41,6 +41,29 @@ At minimum, complete the normal Agent Teams runtime setup first:
 
 - `~/.config/agent-teams/model.json`
 - optionally `~/.config/agent-teams/.env`
+- optionally `~/.config/agent-teams/prompts.json`
+- optionally one global instruction file:
+  - `~/.config/agent-teams/AGENTS.md`
+  - otherwise `~/.claude/CLAUDE.md`
+  - otherwise `~/.gemini/GEMINI.md`
+
+`prompts.json` uses this shape:
+
+```json
+{
+  "instructions": [
+    "docs/prompts/*.md",
+    "~/shared/team-prompt.md",
+    "https://example.com/prompt.txt"
+  ]
+}
+```
+
+Prompt instruction loading order is:
+
+- project/workspace chain: `AGENTS.md`, otherwise `CLAUDE.md`, otherwise `GEMINI.md`
+- one global file using the same fallback order
+- extra `prompts.json` instruction sources
 
 ### 3.3 Verify the gateway command first
 

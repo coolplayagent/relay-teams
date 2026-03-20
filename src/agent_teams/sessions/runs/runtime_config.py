@@ -5,8 +5,12 @@ from collections.abc import Mapping
 from json import loads
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agent_teams.agents.execution.prompt_instructions import (
+    PromptInstructionsConfig,
+    load_prompt_instructions_config,
+)
 from agent_teams.env import load_merged_env_vars
 from agent_teams.paths import get_app_config_dir
 from agent_teams.providers.model_config import (
@@ -28,6 +32,13 @@ class RuntimePaths(BaseModel):
     env_file: Path
     db_path: Path
     roles_dir: Path
+    prompts_file: Path | None = None
+
+    @model_validator(mode="after")
+    def _default_prompts_file(self) -> RuntimePaths:
+        if self.prompts_file is None:
+            self.prompts_file = self.config_dir / "prompts.json"
+        return self
 
 
 class ModelConfigStatus(BaseModel):
@@ -46,6 +57,9 @@ class RuntimeConfig(BaseModel):
     llm_retry: LlmRetryConfig = Field(default_factory=LlmRetryConfig)
     default_model_profile: str | None = None
     model_status: ModelConfigStatus = ModelConfigStatus(loaded=True)
+    prompt_instructions: PromptInstructionsConfig = Field(
+        default_factory=PromptInstructionsConfig
+    )
 
 
 class LoadedLlmProfiles(BaseModel):
@@ -68,6 +82,7 @@ def load_runtime_config(
     resolved_config_dir.mkdir(parents=True, exist_ok=True)
 
     env_file = resolved_config_dir / ".env"
+    prompts_file = resolved_config_dir / "prompts.json"
     merged_env = load_merged_env_vars(extra_env_files=(env_file,))
 
     resolved_roles_dir = (
@@ -97,17 +112,20 @@ def load_runtime_config(
         )
     else:
         default_model_profile = loaded_profiles.default_profile_name
+    prompt_instructions = load_prompt_instructions_config(resolved_config_dir)
     return RuntimeConfig(
         paths=RuntimePaths(
             config_dir=resolved_config_dir,
             env_file=env_file,
             db_path=resolved_db_path,
             roles_dir=resolved_roles_dir,
+            prompts_file=prompts_file,
         ),
         llm_profiles=llm_profiles,
         llm_retry=LlmRetryConfig(),
         default_model_profile=default_model_profile,
         model_status=model_status,
+        prompt_instructions=prompt_instructions,
     )
 
 

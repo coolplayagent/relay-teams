@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -40,6 +41,8 @@ class _FakeWorkspaceService:
 class _FakeWorkspaceHandle:
     def __init__(self, workdir: Path) -> None:
         self._workdir = workdir
+        self.locations = SimpleNamespace(worktree_root=workdir)
+        self.root_path = workdir
 
     def resolve_workdir(self) -> Path:
         return self._workdir
@@ -178,10 +181,10 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert payload["tools"] == ["dispatch_task"]
     assert payload["skills"] == ["time"]
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
-    assert "## Role Usage" in payload["runtime_system_prompt"]
+    assert "## Runtime Rules" in payload["runtime_system_prompt"]
     assert "## Available Roles" in payload["runtime_system_prompt"]
     assert (
-        "rely on each tool description for exact usage and constraints."
+        "Use the dispatch prompt to pass stage-specific instructions and upstream context."
         in payload["runtime_system_prompt"]
     )
     assert (
@@ -246,6 +249,47 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
         f"- Working Directory: {workspace_root.resolve()}"
         in payload["runtime_system_prompt"]
     )
+
+
+def test_prompts_preview_includes_project_instruction_files(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "preview-workspace" / "execution-root" / "preview"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / "AGENTS.md").write_text(
+        "Workspace instructions.",
+        encoding="utf-8",
+    )
+    workspace_repo = WorkspaceRepository(tmp_path / "prompt_preview.db")
+    workspace_service = WorkspaceService(repository=workspace_repo)
+    _ = workspace_service.create_workspace(
+        workspace_id="preview-workspace",
+        root_path=workspace_root,
+    )
+    workspace_manager = WorkspaceManager(
+        project_root=tmp_path,
+        workspace_repo=workspace_repo,
+    )
+
+    app = FastAPI()
+    app.include_router(prompts.router, prefix="/api")
+    app.dependency_overrides[get_role_registry] = _build_role_registry
+    app.dependency_overrides[get_tool_registry] = _build_tool_registry
+    app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
+    app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
+    app.dependency_overrides[get_workspace_service] = lambda: workspace_service
+    app.dependency_overrides[get_workspace_manager] = lambda: workspace_manager
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "writer_agent",
+            "workspace_id": "preview-workspace",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "Workspace instructions." in payload["runtime_system_prompt"]
 
 
 def test_prompts_preview_skill_override_replaces_role_default() -> None:
