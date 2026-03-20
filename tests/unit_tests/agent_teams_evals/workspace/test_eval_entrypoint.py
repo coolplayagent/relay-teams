@@ -29,7 +29,9 @@ def test_eval_entrypoint_copies_only_whitelisted_config_entries(tmp_path: Path) 
     (staging_dir / "log" / "backend.log").write_text("host-log", encoding="utf-8")
     (staging_dir / "secrets.txt").write_text("secret", encoding="utf-8")
 
-    script_path = (Path(__file__).resolve().parents[4] / "docker" / "eval-entrypoint.sh").as_posix()
+    script_path = (
+        Path(__file__).resolve().parents[4] / "docker" / "eval-entrypoint.sh"
+    ).as_posix()
     env = os.environ.copy()
     env["AGENT_TEAMS_CONFIG_STAGING"] = staging_dir.resolve().as_posix()
     env["AGENT_TEAMS_CONFIG_TARGET"] = target_dir.resolve().as_posix()

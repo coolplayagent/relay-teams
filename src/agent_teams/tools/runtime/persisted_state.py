@@ -390,12 +390,12 @@ def _recover_dispatch_task_call_state(
     record = task_repo.get(dispatched_task_id)
     if record.envelope.trace_id != trace_id:
         return {}
-    feedback = str(tool_args.get("feedback") or "")
+    prompt = str(tool_args.get("prompt") or "")
     return {
         "kind": "dispatch_task",
         "task_id": dispatched_task_id,
-        "feedback": feedback,
-        "role_id": record.envelope.role_id,
+        "prompt": prompt,
+        "role_id": str(tool_args.get("role_id") or record.envelope.role_id or ""),
         "instance_id": str(record.assigned_instance_id or ""),
         "execution_started": record.status
         not in {TaskStatus.CREATED, TaskStatus.ASSIGNED},

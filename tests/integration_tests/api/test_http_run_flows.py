@@ -8,6 +8,7 @@ from integration_tests.support.api_helpers import (
     create_run,
     create_session,
     dispatch_task,
+    get_coordinator_role_id,
     new_session_id,
     stream_run_until_terminal,
 )
@@ -85,14 +86,23 @@ def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None
     )
     tasks = task_batch.get("tasks")
     assert isinstance(tasks, list)
+    coordinator_role_id = get_coordinator_role_id(api_client)
     task_ids = [
         str(item.get("task_id") or "") for item in tasks if isinstance(item, dict)
     ]
     assert len(task_ids) == 2
     assert all(task_ids)
 
-    first_dispatch = dispatch_task(api_client, task_id=task_ids[0])
-    second_dispatch = dispatch_task(api_client, task_id=task_ids[1])
+    first_dispatch = dispatch_task(
+        api_client,
+        task_id=task_ids[0],
+        role_id=coordinator_role_id,
+    )
+    second_dispatch = dispatch_task(
+        api_client,
+        task_id=task_ids[1],
+        role_id=coordinator_role_id,
+    )
     first_task = first_dispatch.get("task")
     second_task = second_dispatch.get("task")
     assert isinstance(first_task, dict)

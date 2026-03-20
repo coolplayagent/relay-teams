@@ -226,9 +226,7 @@ def build_report(
     total_input = sum(r.token_usage.input_tokens for r in results)
     total_cached_input = sum(r.token_usage.cached_input_tokens for r in results)
     total_output = sum(r.token_usage.output_tokens for r in results)
-    total_reasoning_output = sum(
-        r.token_usage.reasoning_output_tokens for r in results
-    )
+    total_reasoning_output = sum(r.token_usage.reasoning_output_tokens for r in results)
     total_requests = sum(r.token_usage.total_requests for r in results)
     total_tool_calls = sum(r.token_usage.total_tool_calls for r in results)
     estimated_input_cost = total_input / 1_000_000 * cost_per_million_input

@@ -18,18 +18,16 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def update_task(
         ctx: ToolContext,
         task_id: str,
-        role_id: str | None = None,
         objective: str | None = None,
         title: str | None = None,
     ) -> dict[str, JsonValue]:
-        """Update a task that is still in the created state."""
+        """Update a task contract that is still in the created state."""
 
         def _action() -> dict[str, JsonValue]:
             return ctx.deps.task_service.update_task(
                 run_id=ctx.deps.run_id,
                 task_id=task_id,
                 update=TaskUpdate(
-                    role_id=role_id,
                     objective=objective,
                     title=title,
                 ),
@@ -40,7 +38,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             tool_name="update_task",
             args_summary={
                 "task_id": task_id,
-                "has_role_id": role_id is not None,
                 "has_objective": objective is not None,
                 "has_title": title is not None,
             },

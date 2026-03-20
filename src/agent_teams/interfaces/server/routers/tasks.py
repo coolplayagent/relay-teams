@@ -21,13 +21,11 @@ class CreateTasksRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tasks: list[TaskDraft] = Field(min_length=1)
-    auto_dispatch: bool = False
 
 
 class UpdateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str | None = None
     objective: str | None = None
     title: str | None = None
 
@@ -35,7 +33,8 @@ class UpdateTaskRequest(BaseModel):
 class DispatchTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    feedback: str = ""
+    role_id: str = Field(min_length=1)
+    prompt: str = ""
 
 
 @router.get("", response_model=list[TaskRecord])
@@ -53,7 +52,6 @@ async def create_tasks_for_run(
         return await service.create_tasks(
             run_id=run_id,
             tasks=req.tasks,
-            auto_dispatch=req.auto_dispatch,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -68,7 +66,7 @@ def list_tasks_for_run(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
-        return service.list_run_tasks(run_id=run_id, include_root=include_root)
+        return service.list_delegated_tasks(run_id=run_id, include_root=include_root)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -95,7 +93,6 @@ def update_task_by_id(
             run_id=None,
             task_id=task_id,
             update=TaskUpdate(
-                role_id=req.role_id,
                 objective=req.objective,
                 title=req.title,
             ),
@@ -116,7 +113,8 @@ async def dispatch_task_by_id(
         return await service.dispatch_task(
             run_id=None,
             task_id=task_id,
-            feedback=req.feedback,
+            role_id=req.role_id,
+            prompt=req.prompt,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

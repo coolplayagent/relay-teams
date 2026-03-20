@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
+from agent_teams.agents.tasks.dispatch_prompts import build_dispatch_prompt
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -25,7 +26,6 @@ from agent_teams.agents.tasks.models import (
 class TaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
     objective: str = Field(min_length=1)
     title: str | None = None
 
@@ -33,9 +33,14 @@ class TaskDraft(BaseModel):
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str | None = None
     objective: str | None = None
     title: str | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_patch(self) -> TaskUpdate:
+        if self.objective is None and self.title is None:
+            raise ValueError("update must include at least one field")
+        return self
 
 
 class TaskOrchestrationService:
@@ -61,17 +66,13 @@ class TaskOrchestrationService:
         *,
         run_id: str,
         tasks: list[TaskDraft],
-        auto_dispatch: bool = False,
     ) -> dict[str, JsonValue]:
         if not tasks:
             raise ValueError("tasks must contain at least one task")
-        if auto_dispatch and len(tasks) != 1:
-            raise ValueError("auto_dispatch only supports a single task")
 
         root = self._get_root_task(run_id)
         created_records: list[TaskRecord] = []
         for draft in tasks:
-            self._role_registry.get(draft.role_id)
             created_records.append(
                 self._task_repo.create(
                     TaskEnvelope(
@@ -79,7 +80,7 @@ class TaskOrchestrationService:
                         session_id=root.envelope.session_id,
                         parent_task_id=root.envelope.task_id,
                         trace_id=root.envelope.trace_id,
-                        role_id=draft.role_id,
+                        role_id=None,
                         title=_resolved_title(draft.title, draft.objective),
                         objective=draft.objective,
                         verification=VerificationPlan(
@@ -93,12 +94,6 @@ class TaskOrchestrationService:
             "created_count": len(created_records),
             "tasks": [_task_projection(record) for record in created_records],
         }
-        if auto_dispatch:
-            dispatched = await self.dispatch_task(
-                run_id=run_id,
-                task_id=created_records[0].envelope.task_id,
-            )
-            response["dispatched_task"] = dispatched["task"]
         return response
 
     def update_task(
@@ -115,15 +110,6 @@ class TaskOrchestrationService:
             raise ValueError("only created tasks can be updated")
 
         current = record.envelope
-        next_role_id = (
-            str(update.role_id).strip()
-            if update.role_id is not None
-            else current.role_id
-        )
-        if not next_role_id:
-            raise ValueError("role_id must not be empty")
-        self._role_registry.get(next_role_id)
-
         next_objective = (
             str(update.objective).strip()
             if update.objective is not None
@@ -141,7 +127,6 @@ class TaskOrchestrationService:
             task_id,
             current.model_copy(
                 update={
-                    "role_id": next_role_id,
                     "objective": next_objective,
                     "title": next_title,
                 }
@@ -149,7 +134,7 @@ class TaskOrchestrationService:
         )
         return {"task": _task_projection(updated)}
 
-    def list_run_tasks(
+    def list_delegated_tasks(
         self,
         *,
         run_id: str,
@@ -164,12 +149,21 @@ class TaskOrchestrationService:
             "tasks": [_task_projection(record) for record in records],
         }
 
+    def list_run_tasks(
+        self,
+        *,
+        run_id: str,
+        include_root: bool = False,
+    ) -> dict[str, JsonValue]:
+        return self.list_delegated_tasks(run_id=run_id, include_root=include_root)
+
     async def dispatch_task(
         self,
         *,
         run_id: str | None,
         task_id: str,
-        feedback: str = "",
+        role_id: str,
+        prompt: str = "",
     ) -> dict[str, JsonValue]:
         record = self.get_task(task_id=task_id, run_id=run_id)
         resolved_run_id = run_id or record.envelope.trace_id
@@ -178,15 +172,30 @@ class TaskOrchestrationService:
         if record.status == TaskStatus.RUNNING:
             raise ValueError("task is already running")
 
-        normalized_feedback = feedback.strip()
-        role_id = record.envelope.role_id
+        normalized_role_id = str(role_id).strip()
+        if not normalized_role_id:
+            raise ValueError("role_id must not be empty")
+        self._role_registry.get(normalized_role_id)
+
+        normalized_prompt = prompt.strip()
+        bound_role_id = str(record.envelope.role_id or "").strip()
         instance_id = record.assigned_instance_id or ""
 
         if record.status == TaskStatus.CREATED:
+            if bound_role_id and bound_role_id != normalized_role_id:
+                raise ValueError(
+                    f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                )
+            if not bound_role_id:
+                record = self._task_repo.update_envelope(
+                    task_id,
+                    record.envelope.model_copy(update={"role_id": normalized_role_id}),
+                )
+                bound_role_id = normalized_role_id
             bound_instance_id = self._ensure_role_instance(
                 session_id=record.envelope.session_id,
                 run_id=resolved_run_id,
-                role_id=role_id,
+                role_id=bound_role_id,
             )
             instance_id = bound_instance_id
             self._task_repo.update_status(
@@ -195,11 +204,20 @@ class TaskOrchestrationService:
                 assigned_instance_id=instance_id,
             )
             record = self._task_repo.get(task_id)
-        elif record.status == TaskStatus.COMPLETED and not normalized_feedback:
-            raise ValueError("feedback is required to re-dispatch a completed task")
+        else:
+            if not bound_role_id:
+                raise ValueError(
+                    "task must be bound to a role before it can be re-dispatched"
+                )
+            if bound_role_id != normalized_role_id:
+                raise ValueError(
+                    f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                )
+        if record.status == TaskStatus.COMPLETED and not normalized_prompt:
+            raise ValueError("prompt is required to re-dispatch a completed task")
         elif record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}:
             raise ValueError(
-                f"Task '{record.envelope.title}' (role={record.envelope.role_id}) "
+                f"Task '{record.envelope.title}' (role={bound_role_id}) "
                 f"is {record.status.value}: "
                 f"{record.error_message or 'unknown error'}. "
                 "Create a replacement task instead of re-dispatching this one."
@@ -212,41 +230,23 @@ class TaskOrchestrationService:
 
         self._assert_instance_available(task=record, instance_id=instance_id)
 
-        if normalized_feedback:
-            self._append_followup_prompt(
-                task=record,
-                instance_id=instance_id,
-                content=normalized_feedback,
-            )
+        effective_prompt = build_dispatch_prompt(
+            title=record.envelope.title
+            or _resolved_title(None, record.envelope.objective),
+            objective=record.envelope.objective,
+            prompt=normalized_prompt,
+        )
 
         await self._task_execution_service.execute(
             instance_id=instance_id,
-            role_id=role_id,
+            role_id=bound_role_id,
             task=record.envelope,
+            user_prompt_override=effective_prompt,
         )
         refreshed = self._task_repo.get(task_id)
         return {
             "task": _task_projection(refreshed),
         }
-
-    def _append_followup_prompt(
-        self,
-        *,
-        task: TaskRecord,
-        instance_id: str,
-        content: str,
-    ) -> None:
-        agent = self._agent_repo.get_instance(instance_id)
-        self._message_repo.append_user_prompt_if_missing(
-            session_id=task.envelope.session_id,
-            workspace_id=agent.workspace_id,
-            conversation_id=agent.conversation_id,
-            agent_role_id=agent.role_id,
-            instance_id=instance_id,
-            task_id=task.envelope.task_id,
-            trace_id=task.envelope.trace_id,
-            content=content,
-        )
 
     def _ensure_role_instance(
         self,
@@ -305,7 +305,7 @@ class TaskOrchestrationService:
             if candidate.status not in blocking_statuses:
                 continue
             raise ValueError(
-                f"Role {candidate.envelope.role_id} is busy with task "
+                f"Role {candidate.envelope.role_id or 'unassigned'} is busy with task "
                 f"'{candidate.envelope.title}' (status={candidate.status.value}). "
                 f"Wait for it to complete or use a different role."
             )
@@ -334,14 +334,18 @@ def _resolved_title(title: str | None, objective: str) -> str:
 
 
 def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
+    assigned_role_id = record.envelope.role_id
+    assigned_instance_id = record.assigned_instance_id
     row: dict[str, JsonValue] = {
         "task_id": record.envelope.task_id,
         "title": record.envelope.title
         or _resolved_title(None, record.envelope.objective),
-        "role_id": record.envelope.role_id,
         "objective": record.envelope.objective,
         "status": record.status.value,
-        "instance_id": record.assigned_instance_id or "",
+        "assigned_role_id": assigned_role_id,
+        "assigned_instance_id": assigned_instance_id,
+        "role_id": assigned_role_id,
+        "instance_id": assigned_instance_id,
         "parent_task_id": record.envelope.parent_task_id,
     }
     if record.result:

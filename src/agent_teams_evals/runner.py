@@ -123,7 +123,9 @@ class EvalRunner:
                 raw_generated_patch = self._patch_extractor.extract(prepared)
                 generated_patch = raw_generated_patch
                 if self._scorer.name == "swebench_docker":
-                    filtered_patch = filter_patch_for_swebench(item, raw_generated_patch)
+                    filtered_patch = filter_patch_for_swebench(
+                        item, raw_generated_patch
+                    )
                     generated_patch = filtered_patch.scored_patch
                     filtered_generated_files = filtered_patch.filtered_files
                     if filtered_generated_files:

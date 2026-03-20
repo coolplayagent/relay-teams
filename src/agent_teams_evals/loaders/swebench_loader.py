@@ -84,11 +84,7 @@ def build_swebench_intent(
 
     hints_block = ""
     if normalized_hints:
-        hints_block = (
-            "<hints_text>\n"
-            f"{normalized_hints}\n"
-            "</hints_text>\n\n"
-        )
+        hints_block = f"<hints_text>\n{normalized_hints}\n</hints_text>\n\n"
 
     return (
         "Consider the following PR description:\n\n"

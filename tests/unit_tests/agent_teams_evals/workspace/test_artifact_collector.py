@@ -76,7 +76,9 @@ def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> No
     assert metadata["output_tokens"] == 5
 
 
-def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(tmp_path) -> None:
+def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(
+    tmp_path,
+) -> None:
     collector = ArtifactCollector(tmp_path)
     item = EvalItem(item_id="demo-filtered", dataset="swebench", intent="demo")
     result = EvalResult(
@@ -102,8 +104,12 @@ def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(tmp_pat
     artifact_dir = tmp_path / "artifacts" / "demo-filtered"
     metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["filtered_generated_files"] == ["tests/test_app.py"]
-    assert (artifact_dir / "patch.diff").read_text(encoding="utf-8") == result.generated_patch
-    assert (artifact_dir / "raw_patch.diff").read_text(encoding="utf-8") == result.raw_generated_patch
+    assert (artifact_dir / "patch.diff").read_text(
+        encoding="utf-8"
+    ) == result.generated_patch
+    assert (artifact_dir / "raw_patch.diff").read_text(
+        encoding="utf-8"
+    ) == result.raw_generated_patch
 
 
 def test_artifact_collector_writes_scorer_log(tmp_path) -> None:

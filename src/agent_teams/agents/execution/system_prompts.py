@@ -19,7 +19,9 @@ ROLE_USAGE_PROMPT = (
     "- Use orchestration tools directly and rely on each tool description for exact usage and constraints.\n"
     "- Delegate only when another role is a better fit than answering directly.\n"
     "- Choose roles by their Description, Tools, MCP Tools, and Skills.\n"
-    "- Write self-contained objectives with concrete outcomes and constraints.\n"
+    "- Create tasks as durable contracts with concrete outcomes and constraints.\n"
+    "- Choose the executing role in `dispatch_task`.\n"
+    "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
     "- Avoid vague references like this, that, it, or the task without restating the subject.\n"
     "- The roles listed below are dispatch targets, not your own capabilities."
 )

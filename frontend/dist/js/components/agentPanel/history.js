@@ -122,9 +122,13 @@ function renderPanelSummary(panelEl, instanceId, roleId) {
 
     const tasks = (state.sessionTasks || [])
         .filter(task => {
-            const taskInstanceId = String(task?.instance_id || '').trim();
+            const taskInstanceId = String(
+                task?.assigned_instance_id || task?.instance_id || '',
+            ).trim();
             if (taskInstanceId && taskInstanceId === String(instanceId || '').trim()) return true;
-            return !!roleId && String(task?.role_id || '').trim() === String(roleId || '').trim();
+            return !!roleId
+                && String(task?.assigned_role_id || task?.role_id || '').trim()
+                    === String(roleId || '').trim();
         })
         .slice()
         .sort((left, right) => compareTimelineDesc(left, right))

@@ -1,0 +1,6 @@
+List delegated tasks that belong to the current run.
+
+Usage:
+- Use this tool to inspect the current delegation graph and check task status before dispatching or revising work.
+- By default the root task is omitted; set `include_root=true` when you need the full run tree.
+- Prefer this tool when you need task ids, statuses, assigned roles, assigned instances, or parent-child relationships.

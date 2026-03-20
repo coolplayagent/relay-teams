@@ -306,9 +306,11 @@ class SessionService:
             {
                 "task_id": record.envelope.task_id,
                 "title": record.envelope.title or record.envelope.objective[:80],
-                "role_id": record.envelope.role_id,
+                "assigned_role_id": record.envelope.role_id,
                 "status": record.status.value,
-                "instance_id": record.assigned_instance_id or "",
+                "assigned_instance_id": record.assigned_instance_id,
+                "role_id": record.envelope.role_id,
+                "instance_id": record.assigned_instance_id,
                 "run_id": record.envelope.trace_id,
                 "created_at": record.created_at.isoformat(),
                 "updated_at": record.updated_at.isoformat(),

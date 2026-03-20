@@ -237,8 +237,7 @@ class SWEBenchDockerScorer(Scorer):
             if filtered_generated_files:
                 filtered_listing = "\n".join(filtered_generated_files)
                 log_parts.append(
-                    "=== filtered benchmark test file changes ===\n"
-                    f"{filtered_listing}"
+                    f"=== filtered benchmark test file changes ===\n{filtered_listing}"
                 )
             if candidate_patch_err:
                 log_parts.append(

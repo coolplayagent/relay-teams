@@ -88,7 +88,10 @@ class ArtifactCollector:
         if result.generated_patch:
             path = artifact_dir / "patch.diff"
             path.write_text(result.generated_patch, encoding="utf-8")
-        if result.raw_generated_patch and result.raw_generated_patch != result.generated_patch:
+        if (
+            result.raw_generated_patch
+            and result.raw_generated_patch != result.generated_patch
+        ):
             raw_path = artifact_dir / "raw_patch.diff"
             raw_path.write_text(result.raw_generated_patch, encoding="utf-8")
 

@@ -233,10 +233,11 @@ class CoordinatorGraph(BaseModel):
         initial_result: str = "",
     ) -> str:
         coordinator_result = initial_result
+        coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
             coordinator_result = await self._task_executor(
                 instance_id=coordinator_instance_id,
-                role_id=root_task.role_id,
+                role_id=coordinator_role_id,
                 task=root_task,
             )
             log_event(
@@ -274,7 +275,7 @@ class CoordinatorGraph(BaseModel):
                 break
             coordinator_result = await self._task_executor(
                 instance_id=coordinator_instance_id,
-                role_id=root_task.role_id,
+                role_id=coordinator_role_id,
                 task=root_task,
             )
             log_event(
@@ -466,7 +467,7 @@ class CoordinatorGraph(BaseModel):
         trace_id: str,
         root_task: TaskEnvelope,
     ) -> str:
-        coordinator_role_id = root_task.role_id
+        coordinator_role_id = _require_task_role_id(root_task)
         _ = self.role_registry.get(coordinator_role_id)
         existing = self.agent_repo.get_session_role_instance(
             session_id, coordinator_role_id
@@ -481,7 +482,7 @@ class CoordinatorGraph(BaseModel):
                 trace_id=trace_id,
                 session_id=session_id,
                 instance_id=coordinator_instance_id,
-                role_id=root_task.role_id,
+                role_id=coordinator_role_id,
                 workspace_id=existing.workspace_id,
                 conversation_id=existing.conversation_id,
                 status=InstanceStatus.IDLE,
@@ -629,3 +630,10 @@ class CoordinatorGraph(BaseModel):
         return await self.task_execution_service.execute(
             instance_id=instance_id, role_id=role_id, task=task
         )
+
+
+def _require_task_role_id(task: TaskEnvelope) -> str:
+    role_id = task.role_id
+    if role_id is None:
+        raise ValueError(f"Task {task.task_id} is not bound to a role")
+    return role_id

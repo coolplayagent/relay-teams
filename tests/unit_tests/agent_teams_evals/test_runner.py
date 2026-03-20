@@ -133,7 +133,9 @@ class FakeScorer(Scorer):
         )
 
 
-def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files() -> None:
+def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files() -> (
+    None
+):
     item = EvalItem(
         item_id="demo",
         dataset="swebench",

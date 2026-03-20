@@ -123,7 +123,12 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "Do not implement it directly." in prompt
     assert "rely on each tool description for exact usage and constraints." in prompt
     assert (
-        "Write self-contained objectives with concrete outcomes and constraints."
+        "Create tasks as durable contracts with concrete outcomes and constraints."
+        in prompt
+    )
+    assert "Choose the executing role in `dispatch_task`." in prompt
+    assert (
+        "Use the dispatch prompt to pass stage-specific instructions and upstream context."
         in prompt
     )
     assert "dispatch targets, not your own capabilities." in prompt

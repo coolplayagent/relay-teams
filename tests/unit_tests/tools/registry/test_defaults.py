@@ -20,7 +20,7 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "edit",
         "glob",
         "grep",
-        "list_run_tasks",
+        "list_delegated_tasks",
         "read",
         "shell",
         "update_task",

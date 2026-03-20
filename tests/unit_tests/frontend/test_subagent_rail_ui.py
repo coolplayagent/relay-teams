@@ -51,8 +51,10 @@ console.log(JSON.stringify({
         {
             "task_id": "task-writer",
             "title": "Write result",
+            "assigned_role_id": "writer",
             "role_id": "writer",
             "status": "running",
+            "assigned_instance_id": "writer-1",
             "instance_id": "writer-1",
             "run_id": "run-1",
             "created_at": "2026-03-13T00:01:10Z",

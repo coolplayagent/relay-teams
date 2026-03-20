@@ -50,7 +50,7 @@ export function getPendingApprovalsForPanel(instanceId, roleId) {
     return activeRoundPendingApprovals.filter(item => {
         const itemInstance = String(item?.instance_id || '');
         if (itemInstance && itemInstance === instanceId) return true;
-        const itemRole = String(item?.role_id || '');
+        const itemRole = String(item?.assigned_role_id || item?.role_id || '');
         return !!roleId && itemRole === roleId;
     });
 }

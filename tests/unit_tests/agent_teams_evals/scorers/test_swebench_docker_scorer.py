@@ -80,7 +80,9 @@ def test_records_patch_jaccard_auxiliary_score(monkeypatch) -> None:
 def test_apply_test_patch_omits_allow_empty_flag(monkeypatch) -> None:
     calls: list[tuple[list[str], object, bool]] = []
 
-    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
         calls.append((cmd, kwargs.get("input"), bool(kwargs.get("text", False))))
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
@@ -211,7 +213,9 @@ def test_candidate_patch_failure_skips_test_patch_and_pytest(monkeypatch) -> Non
         )[1],
     )
 
-    result = _score(_make_item(test_patch="diff --git a/t.py b/t.py\n"), _make_workspace())
+    result = _score(
+        _make_item(test_patch="diff --git a/t.py b/t.py\n"), _make_workspace()
+    )
 
     assert result.passed is False
     assert result.score == 0.0
@@ -342,7 +346,8 @@ def test_filtered_test_files_are_reported(monkeypatch) -> None:
         outcome=RunOutcome.COMPLETED,
         agent_output="",
         generated_patch=_PATCH,
-        raw_generated_patch=_PATCH + "diff --git a/tests/test_fix.py b/tests/test_fix.py\n",
+        raw_generated_patch=_PATCH
+        + "diff --git a/tests/test_fix.py b/tests/test_fix.py\n",
         filtered_generated_files=("tests/test_fix.py",),
         token_usage=TokenUsage(),
         duration_seconds=1.0,

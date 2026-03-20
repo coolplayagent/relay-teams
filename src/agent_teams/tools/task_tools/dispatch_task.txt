@@ -1,7 +1,7 @@
-Start a created task or send follow-up feedback to a completed task.
+Dispatch a task contract to a role for execution.
 
 Usage:
 - `task_id` must be a task created in the current run.
-- Use `feedback` for follow-up work on a completed task; leave it empty for the first dispatch.
-- If a task failed or timed out, create a replacement task instead of redispatching it.
-- If the target role is currently busy, wait for that task to finish before dispatching another one.
+- `role_id` selects the executing role. The first dispatch binds that role to the task.
+- `prompt` carries the coordinator's execution instruction for this dispatch attempt.
+- Re-dispatching a completed task requires a non-empty `prompt`.

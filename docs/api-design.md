@@ -19,9 +19,9 @@ Common status codes:
 
 - A run starts from one root coordinator task.
 - Every delegated task is a persisted task record under that root task.
-- A delegated task binds to exactly one subagent instance on first dispatch.
+- A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
 - Re-dispatching the same task reuses its bound instance.
-- In one session, delegated tasks with the same `role_id` reuse the same session-level subagent instance.
+- In one session, delegated tasks with the same bound `role_id` reuse the same session-level subagent instance.
 - Same-role task dispatch is serial only. If a role instance is already busy or paused on another task, dispatch returns a runtime conflict.
 
 Task status values:
@@ -211,8 +211,10 @@ Response shape:
         {
           "task_id": "task-2",
           "title": "Write API code",
+          "assigned_role_id": "spec_coder",
           "role_id": "spec_coder",
           "status": "completed",
+          "assigned_instance_id": "inst-2",
           "instance_id": "inst-2"
         }
       ],
@@ -430,33 +432,32 @@ Request:
 {
   "tasks": [
     {
-      "role_id": "spec_coder",
       "title": "Write API code",
       "objective": "Implement the endpoint and tests"
     }
-  ],
-  "auto_dispatch": false
+  ]
 }
 ```
 
 Behavior:
-- `auto_dispatch=false`: create tasks only.
-- `auto_dispatch=true`: only valid when `tasks` contains exactly one item; creates the task and dispatches it immediately.
+- Creates delegated task contracts only.
+- Role binding happens later during dispatch.
 
 Response:
 
 ```json
 {
-  "ok": true,
   "created_count": 1,
   "tasks": [
     {
       "task_id": "task-2",
       "title": "Write API code",
-      "role_id": "spec_coder",
       "objective": "Implement the endpoint and tests",
       "status": "created",
-      "instance_id": "",
+      "assigned_role_id": null,
+      "assigned_instance_id": null,
+      "role_id": null,
+      "instance_id": null,
       "parent_task_id": "task-root"
     }
   ]
@@ -486,7 +487,6 @@ Request:
 
 ```json
 {
-  "role_id": "reviewer",
   "title": "Review code",
   "objective": "Review the implementation and report issues"
 }
@@ -494,6 +494,7 @@ Request:
 
 Rules:
 - Only `created` delegated tasks can be updated.
+- `role_id` cannot be updated through task APIs.
 - Root coordinator tasks cannot be updated through task APIs.
 
 ### `POST /tasks/{task_id}/dispatch`
@@ -503,15 +504,16 @@ Dispatches or re-dispatches a delegated task.
 Request:
 
 ```json
-{"feedback": "Address pagination concerns"}
+{"role_id": "spec_coder", "prompt": "Address pagination concerns"}
 ```
 
 Rules:
-- `created`: bind the task to the session-level subagent instance for its `role_id` (creating it if needed), then execute.
+- `created`: bind the task to the provided `role_id`, create or reuse the session-level subagent instance for that role, then execute.
 - `assigned` or `stopped`: reuse the bound instance and continue.
-- `completed`: requires non-empty `feedback`, then reuses the same instance.
+- `completed`: requires non-empty `prompt`, then reuses the same instance.
 - `running`: rejected as a conflict.
 - `failed` or `timeout`: rejected; create a new task instead.
+- After the first dispatch, the delegated role is fixed for that task. To change roles, create a replacement task.
 - If another task already holds the same role instance in `assigned`, `running`, or `stopped`, dispatch is rejected as a conflict.
 
 ## Role APIs

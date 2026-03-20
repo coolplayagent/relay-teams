@@ -2,6 +2,6 @@ Update a task that has not been dispatched yet.
 
 Usage:
 - `task_id` identifies the created task to modify.
-- `role_id`, `objective`, and `title` are optional patch fields; omitted fields remain unchanged.
-- Use this tool to correct scope, assign a different role, or improve the task brief before execution starts.
+- `objective` and `title` are optional patch fields; omitted fields remain unchanged.
+- Use this tool to correct scope or improve the task contract before execution starts.
 - This tool is only valid while the task is still in the created state.

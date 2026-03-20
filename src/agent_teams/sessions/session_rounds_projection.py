@@ -50,12 +50,13 @@ def build_session_rounds(
             task_instance_map_by_run[run_id][task.envelope.task_id] = (
                 task.assigned_instance_id
             )
-            instance_role_by_run[run_id][task.assigned_instance_id] = (
-                task.envelope.role_id
+            instance_role_by_run[run_id][task.assigned_instance_id] = str(
+                task.envelope.role_id or ""
             )
-            role_instance_by_run[run_id][task.envelope.role_id] = (
-                task.assigned_instance_id
-            )
+            if task.envelope.role_id:
+                role_instance_by_run[run_id][task.envelope.role_id] = (
+                    task.assigned_instance_id
+                )
         if task.envelope.parent_task_id is None:
             root_task_by_run[run_id] = task
             continue
@@ -63,9 +64,11 @@ def build_session_rounds(
             {
                 "task_id": task.envelope.task_id,
                 "title": task.envelope.title or task.envelope.objective[:80],
-                "role_id": task.envelope.role_id,
+                "assigned_role_id": task.envelope.role_id,
                 "status": task.status.value,
-                "instance_id": task.assigned_instance_id or "",
+                "assigned_instance_id": task.assigned_instance_id,
+                "role_id": task.envelope.role_id,
+                "instance_id": task.assigned_instance_id,
             }
         )
 

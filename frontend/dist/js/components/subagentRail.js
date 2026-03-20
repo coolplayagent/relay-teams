@@ -285,13 +285,19 @@ function normalizeSessionAgents(payload) {
 function normalizeSessionTasks(payload) {
     const rows = Array.isArray(payload) ? payload : [];
     return rows
-        .filter(item => item && typeof item === 'object' && !isCoordinatorRoleId(item.role_id))
+        .filter(item => {
+            if (!item || typeof item !== 'object') return false;
+            const assignedRoleId = String(item.assigned_role_id || item.role_id || '').trim();
+            return !assignedRoleId || !isCoordinatorRoleId(assignedRoleId);
+        })
         .map(item => ({
             task_id: String(item.task_id || ''),
             title: String(item.title || item.task_id || ''),
-            role_id: String(item.role_id || ''),
+            assigned_role_id: String(item.assigned_role_id || item.role_id || ''),
+            role_id: String(item.assigned_role_id || item.role_id || ''),
             status: String(item.status || 'created'),
-            instance_id: String(item.instance_id || ''),
+            assigned_instance_id: String(item.assigned_instance_id || item.instance_id || ''),
+            instance_id: String(item.assigned_instance_id || item.instance_id || ''),
             run_id: String(item.run_id || ''),
             created_at: String(item.created_at || ''),
             updated_at: String(item.updated_at || item.created_at || ''),

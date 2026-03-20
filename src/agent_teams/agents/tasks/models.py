@@ -20,7 +20,7 @@ class TaskEnvelope(BaseModel):
     session_id: str = Field(min_length=1)
     parent_task_id: str | None = None
     trace_id: str = Field(min_length=1)
-    role_id: str = Field(default="coordinator_agent", min_length=1)
+    role_id: str | None = "coordinator_agent"
     title: str | None = None
     objective: str = Field(min_length=1)
     verification: VerificationPlan

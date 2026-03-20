@@ -632,7 +632,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     }
 
     assert coordinator_tools["create_tasks"].startswith(
-        "Create one or more run-scoped tasks for specialist roles."
+        "Create one or more run-scoped delegated task contracts."
     )
     assert writer_tools["read"].startswith(
         "Read a file or directory from the workspace."

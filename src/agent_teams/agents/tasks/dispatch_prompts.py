@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 
-def build_revise_followup_prompt(feedback: str) -> str:
-    request = str(feedback or "").strip()
+def build_dispatch_prompt(
+    *,
+    title: str,
+    objective: str,
+    prompt: str,
+) -> str:
+    request = str(prompt or "").strip()
     if not request:
-        request = "Run the task again and produce an updated result."
+        request = "Execute this task contract and return the requested result."
     return (
-        "## Follow-Up Request\n"
+        "## Task Contract\n"
+        f"Title: {title}\n"
+        f"Objective: {objective}\n\n"
+        "## Coordinator Prompt\n"
         f"{request}\n\n"
         "## Execution Rules\n"
-        "- Treat this as a new execution turn for the same task.\n"
-        "- Do not just restate or lightly edit your previous answer.\n"
-        "- If the task needs fresh data or external tools, call them again.\n"
-        "- Use the earlier task history only as context."
+        "- Treat this as a fresh execution turn for the current task.\n"
+        "- Satisfy the task contract first, then follow the coordinator prompt.\n"
+        "- If tools or fresh data are required, use them again instead of relying on stale outputs.\n"
+        "- Keep the final result focused on the requested deliverable."
     )

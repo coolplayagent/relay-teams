@@ -12,8 +12,8 @@ def test_coordinator_uses_task_tools_and_not_emit_event() -> None:
 
     assert "create_tasks" in tools
     assert "update_task" in tools
+    assert "list_delegated_tasks" in tools
     assert "dispatch_task" in tools
-    assert "list_run_tasks" not in tools
     assert "get_workflow_status" not in tools
     assert "materialize_code_shards_from_design" not in tools
     assert "manage_state" not in tools

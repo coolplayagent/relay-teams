@@ -85,7 +85,6 @@ def create_task_batch(
     run_id: str,
     objective: str,
 ) -> dict[str, object]:
-    coordinator_role_id = _get_coordinator_role_id(client)
     response = client.post(
         f"/api/tasks/runs/{run_id}",
         json={
@@ -93,15 +92,12 @@ def create_task_batch(
                 {
                     "title": "first_time_query",
                     "objective": f"{objective}: return the current time for the first task.",
-                    "role_id": coordinator_role_id,
                 },
                 {
                     "title": "second_time_query",
                     "objective": f"{objective}: return the current time for the second task.",
-                    "role_id": coordinator_role_id,
                 },
             ],
-            "auto_dispatch": False,
         },
     )
     response.raise_for_status()
@@ -111,7 +107,7 @@ def create_task_batch(
     return body
 
 
-def _get_coordinator_role_id(client: httpx.Client) -> str:
+def get_coordinator_role_id(client: httpx.Client) -> str:
     response = client.get("/api/roles:options")
     response.raise_for_status()
     body = response.json()
@@ -127,11 +123,12 @@ def dispatch_task(
     client: httpx.Client,
     *,
     task_id: str,
-    feedback: str = "",
+    role_id: str,
+    prompt: str = "",
 ) -> dict[str, object]:
     response = client.post(
         f"/api/tasks/{task_id}/dispatch",
-        json={"feedback": feedback},
+        json={"role_id": role_id, "prompt": prompt},
     )
     response.raise_for_status()
     body = response.json()

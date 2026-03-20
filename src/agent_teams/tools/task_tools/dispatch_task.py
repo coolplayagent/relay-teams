@@ -16,20 +16,23 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def dispatch_task(
         ctx: ToolContext,
         task_id: str,
-        feedback: str = "",
+        role_id: str,
+        prompt: str = "",
     ) -> dict[str, JsonValue]:
-        """Dispatch a created task or send follow-up feedback to a completed task."""
+        """Dispatch a task to a role with an execution prompt."""
 
         return await execute_tool(
             ctx,
             tool_name="dispatch_task",
             args_summary={
                 "task_id": task_id,
-                "feedback_len": len(feedback),
+                "role_id": role_id,
+                "prompt_len": len(prompt),
             },
             action=lambda: ctx.deps.task_service.dispatch_task(
                 run_id=ctx.deps.run_id,
                 task_id=task_id,
-                feedback=feedback,
+                role_id=role_id,
+                prompt=prompt,
             ),
         )

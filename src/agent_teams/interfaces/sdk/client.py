@@ -192,14 +192,12 @@ class AgentTeamsClient:
         self,
         run_id: str,
         tasks: list[dict[str, JsonValue]] | None = None,
-        auto_dispatch: bool = False,
     ) -> dict[str, JsonValue]:
         tasks_payload: list[JsonValue] | None = None
         if tasks is not None:
             tasks_payload = [task for task in tasks]
         payload: dict[str, JsonValue] = {
             "tasks": tasks_payload,
-            "auto_dispatch": auto_dispatch,
         }
         return self._request_json(
             "POST",
@@ -207,7 +205,7 @@ class AgentTeamsClient:
             payload,
         )
 
-    def list_run_tasks(
+    def list_delegated_tasks(
         self, run_id: str, include_root: bool = False
     ) -> dict[str, JsonValue]:
         return self._request_json(
@@ -215,16 +213,19 @@ class AgentTeamsClient:
             f"/api/tasks/runs/{run_id}?include_root={'true' if include_root else 'false'}",
         )
 
+    def list_run_tasks(
+        self, run_id: str, include_root: bool = False
+    ) -> dict[str, JsonValue]:
+        return self.list_delegated_tasks(run_id, include_root=include_root)
+
     def update_task(
         self,
         task_id: str,
         *,
-        role_id: str | None = None,
         objective: str | None = None,
         title: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
-            "role_id": role_id,
             "objective": objective,
             "title": title,
         }
@@ -234,11 +235,17 @@ class AgentTeamsClient:
             payload,
         )
 
-    def dispatch_task(self, task_id: str, feedback: str = "") -> dict[str, JsonValue]:
+    def dispatch_task(
+        self,
+        task_id: str,
+        *,
+        role_id: str,
+        prompt: str = "",
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",
             f"/api/tasks/{task_id}/dispatch",
-            {"feedback": feedback},
+            {"role_id": role_id, "prompt": prompt},
         )
 
     def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
