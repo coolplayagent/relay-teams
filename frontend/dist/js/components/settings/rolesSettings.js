@@ -149,10 +149,12 @@ function renderRolesList() {
                     <div class="role-record-title-row">
                         <div class="role-record-title">${escapeHtml(role.name)}</div>
                         <div class="role-record-id">${escapeHtml(role.role_id)}</div>
+                        ${renderRoleUsageChips(role.role_id)}
                     </div>
                     <div class="role-record-meta">
                         <span>v${escapeHtml(role.version)}</span>
                         <span>${escapeHtml(role.model_profile)}</span>
+                        ${renderRoleUsageMeta(role.role_id)}
                     </div>
                 </div>
                 <div class="role-record-actions">
@@ -234,13 +236,11 @@ function applyReservedRoleUi(record) {
     setReadonly('role-name-input', isReservedRole);
     setReadonly('role-description-input', isReservedRole);
     setReadonly('role-version-input', isReservedRole);
-    setReadonly('role-system-prompt-input', isReservedRole);
+    setReadonly('role-system-prompt-input', false);
 
     const promptInput = document.getElementById('role-system-prompt-input');
     if (promptInput) {
-        promptInput.title = isReservedRole
-            ? 'System role prompts are managed in the Orchestration settings panel.'
-            : '';
+        promptInput.title = buildReservedPromptTitle(roleId);
     }
     const statusEl = document.getElementById('role-editor-status');
     if (!statusEl || !isReservedRole) {
@@ -249,8 +249,8 @@ function applyReservedRoleUi(record) {
     statusEl.style.display = 'block';
     statusEl.className = 'role-editor-status';
     statusEl.textContent = roleId === roleConfigOptions.main_agent_role_id
-        ? 'Main Agent keeps a fixed identity here. Edit its prompt in Settings > Orchestration.'
-        : 'Coordinator keeps a fixed identity here. Edit orchestration prompts in Settings > Orchestration.';
+        ? 'Main Agent keeps a fixed identity. Its base prompt is edited here and is only used in normal mode.'
+        : 'Coordinator keeps a fixed identity. Its base prompt is edited here and is combined with the selected preset orchestration prompt in orchestration mode.';
 }
 
 function renderOptionPicker(containerId, availableValues, selectedValues, emptyMessage) {
@@ -630,6 +630,39 @@ function isReservedSystemRoleId(roleId) {
     const safeRoleId = String(roleId || '').trim();
     return safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()
         || safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim();
+}
+
+function renderRoleUsageChips(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
+        return '<div class="profile-card-chips role-record-chips"><span class="profile-card-chip profile-card-chip-accent">Normal Mode</span></div>';
+    }
+    if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
+        return '<div class="profile-card-chips role-record-chips"><span class="profile-card-chip">Orchestration</span></div>';
+    }
+    return '';
+}
+
+function renderRoleUsageMeta(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
+        return '<span>Main Agent only</span>';
+    }
+    if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
+        return '<span>Coordinator root</span>';
+    }
+    return '';
+}
+
+function buildReservedPromptTitle(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
+        return 'Main Agent base prompt is edited here and used only in normal mode.';
+    }
+    if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
+        return 'Coordinator base prompt is edited here and combined with the selected preset orchestration prompt in orchestration mode.';
+    }
+    return '';
 }
 
 function toggleRoleActions(visibility) {

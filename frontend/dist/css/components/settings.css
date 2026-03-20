@@ -775,84 +775,30 @@
     line-height: 1.5;
 }
 
+.orchestration-fixed-role-copy:last-child {
+    margin-bottom: 0;
+}
+
 .orchestration-prompt-textarea {
     min-height: 220px;
 }
 
-.orchestration-section-header {
-    align-items: center;
+.role-record-chips {
+    margin-left: 0.2rem;
 }
 
 .orchestration-default-row {
-    max-width: 320px;
-}
-
-.orchestration-layout {
-    display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
-    gap: 1rem;
-    min-height: 0;
+    margin-top: 0.85rem;
 }
 
 .orchestration-preset-list {
     min-height: 180px;
 }
 
-.orchestration-preset-records {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.orchestration-preset-record {
-    display: flex;
-    flex-direction: column;
-    gap: 0.12rem;
-    width: 100%;
-    padding: 0.7rem 0.8rem;
-    border: 1px solid var(--settings-border-soft);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-primary);
-    text-align: left;
-    cursor: pointer;
-}
-
-.orchestration-preset-record:hover {
-    background: var(--settings-row-hover-bg);
-}
-
-.orchestration-preset-record.active {
-    border-color: var(--settings-border-default);
-    background: var(--settings-surface-bg);
-}
-
-.orchestration-preset-record-name {
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.orchestration-preset-record-meta {
-    color: var(--text-secondary);
-    font-size: 0.74rem;
-    font-family: var(--font-mono);
-}
-
-.orchestration-preset-editor-shell {
+.orchestration-editor-panel,
+.orchestration-editor-form {
     min-width: 0;
-}
-
-.orchestration-preset-toolbar {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 0.85rem;
-}
-
-.orchestration-preset-form {
-    border: 1px solid var(--settings-border-soft);
-    border-radius: 10px;
-    background: var(--settings-surface-bg);
-    padding: 1rem 1rem 0;
+    min-height: 0;
 }
 
 .orchestration-role-section {

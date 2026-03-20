@@ -176,6 +176,57 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     assert captured_registry[-1].get("new_role").name == "New Role"
 
 
+def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    builtin_roles_dir = _create_builtin_roles_dir(tmp_path)
+    _write_role(
+        builtin_roles_dir / "MainAgent.md",
+        role_id="MainAgent",
+        name="Main Agent",
+        description="Handles normal-mode runs directly.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Handle the task directly.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=builtin_roles_dir,
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    saved = service.save_role_document(
+        "MainAgent",
+        draft=RoleDocumentDraft(
+            source_role_id="MainAgent",
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles normal-mode runs directly.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Handle the task directly and verify the outcome before finishing.",
+        ),
+    )
+
+    assert saved.role_id == "MainAgent"
+    assert (
+        saved.system_prompt
+        == "Handle the task directly and verify the outcome before finishing."
+    )
+    assert (roles_dir / "MainAgent.md").exists()
+
+
 def _write_role(
     path: Path,
     *,

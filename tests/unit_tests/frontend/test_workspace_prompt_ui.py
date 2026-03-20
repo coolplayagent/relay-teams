@@ -148,8 +148,16 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'data-tab="orchestration"' in settings_index_script
     assert 'id="orchestration-panel"' in settings_index_script
     assert "loadOrchestrationSettingsPanel" in settings_index_script
-    assert "main_agent_prompt" in orchestration_settings_script
+    assert "orchestration-overview-card" not in settings_index_script
+    assert "orchestration-main-agent-card" not in settings_index_script
+    assert 'id="add-orchestration-preset-btn"' in settings_index_script
+    assert 'id="cancel-orchestration-btn"' in settings_index_script
+    assert "main_agent_prompt" not in orchestration_settings_script
     assert "default_orchestration_preset_id" in orchestration_settings_script
+    assert "Set as default orchestration" in orchestration_settings_script
+    assert "showOrchestrationList" in orchestration_settings_script
+    assert "showOrchestrationEditor" in orchestration_settings_script
+    assert "showConfirmDialog" in orchestration_settings_script
     assert "fetchSessionTokenUsage" in session_token_usage_script
     assert "Token usage: total=" in session_token_usage_script
     assert "session-token-usage" in session_token_usage_script

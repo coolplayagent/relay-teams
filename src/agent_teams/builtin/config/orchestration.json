@@ -1,5 +1,4 @@
 {
-  "main_agent_prompt": "Execute the user's request directly. Work end-to-end when tools and context allow it. Do not delegate. When you edit files, verify the outcome before you conclude.",
   "default_orchestration_preset_id": "default",
   "presets": [
     {

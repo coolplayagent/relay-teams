@@ -39,7 +39,7 @@ const TAB_METADATA = {
     },
     orchestration: {
         title: 'Orchestration',
-        description: 'Configure 普通模式 main-agent prompt and 编排模式 preset routing.',
+        description: 'Manage orchestrations for orchestration mode. Main Agent and Coordinator base prompts are edited in Roles.',
     },
     notifications: {
         title: 'Notifications',
@@ -313,33 +313,19 @@ function createModal() {
                         <div class="settings-section">
                             <div class="settings-content-stack orchestration-settings-stack">
                                 <section class="orchestration-settings-block">
-                                    <div class="settings-section-header">
-                                        <div class="settings-section-copy">
-                                            <h3>Main Agent</h3>
-                                            <p>普通模式 uses a fixed main role. Only the prompt is edited here.</p>
+                                    <div class="orchestration-preset-list" id="orchestration-preset-list"></div>
+                                    <div class="role-editor-panel orchestration-editor-panel" id="orchestration-editor-panel" style="display:none;">
+                                        <div class="roles-editor-empty settings-empty-state settings-empty-state-compact" id="orchestration-editor-empty" style="display:none;">
+                                            <h4>No orchestration selected</h4>
+                                            <p>Select an orchestration to edit its roles and orchestration prompt.</p>
                                         </div>
-                                    </div>
-                                    <div id="orchestration-main-agent-card"></div>
-                                </section>
-                                <section class="orchestration-settings-block">
-                                    <div class="settings-section-header orchestration-section-header">
-                                        <div class="settings-section-copy">
-                                            <h3>Orchestration Presets</h3>
-                                            <p>编排模式 attaches the selected preset to Coordinator and limits which roles may be delegated.</p>
-                                        </div>
-                                        <button class="secondary-btn section-action-btn" id="add-orchestration-preset-btn" type="button">Add Preset</button>
-                                    </div>
-                                    <div class="orchestration-default-row">
-                                        <div class="form-group">
-                                            <label for="orchestration-default-preset-select">Default Preset</label>
-                                            <select id="orchestration-default-preset-select"></select>
-                                        </div>
-                                    </div>
-                                    <div class="orchestration-layout">
-                                        <div class="orchestration-preset-list" id="orchestration-preset-list"></div>
-                                        <div class="orchestration-preset-editor-shell">
-                                            <div class="orchestration-preset-toolbar">
-                                                <button class="secondary-btn section-action-btn" id="delete-orchestration-preset-btn" type="button">Delete Preset</button>
+                                        <div class="role-editor-form orchestration-editor-form" id="orchestration-editor-form" style="display:none;">
+                                            <div class="role-editor-header">
+                                                <div>
+                                                    <h4>Orchestration Editor</h4>
+                                                    <p id="orchestration-file-meta">Orchestration configuration</p>
+                                                </div>
+                                                <button class="secondary-btn section-action-btn" id="delete-orchestration-preset-btn" type="button">Delete Orchestration</button>
                                             </div>
                                             <div id="orchestration-preset-editor"></div>
                                         </div>
@@ -525,10 +511,12 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;">Add Role</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-orchestration-preset-btn" type="button" style="display:none;">Add Orchestration</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-orchestration-btn" type="button" style="display:none;">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-orchestration-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;">Save</button>
@@ -632,7 +620,7 @@ function renderPanelActions(tab) {
         return;
     }
     if (tab === 'orchestration') {
-        document.getElementById('save-orchestration-btn').style.display = 'inline-flex';
+        document.getElementById('add-orchestration-preset-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'environment') {

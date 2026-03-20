@@ -26,7 +26,6 @@ const YOLO_STORAGE_KEY = 'agent_teams_yolo';
 const THINKING_MODE_STORAGE_KEY = 'agent_teams_thinking_enabled';
 const THINKING_EFFORT_STORAGE_KEY = 'agent_teams_thinking_effort';
 let orchestrationConfig = {
-    main_agent_prompt: '',
     default_orchestration_preset_id: '',
     presets: [],
 };
@@ -308,7 +307,6 @@ function normalizeOrchestrationConfig(config) {
         })).filter(preset => preset.preset_id)
         : [];
     return {
-        main_agent_prompt: String(config?.main_agent_prompt || '').trim(),
         default_orchestration_preset_id: String(config?.default_orchestration_preset_id || '').trim(),
         presets,
     };

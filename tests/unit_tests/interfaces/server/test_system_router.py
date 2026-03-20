@@ -112,7 +112,6 @@ class _FakeSystemService:
 
     def get_orchestration_config(self) -> dict[str, object]:
         return {
-            "main_agent_prompt": "Handle the task directly unless orchestration is enabled.",
             "default_orchestration_preset_id": "default",
             "presets": [
                 {
@@ -312,7 +311,6 @@ def test_save_orchestration_config() -> None:
         "/api/system/configs/orchestration",
         json={
             "config": {
-                "main_agent_prompt": "Normal mode prompt.",
                 "default_orchestration_preset_id": "shipping",
                 "presets": [
                     {

@@ -145,8 +145,7 @@ async def build_runtime_system_prompt(
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
     prompt_sections.append(env_prompt)
 
-    if is_main_agent_role_definition(data.role) and topology is not None:
-        prompt_sections.append("## Normal Mode\n" + topology.main_agent_prompt)
+    if is_main_agent_role_definition(data.role):
         return "\n\n".join(prompt_sections)
     if not is_coordinator_role_definition(data.role):
         return "\n\n".join(prompt_sections)

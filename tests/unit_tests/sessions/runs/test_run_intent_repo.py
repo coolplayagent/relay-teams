@@ -108,7 +108,6 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
                 session_mode=SessionMode.ORCHESTRATION,
                 main_agent_role_id="MainAgent",
                 coordinator_role_id="Coordinator",
-                main_agent_prompt="Normal mode prompt.",
                 orchestration_preset_id="default",
                 orchestration_prompt="Delegate by capability.",
                 allowed_role_ids=("writer", "reviewer"),

@@ -248,7 +248,6 @@ class RoleSettingsService:
             ("name", source_definition.name, draft.name),
             ("description", source_definition.description, draft.description),
             ("version", source_definition.version, draft.version),
-            ("system_prompt", source_definition.system_prompt, draft.system_prompt),
         )
         for field_name, source_value, next_value in locked_pairs:
             if str(source_value) != str(next_value):

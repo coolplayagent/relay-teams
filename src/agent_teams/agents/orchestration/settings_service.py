@@ -63,7 +63,6 @@ class OrchestrationSettingsService:
                 session_mode=SessionMode.NORMAL,
                 main_agent_role_id=main_agent_role_id,
                 coordinator_role_id=coordinator_role_id,
-                main_agent_prompt=settings.main_agent_prompt,
                 orchestration_preset_id=session.orchestration_preset_id,
             )
 
@@ -86,7 +85,6 @@ class OrchestrationSettingsService:
             session_mode=SessionMode.ORCHESTRATION,
             main_agent_role_id=main_agent_role_id,
             coordinator_role_id=coordinator_role_id,
-            main_agent_prompt=settings.main_agent_prompt,
             orchestration_preset_id=preset.preset_id,
             orchestration_prompt=preset.orchestration_prompt,
             allowed_role_ids=preset.role_ids,

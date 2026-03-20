@@ -115,7 +115,6 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     coordinator_role_id="coordinator_agent",
-                    main_agent_prompt="Handle it directly.",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -210,7 +209,6 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     coordinator_role_id="coordinator_agent",
-                    main_agent_prompt="Handle it directly.",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -228,7 +226,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     assert "Choose roles by their Description, Tools, MCP Tools, and Skills." in prompt
 
 
-def test_runtime_system_prompt_for_main_agent_includes_normal_mode_prompt() -> None:
+def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> None:
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
@@ -237,7 +235,6 @@ def test_runtime_system_prompt_for_main_agent_includes_normal_mode_prompt() -> N
                     session_mode=SessionMode.NORMAL,
                     main_agent_role_id="MainAgent",
                     coordinator_role_id="Coordinator",
-                    main_agent_prompt="Solve the task directly and avoid delegation unless explicitly switched.",
                     orchestration_preset_id=None,
                     orchestration_prompt="",
                     allowed_role_ids=(),
@@ -248,9 +245,6 @@ def test_runtime_system_prompt_for_main_agent_includes_normal_mode_prompt() -> N
     )
 
     assert "## Runtime Rules" in prompt
-    assert "## Normal Mode" in prompt
-    assert (
-        "Solve the task directly and avoid delegation unless explicitly switched."
-        in prompt
-    )
+    assert "## Normal Mode" not in prompt
+    assert "You are a focused agent." in prompt
     assert "## Available Roles" not in prompt

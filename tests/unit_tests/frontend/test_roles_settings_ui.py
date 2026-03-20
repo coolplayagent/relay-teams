@@ -200,6 +200,36 @@ console.log(JSON.stringify({
     assert 'value="moonshot">moonshot</option>' in model_profile_html
 
 
+def test_role_settings_marks_main_agent_and_keeps_reserved_prompt_editable(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[2].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    listHtml: document.getElementById("roles-list").innerHTML,
+    promptReadonly: document.getElementById("role-system-prompt-input").readOnly,
+    promptTitle: document.getElementById("role-system-prompt-input").title,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert "Main Agent only" in cast(str, payload["listHtml"])
+    assert "Normal Mode" in cast(str, payload["listHtml"])
+    assert payload["promptReadonly"] is False
+    assert "normal mode" in cast(str, payload["promptTitle"])
+    assert "only used in normal mode" in cast(str, payload["statusText"])
+
+
 def _run_roles_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -221,7 +251,7 @@ def _run_roles_settings_script(tmp_path: Path, runner_source: str) -> dict[str, 
 
     mock_api_path.write_text(
         """
-const roleRecords = {
+const defaultRoleRecords = {
     writer: {
         source_role_id: "writer",
         role_id: "writer",
@@ -252,11 +282,45 @@ const roleRecords = {
         file_name: "reviewer.md",
         content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
     },
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        tools: ["read_file"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+    },
+    Coordinator: {
+        source_role_id: "Coordinator",
+        role_id: "Coordinator",
+        name: "Coordinator",
+        description: "Coordinates delegated work.",
+        version: "1.0.0",
+        tools: ["create_tasks", "dispatch_task"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Coordinate the run.",
+        file_name: "coordinator.md",
+        content: "---\\nrole_id: Coordinator\\n---\\n\\nCoordinate the run.\\n",
+    },
 };
+
+function getRoleRecords() {
+    return globalThis.__roleRecordsOverride || defaultRoleRecords;
+}
 
 export async function fetchRoleConfigs() {
     globalThis.__fetchRoleConfigsCount += 1;
-    return Object.values(roleRecords).map(record => ({
+    return Object.values(getRoleRecords()).map(record => ({
         role_id: record.role_id,
         name: record.name,
         description: record.description,
@@ -267,6 +331,8 @@ export async function fetchRoleConfigs() {
 
 export async function fetchRoleConfigOptions() {
         return {
+            coordinator_role_id: "Coordinator",
+            main_agent_role_id: "MainAgent",
             tools: ["read_file", "write_file"],
             mcp_servers: ["docs"],
             skills: ["diff", "time"],
@@ -282,7 +348,7 @@ export async function fetchModelProfiles() {
 
 export async function fetchRoleConfig(roleId) {
     globalThis.__fetchRoleConfigCalls.push(roleId);
-    return roleRecords[roleId];
+    return getRoleRecords()[roleId];
 }
 
 export async function validateRoleConfig(payload) {
@@ -300,6 +366,7 @@ export async function validateRoleConfig(payload) {
 
 export async function saveRoleConfig(roleId, payload) {
     globalThis.__saveCalls.push({ roleId, payload });
+    const roleRecords = getRoleRecords();
     roleRecords[payload.role_id] = {
         ...payload,
         source_role_id: payload.source_role_id,

@@ -138,7 +138,6 @@ Replaces notification rules.
 Returns global orchestration settings.
 
 Response fields:
-- `main_agent_prompt`
 - `default_orchestration_preset_id`
 - `presets[]`
   - `preset_id`
@@ -154,7 +153,7 @@ Replaces global orchestration settings.
 Rules:
 - `presets[].role_ids` may contain only normal roles; reserved system roles are rejected.
 - The default preset id must match one existing preset.
-- `main_agent_prompt` is used only in `normal` session mode.
+- `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
 
 ### `GET /system/configs/environment-variables`

@@ -23,7 +23,6 @@ class OrchestrationPreset(BaseModel):
 class OrchestrationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    main_agent_prompt: str = Field(min_length=1)
     default_orchestration_preset_id: str = ""
     presets: tuple[OrchestrationPreset, ...] = Field(default_factory=tuple)
 

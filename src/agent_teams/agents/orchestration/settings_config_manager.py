@@ -32,5 +32,7 @@ class OrchestrationSettingsConfigManager:
 def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     raw = cast(object, loads(file_path.read_text(encoding="utf-8")))
     if isinstance(raw, dict):
-        return cast(dict[str, JsonValue], raw)
+        payload = cast(dict[str, JsonValue], raw)
+        payload.pop("main_agent_prompt", None)
+        return payload
     return {}

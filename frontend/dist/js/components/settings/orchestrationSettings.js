@@ -8,18 +8,16 @@ import {
     fetchRoleConfigs,
     saveOrchestrationConfig,
 } from '../../core/api.js';
-import { showToast } from '../../utils/feedback.js';
+import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let orchestrationConfig = {
-    main_agent_prompt: '',
     default_orchestration_preset_id: '',
     presets: [],
 };
 let orchestrationRoleOptions = [];
-let mainAgentRoleId = 'MainAgent';
-let coordinatorRoleId = 'Coordinator';
-let selectedPresetId = '';
+let editingDraft = null;
+let editingSourceId = '';
 let handlersBound = false;
 
 export function bindOrchestrationSettingsHandlers() {
@@ -28,12 +26,13 @@ export function bindOrchestrationSettingsHandlers() {
     }
     handlersBound = true;
 
-    bindActionButton('add-orchestration-preset-btn', handleAddPreset);
-    bindActionButton('delete-orchestration-preset-btn', handleDeletePreset);
+    bindActionButton('add-orchestration-preset-btn', handleAddOrchestration);
+    bindActionButton('delete-orchestration-preset-btn', handleDeleteOrchestration);
     bindActionButton('save-orchestration-btn', handleSaveOrchestration);
+    bindActionButton('cancel-orchestration-btn', handleCancelOrchestrationEdit);
 }
 
-export async function loadOrchestrationSettingsPanel(preferredPresetId = '') {
+export async function loadOrchestrationSettingsPanel(preferredOrchestrationId = '') {
     try {
         const [config, roleSummaries, roleOptions] = await Promise.all([
             fetchOrchestrationConfig(),
@@ -41,11 +40,16 @@ export async function loadOrchestrationSettingsPanel(preferredPresetId = '') {
             fetchRoleConfigOptions(),
         ]);
         orchestrationConfig = normalizeOrchestrationConfig(config);
-        mainAgentRoleId = String(roleOptions?.main_agent_role_id || 'MainAgent').trim() || 'MainAgent';
-        coordinatorRoleId = String(roleOptions?.coordinator_role_id || 'Coordinator').trim() || 'Coordinator';
-        orchestrationRoleOptions = normalizeRoleOptions(roleSummaries);
-        selectedPresetId = resolveSelectedPresetId(preferredPresetId);
-        renderOrchestrationPanel();
+        orchestrationRoleOptions = normalizeRoleOptions(roleSummaries, roleOptions);
+        editingDraft = null;
+        editingSourceId = '';
+        renderOrchestrationList();
+        renderStatus('', '');
+        if (String(preferredOrchestrationId || '').trim()) {
+            openOrchestrationEditor(preferredOrchestrationId);
+            return;
+        }
+        showOrchestrationList();
     } catch (error) {
         logError(
             'frontend.orchestration_settings.load_failed',
@@ -63,73 +67,218 @@ function bindActionButton(id, handler) {
     }
 }
 
-function handlePresetSelection(nextPresetId) {
-    syncSelectedPresetFromForm();
-    selectedPresetId = String(nextPresetId || '').trim();
-    renderPresetList();
-    renderDefaultPresetSelect();
-    renderPresetEditor();
+function renderOrchestrationList() {
+    const host = document.getElementById('orchestration-preset-list');
+    if (!host) {
+        return;
+    }
+    const orchestrations = Array.isArray(orchestrationConfig.presets)
+        ? orchestrationConfig.presets
+        : [];
+    if (orchestrations.length === 0) {
+        host.innerHTML = `
+            <div class="settings-empty-state">
+                <h4>No orchestrations</h4>
+                <p>Add an orchestration to choose roles and orchestration-specific coordinator instructions.</p>
+            </div>
+        `;
+        return;
+    }
+
+    host.innerHTML = `
+        <div class="role-records">
+            ${orchestrations.map(orchestration => renderOrchestrationRecord(orchestration)).join('')}
+        </div>
+    `;
+
+    host.querySelectorAll('.orchestration-edit-btn').forEach(button => {
+        button.onclick = event => {
+            event.stopPropagation();
+            openOrchestrationEditor(button.dataset.orchestrationId);
+        };
+    });
+    host.querySelectorAll('.role-record').forEach(button => {
+        button.onclick = () => {
+            openOrchestrationEditor(button.dataset.orchestrationId);
+        };
+    });
 }
 
-function handleAddPreset() {
+function renderOrchestrationRecord(orchestration) {
+    const orchestrationId = String(orchestration?.preset_id || '').trim();
+    const orchestrationName = String(
+        orchestration?.name || orchestrationId || 'Orchestration',
+    ).trim();
+    const isDefault = orchestrationId === String(
+        orchestrationConfig.default_orchestration_preset_id || '',
+    ).trim();
+    const roleCount = Array.isArray(orchestration?.role_ids)
+        ? orchestration.role_ids.length
+        : 0;
+    const defaultChip = isDefault
+        ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
+        : '';
+    return `
+        <div class="role-record" data-orchestration-id="${escapeHtml(orchestrationId)}">
+            <div class="role-record-main">
+                <div class="role-record-title-row">
+                    <div class="role-record-title">${escapeHtml(orchestrationName)}</div>
+                    <div class="role-record-id">${escapeHtml(orchestrationId)}</div>
+                    <div class="profile-card-chips role-record-chips">${defaultChip}</div>
+                </div>
+                <div class="role-record-meta">
+                    <span>${escapeHtml(roleCount)} role${roleCount === 1 ? '' : 's'}</span>
+                    <span>${escapeHtml(String(orchestration?.description || '').trim() || 'No description')}</span>
+                </div>
+            </div>
+            <div class="role-record-actions">
+                <button class="settings-inline-action settings-list-action orchestration-edit-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button">Edit</button>
+            </div>
+        </div>
+    `;
+}
+
+function openOrchestrationEditor(orchestrationId) {
+    const safeId = String(orchestrationId || '').trim();
+    if (!safeId) {
+        return;
+    }
+    const source = orchestrationConfig.presets.find(item => item.preset_id === safeId);
+    if (!source) {
+        return;
+    }
+    editingSourceId = source.preset_id;
+    editingDraft = cloneOrchestration(source);
+    renderOrchestrationEditor();
+}
+
+function handleAddOrchestration() {
     if (orchestrationRoleOptions.length === 0) {
         showToast({
             title: 'No Roles Available',
-            message: 'Create at least one normal role before adding an orchestration preset.',
+            message: 'Create at least one normal role before adding an orchestration.',
             tone: 'warning',
         });
         return;
     }
-    syncSelectedPresetFromForm();
-    const nextPresetId = createPresetId();
-    orchestrationConfig.presets.push({
-        preset_id: nextPresetId,
-        name: 'New Preset',
+    editingSourceId = '';
+    editingDraft = {
+        preset_id: createOrchestrationId(),
+        name: 'New Orchestration',
         description: '',
         role_ids: [orchestrationRoleOptions[0].role_id],
         orchestration_prompt: '',
-    });
-    if (!orchestrationConfig.default_orchestration_preset_id) {
-        orchestrationConfig.default_orchestration_preset_id = nextPresetId;
-    }
-    selectedPresetId = nextPresetId;
-    renderOrchestrationPanel();
+        is_default: orchestrationConfig.presets.length === 0,
+    };
+    renderStatus('', '');
+    renderOrchestrationEditor();
 }
 
-function handleDeletePreset() {
-    if (!selectedPresetId) {
+function renderOrchestrationEditor() {
+    const panel = document.getElementById('orchestration-editor-panel');
+    const formEl = document.getElementById('orchestration-editor-form');
+    const emptyEl = document.getElementById('orchestration-editor-empty');
+    const host = document.getElementById('orchestration-preset-editor');
+    const deleteButton = document.getElementById('delete-orchestration-preset-btn');
+    const fileMeta = document.getElementById('orchestration-file-meta');
+    if (!panel || !formEl || !emptyEl || !host) {
         return;
     }
-    if (orchestrationConfig.presets.length <= 1) {
-        showToast({
-            title: 'Preset Required',
-            message: 'At least one orchestration preset must remain configured.',
-            tone: 'warning',
-        });
+
+    if (!editingDraft) {
+        host.innerHTML = '';
+        if (fileMeta) {
+            fileMeta.textContent = 'Orchestration configuration';
+        }
+        if (deleteButton) {
+            deleteButton.disabled = true;
+            deleteButton.style.display = 'none';
+        }
+        showOrchestrationList();
         return;
     }
-    orchestrationConfig.presets = orchestrationConfig.presets.filter(
-        preset => preset.preset_id !== selectedPresetId,
+
+    if (fileMeta) {
+        fileMeta.textContent = editingSourceId
+            ? `Orchestration: ${editingSourceId}`
+            : 'New orchestration';
+    }
+    if (deleteButton) {
+        deleteButton.disabled = editingSourceId === '';
+        deleteButton.style.display = editingSourceId ? 'inline-flex' : 'none';
+    }
+    panel.style.display = 'block';
+    formEl.style.display = 'block';
+    emptyEl.style.display = 'none';
+    host.innerHTML = `
+        <div class="role-editor-sections">
+            <section class="role-editor-section">
+                <div class="profile-editor-grid role-editor-grid">
+                    <div class="form-group">
+                        <label for="orchestration-id-input">Orchestration ID</label>
+                        <input type="text" id="orchestration-id-input" value="${escapeHtml(editingDraft.preset_id)}" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="orchestration-name-input">Orchestration Name</label>
+                        <input type="text" id="orchestration-name-input" value="${escapeHtml(editingDraft.name)}" autocomplete="off">
+                    </div>
+                    <div class="form-group form-group-span-2">
+                        <label for="orchestration-description-input">Description</label>
+                        <input type="text" id="orchestration-description-input" value="${escapeHtml(editingDraft.description)}" autocomplete="off">
+                    </div>
+                </div>
+                <div class="profile-default-row orchestration-default-row">
+                    <input type="checkbox" id="orchestration-default-input"${editingDraft.is_default ? ' checked' : ''}>
+                    <label for="orchestration-default-input">Set as default orchestration</label>
+                </div>
+            </section>
+            <section class="role-editor-section orchestration-role-section">
+                <h5>Allowed Roles</h5>
+                <div class="role-option-picker role-option-picker-single" id="orchestration-role-picker">
+                    ${renderRolePickerOptions(editingDraft.role_ids)}
+                </div>
+            </section>
+            <section class="role-editor-section">
+                <div class="role-prompt-header">
+                    <h5>Orchestration Prompt</h5>
+                </div>
+                <textarea id="orchestration-prompt-input" class="config-textarea orchestration-prompt-textarea" placeholder="Explain how Coordinator should split work, choose roles, and drive work to completion.">${escapeHtml(editingDraft.orchestration_prompt)}</textarea>
+            </section>
+        </div>
+    `;
+    showOrchestrationEditor();
+}
+
+function renderRolePickerOptions(selectedRoleIds) {
+    if (orchestrationRoleOptions.length === 0) {
+        return '<div class="role-option-empty">No normal roles available.</div>';
+    }
+    const selectedSet = new Set(
+        Array.isArray(selectedRoleIds)
+            ? selectedRoleIds.map(roleId => String(roleId || '').trim()).filter(Boolean)
+            : [],
     );
-    if (orchestrationConfig.default_orchestration_preset_id === selectedPresetId) {
-        orchestrationConfig.default_orchestration_preset_id = orchestrationConfig.presets[0]?.preset_id || '';
-    }
-    selectedPresetId = orchestrationConfig.presets[0]?.preset_id || '';
-    renderOrchestrationPanel();
+    return orchestrationRoleOptions.map(role => `
+        <label class="role-option-item">
+            <input type="checkbox" data-role-id="${escapeHtml(role.role_id)}"${selectedSet.has(role.role_id) ? ' checked' : ''}>
+            <span class="role-option-check" aria-hidden="true"></span>
+            <span class="role-option-label">${escapeHtml(role.name)} <em>${escapeHtml(role.role_id)}</em></span>
+        </label>
+    `).join('');
 }
 
 async function handleSaveOrchestration() {
     try {
-        const draft = buildDraft();
-        await saveOrchestrationConfig(draft);
+        const draft = readDraftFromForm();
+        const nextConfig = buildSavedConfig(draft);
+        await saveOrchestrationConfig(nextConfig);
         showToast({
             title: 'Orchestration Saved',
             message: 'Orchestration settings were saved.',
             tone: 'success',
         });
         document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
-        await loadOrchestrationSettingsPanel(selectedPresetId || draft.default_orchestration_preset_id);
-        renderStatus('Saved orchestration settings.', 'success');
+        await loadOrchestrationSettingsPanel();
     } catch (error) {
         renderStatus(error.message || 'Failed to save orchestration settings.', 'danger');
         showToast({
@@ -140,216 +289,226 @@ async function handleSaveOrchestration() {
     }
 }
 
-function buildDraft() {
-    syncSelectedPresetFromForm();
-    const mainAgentPrompt = String(
-        document.getElementById('orchestration-main-agent-prompt')?.value || '',
+async function handleDeleteOrchestration() {
+    if (!editingSourceId) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: 'Delete Orchestration',
+        message: `Delete orchestration "${editingSourceId}"?`,
+        tone: 'warning',
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+    });
+    if (!confirmed) {
+        return;
+    }
+
+    const nextPresets = orchestrationConfig.presets.filter(
+        item => item.preset_id !== editingSourceId,
+    );
+    if (nextPresets.length === 0) {
+        showToast({
+            title: 'Orchestration Required',
+            message: 'At least one orchestration must remain configured.',
+            tone: 'warning',
+        });
+        return;
+    }
+
+    const currentDefaultId = String(orchestrationConfig.default_orchestration_preset_id || '').trim();
+    const nextDefaultId = currentDefaultId === editingSourceId
+        ? nextPresets[0]?.preset_id || ''
+        : currentDefaultId;
+    try {
+        await saveOrchestrationConfig({
+            default_orchestration_preset_id: nextDefaultId,
+            presets: nextPresets.map(item => serializeOrchestration(item)),
+        });
+        showToast({
+            title: 'Orchestration Deleted',
+            message: 'The orchestration was deleted.',
+            tone: 'success',
+        });
+        document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
+        await loadOrchestrationSettingsPanel();
+    } catch (error) {
+        renderStatus(error.message || 'Failed to delete orchestration.', 'danger');
+        showToast({
+            title: 'Delete Failed',
+            message: error.message || 'Failed to delete orchestration.',
+            tone: 'danger',
+        });
+    }
+}
+
+function handleCancelOrchestrationEdit() {
+    editingDraft = null;
+    editingSourceId = '';
+    renderStatus('', '');
+    showOrchestrationList();
+}
+
+function readDraftFromForm() {
+    if (!editingDraft) {
+        throw new Error('No orchestration is currently being edited.');
+    }
+    const orchestrationId = String(
+        document.getElementById('orchestration-id-input')?.value || editingDraft.preset_id,
     ).trim();
-    if (!mainAgentPrompt) {
-        throw new Error('Main agent prompt is required.');
-    }
-    const defaultPresetId = String(
-        document.getElementById('orchestration-default-preset-select')?.value || '',
+    const orchestrationName = String(
+        document.getElementById('orchestration-name-input')?.value || editingDraft.name,
     ).trim();
-    if (!defaultPresetId) {
-        throw new Error('Default orchestration preset is required.');
+    const description = String(
+        document.getElementById('orchestration-description-input')?.value || '',
+    ).trim();
+    const orchestrationPrompt = String(
+        document.getElementById('orchestration-prompt-input')?.value || '',
+    ).trim();
+    const roleIds = [];
+    document.getElementById('orchestration-role-picker')
+        ?.querySelectorAll('input[type="checkbox"]')
+        .forEach(input => {
+            if (input.checked) {
+                roleIds.push(String(input.dataset.roleId || '').trim());
+            }
+        });
+    const isDefault = document.getElementById('orchestration-default-input')?.checked === true;
+
+    if (!orchestrationId) {
+        throw new Error('Orchestration ID is required.');
     }
-    const presets = orchestrationConfig.presets.map(preset => ({
-        preset_id: String(preset.preset_id || '').trim(),
-        name: String(preset.name || '').trim(),
-        description: String(preset.description || '').trim(),
-        role_ids: Array.isArray(preset.role_ids)
-            ? preset.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
-            : [],
-        orchestration_prompt: String(preset.orchestration_prompt || '').trim(),
-    }));
-    if (presets.some(preset => !preset.preset_id || !preset.name || preset.role_ids.length === 0)) {
-        throw new Error('Each orchestration preset requires an id, a name, and at least one role.');
+    if (!orchestrationName) {
+        throw new Error('Orchestration name is required.');
     }
-    if (!presets.some(preset => preset.preset_id === defaultPresetId)) {
-        throw new Error('Default orchestration preset must match an existing preset.');
+    if (roleIds.length === 0) {
+        throw new Error('At least one role is required.');
+    }
+    if (!orchestrationPrompt) {
+        throw new Error('Orchestration prompt is required.');
+    }
+
+    editingDraft = {
+        preset_id: orchestrationId,
+        name: orchestrationName,
+        description,
+        role_ids: roleIds.filter(Boolean),
+        orchestration_prompt: orchestrationPrompt,
+        is_default: isDefault,
+    };
+    return { ...editingDraft };
+}
+
+function buildSavedConfig(draft) {
+    const nextPresets = orchestrationConfig.presets
+        .filter(item => item.preset_id !== editingSourceId)
+        .map(item => cloneOrchestration(item));
+    nextPresets.push(cloneOrchestration(draft));
+
+    const normalizedPresets = nextPresets.map(item => serializeOrchestration(item));
+    const defaultOrchestrationId = draft.is_default
+        ? draft.preset_id
+        : resolveDefaultOrchestrationId({
+            presets: nextPresets,
+            editingSourceId,
+            fallbackId: draft.preset_id,
+        });
+
+    if (!defaultOrchestrationId) {
+        throw new Error('Default orchestration is required.');
+    }
+    if (!normalizedPresets.some(item => item.preset_id === defaultOrchestrationId)) {
+        throw new Error('Default orchestration must match an existing orchestration.');
+    }
+    if (hasDuplicateIds(normalizedPresets)) {
+        throw new Error('Orchestration IDs must be unique.');
     }
     return {
-        main_agent_prompt: mainAgentPrompt,
-        default_orchestration_preset_id: defaultPresetId,
-        presets,
+        default_orchestration_preset_id: defaultOrchestrationId,
+        presets: normalizedPresets,
     };
 }
 
-function renderOrchestrationPanel() {
-    renderMainAgentCard();
-    renderPresetList();
-    renderDefaultPresetSelect();
-    renderPresetEditor();
-    renderStatus('', '');
+function resolveDefaultOrchestrationId({ presets, editingSourceId, fallbackId }) {
+    const currentDefaultId = String(orchestrationConfig.default_orchestration_preset_id || '').trim();
+    if (currentDefaultId && currentDefaultId !== editingSourceId && presets.some(item => item.preset_id === currentDefaultId)) {
+        return currentDefaultId;
+    }
+    if (currentDefaultId === editingSourceId && editingDraft && presets.some(item => item.preset_id === editingDraft.preset_id)) {
+        return editingDraft.preset_id;
+    }
+    if (fallbackId && presets.some(item => item.preset_id === fallbackId)) {
+        return fallbackId;
+    }
+    return presets[0]?.preset_id || '';
 }
 
-function renderMainAgentCard() {
-    const host = document.getElementById('orchestration-main-agent-card');
-    if (!host) {
-        return;
-    }
-    host.innerHTML = `
-        <div class="orchestration-fixed-role">
-            <div class="orchestration-fixed-role-head">
-                <div class="orchestration-fixed-role-title">Main Agent</div>
-                <div class="orchestration-fixed-role-meta">${escapeHtml(mainAgentRoleId)}</div>
-            </div>
-            <p class="orchestration-fixed-role-copy">Used by 普通模式. Identity stays fixed here; tool and model changes still belong in the Roles tab.</p>
-            <div class="form-group">
-                <label for="orchestration-main-agent-prompt">普通模式提示词</label>
-                <textarea id="orchestration-main-agent-prompt" class="config-textarea orchestration-prompt-textarea" placeholder="Prompt used by the main agent in 普通模式.">${escapeHtml(orchestrationConfig.main_agent_prompt || '')}</textarea>
-            </div>
-        </div>
-    `;
+function normalizeOrchestrationConfig(config) {
+    return {
+        default_orchestration_preset_id: String(config?.default_orchestration_preset_id || '').trim(),
+        presets: Array.isArray(config?.presets)
+            ? config.presets.map(item => cloneOrchestration(item))
+            : [],
+    };
 }
 
-function renderPresetList() {
-    const host = document.getElementById('orchestration-preset-list');
-    if (!host) {
-        return;
-    }
-    if (orchestrationConfig.presets.length === 0) {
-        host.innerHTML = `
-            <div class="settings-empty-state settings-empty-state-compact">
-                <h4>No presets</h4>
-                <p>Add an orchestration preset to choose roles and routing guidance.</p>
-            </div>
-        `;
-        return;
-    }
-    host.innerHTML = `
-        <div class="orchestration-preset-records">
-            ${orchestrationConfig.presets.map(preset => `
-                <button
-                    type="button"
-                    class="orchestration-preset-record${preset.preset_id === selectedPresetId ? ' active' : ''}"
-                    data-preset-id="${escapeHtml(preset.preset_id)}"
-                >
-                    <span class="orchestration-preset-record-name">${escapeHtml(preset.name || preset.preset_id)}</span>
-                    <span class="orchestration-preset-record-meta">${escapeHtml(preset.preset_id)}</span>
-                </button>
-            `).join('')}
-        </div>
-    `;
-    host.querySelectorAll('[data-preset-id]').forEach(button => {
-        button.onclick = () => {
-            handlePresetSelection(button.getAttribute('data-preset-id'));
-        };
-    });
+function normalizeRoleOptions(roleSummaries, roleOptions) {
+    const coordinatorRoleId = String(roleOptions?.coordinator_role_id || 'Coordinator').trim();
+    const mainAgentRoleId = String(roleOptions?.main_agent_role_id || 'MainAgent').trim();
+    const rows = Array.isArray(roleSummaries) ? roleSummaries : [];
+    return rows
+        .map(role => ({
+            role_id: String(role?.role_id || '').trim(),
+            name: String(role?.name || role?.role_id || '').trim(),
+        }))
+        .filter(role => role.role_id && role.role_id !== coordinatorRoleId && role.role_id !== mainAgentRoleId)
+        .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function renderDefaultPresetSelect() {
-    const select = document.getElementById('orchestration-default-preset-select');
-    if (!select) {
-        return;
-    }
-    const defaultPresetId = String(orchestrationConfig.default_orchestration_preset_id || '').trim();
-    select.innerHTML = orchestrationConfig.presets.map(preset => {
-        const presetId = String(preset.preset_id || '').trim();
-        const selected = presetId === defaultPresetId ? ' selected' : '';
-        return `<option value="${escapeHtml(presetId)}"${selected}>${escapeHtml(preset.name || presetId)}</option>`;
-    }).join('');
+function cloneOrchestration(source) {
+    const orchestrationId = String(source?.preset_id || '').trim();
+    return {
+        preset_id: orchestrationId,
+        name: String(source?.name || orchestrationId || '').trim(),
+        description: String(source?.description || '').trim(),
+        role_ids: Array.isArray(source?.role_ids)
+            ? source.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
+            : [],
+        orchestration_prompt: String(source?.orchestration_prompt || '').trim(),
+        is_default: orchestrationId === String(orchestrationConfig.default_orchestration_preset_id || '').trim()
+            || source?.is_default === true,
+    };
 }
 
-function renderPresetEditor() {
-    const host = document.getElementById('orchestration-preset-editor');
-    if (!host) {
-        return;
-    }
-    const preset = orchestrationConfig.presets.find(item => item.preset_id === selectedPresetId) || null;
-    const deleteButton = document.getElementById('delete-orchestration-preset-btn');
-    if (deleteButton) {
-        deleteButton.disabled = !preset || orchestrationConfig.presets.length <= 1;
-    }
-    if (!preset) {
-        host.innerHTML = `
-            <div class="settings-empty-state settings-empty-state-compact">
-                <h4>No preset selected</h4>
-                <p>Select a preset to edit its roles and orchestration prompt.</p>
-            </div>
-        `;
-        return;
-    }
-    host.innerHTML = `
-        <div class="orchestration-preset-form">
-            <div class="profile-editor-grid role-editor-grid">
-                <div class="form-group">
-                    <label for="orchestration-preset-id-input">Preset ID</label>
-                    <input type="text" id="orchestration-preset-id-input" value="${escapeHtml(preset.preset_id)}" autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <label for="orchestration-preset-name-input">Preset Name</label>
-                    <input type="text" id="orchestration-preset-name-input" value="${escapeHtml(preset.name)}" autocomplete="off">
-                </div>
-                <div class="form-group form-group-span-2">
-                    <label for="orchestration-preset-description-input">Description</label>
-                    <input type="text" id="orchestration-preset-description-input" value="${escapeHtml(preset.description)}" autocomplete="off">
-                </div>
-            </div>
-            <section class="role-editor-section orchestration-role-section">
-                <h5>Allowed Roles</h5>
-                <div class="role-option-picker role-option-picker-single" id="orchestration-role-picker">
-                    ${renderRolePickerOptions(preset)}
-                </div>
-            </section>
-            <section class="role-editor-section orchestration-role-section">
-                <div class="form-group">
-                    <label for="orchestration-preset-prompt-input">编排提示词</label>
-                    <textarea id="orchestration-preset-prompt-input" class="config-textarea orchestration-prompt-textarea" placeholder="Explain how Coordinator should split work, how to select roles, and how to finish.">${escapeHtml(preset.orchestration_prompt)}</textarea>
-                </div>
-            </section>
-        </div>
-    `;
+function serializeOrchestration(orchestration) {
+    return {
+        preset_id: String(orchestration?.preset_id || '').trim(),
+        name: String(orchestration?.name || '').trim(),
+        description: String(orchestration?.description || '').trim(),
+        role_ids: Array.isArray(orchestration?.role_ids)
+            ? orchestration.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
+            : [],
+        orchestration_prompt: String(orchestration?.orchestration_prompt || '').trim(),
+    };
 }
 
-function renderRolePickerOptions(preset) {
-    if (orchestrationRoleOptions.length === 0) {
-        return '<div class="role-option-empty">No normal roles available.</div>';
-    }
-    const selectedRoleIds = new Set(
-        Array.isArray(preset?.role_ids) ? preset.role_ids.map(roleId => String(roleId || '').trim()) : [],
+function hasDuplicateIds(orchestrations) {
+    const ids = orchestrations.map(item => String(item?.preset_id || '').trim()).filter(Boolean);
+    return ids.length !== new Set(ids).size;
+}
+
+function createOrchestrationId() {
+    const baseId = 'orchestration';
+    const existingIds = new Set(
+        orchestrationConfig.presets.map(item => String(item.preset_id || '').trim()),
     );
-    return orchestrationRoleOptions.map(role => `
-        <label class="role-option-item">
-            <input type="checkbox" data-role-id="${escapeHtml(role.role_id)}"${selectedRoleIds.has(role.role_id) ? ' checked' : ''}>
-            <span class="role-option-check" aria-hidden="true"></span>
-            <span class="role-option-label">${escapeHtml(role.name)} <em>${escapeHtml(role.role_id)}</em></span>
-        </label>
-    `).join('');
-}
-
-function syncSelectedPresetFromForm() {
-    const preset = orchestrationConfig.presets.find(item => item.preset_id === selectedPresetId);
-    if (!preset) {
-        return;
+    let suffix = orchestrationConfig.presets.length + 1;
+    let candidate = `${baseId}_${suffix}`;
+    while (existingIds.has(candidate)) {
+        suffix += 1;
+        candidate = `${baseId}_${suffix}`;
     }
-    const nextPresetId = String(
-        document.getElementById('orchestration-preset-id-input')?.value || preset.preset_id,
-    ).trim();
-    const nextName = String(
-        document.getElementById('orchestration-preset-name-input')?.value || preset.name,
-    ).trim();
-    preset.preset_id = nextPresetId || preset.preset_id;
-    preset.name = nextName || preset.name;
-    preset.description = String(
-        document.getElementById('orchestration-preset-description-input')?.value || '',
-    ).trim();
-    preset.orchestration_prompt = String(
-        document.getElementById('orchestration-preset-prompt-input')?.value || '',
-    ).trim();
-    const rolePicker = document.getElementById('orchestration-role-picker');
-    const nextRoleIds = [];
-    rolePicker?.querySelectorAll('input[type="checkbox"]').forEach(input => {
-        if (input.checked) {
-            nextRoleIds.push(String(input.dataset.roleId || '').trim());
-        }
-    });
-    preset.role_ids = nextRoleIds.filter(Boolean);
-    if (orchestrationConfig.default_orchestration_preset_id === selectedPresetId) {
-        orchestrationConfig.default_orchestration_preset_id = preset.preset_id;
-    }
-    selectedPresetId = preset.preset_id;
+    return candidate;
 }
 
 function renderStatus(message, tone) {
@@ -372,77 +531,70 @@ function renderStatus(message, tone) {
 
 function renderLoadError(error) {
     const listHost = document.getElementById('orchestration-preset-list');
-    const mainHost = document.getElementById('orchestration-main-agent-card');
-    const editorHost = document.getElementById('orchestration-preset-editor');
+    const panel = document.getElementById('orchestration-editor-panel');
     const message = error?.message || 'Unable to load orchestration settings.';
-    if (mainHost) {
-        mainHost.innerHTML = `
-            <div class="settings-empty-state settings-empty-state-compact">
+    if (listHost) {
+        listHost.innerHTML = `
+            <div class="settings-empty-state">
                 <h4>Load failed</h4>
                 <p>${escapeHtml(message)}</p>
             </div>
         `;
     }
-    if (listHost) {
-        listHost.innerHTML = '';
+    if (panel) {
+        panel.style.display = 'none';
     }
-    if (editorHost) {
-        editorHost.innerHTML = '';
-    }
-    renderStatus(message, 'danger');
+    renderStatus('', '');
+    toggleOrchestrationActions({
+        add: true,
+        save: false,
+        cancel: false,
+    });
 }
 
-function normalizeOrchestrationConfig(config) {
-    return {
-        main_agent_prompt: String(config?.main_agent_prompt || '').trim(),
-        default_orchestration_preset_id: String(config?.default_orchestration_preset_id || '').trim(),
-        presets: Array.isArray(config?.presets)
-            ? config.presets.map(preset => ({
-                preset_id: String(preset?.preset_id || '').trim(),
-                name: String(preset?.name || '').trim(),
-                description: String(preset?.description || '').trim(),
-                role_ids: Array.isArray(preset?.role_ids)
-                    ? preset.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
-                    : [],
-                orchestration_prompt: String(preset?.orchestration_prompt || '').trim(),
-            })).filter(preset => preset.preset_id)
-            : [],
-    };
+function showOrchestrationList() {
+    const listEl = document.getElementById('orchestration-preset-list');
+    const editorPanel = document.getElementById('orchestration-editor-panel');
+    if (listEl) {
+        listEl.style.display = 'block';
+    }
+    if (editorPanel) {
+        editorPanel.style.display = 'none';
+    }
+    toggleOrchestrationActions({
+        add: true,
+        save: false,
+        cancel: false,
+    });
 }
 
-function normalizeRoleOptions(roleSummaries) {
-    const rows = Array.isArray(roleSummaries) ? roleSummaries : [];
-    return rows
-        .map(role => ({
-            role_id: String(role?.role_id || '').trim(),
-            name: String(role?.name || role?.role_id || '').trim(),
-        }))
-        .filter(role => role.role_id && role.role_id !== coordinatorRoleId && role.role_id !== mainAgentRoleId)
-        .sort((left, right) => left.name.localeCompare(right.name));
+function showOrchestrationEditor() {
+    const listEl = document.getElementById('orchestration-preset-list');
+    const editorPanel = document.getElementById('orchestration-editor-panel');
+    if (listEl) {
+        listEl.style.display = 'none';
+    }
+    if (editorPanel) {
+        editorPanel.style.display = 'block';
+    }
+    toggleOrchestrationActions({
+        add: false,
+        save: true,
+        cancel: true,
+    });
 }
 
-function resolveSelectedPresetId(preferredPresetId = '') {
-    const safePreferredPresetId = String(preferredPresetId || '').trim();
-    if (safePreferredPresetId && orchestrationConfig.presets.some(preset => preset.preset_id === safePreferredPresetId)) {
-        return safePreferredPresetId;
-    }
-    const currentDefaultPresetId = String(orchestrationConfig.default_orchestration_preset_id || '').trim();
-    if (currentDefaultPresetId && orchestrationConfig.presets.some(preset => preset.preset_id === currentDefaultPresetId)) {
-        return currentDefaultPresetId;
-    }
-    return orchestrationConfig.presets[0]?.preset_id || '';
+function toggleOrchestrationActions(visibility) {
+    setActionDisplay('add-orchestration-preset-btn', visibility.add);
+    setActionDisplay('save-orchestration-btn', visibility.save);
+    setActionDisplay('cancel-orchestration-btn', visibility.cancel);
 }
 
-function createPresetId() {
-    const baseId = 'preset';
-    const existingIds = new Set(orchestrationConfig.presets.map(preset => preset.preset_id));
-    let suffix = orchestrationConfig.presets.length + 1;
-    let candidate = `${baseId}_${suffix}`;
-    while (existingIds.has(candidate)) {
-        suffix += 1;
-        candidate = `${baseId}_${suffix}`;
+function setActionDisplay(id, visible) {
+    const button = document.getElementById(id);
+    if (button) {
+        button.style.display = visible ? 'inline-flex' : 'none';
     }
-    return candidate;
 }
 
 function escapeHtml(value) {
