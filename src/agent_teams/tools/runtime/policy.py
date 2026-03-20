@@ -14,6 +14,7 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "shell",
         "edit",
         "write",
+        "write_tmp",
     }
 )
 

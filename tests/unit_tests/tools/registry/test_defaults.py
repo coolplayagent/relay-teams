@@ -25,4 +25,5 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "shell",
         "update_task",
         "write",
+        "write_tmp",
     )

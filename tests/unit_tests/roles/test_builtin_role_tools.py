@@ -5,13 +5,19 @@ from agent_teams.builtin import get_builtin_roles_dir
 from agent_teams.roles.role_registry import RoleLoader
 
 
-def test_builtin_roles_mount_edit_where_write_is_available() -> None:
+def test_builtin_roles_mount_expected_write_tools() -> None:
     registry = RoleLoader().load_all(get_builtin_roles_dir())
 
     crafter = registry.get("Crafter")
     designer = registry.get("Designer")
+    explorer = registry.get("Explorer")
+    gater = registry.get("Gater")
 
     assert "write" in crafter.tools
     assert "edit" in crafter.tools
-    assert "write" in designer.tools
-    assert "edit" in designer.tools
+    assert "write_tmp" in designer.tools
+    assert "write" not in designer.tools
+    assert "write_tmp" in explorer.tools
+    assert "write" not in explorer.tools
+    assert "write_tmp" in gater.tools
+    assert "write" not in gater.tools
