@@ -122,6 +122,23 @@ class AgentTeamsClient:
             payload,
         )
 
+    def update_session_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: str,
+        orchestration_preset_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "session_mode": session_mode,
+            "orchestration_preset_id": orchestration_preset_id,
+        }
+        return self._request_json(
+            "PATCH",
+            f"/api/sessions/{session_id}/topology",
+            payload,
+        )
+
     def create_run(
         self,
         intent: str,

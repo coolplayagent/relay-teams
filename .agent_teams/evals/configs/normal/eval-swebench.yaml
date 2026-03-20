@@ -1,5 +1,5 @@
-# SWE-bench Verified eval run
-# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/eval-swebench.yaml
+# SWE-bench Verified eval run - normal mode
+# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/normal/eval-swebench.yaml
 
 dataset: swebench
 dataset_path: .agent_teams/evals/datasets/swebench-verified-1.jsonl
@@ -11,6 +11,8 @@ backend: agent_teams
 agent_teams:
   base_url: "http://127.0.0.1:8000"
   execution_mode: ai
+  session_mode: normal
+  orchestration_preset_id: null
   yolo: true
   timeout_seconds: 600
   config_dir: "~/.config/agent-teams"
@@ -42,7 +44,7 @@ item_ids: []
 concurrency: 1
 keep_workspaces: false
 
-output_dir: .agent_teams/evals/results/swebench-verified-1
+output_dir: .agent_teams/evals/results/normal/swebench-verified-1
 report_format: both
 
 cost_per_million_input_tokens: 3.0

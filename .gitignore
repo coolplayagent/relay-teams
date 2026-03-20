@@ -22,6 +22,8 @@ frontend/.vite/
 !.agent_teams/evals/configs/
 .agent_teams/evals/configs/*
 !.agent_teams/evals/configs/*.yaml
+!.agent_teams/evals/configs/*/
+!.agent_teams/evals/configs/*/*.yaml
 !.agent_teams/evals/datasets/
 .agent_teams/evals/datasets/*
 !.agent_teams/evals/datasets/*.jsonl

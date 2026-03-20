@@ -8,8 +8,11 @@ from agent_teams_evals.checkpoint import (
     EvalCheckpointSignature,
     EvalCheckpointStore,
     archive_output_dir,
+    build_checkpoint_signature,
 )
+from agent_teams_evals.backends.agent_teams_config import AgentTeamsConfig
 from agent_teams_evals.models import EvalResult, RunOutcome, TokenUsage
+from agent_teams_evals.run_config import RunConfig
 
 
 def _signature() -> EvalCheckpointSignature:
@@ -23,6 +26,8 @@ def _signature() -> EvalCheckpointSignature:
         backend="agent_teams",
         workspace_mode="git",
         agent_execution_mode="ai",
+        agent_session_mode="normal",
+        agent_orchestration_preset_id=None,
         agent_yolo=True,
         agent_timeout_seconds=600.0,
         git_clone_timeout_seconds=120.0,
@@ -81,3 +86,26 @@ def test_archive_output_dir_moves_existing_contents_to_timestamped_sibling(
     assert output_dir.exists() is False
     assert archived is not None
     assert (archived / "report.json").read_text(encoding="utf-8") == '{"old": true}'
+
+
+def test_build_checkpoint_signature_includes_session_mode_and_orchestration(
+    tmp_path: Path,
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text('{"item_id":"a","intent":"demo"}\n', encoding="utf-8")
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        agent_teams=AgentTeamsConfig(
+            session_mode="orchestration",
+            orchestration_preset_id="default",
+        ),
+    )
+
+    signature = build_checkpoint_signature(
+        cfg,
+        dataset_path=dataset_path,
+        item_ids=("a",),
+    )
+
+    assert signature.agent_session_mode == "orchestration"
+    assert signature.agent_orchestration_preset_id == "default"

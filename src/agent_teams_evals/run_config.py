@@ -30,6 +30,8 @@ backend: agent_teams
 agent_teams:
   base_url: "http://127.0.0.1:8000"    # used in git mode; docker mode uses per-container port
   execution_mode: ai
+  session_mode: normal                  # normal | orchestration
+  orchestration_preset_id: null         # null = use server default when session_mode=orchestration
   yolo: true
   timeout_seconds: 600
   config_dir: null                      # docker mode: mount this as ~/.config/agent-teams

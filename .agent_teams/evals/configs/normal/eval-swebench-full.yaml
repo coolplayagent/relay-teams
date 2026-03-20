@@ -1,8 +1,8 @@
-# SWE-bench Verified eval run - first 10 items
-# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/eval-swebench-10.yaml
+# SWE-bench Verified eval run - full dataset - normal mode
+# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/normal/eval-swebench-full.yaml
 
 dataset: swebench
-dataset_path: .agent_teams/evals/datasets/swebench-verified-10.jsonl
+dataset_path: .agent_teams/evals/datasets/swebench-verified-full.jsonl
 
 scorer: swebench_docker
 swebench_pass_threshold: 0.8
@@ -11,6 +11,8 @@ backend: agent_teams
 agent_teams:
   base_url: "http://127.0.0.1:8000"
   execution_mode: ai
+  session_mode: normal
+  orchestration_preset_id: null
   yolo: true
   timeout_seconds: 600
   config_dir: "~/.config/agent-teams"
@@ -26,13 +28,13 @@ docker:
   build_instance_images: true
   swebench_dataset: "SWE-bench/SWE-bench_Verified"
   container_startup_timeout_seconds: 60
-#  extra_env:
-#    HTTP_PROXY: "http://host.docker.internal:7897"
-#    HTTPS_PROXY: "http://host.docker.internal:7897"
-#    http_proxy: "http://host.docker.internal:7897"
-#    https_proxy: "http://host.docker.internal:7897"
-#    NO_PROXY: "localhost,127.0.0.1"
-#    no_proxy: "localhost,127.0.0.1"
+  extra_env:
+    HTTP_PROXY: "http://host.docker.internal:7897"
+    HTTPS_PROXY: "http://host.docker.internal:7897"
+    http_proxy: "http://host.docker.internal:7897"
+    https_proxy: "http://host.docker.internal:7897"
+    NO_PROXY: "localhost,127.0.0.1"
+    no_proxy: "localhost,127.0.0.1"
 
 limit: null
 item_ids: []
@@ -40,7 +42,7 @@ item_ids: []
 concurrency: 1
 keep_workspaces: false
 
-output_dir: .agent_teams/evals/results/swebench-verified-10
+output_dir: .agent_teams/evals/results/normal/swebench-verified-full
 report_format: both
 
 cost_per_million_input_tokens: 3.0

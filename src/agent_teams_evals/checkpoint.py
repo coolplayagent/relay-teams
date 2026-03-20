@@ -28,6 +28,8 @@ class EvalCheckpointSignature(BaseModel):
     backend: str
     workspace_mode: str
     agent_execution_mode: str
+    agent_session_mode: str
+    agent_orchestration_preset_id: str | None = None
     agent_yolo: bool
     agent_timeout_seconds: float
     agent_config_dir: str | None = None
@@ -67,6 +69,8 @@ def build_checkpoint_signature(
         backend=cfg.backend,
         workspace_mode=cfg.workspace_mode,
         agent_execution_mode=cfg.agent_teams.execution_mode,
+        agent_session_mode=cfg.agent_teams.session_mode,
+        agent_orchestration_preset_id=cfg.agent_teams.orchestration_preset_id,
         agent_yolo=cfg.agent_teams.yolo,
         agent_timeout_seconds=cfg.agent_teams.timeout_seconds,
         agent_config_dir=(

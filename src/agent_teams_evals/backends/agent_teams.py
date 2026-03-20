@@ -395,6 +395,18 @@ class AgentTeamsBackend(AgentBackend):
             session_data = client.create_session(workspace_id=workspace_id)
             session_id = str(session_data.get("session_id", ""))
             _log(workspace.item_id, f"session: {session_id}")
+            if self._config.session_mode == "orchestration":
+                preset_id = self._config.orchestration_preset_id
+                preset_suffix = f" preset={preset_id}" if preset_id else ""
+                _log(
+                    workspace.item_id,
+                    "configuring session mode: orchestration" + preset_suffix,
+                )
+                client.update_session_topology(
+                    session_id,
+                    session_mode="orchestration",
+                    orchestration_preset_id=preset_id,
+                )
 
             _log(workspace.item_id, "creating run ...")
             run_handle = client.create_run(

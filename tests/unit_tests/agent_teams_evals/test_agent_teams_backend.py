@@ -28,6 +28,17 @@ class _FakeClient:
         assert workspace_id == "eval-demo"
         return {"session_id": "session-1"}
 
+    def update_session_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: str,
+        orchestration_preset_id: str | None = None,
+    ) -> dict[str, object]:
+        raise AssertionError(
+            "update_session_topology should not be called in normal mode"
+        )
+
     def create_run(
         self,
         *,
@@ -295,3 +306,51 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) ->
         "[event #21] run_completed: status=completed "
         "root_task=root_123 output=Task finished successfully" in out
     )
+
+
+class _FakeOrchestrationClient(_FakeClient):
+    def update_session_topology(
+        self,
+        session_id: str,
+        *,
+        session_mode: str,
+        orchestration_preset_id: str | None = None,
+    ) -> dict[str, object]:
+        assert session_id == "session-1"
+        assert session_mode == "orchestration"
+        assert orchestration_preset_id == "default"
+        return {
+            "session_id": session_id,
+            "session_mode": session_mode,
+            "orchestration_preset_id": orchestration_preset_id,
+        }
+
+
+def test_agent_teams_backend_configures_orchestration_session(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        "agent_teams_evals.backends.agent_teams.AgentTeamsClient",
+        _FakeOrchestrationClient,
+    )
+    backend = AgentTeamsBackend(
+        AgentTeamsConfig(
+            base_url="http://localhost:8000",
+            timeout_seconds=30.0,
+            session_mode="orchestration",
+            orchestration_preset_id="default",
+            yolo=True,
+        )
+    )
+    workspace = PreparedWorkspace(
+        item_id="demo",
+        repo_path=Path("."),
+        base_commit="abc123",
+        container_repo_path="/testbed",
+    )
+
+    events = list(backend.run("demo intent", workspace))
+    out = capsys.readouterr().out
+
+    assert [event.type for event in events] == ["metadata", "token_usage", "completed"]
+    assert "configuring session mode: orchestration preset=default" in out

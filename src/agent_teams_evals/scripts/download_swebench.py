@@ -1,9 +1,9 @@
 """Download SWE-bench Verified dataset items to a local JSONL file.
 
 Usage:
-    uv run python scripts/download_swebench.py --limit 10
-    uv run python scripts/download_swebench.py --limit 500 --output .agent_teams/evals/datasets/swebench-verified-500.jsonl
-    uv run python scripts/download_swebench.py --ids astropy__astropy-12907 astropy__astropy-13033
+    uv run python src/agent_teams_evals/scripts/download_swebench.py --limit 10
+    uv run python src/agent_teams_evals/scripts/download_swebench.py --limit 500 --output .agent_teams/evals/datasets/swebench-verified-500.jsonl
+    uv run python src/agent_teams_evals/scripts/download_swebench.py --ids astropy__astropy-12907 astropy__astropy-13033
 """
 
 from __future__ import annotations
@@ -63,9 +63,9 @@ def main(
         output = Path(f".agent_teams/evals/datasets/swebench-verified-{n}.jsonl")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as f:
+    with output.open("w", encoding="utf-8") as handle:
         for item in items:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     typer.echo(f"Wrote {len(items)} items to {output}")
     for item in items:
