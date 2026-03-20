@@ -249,12 +249,7 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
             "Title: Implement endpoint\n"
             "Objective: Implement the endpoint\n\n"
             "## Coordinator Prompt\n"
-            "Execute this task contract and return the requested result.\n\n"
-            "## Execution Rules\n"
-            "- Treat this as a fresh execution turn for the current task.\n"
-            "- Satisfy the task contract first, then follow the coordinator prompt.\n"
-            "- If tools or fresh data are required, use them again instead of relying on stale outputs.\n"
-            "- Keep the final result focused on the requested deliverable.",
+            "Execute this task contract and return the requested result.\n\n",
         ),
         (
             bound_instance_id,
@@ -264,12 +259,7 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
             "Title: Implement endpoint\n"
             "Objective: Implement the endpoint\n\n"
             "## Coordinator Prompt\n"
-            "Add pagination to the response.\n\n"
-            "## Execution Rules\n"
-            "- Treat this as a fresh execution turn for the current task.\n"
-            "- Satisfy the task contract first, then follow the coordinator prompt.\n"
-            "- If tools or fresh data are required, use them again instead of relying on stale outputs.\n"
-            "- Keep the final result focused on the requested deliverable.",
+            "Add pagination to the response.\n\n",
         ),
     ]
     assert execution_service.calls[-1][3] is not None

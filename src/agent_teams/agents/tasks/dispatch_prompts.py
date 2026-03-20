@@ -16,9 +16,4 @@ def build_dispatch_prompt(
         f"Objective: {objective}\n\n"
         "## Coordinator Prompt\n"
         f"{request}\n\n"
-        "## Execution Rules\n"
-        "- Treat this as a fresh execution turn for the current task.\n"
-        "- Satisfy the task contract first, then follow the coordinator prompt.\n"
-        "- If tools or fresh data are required, use them again instead of relying on stale outputs.\n"
-        "- Keep the final result focused on the requested deliverable."
     )
