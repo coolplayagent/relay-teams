@@ -24,6 +24,7 @@ from agent_teams.interfaces.cli.run_prompt_cli import (
 from agent_teams.interfaces.server.cli import build_server_app
 from agent_teams.mcp.mcp_cli import mcp_app
 from agent_teams.roles.role_cli import build_roles_app
+from agent_teams.sessions.session_models import SessionMode
 from agent_teams.skills.skill_cli import skills_app
 from agent_teams.triggers.trigger_cli import build_triggers_app
 
@@ -229,7 +230,23 @@ def root_command(
         None,
         "-m",
         "--message",
-        help="Run a single prompt with default settings.",
+        help="Run a single prompt in a new session.",
+    ),
+    mode: SessionMode = typer.Option(
+        SessionMode.NORMAL,
+        "--mode",
+        help=(
+            "Run the quick prompt session in normal mode or orchestration mode. "
+            "Requires --message."
+        ),
+    ),
+    orchestration: str | None = typer.Option(
+        None,
+        "--orchestration",
+        help=(
+            "Select the orchestration id to use with --mode orchestration. "
+            "If omitted, the current default orchestration is used."
+        ),
     ),
     yolo: bool = typer.Option(
         True,
@@ -241,14 +258,23 @@ def root_command(
         ctx,
         message,
         yolo,
+        mode,
+        orchestration,
         run_single_prompt=_run_single_prompt,
     )
 
 
-def _run_single_prompt(message: str, yolo: bool) -> None:
+def _run_single_prompt(
+    message: str,
+    yolo: bool,
+    session_mode: SessionMode,
+    orchestration_id: str | None,
+) -> None:
     _run_single_prompt_impl(
         message,
         yolo,
+        session_mode,
+        orchestration_id,
         default_base_url=DEFAULT_BASE_URL,
         execute_prompt=_execute_prompt,
     )
@@ -261,6 +287,8 @@ def _execute_prompt(
     base_url: str = DEFAULT_BASE_URL,
     execution_mode: str = "ai",
     yolo: bool = False,
+    session_mode: SessionMode = SessionMode.NORMAL,
+    orchestration_id: str | None = None,
     autostart: bool = True,
     debug: bool = False,
 ) -> None:
@@ -270,6 +298,8 @@ def _execute_prompt(
         base_url,
         execution_mode,
         yolo,
+        session_mode,
+        orchestration_id,
         autostart,
         debug,
         auto_start_if_needed=_module_auto_start,
