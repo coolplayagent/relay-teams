@@ -89,6 +89,69 @@ class TestRipgrepFilepath:
                 assert second == rg
                 assert mock_download.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_prefers_bundled_over_system_rg(self, tmp_path: Path) -> None:
+        """Downloaded binary should be used even when system rg is on PATH."""
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        rg_name = "rg.exe" if os.name == "nt" else "rg"
+        rg = cache_dir / rg_name
+        rg.write_bytes(b"bundled")
+
+        with patch("shutil.which", return_value="/usr/bin/rg"):
+            with patch("agent_teams.tools.workspace_tools.ripgrep.BIN_DIR", cache_dir):
+                from agent_teams.tools.workspace_tools import ripgrep
+
+                ripgrep.clear_rg_path_cache()
+                path = await ripgrep.get_rg_path()
+                assert path == rg
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_system_rg_on_download_failure(
+        self, tmp_path: Path
+    ) -> None:
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        system_rg = tmp_path / "system_rg"
+        system_rg.write_bytes(b"system")
+
+        with patch("shutil.which", return_value=str(system_rg)):
+            with patch("agent_teams.tools.workspace_tools.ripgrep.BIN_DIR", cache_dir):
+                from agent_teams.tools.workspace_tools import ripgrep
+
+                ripgrep.clear_rg_path_cache()
+                with patch(
+                    "agent_teams.tools.workspace_tools.ripgrep._download_rg",
+                    new=AsyncMock(side_effect=RuntimeError("no network")),
+                ):
+                    path = await ripgrep.get_rg_path()
+                    assert path == system_rg
+
+    @pytest.mark.asyncio
+    async def test_raises_not_found_when_nothing_available(
+        self, tmp_path: Path
+    ) -> None:
+        from agent_teams.tools.workspace_tools.ripgrep_errors import (
+            RipgrepNotFoundError,
+        )
+
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        with patch("shutil.which", return_value=None):
+            with patch("agent_teams.tools.workspace_tools.ripgrep.BIN_DIR", cache_dir):
+                from agent_teams.tools.workspace_tools import ripgrep
+
+                ripgrep.clear_rg_path_cache()
+                with patch(
+                    "agent_teams.tools.workspace_tools.ripgrep._download_rg",
+                    new=AsyncMock(side_effect=RuntimeError("no network")),
+                ):
+                    with pytest.raises(RipgrepNotFoundError):
+                        await ripgrep.get_rg_path()
+
 
 class TestRipgrepDownload:
     @pytest.mark.asyncio
@@ -319,6 +382,52 @@ class TestGrepResultFormat:
         formatted = result.format()
         assert "file1.py:" in formatted
         assert "file2.py:" in formatted
+
+
+class TestGrepSearchErrorHandling:
+    @pytest.mark.asyncio
+    async def test_grep_search_raises_on_ripgrep_error(self) -> None:
+        from agent_teams.tools.workspace_tools import ripgrep
+        from agent_teams.tools.workspace_tools.ripgrep_errors import (
+            RipgrepExecutionError,
+        )
+
+        mock_result = MagicMock(
+            stdout="",
+            stderr="error: unrecognized flag '--field-match-separator'",
+            returncode=2,
+        )
+        with patch(
+            "agent_teams.tools.workspace_tools.ripgrep.get_rg_path",
+            new=AsyncMock(return_value=Path("rg")),
+        ):
+            with patch(
+                "agent_teams.tools.workspace_tools.ripgrep.subprocess.run",
+                return_value=mock_result,
+            ):
+                with pytest.raises(RipgrepExecutionError) as exc:
+                    await ripgrep.grep_search(Path("."), "pattern")
+
+                assert exc.value.returncode == 2
+                assert "unrecognized flag" in exc.value.stderr
+
+    @pytest.mark.asyncio
+    async def test_grep_search_returns_empty_on_exit_code_1(self) -> None:
+        """Exit code 1 means no matches -- not an error."""
+        from agent_teams.tools.workspace_tools import ripgrep
+
+        mock_result = MagicMock(stdout="", stderr="", returncode=1)
+        with patch(
+            "agent_teams.tools.workspace_tools.ripgrep.get_rg_path",
+            new=AsyncMock(return_value=Path("rg")),
+        ):
+            with patch(
+                "agent_teams.tools.workspace_tools.ripgrep.subprocess.run",
+                return_value=mock_result,
+            ):
+                result = await ripgrep.grep_search(Path("."), "pattern")
+                assert result.matches == []
+                assert result.total == 0
 
 
 class TestRipgrepSubprocessEncoding:

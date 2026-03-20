@@ -10,13 +10,18 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from agent_teams.logger import get_logger
 from agent_teams.net.clients import create_async_http_client
 from agent_teams.tools.workspace_tools.ripgrep_errors import (
     DownloadFailedError,
     ExtractionFailedError,
+    RipgrepExecutionError,
+    RipgrepNotFoundError,
     UnsupportedPlatformError,
 )
 from agent_teams.tools.workspace_tools.ripgrep_types import GrepMatch, GrepResult
+
+LOGGER = get_logger(__name__)
 
 VERSION = "14.1.1"
 BIN_DIR = Path.home() / ".agent-teams" / "bin"
@@ -65,17 +70,18 @@ def _get_platform_key() -> str:
 
 
 async def get_rg_path() -> Path:
+    """Return path to a ripgrep binary, preferring the bundled v14.1.1.
+
+    Resolution order:
+      1. In-process cache (already resolved)
+      2. Previously downloaded binary under ``BIN_DIR``
+      3. Download the bundled version
+      4. Fall back to system ``rg`` only when the download is unavailable
+    """
     global _rg_path_cache
 
     if _rg_path_cache and _rg_path_cache.is_file():
         return _rg_path_cache
-
-    system_rg = shutil.which("rg")
-    if system_rg:
-        system_path = Path(system_rg)
-        if system_path.is_file():
-            _rg_path_cache = system_path
-            return system_path
 
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     extension = ".exe" if os.name == "nt" else ""
@@ -91,9 +97,23 @@ async def get_rg_path() -> Path:
         if local_path.is_file():
             _rg_path_cache = local_path
             return local_path
-        await _download_rg(local_path)
-        _rg_path_cache = local_path
-        return local_path
+        try:
+            await _download_rg(local_path)
+            _rg_path_cache = local_path
+            return local_path
+        except Exception as exc:
+            LOGGER.warning("Failed to download bundled ripgrep: %s", exc)
+
+    # Fall back to system rg only when the bundled binary is unavailable.
+    system_rg = shutil.which("rg")
+    if system_rg:
+        system_path = Path(system_rg)
+        if system_path.is_file():
+            LOGGER.info("Using system ripgrep at %s", system_path)
+            _rg_path_cache = system_path
+            return system_path
+
+    raise RipgrepNotFoundError()
 
 
 def clear_rg_path_cache() -> None:
@@ -180,6 +200,13 @@ async def grep_search(
         encoding="utf-8",
         errors="replace",
     )
+
+    # ripgrep exit codes: 0 = matches found, 1 = no matches, 2+ = error
+    if result.returncode >= 2:
+        raise RipgrepExecutionError(
+            returncode=result.returncode,
+            stderr=result.stderr.strip(),
+        )
 
     matches: list[GrepMatch] = []
     for line in result.stdout.strip().splitlines():
