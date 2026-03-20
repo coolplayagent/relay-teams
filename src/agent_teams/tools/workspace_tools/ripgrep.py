@@ -217,7 +217,7 @@ async def grep_search(
             GrepMatch(
                 path=parts[0],
                 line_num=int(parts[1]),
-                line_text=parts[2],
+                line_text="|".join(parts[2:]),
             )
         )
 
@@ -270,4 +270,14 @@ async def enumerate_files(
         files.append(Path(line.strip()))
 
     process.wait()
+
+    # Only check for errors when we did not truncate (terminate sends SIGTERM
+    # which results in a non-zero exit code that is expected).
+    if not truncated and process.returncode >= 2:
+        stderr = process.stderr.read() if process.stderr else ""
+        raise RipgrepExecutionError(
+            returncode=process.returncode,
+            stderr=stderr.strip() if isinstance(stderr, str) else "",
+        )
+
     return files, truncated

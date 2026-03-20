@@ -229,7 +229,7 @@ class TestGrepSearch:
     def test_grep_result_parsing(self) -> None:
         from agent_teams.tools.workspace_tools.ripgrep_types import GrepMatch
 
-        stdout = "file1.py|1|def foo\nfile2.py|5|def bar\n"
+        stdout = "file1.py|1|def foo\nfile2.py|5|if a | b:\n"
         matches: list[GrepMatch] = []
         for line in stdout.strip().splitlines():
             if not line:
@@ -241,7 +241,7 @@ class TestGrepSearch:
                 GrepMatch(
                     path=parts[0],
                     line_num=int(parts[1]),
-                    line_text=parts[2],
+                    line_text="|".join(parts[2:]),
                 )
             )
 
@@ -249,6 +249,7 @@ class TestGrepSearch:
         assert matches[0].path == "file1.py"
         assert matches[0].line_num == 1
         assert matches[0].line_text == "def foo"
+        assert matches[1].line_text == "if a | b:"
 
     def test_grep_args_case_sensitive(self) -> None:
         args: list[str] = []
@@ -296,6 +297,60 @@ class TestGrepSearch:
 
         assert truncated is True
         assert len(final) == 100
+
+
+class TestEnumerateFilesErrorHandling:
+    @pytest.mark.asyncio
+    async def test_enumerate_files_raises_on_ripgrep_error(self) -> None:
+        from agent_teams.tools.workspace_tools import ripgrep
+        from agent_teams.tools.workspace_tools.ripgrep_errors import (
+            RipgrepExecutionError,
+        )
+
+        proc = MagicMock()
+        proc.stdout = iter([])
+        proc.stderr = MagicMock()
+        proc.stderr.read = MagicMock(return_value="error: bad glob")
+        proc.wait = MagicMock()
+        proc.returncode = 2
+
+        with patch(
+            "agent_teams.tools.workspace_tools.ripgrep.get_rg_path",
+            new=AsyncMock(return_value=Path("rg")),
+        ):
+            with patch(
+                "agent_teams.tools.workspace_tools.ripgrep.subprocess.Popen",
+                return_value=proc,
+            ):
+                with pytest.raises(RipgrepExecutionError) as exc:
+                    await ripgrep.enumerate_files(Path("."), "*.py")
+
+                assert exc.value.returncode == 2
+                assert "bad glob" in exc.value.stderr
+
+    @pytest.mark.asyncio
+    async def test_enumerate_files_no_error_on_exit_code_1(self) -> None:
+        """Exit code 1 means no files matched -- not an error."""
+        from agent_teams.tools.workspace_tools import ripgrep
+
+        proc = MagicMock()
+        proc.stdout = iter([])
+        proc.stderr = MagicMock()
+        proc.stderr.read = MagicMock(return_value="")
+        proc.wait = MagicMock()
+        proc.returncode = 1
+
+        with patch(
+            "agent_teams.tools.workspace_tools.ripgrep.get_rg_path",
+            new=AsyncMock(return_value=Path("rg")),
+        ):
+            with patch(
+                "agent_teams.tools.workspace_tools.ripgrep.subprocess.Popen",
+                return_value=proc,
+            ):
+                files, truncated = await ripgrep.enumerate_files(Path("."), "*.py")
+                assert files == []
+                assert truncated is False
 
 
 class TestEnumerateFiles:
@@ -458,6 +513,7 @@ class TestRipgrepSubprocessEncoding:
         proc = MagicMock()
         proc.stdout = ["a.py\n", "b.py\n"]
         proc.wait = MagicMock()
+        proc.returncode = 0
 
         with patch(
             "agent_teams.tools.workspace_tools.ripgrep.get_rg_path",
