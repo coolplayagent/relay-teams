@@ -16,4 +16,10 @@ frontend/.vite/
 
 .claude
 .agent_teams/evals/
+!.agent_teams/
+!.agent_teams/evals/
+.agent_teams/evals/*
+!.agent_teams/evals/configs/
+.agent_teams/evals/configs/*
+!.agent_teams/evals/configs/*.yaml
 logs/

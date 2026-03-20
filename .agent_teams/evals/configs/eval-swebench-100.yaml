@@ -1,0 +1,47 @@
+# SWE-bench Verified eval run - first 100 items
+# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/eval-swebench-100.yaml
+
+dataset: swebench
+dataset_path: .agent_teams/evals/datasets/swebench-verified-100.jsonl
+
+scorer: swebench_docker
+swebench_pass_threshold: 0.8
+
+backend: agent_teams
+agent_teams:
+  base_url: "http://127.0.0.1:8000"
+  execution_mode: ai
+  approval_mode: yolo
+  timeout_seconds: 600
+  config_dir: "~/.config/agent-teams"
+
+workspace_mode: docker
+evals_workdir: .agent_teams/evals/workspaces
+git_clone_timeout_seconds: 180
+
+docker:
+  image_prefix: "sweb.eval.x86_64"
+  agent_runtime_image: "agent-teams-runtime:latest"
+  build_runtime_image: true
+  build_instance_images: true
+  swebench_dataset: "SWE-bench/SWE-bench_Verified"
+  container_startup_timeout_seconds: 60
+  extra_env:
+    HTTP_PROXY: "http://host.docker.internal:7897"
+    HTTPS_PROXY: "http://host.docker.internal:7897"
+    http_proxy: "http://host.docker.internal:7897"
+    https_proxy: "http://host.docker.internal:7897"
+    NO_PROXY: "localhost,127.0.0.1"
+    no_proxy: "localhost,127.0.0.1"
+
+limit: null
+item_ids: []
+
+concurrency: 1
+keep_workspaces: false
+
+output_dir: .agent_teams/evals/results/swebench-verified-100
+report_format: both
+
+cost_per_million_input_tokens: 3.0
+cost_per_million_output_tokens: 15.0

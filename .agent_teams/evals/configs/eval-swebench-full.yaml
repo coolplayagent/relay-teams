@@ -1,8 +1,8 @@
-# SWE-bench Verified eval run — first 10 items
-# Run: uv run python agent_teams_evals/run.py run --config eval-swebench-10.yaml
+# SWE-bench Verified eval run - full dataset
+# Run: uv run python agent_teams_evals/run.py run --config .agent_teams/evals/configs/eval-swebench-full.yaml
 
 dataset: swebench
-dataset_path: .agent_teams/evals/datasets/swebench-verified-10.jsonl
+dataset_path: .agent_teams/evals/datasets/swebench-verified-full.jsonl
 
 scorer: swebench_docker
 swebench_pass_threshold: 0.8
@@ -40,7 +40,7 @@ item_ids: []
 concurrency: 1
 keep_workspaces: false
 
-output_dir: .agent_teams/evals/results/swebench-verified-10
+output_dir: .agent_teams/evals/results/swebench-verified-full
 report_format: both
 
 cost_per_million_input_tokens: 3.0
