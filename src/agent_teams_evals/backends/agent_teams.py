@@ -76,6 +76,9 @@ def _common_actor_suffix(data: dict[str, object]) -> str:
 def _log_run_event(
     item_id: str, event_count: int, event_type: str, data: object
 ) -> None:
+    if event_type in {"thinking_delta", "text_delta"}:
+        return
+
     if not isinstance(data, dict):
         _log(item_id, f"[event #{event_count}] {event_type}")
         return
@@ -333,23 +336,6 @@ def _log_run_event(
             f"[event #{event_count}] awaiting_manual_action: "
             f"root_task={root_task_id or '-'}",
         )
-        return
-
-    if event_type == "thinking_delta":
-        text = _truncate(_single_line(_event_str(data, "text")), limit=80)
-        part_index = _event_int(data, "part_index")
-        message = f"[event #{event_count}] thinking_delta: part={part_index}"
-        if text:
-            message += f" text={text}"
-        _log(item_id, message)
-        return
-
-    if event_type == "text_delta":
-        text = _truncate(_single_line(_event_str(data, "text")), limit=80)
-        message = f"[event #{event_count}] text_delta"
-        if text:
-            message += f": text={text}"
-        _log(item_id, message)
         return
 
     _log(item_id, f"[event #{event_count}] {event_type}")

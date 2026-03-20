@@ -119,6 +119,13 @@ class _FakeClient:
             ),
         }
         yield {
+            "event_type": "thinking_delta",
+            "payload_json": (
+                '{"part_index": 0, "text": "maintains", '
+                '"role_id": "coordinator", "instance_id": "coord_12345678"}'
+            ),
+        }
+        yield {
             "event_type": "thinking_finished",
             "payload_json": (
                 '{"part_index": 0, "role_id": "coordinator", '
@@ -249,37 +256,38 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) ->
         "[event #10] thinking_started: part=0 role=coordinator "
         "instance=coord_12345678" in out
     )
+    assert "[event #11] thinking_delta" not in out
     assert (
-        "[event #11] thinking_finished: part=0 role=coordinator "
+        "[event #12] thinking_finished: part=0 role=coordinator "
         "instance=coord_12345678" in out
     )
     assert (
-        "[event #12] injection_enqueued: source=user recipient=subagent "
+        "[event #13] injection_enqueued: source=user recipient=subagent "
         "sender_role=coordinator content=Please retry with more context" in out
     )
     assert (
-        "[event #13] injection_applied: source=user "
+        "[event #14] injection_applied: source=user "
         "content=Please retry with more context" in out
     )
-    assert "[event #14] notification_requested: type=run_failed title=Run Failed" in out
+    assert "[event #15] notification_requested: type=run_failed title=Run Failed" in out
     assert (
-        "[event #15] subagent_stopped: instance=subagent role=crafter "
+        "[event #16] subagent_stopped: instance=subagent role=crafter "
         "task=task_123 reason=stopped_by_user" in out
     )
     assert (
-        "[event #16] subagent_resumed: instance=subagent role=crafter "
+        "[event #17] subagent_resumed: instance=subagent role=crafter "
         "task=task_123" in out
     )
-    assert "[event #17] awaiting_manual_action: root_task=root_123" in out
+    assert "[event #18] awaiting_manual_action: root_task=root_123" in out
     assert (
-        "[event #18] token_usage: input=10 cached=2 output=5 "
+        "[event #19] token_usage: input=10 cached=2 output=5 "
         "reasoning=1 requests=3 tool_calls=4" in out
     )
     assert (
-        "[event #19] model_step_finished: role=coordinator "
+        "[event #20] model_step_finished: role=coordinator "
         "instance=coord_12345678" in out
     )
     assert (
-        "[event #20] run_completed: status=completed "
+        "[event #21] run_completed: status=completed "
         "root_task=root_123 output=Task finished successfully" in out
     )
