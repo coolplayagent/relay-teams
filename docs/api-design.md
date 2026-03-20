@@ -227,7 +227,9 @@ Response shape:
           "role_id": "spec_coder",
           "attempt_number": 2,
           "total_attempts": 6,
-          "retry_in_ms": 1000,
+          "retry_in_ms": 2000,
+          "phase": "scheduled",
+          "is_active": true,
           "error_code": "429",
           "error_message": "Rate limited"
         }
@@ -247,7 +249,9 @@ Response shape:
 Notes:
 - `tasks` contains delegated task summaries only. The root coordinator task is omitted.
 - `task_instance_map` is the authoritative mapping when multiple tasks use the same `role_id`.
-- `retry_events` reflects the current active retry card for the run timeline. The array is empty when no retry backoff is currently pending and contains at most one entry.
+- `retry_events` reflects the current retry card for the run timeline. The array is empty when no retry state should be shown and contains at most one entry.
+- Active retry countdowns are anchored to the event `occurred_at` timestamp, not to the browser receive time.
+- `retry_events[].phase` is `scheduled` while backoff is pending and `failed` when retries have been exhausted.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
 
@@ -375,12 +379,14 @@ Thinking events:
 
 Retry events:
 - `llm_retry_scheduled`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `retry_in_ms`, `error_code`, and `error_message`.
+- `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
+- Retry countdowns are computed from the SSE event `occurred_at` timestamp plus `retry_in_ms`, so delayed delivery or page refresh does not restart the timer.
 - Later retry events replace the same card instead of stacking multiple historical cards.
 - Once a retried model attempt produces successful output, the retry card is removed.
-- If the run still fails after retries are exhausted, the retry card remains visible as the final failed retry state.
+- If the run still fails after retries are exhausted, `llm_retry_exhausted` leaves the retry card visible as the final failed retry state.
 
 ### `POST /runs/{run_id}/inject`
 

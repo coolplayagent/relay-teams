@@ -1678,3 +1678,74 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
 
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+
+
+@pytest.mark.asyncio
+async def test_generate_publishes_retry_exhausted_event_on_final_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _ = _build_provider(tmp_path / "retry_exhausted.db", fake_hub)
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 2000
+    provider._session._retry_config.max_retries = 2
+    request_error = APIError(
+        "provider error",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={"error": {"code": "2062", "message": "busy"}},
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-retry-exhausted",
+        trace_id="run-retry-exhausted",
+        task_id="task-retry-exhausted",
+        session_id="session-retry-exhausted",
+        workspace_id="default",
+        instance_id="inst-retry-exhausted",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(APIError):
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.count(RunEventType.LLM_RETRY_SCHEDULED) == 2
+    assert RunEventType.LLM_RETRY_EXHAUSTED in event_types
+    exhausted_event = next(
+        event
+        for event in fake_hub.events
+        if event.event_type == RunEventType.LLM_RETRY_EXHAUSTED
+    )
+    payload = json.loads(exhausted_event.payload_json)
+    assert payload["attempt_number"] == 3
+    assert payload["total_attempts"] == 3
+    assert payload["error_message"] == "busy"

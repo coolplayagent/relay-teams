@@ -9,8 +9,7 @@ from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 DEFAULT_LLM_RETRY_MAX_RETRIES = 5
-DEFAULT_LLM_RETRY_INITIAL_DELAY_MS = 1000
-DEFAULT_LLM_RETRY_MAX_DELAY_MS = 30000
+DEFAULT_LLM_RETRY_INITIAL_DELAY_MS = 2000
 DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER = 2.0
 
 
@@ -71,15 +70,9 @@ class LlmRetryConfig(BaseModel):
         ge=0,
         le=300000,
     )
-    max_delay_ms: int = Field(
-        default=DEFAULT_LLM_RETRY_MAX_DELAY_MS,
-        ge=0,
-        le=300000,
-    )
     backoff_multiplier: float = Field(
         default=DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER,
         ge=1.0,
         le=10.0,
     )
-    jitter: bool = True
-    respect_retry_after: bool = True
+    jitter: bool = False

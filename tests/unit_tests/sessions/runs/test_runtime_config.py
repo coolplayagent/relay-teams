@@ -38,7 +38,8 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.roles_dir == (config_dir / "roles")
     assert resolved.paths.db_path == (config_dir / "agent_teams.db")
     assert resolved.llm_retry.max_retries == 5
-    assert resolved.llm_retry.initial_delay_ms == 1000
+    assert resolved.llm_retry.initial_delay_ms == 2000
+    assert resolved.llm_retry.jitter is False
 
 
 def test_load_runtime_config_ignores_roles_dir_env_override(

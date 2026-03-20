@@ -21,6 +21,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 
 export let currentRounds = [];
 export let currentRound = null;
+let retryTimelineTimerId = 0;
 
 export async function loadSessionRounds(sessionId) {
     try {
@@ -124,6 +125,7 @@ export function appendRoundRetryEvent(runId, retryEvent) {
     }
     syncExportedState();
     patchRoundRetryEvents(safeRunId);
+    syncRetryTimelineTimer();
 }
 
 export function updateRoundRetryEvent(runId, retryEventId, updates) {
@@ -150,6 +152,7 @@ export function updateRoundRetryEvent(runId, retryEventId, updates) {
     }
     syncExportedState();
     patchRoundRetryEvents(safeRunId);
+    syncRetryTimelineTimer();
 }
 
 export function removeRoundRetryEvent(runId, retryEventId) {
@@ -172,6 +175,7 @@ export function removeRoundRetryEvent(runId, retryEventId) {
     }
     syncExportedState();
     patchRoundRetryEvents(safeRunId);
+    syncRetryTimelineTimer();
 }
 
 export function overlayRoundRecoveryState(runId, overlay = {}) {
@@ -194,6 +198,7 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
     }
     syncExportedState();
     patchRoundHeader(nextRound, roundIndex);
+    syncRetryTimelineTimer();
     renderRoundNavigator(roundsState.currentRounds, selectRound);
     setActiveRoundNav(roundsState.activeRunId);
 
@@ -243,6 +248,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         roundsState.activeRunId = null;
         setRoundPendingApprovals('', [], {});
         renderRoundNavigator([], selectRound);
+        syncRetryTimelineTimer();
         return;
     }
 
@@ -332,6 +338,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         activateLatestRound(rounds);
     }
     schedulePostLayoutRoundSync(container);
+    syncRetryTimelineTimer();
 }
 
 function bindScrollSync() {
@@ -560,6 +567,39 @@ function patchRoundRetryEvents(runId) {
     renderRoundRetryEvents(section, round.retry_events || []);
 }
 
+function syncRetryTimelineTimer() {
+    const hasActiveRetry = roundsState.currentRounds.some(round =>
+        (Array.isArray(round.retry_events) ? round.retry_events : []).some(isScheduledRetryEvent),
+    );
+    if (!hasActiveRetry) {
+        clearRetryTimelineTimer();
+        return;
+    }
+    if (retryTimelineTimerId) {
+        return;
+    }
+    retryTimelineTimerId = window.setInterval(() => {
+        patchAllActiveRetryEvents();
+    }, 200);
+}
+
+function clearRetryTimelineTimer() {
+    if (!retryTimelineTimerId) {
+        return;
+    }
+    clearInterval(retryTimelineTimerId);
+    retryTimelineTimerId = 0;
+}
+
+function patchAllActiveRetryEvents() {
+    roundsState.currentRounds.forEach(round => {
+        const retryEvents = Array.isArray(round.retry_events) ? round.retry_events : [];
+        if (retryEvents.some(isScheduledRetryEvent)) {
+            patchRoundRetryEvents(round.run_id);
+        }
+    });
+}
+
 function renderRoundBadges(round, stateLabel, stateTone, approvalCount) {
     return `
         ${stateLabel ? `<span class="round-state-pill round-state-${stateTone}">${esc(stateLabel)}</span>` : ''}
@@ -574,18 +614,20 @@ function renderRoundRetryEvents(section, retryEvents) {
     }
     const host = document.createElement('div');
     host.className = 'round-retry-timeline';
-    host.innerHTML = items.map(renderRetryEventMarkup).join('');
+    const nowMs = Date.now();
+    host.innerHTML = items.map(event => renderRetryEventMarkup(event, nowMs)).join('');
     section.appendChild(host);
 }
 
-function renderRetryEventMarkup(event) {
+function renderRetryEventMarkup(event, nowMs) {
     const attemptNumber = Number(event?.attempt_number || 0);
     const totalAttempts = Number(event?.total_attempts || 0);
     const isActive = event?.is_active === true;
     const phase = String(event?.phase || '').trim() || 'scheduled';
-    const activeRemainingMs = Number(event?.remaining_ms || 0);
     const retryInMs = Number(event?.retry_in_ms || 0);
-    const displayRetryMs = isActive ? activeRemainingMs : retryInMs;
+    const displayRetryMs = isScheduledRetryEvent(event)
+        ? computeRetryRemainingMs(event, nowMs)
+        : retryInMs;
     const retrySeconds = displayRetryMs > 0
         ? `${(displayRetryMs / 1000).toFixed(displayRetryMs >= 10000 ? 0 : 1)}s`
         : '0s';
@@ -616,4 +658,23 @@ function renderRetryEventMarkup(event) {
             ${errorMessage ? `<div class="round-retry-detail">${esc(errorMessage)}</div>` : ''}
         </div>
     `;
+}
+
+function isScheduledRetryEvent(event) {
+    return String(event?.phase || 'scheduled').trim() === 'scheduled'
+        && Number(event?.retry_in_ms || 0) > 0;
+}
+
+function computeRetryRemainingMs(event, nowMs = Date.now()) {
+    const retryInMs = Math.max(0, Number(event?.retry_in_ms || 0));
+    if (retryInMs === 0) {
+        return 0;
+    }
+    const occurredAt = String(event?.occurred_at || '').trim();
+    const occurredAtMs = Date.parse(occurredAt);
+    if (Number.isFinite(occurredAtMs)) {
+        return Math.max(0, occurredAtMs + retryInMs - nowMs);
+    }
+    const fallbackRemainingMs = Number(event?.remaining_ms || retryInMs);
+    return Math.max(0, fallbackRemainingMs);
 }

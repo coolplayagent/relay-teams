@@ -52,8 +52,7 @@ import {
 } from "./retryStatus.mjs";
 
 globalThis.window = {
-    setInterval(callback) {
-        callback();
+    setInterval() {
         return 1;
     },
     clearInterval() {},
@@ -69,7 +68,7 @@ showLlmRetryStatus(
         error_code: "2062",
         error_message: "busy",
     },
-    { run_id: "run-1" },
+    { run_id: "run-1", occurred_at: "2026-03-20T00:00:00Z" },
 );
 
 beginLlmRetryAttempt();
@@ -84,7 +83,7 @@ showLlmRetryStatus(
         error_code: "2062",
         error_message: "still busy",
     },
-    { run_id: "run-1" },
+    { run_id: "run-1", occurred_at: "2026-03-20T00:00:03Z" },
 );
 
 beginLlmRetryAttempt();
@@ -106,7 +105,7 @@ showLlmRetryStatus(
         error_code: "2062",
         error_message: "busy again",
     },
-    { run_id: "run-2" },
+    { run_id: "run-2", occurred_at: "2026-03-20T00:00:10Z" },
 );
 
 beginLlmRetryAttempt();
@@ -160,10 +159,9 @@ console.log(JSON.stringify({
     assert appended[0]["payload"]["attempt_number"] == 2
     assert appended[1]["payload"]["attempt_number"] == 3
     assert appended[0]["payload"]["phase"] == "scheduled"
+    assert appended[0]["payload"]["occurred_at"] == "2026-03-20T00:00:00Z"
     assert removed[0]["runId"] == "run-1"
     assert len(updated) >= 2
-    assert updated[0]["runId"] == "run-1"
-    assert updated[0]["payload"]["is_active"] is True
     phase_updates = [item["payload"].get("phase") for item in updated]
     assert "retrying" in phase_updates
     assert "failed" in phase_updates

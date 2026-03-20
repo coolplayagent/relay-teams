@@ -33,6 +33,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import UsageLimits
 
 from agent_teams.providers.llm_retry import (
+    LlmRetryErrorInfo,
     LlmRetrySchedule,
     compute_retry_delay_ms,
     extract_retry_error_info,
@@ -637,7 +638,6 @@ class AgentLlmSession:
                 delay_ms = compute_retry_delay_ms(
                     config=self._retry_config,
                     retry_number=next_retry_number,
-                    retry_after_ms=resolved_retry_error.retry_after_ms,
                 )
                 await self._handle_retry_scheduled(
                     request=request,
@@ -660,20 +660,11 @@ class AgentLlmSession:
                 and self._retry_config.enabled
                 and retry_number >= self._retry_config.max_retries
             ):
-                log_event(
-                    LOGGER,
-                    logging.ERROR,
-                    event="llm.request.retry_exhausted",
-                    message="LLM request retries exhausted",
-                    payload={
-                        "run_id": request.run_id,
-                        "task_id": request.task_id,
-                        "role_id": request.role_id,
-                        "instance_id": request.instance_id,
-                        "retries_used": retry_number,
-                        "status_code": retry_error.status_code,
-                        "error_code": retry_error.error_code,
-                    },
+                self._handle_retry_exhausted(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    error=retry_error,
                 )
             raise ModelAPIError(
                 model_name=exc.model_name,
@@ -696,7 +687,6 @@ class AgentLlmSession:
                 delay_ms = compute_retry_delay_ms(
                     config=self._retry_config,
                     retry_number=next_retry_number,
-                    retry_after_ms=resolved_retry_error.retry_after_ms,
                 )
                 await self._handle_retry_scheduled(
                     request=request,
@@ -729,20 +719,11 @@ class AgentLlmSession:
                     exc_info=exc,
                 )
                 if retry_number >= self._retry_config.max_retries:
-                    log_event(
-                        LOGGER,
-                        logging.ERROR,
-                        event="llm.request.retry_exhausted",
-                        message="LLM request retries exhausted",
-                        payload={
-                            "run_id": request.run_id,
-                            "task_id": request.task_id,
-                            "role_id": request.role_id,
-                            "instance_id": request.instance_id,
-                            "retries_used": retry_number,
-                            "status_code": retry_error.status_code,
-                            "error_code": retry_error.error_code,
-                        },
+                    self._handle_retry_exhausted(
+                        request=request,
+                        retry_number=retry_number,
+                        total_attempts=total_attempts,
+                        error=retry_error,
                     )
             raise
 
@@ -856,6 +837,53 @@ class AgentLlmSession:
                 "error_code": schedule.error.error_code,
                 "transport_error": schedule.error.transport_error,
                 "timeout_error": schedule.error.timeout_error,
+            },
+        )
+
+    def _handle_retry_exhausted(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        error: LlmRetryErrorInfo,
+    ) -> None:
+        payload = {
+            "role_id": request.role_id,
+            "instance_id": request.instance_id,
+            "attempt_number": retry_number + 1,
+            "total_attempts": total_attempts,
+            "error_code": error.error_code or "",
+            "error_message": error.message,
+            "status_code": error.status_code,
+        }
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.LLM_RETRY_EXHAUSTED,
+                payload_json=dumps(payload),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.ERROR,
+            event="llm.request.retry_exhausted",
+            message="LLM request retries exhausted",
+            payload={
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "retries_used": retry_number,
+                "attempt_number": retry_number + 1,
+                "total_attempts": total_attempts,
+                "status_code": error.status_code,
+                "error_code": error.error_code,
             },
         )
 

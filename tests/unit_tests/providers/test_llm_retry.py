@@ -50,21 +50,18 @@ def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
     assert info.message == "busy"
 
 
-def test_compute_retry_delay_ms_uses_retry_after_without_jitter() -> None:
+def test_compute_retry_delay_ms_uses_exponential_backoff_without_jitter() -> None:
     config = LlmRetryConfig(
         jitter=False,
-        respect_retry_after=True,
-        initial_delay_ms=1000,
-        max_delay_ms=30000,
+        initial_delay_ms=2000,
     )
 
     delay_ms = compute_retry_delay_ms(
         config=config,
         retry_number=2,
-        retry_after_ms=7000,
     )
 
-    assert delay_ms == 7000
+    assert delay_ms == 4000
 
 
 @pytest.mark.asyncio
@@ -85,7 +82,7 @@ async def test_run_with_llm_retry_retries_until_success() -> None:
 
     result = await run_with_llm_retry(
         operation=operation,
-        config=LlmRetryConfig(jitter=False, max_retries=5, initial_delay_ms=1000),
+        config=LlmRetryConfig(jitter=False, max_retries=5, initial_delay_ms=2000),
         is_retry_allowed=lambda: True,
         on_retry_scheduled=lambda schedule: recorded_delays.append(schedule.delay_ms),
         sleep=lambda _seconds: _async_noop(),
@@ -93,7 +90,37 @@ async def test_run_with_llm_retry_retries_until_success() -> None:
 
     assert result == "ok"
     assert attempts["count"] == 3
-    assert recorded_delays == [1000, 2000]
+    assert recorded_delays == [2000, 4000]
+
+
+@pytest.mark.asyncio
+async def test_run_with_llm_retry_reports_exhausted_after_max_retries() -> None:
+    recorded_delays: list[int] = []
+    exhausted: list[tuple[str, int]] = []
+
+    async def operation() -> str:
+        raise APIError(
+            "provider error",
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+            body={"error": {"code": "2062", "message": "busy"}},
+        )
+
+    with pytest.raises(APIError):
+        await run_with_llm_retry(
+            operation=operation,
+            config=LlmRetryConfig(jitter=False, max_retries=2, initial_delay_ms=2000),
+            is_retry_allowed=lambda: True,
+            on_retry_scheduled=lambda schedule: recorded_delays.append(
+                schedule.delay_ms
+            ),
+            on_retry_exhausted=lambda error: exhausted.append(
+                (error.error.message, error.retries_used)
+            ),
+            sleep=lambda _seconds: _async_noop(),
+        )
+
+    assert recorded_delays == [2000, 4000]
+    assert exhausted == [("busy", 2)]
 
 
 async def _async_noop() -> None:

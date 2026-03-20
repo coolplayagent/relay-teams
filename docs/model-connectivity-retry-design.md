@@ -273,9 +273,8 @@ class RetryDecision(BaseModel):
   "llm_retry": {
     "enabled": true,
     "max_attempts": 5,
-    "base_delay_ms": 500,
-    "max_delay_ms": 8000,
-    "jitter": "full",
+    "base_delay_ms": 2000,
+    "jitter": false,
     "per_request_timeout_ms": 30000,
     "pause_on_exhausted": true,
     "resume_requires_probe": false

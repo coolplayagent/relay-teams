@@ -93,7 +93,6 @@ async def run_with_llm_retry(
             delay_ms = compute_retry_delay_ms(
                 config=config,
                 retry_number=retries_used,
-                retry_after_ms=error.retry_after_ms,
             )
             schedule = LlmRetrySchedule(
                 retry_number=retries_used,
@@ -112,20 +111,16 @@ def compute_retry_delay_ms(
     *,
     config: LlmRetryConfig,
     retry_number: int,
-    retry_after_ms: int | None,
 ) -> int:
-    if config.respect_retry_after and retry_after_ms is not None:
-        base_delay_ms = retry_after_ms
-    else:
-        base_delay_ms = int(
-            config.initial_delay_ms * (config.backoff_multiplier ** (retry_number - 1))
-        )
-    capped_delay_ms = min(max(0, base_delay_ms), config.max_delay_ms)
-    if not config.jitter or capped_delay_ms == 0:
-        return capped_delay_ms
+    base_delay_ms = int(
+        config.initial_delay_ms * (config.backoff_multiplier ** (retry_number - 1))
+    )
+    resolved_delay_ms = max(0, base_delay_ms)
+    if not config.jitter or resolved_delay_ms == 0:
+        return resolved_delay_ms
     jitter_ratio = 0.2
-    lower_bound = max(0, int(capped_delay_ms * (1 - jitter_ratio)))
-    upper_bound = max(lower_bound, int(capped_delay_ms * (1 + jitter_ratio)))
+    lower_bound = max(0, int(resolved_delay_ms * (1 - jitter_ratio)))
+    upper_bound = max(lower_bound, int(resolved_delay_ms * (1 + jitter_ratio)))
     return random.randint(lower_bound, upper_bound)
 
 

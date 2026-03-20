@@ -88,7 +88,6 @@ def build_session_rounds(
         RunEventType.MODEL_STEP_STARTED.value,
         RunEventType.MODEL_STEP_FINISHED.value,
         RunEventType.RUN_COMPLETED.value,
-        RunEventType.RUN_FAILED.value,
         RunEventType.RUN_STOPPED.value,
     }
     active_retry_by_run: dict[str, dict[str, object]] = {}
@@ -110,6 +109,23 @@ def build_session_rounds(
                 "attempt_number": payload.get("attempt_number", 0),
                 "total_attempts": payload.get("total_attempts", 0),
                 "retry_in_ms": payload.get("retry_in_ms", 0),
+                "phase": "scheduled",
+                "is_active": True,
+                "error_code": payload.get("error_code", ""),
+                "error_message": payload.get("error_message", ""),
+            }
+            continue
+        if event_type == RunEventType.LLM_RETRY_EXHAUSTED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": 0,
+                "phase": "failed",
+                "is_active": False,
                 "error_code": payload.get("error_code", ""),
                 "error_message": payload.get("error_message", ""),
             }

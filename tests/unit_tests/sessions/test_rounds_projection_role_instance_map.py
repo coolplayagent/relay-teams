@@ -286,3 +286,58 @@ def test_build_session_rounds_only_keeps_active_retry_card() -> None:
     assert len(retry_events) == 1
     assert retry_events[0]["attempt_number"] == 3
     assert retry_events[0]["retry_in_ms"] == 2000
+    assert retry_events[0]["phase"] == "scheduled"
+    assert retry_events[0]["is_active"] is True
+
+
+def test_build_session_rounds_keeps_exhausted_retry_card_after_run_failed() -> None:
+    session_id = "session-1"
+    run_id = "run-1"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="root",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+    runtime = RunRuntimeRecord(
+        run_id=run_id,
+        session_id=session_id,
+        status=RunRuntimeStatus.FAILED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_EXHAUSTED.value,
+                "occurred_at": "2026-03-19T12:00:05Z",
+                "payload_json": '{"attempt_number":6,"total_attempts":6,"error_code":"network_error","error_message":"still failing"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.RUN_FAILED.value,
+                "occurred_at": "2026-03-19T12:00:06Z",
+                "payload_json": '{"error":"still failing"}',
+            },
+        ],
+    )
+
+    retry_events = cast(list[dict[str, object]], rounds[0]["retry_events"])
+    assert len(retry_events) == 1
+    assert retry_events[0]["attempt_number"] == 6
+    assert retry_events[0]["phase"] == "failed"
+    assert retry_events[0]["is_active"] is False

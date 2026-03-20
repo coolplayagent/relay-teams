@@ -276,3 +276,15 @@ export function handleLlmRetryScheduled(payload, eventMeta) {
     );
     showLlmRetryStatus(payload, eventMeta);
 }
+
+export function handleLlmRetryExhausted(payload, eventMeta) {
+    sysLog(
+        `Model retries exhausted: attempt ${payload?.attempt_number || '?'} of ${payload?.total_attempts || '?'}`,
+        'log-error',
+    );
+    showLlmRetryStatus({
+        ...payload,
+        retry_in_ms: 0,
+    }, eventMeta);
+    markLlmRetryFailed(payload?.error_message || '');
+}

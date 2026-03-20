@@ -61,7 +61,7 @@ class _FakeClient:
         yield {
             "event_type": "llm_retry_scheduled",
             "payload_json": (
-                '{"next_attempt_number": 2, "total_attempts": 4, '
+                '{"attempt_number": 2, "total_attempts": 4, '
                 '"retry_in_ms": 1500, "status_code": 429, '
                 '"error_code": "rate_limit", '
                 '"error_message": "Provider rate limit reached"}'
@@ -187,9 +187,7 @@ class _FakeClient:
         }
 
 
-def test_agent_teams_backend_emits_detailed_runtime_logs(
-    monkeypatch, capsys
-) -> None:
+def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "agent_teams_evals.backends.agent_teams.AgentTeamsClient", _FakeClient
     )
@@ -214,12 +212,9 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(
     assert token_event.reasoning_output_tokens == 1
     assert token_event.requests == 3
     assert token_event.tool_calls == 4
+    assert "[event #1] run_started: session=session-" in out
     assert (
-        "[event #1] run_started: session=session-" in out
-    )
-    assert (
-        "[event #2] model_step_started: role=coordinator "
-        "instance=coord_12345678" in out
+        "[event #2] model_step_started: role=coordinator instance=coord_12345678" in out
     )
     assert (
         "[event #3] llm_retry_scheduled: attempt=2/4 retry_in_ms=1500 "
@@ -266,10 +261,7 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(
         "[event #13] injection_applied: source=user "
         "content=Please retry with more context" in out
     )
-    assert (
-        "[event #14] notification_requested: type=run_failed "
-        "title=Run Failed" in out
-    )
+    assert "[event #14] notification_requested: type=run_failed title=Run Failed" in out
     assert (
         "[event #15] subagent_stopped: instance=subagent role=crafter "
         "task=task_123 reason=stopped_by_user" in out
@@ -278,9 +270,7 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(
         "[event #16] subagent_resumed: instance=subagent role=crafter "
         "task=task_123" in out
     )
-    assert (
-        "[event #17] awaiting_manual_action: root_task=root_123" in out
-    )
+    assert "[event #17] awaiting_manual_action: root_task=root_123" in out
     assert (
         "[event #18] token_usage: input=10 cached=2 output=5 "
         "reasoning=1 requests=3 tool_calls=4" in out

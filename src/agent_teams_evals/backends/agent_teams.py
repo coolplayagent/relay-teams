@@ -73,7 +73,9 @@ def _common_actor_suffix(data: dict[str, object]) -> str:
     return (" " + " ".join(parts)) if parts else ""
 
 
-def _log_run_event(item_id: str, event_count: int, event_type: str, data: object) -> None:
+def _log_run_event(
+    item_id: str, event_count: int, event_type: str, data: object
+) -> None:
     if not isinstance(data, dict):
         _log(item_id, f"[event #{event_count}] {event_type}")
         return
@@ -189,7 +191,9 @@ def _log_run_event(item_id: str, event_count: int, event_type: str, data: object
         return
 
     if event_type == "llm_retry_scheduled":
-        attempt = _event_int(data, "next_attempt_number")
+        attempt = _event_int(data, "attempt_number") or _event_int(
+            data, "next_attempt_number"
+        )
         total_attempts = _event_int(data, "total_attempts")
         retry_in_ms = _event_int(data, "retry_in_ms")
         status_code = _event_int(data, "status_code")
@@ -198,6 +202,25 @@ def _log_run_event(item_id: str, event_count: int, event_type: str, data: object
         message = (
             f"[event #{event_count}] llm_retry_scheduled: attempt={attempt}"
             f"/{total_attempts} retry_in_ms={retry_in_ms}"
+        )
+        if status_code:
+            message += f" status_code={status_code}"
+        if error_code:
+            message += f" error_code={error_code}"
+        if error_message:
+            message += f" message={error_message}"
+        _log(item_id, message)
+        return
+
+    if event_type == "llm_retry_exhausted":
+        attempt = _event_int(data, "attempt_number")
+        total_attempts = _event_int(data, "total_attempts")
+        status_code = _event_int(data, "status_code")
+        error_code = _event_str(data, "error_code")
+        error_message = _truncate(_single_line(_event_str(data, "error_message")))
+        message = (
+            f"[event #{event_count}] llm_retry_exhausted: attempt={attempt}"
+            f"/{total_attempts}"
         )
         if status_code:
             message += f" status_code={status_code}"
@@ -415,9 +438,7 @@ class AgentTeamsBackend(AgentBackend):
                         in_tok = _event_int(data, "input_tokens")
                         cached_in_tok = _event_int(data, "cached_input_tokens")
                         out_tok = _event_int(data, "output_tokens")
-                        reasoning_out_tok = _event_int(
-                            data, "reasoning_output_tokens"
-                        )
+                        reasoning_out_tok = _event_int(data, "reasoning_output_tokens")
                         requests = _event_int(data, "requests")
                         tool_calls = _event_int(data, "tool_calls")
                         _log(
