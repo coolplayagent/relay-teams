@@ -173,12 +173,14 @@ Example:
 
 Download from [SWE-bench/SWE-bench_Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified) and save the file under `.agent_teams/evals/datasets/`. Set `dataset: swebench` in config -- the loader maps SWE-bench fields automatically.
 
-The initial intent preserves the original `problem_statement` content and only normalizes formatting:
+The initial intent is rendered as a Coordinator-facing PR-style prompt built
+from the original `problem_statement` content:
 
 - HTML comments are removed
 - line endings and trailing spaces are normalized
 - extra blank lines are compacted
-- `hints_text`, `FAIL_TO_PASS`, and `PASS_TO_PASS` are appended as structured sections when present
+- `hints_text`, when present, is merged into the `<pr_description>` block under `Additional context:`
+- `FAIL_TO_PASS`, `PASS_TO_PASS`, and `test_patch` remain scorer-only metadata and are not included in the agent-facing intent
 
 ## Scorers
 

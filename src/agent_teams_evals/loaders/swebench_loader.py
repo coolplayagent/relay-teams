@@ -74,39 +74,52 @@ def _normalize_text_block(text: str) -> str:
     return "\n".join(compacted).strip()
 
 
-def _format_list_block(title: str, items: tuple[str, ...]) -> str:
-    if not items:
-        return ""
-    return title + "\n" + "\n".join(f"- {item}" for item in items)
-
-
 def build_swebench_intent(
     *,
     problem_statement: str,
     hints_text: str | None,
-    fail_to_pass: tuple[str, ...],
-    pass_to_pass: tuple[str, ...],
 ) -> str:
-    sections = [
-        "SWE-bench Task",
-        "",
-        "Problem Statement",
-        _normalize_text_block(problem_statement),
-    ]
-
+    pr_description = _normalize_text_block(problem_statement)
     normalized_hints = _normalize_text_block(str(hints_text or ""))
     if normalized_hints:
-        sections.extend(["", "Hints", normalized_hints])
+        pr_description = (
+            f"{pr_description}\n\nAdditional context:\n{normalized_hints}"
+        )
 
-    fail_block = _format_list_block("FAIL_TO_PASS Tests", fail_to_pass)
-    if fail_block:
-        sections.extend(["", fail_block])
-
-    pass_block = _format_list_block("PASS_TO_PASS Tests", pass_to_pass)
-    if pass_block:
-        sections.extend(["", pass_block])
-
-    return "\n".join(sections).strip()
+    return (
+        "Consider the following PR description:\n\n"
+        "<pr_description>\n"
+        f"{pr_description}\n"
+        "</pr_description>\n\n"
+        "Help ensure that the requirements in <pr_description> are satisfied "
+        "with the minimal necessary changes.\n\n"
+        "All test-file changes described by the PR have already been handled. "
+        "Do not modify any test files or testing logic.\n\n"
+        "Only make the minimal non-test changes needed in the current directory "
+        "to satisfy the <pr_description>.\n\n"
+        "Required task flow:\n"
+        "1. First, dispatch Explorer to inspect the relevant code paths and "
+        "gather the concrete repository facts needed for implementation.\n"
+        "2. Then dispatch Crafter with a self-contained implementation task "
+        "based on Explorer's findings. The Crafter task must include the "
+        "relevant files, APIs, constraints, and reproduction details needed "
+        "for execution. Crafter should create a small reproduction script and "
+        "run it with `python <filename.py>` when practical, implement the "
+        "minimal fix, rerun the reproduction, and think through important "
+        "edge cases.\n"
+        "3. After implementation, dispatch Gater to validate the result "
+        "against the requirements in <pr_description> using concrete evidence "
+        "from the code changes and local validation output.\n"
+        "4. If Gater does not pass the result, continue by dispatching "
+        "Crafter again with the missing requirements or validation failures "
+        "made explicit. Do not dispatch Explorer again unless a new "
+        "information gap is discovered that blocks implementation or "
+        "validation.\n"
+        "5. The task is complete only when Gater verifies that the "
+        "requirements in <pr_description> have been satisfied.\n\n"
+        "Keep the work focused, explicit, and minimal.\n"
+        "Your thinking can be thorough if needed."
+    )
 
 
 class SWEBenchLoader(DatasetLoader):
@@ -143,8 +156,6 @@ class SWEBenchLoader(DatasetLoader):
                 intent=build_swebench_intent(
                     problem_statement=problem_statement,
                     hints_text=hints_text,
-                    fail_to_pass=fail_to_pass,
-                    pass_to_pass=pass_to_pass,
                 ),
                 repo_url=repo_url,
                 base_commit=base_commit,

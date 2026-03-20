@@ -20,17 +20,23 @@ def test_build_swebench_intent_preserves_content_but_normalizes_formatting() -> 
             "Windows 11\r\n"
         ),
         hints_text="  try the transform graph first  \n\n",
-        fail_to_pass=("pkg.tests.test_bug",),
-        pass_to_pass=("pkg.tests.test_regression",),
     )
 
     assert "<!--" not in intent
+    assert intent.startswith("Consider the following PR description:")
+    assert "<pr_description>" in intent
+    assert "</pr_description>" in intent
     assert "### Description" in intent
     assert "### System Details" in intent
     assert "Windows 11" in intent
-    assert "Hints" in intent
-    assert "FAIL_TO_PASS Tests" in intent
-    assert "PASS_TO_PASS Tests" in intent
+    assert "Additional context:" in intent
+    assert "try the transform graph first" in intent
+    assert "Required task flow:" in intent
+    assert "dispatch Explorer" in intent
+    assert "dispatch Crafter" in intent
+    assert "dispatch Gater" in intent
+    assert "FAIL_TO_PASS Tests" not in intent
+    assert "PASS_TO_PASS Tests" not in intent
     assert "\r" not in intent
     assert "\n\n\n" not in intent
 
@@ -57,13 +63,16 @@ def test_loader_injects_structured_swebench_intent(tmp_path) -> None:
 
     assert item.item_id == "demo-1"
     assert item.repo_url == "https://github.com/org/repo"
-    assert item.intent.startswith("SWE-bench Task")
-    assert "Problem Statement" in item.intent
+    assert item.intent.startswith("Consider the following PR description:")
     assert "### Description" in item.intent
-    assert "Hints" in item.intent
-    assert "- tests.test_fix" in item.intent
-    assert "- tests.test_keep" in item.intent
+    assert "<pr_description>" in item.intent
+    assert "Additional context:" in item.intent
+    assert "look at parser.py" in item.intent
+    assert "FAIL_TO_PASS Tests" not in item.intent
+    assert "PASS_TO_PASS Tests" not in item.intent
     assert "<!--" not in item.intent
+    assert item.fail_to_pass == ("tests.test_fix",)
+    assert item.pass_to_pass == ("tests.test_keep",)
 
 
 def test_loader_extracts_test_patch(tmp_path) -> None:
