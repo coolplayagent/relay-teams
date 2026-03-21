@@ -94,6 +94,7 @@ def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, o
     mock_state_path = tmp_path / "mockState.mjs"
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "subagentRail.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -204,6 +205,21 @@ export const els = globalThis.__elements;
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "topbar.subagents": "Subagents",
+    "subagent.none": "No subagents",
+    "subagent.summary_idle": "idle / {roles} roles",
+    "subagent.summary_running": "{running} running / {roles} roles",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_logger_path.write_text(
         """
 export function sysLog() {
@@ -219,6 +235,7 @@ export function sysLog() {
         .replace("../core/state.js", "./mockState.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")

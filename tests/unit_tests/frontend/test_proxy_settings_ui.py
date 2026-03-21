@@ -185,6 +185,7 @@ def _run_proxy_settings_script(tmp_path: Path, runner_source: str) -> dict[str, 
 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "proxySettings.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -233,6 +234,25 @@ export function showToast(payload) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "settings.proxy.load_failed": "Load Failed",
+    "settings.proxy.saved": "Proxy Saved",
+    "settings.proxy.save_failed": "Save Failed",
+    "settings.proxy.saved_message": "Proxy settings saved and reloaded.",
+    "settings.proxy.enter_url": "Enter a target URL before testing connectivity.",
+    "settings.proxy.testing_message": "Testing connectivity...",
+    "settings.proxy.test_url": "Test URL",
+    "settings.proxy.testing": "Testing...",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_logger_path.write_text(
         """
 export function errorToPayload(error, extra = {}) {
@@ -253,6 +273,7 @@ export function logError() {
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")

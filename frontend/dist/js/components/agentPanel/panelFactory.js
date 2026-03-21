@@ -12,6 +12,7 @@ import {
 import { refreshSessionRecovery, resumeRecoverableRun } from '../../app/recovery.js';
 import { bindPanelContextIndicator, schedulePanelContextPreview } from '../contextIndicators.js';
 import { state } from '../../core/state.js';
+import { t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
 import { getDrawer } from './dom.js';
 import { loadAgentHistory } from './history.js';
@@ -35,38 +36,38 @@ export function createPanel(instanceId, roleId, onClose) {
     panelEl.innerHTML = `
         <div class="agent-panel-controls" hidden>
             <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
-            <button class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory">Reflect</button>
-            <button class="agent-panel-stop" type="button" title="Stop this subagent">Stop</button>
+            <button class="agent-panel-refresh-reflection" type="button" title="${t('subagent.reflect_title')}">${t('subagent.reflect')}</button>
+            <button class="agent-panel-stop" type="button" title="${t('subagent.stop_title')}">${t('subagent.stop')}</button>
         </div>
-        <div class="agent-panel-tabbar" role="tablist" aria-label="Agent sections">
-            <button class="agent-panel-tab" data-tab="prompt" role="tab" aria-selected="false">Prompt</button>
-            <button class="agent-panel-tab" data-tab="tools" role="tab" aria-selected="false">Tools</button>
-            <button class="agent-panel-tab" data-tab="memory" role="tab" aria-selected="false">Memory</button>
-            <button class="agent-panel-tab" data-tab="tasks" role="tab" aria-selected="false">Tasks</button>
+        <div class="agent-panel-tabbar" role="tablist" aria-label="${t('subagent.sections')}">
+            <button class="agent-panel-tab" data-tab="prompt" role="tab" aria-selected="false">${t('subagent.prompt')}</button>
+            <button class="agent-panel-tab" data-tab="tools" role="tab" aria-selected="false">${t('subagent.tools')}</button>
+            <button class="agent-panel-tab" data-tab="memory" role="tab" aria-selected="false">${t('subagent.memory')}</button>
+            <button class="agent-panel-tab" data-tab="tasks" role="tab" aria-selected="false">${t('subagent.tasks')}</button>
         </div>
         <div class="agent-panel-tabpane" data-tab="prompt" role="tabpanel" hidden>
             <div class="agent-panel-tabpane-header">
                 <span class="agent-panel-runtime-prompt-meta agent-panel-section-meta"></span>
             </div>
-            <div class="agent-panel-section-body agent-panel-runtime-prompt-body">No runtime system prompt yet.</div>
+            <div class="agent-panel-section-body agent-panel-runtime-prompt-body">${t('subagent.no_runtime_prompt')}</div>
         </div>
         <div class="agent-panel-tabpane" data-tab="tools" role="tabpanel" hidden>
             <div class="agent-panel-tabpane-header">
                 <span class="agent-panel-runtime-tools-meta agent-panel-section-meta"></span>
             </div>
-            <div class="agent-panel-section-body agent-panel-runtime-tools-body">No runtime tools snapshot yet.</div>
+            <div class="agent-panel-section-body agent-panel-runtime-tools-body">${t('subagent.no_runtime_tools')}</div>
         </div>
         <div class="agent-panel-tabpane" data-tab="memory" role="tabpanel" hidden>
             <div class="agent-panel-tabpane-header">
                 <span class="agent-panel-reflection-meta agent-panel-section-meta"></span>
-                <div class="agent-panel-section-actions" aria-label="Reflection memory actions">
-                    <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="Edit reflection memory" aria-label="Edit reflection memory">
+                <div class="agent-panel-section-actions" aria-label="${t('subagent.reflection_actions')}">
+                    <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="${t('subagent.edit_reflection')}" aria-label="${t('subagent.edit_reflection')}">
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                             <path d="M16.5 3.5a2.12 2.12 0 113 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
                         </svg>
                     </button>
-                    <button class="agent-panel-icon-btn agent-panel-reflection-delete" type="button" title="Delete reflection memory" aria-label="Delete reflection memory">
+                    <button class="agent-panel-icon-btn agent-panel-reflection-delete" type="button" title="${t('subagent.delete_reflection')}" aria-label="${t('subagent.delete_reflection')}">
                         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <path d="M3 6h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                             <path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6" stroke="currentColor" stroke-width="1.8"/>
@@ -76,25 +77,25 @@ export function createPanel(instanceId, roleId, onClose) {
                     </button>
                 </div>
             </div>
-            <div class="agent-panel-section-body agent-panel-reflection-body">No reflection memory yet.</div>
+            <div class="agent-panel-section-body agent-panel-reflection-body">${t('subagent.no_reflection_memory')}</div>
         </div>
         <div class="agent-panel-tabpane" data-tab="tasks" role="tabpanel" hidden>
             <div class="agent-panel-tabpane-header">
                 <span class="agent-panel-summary-meta agent-panel-section-meta">
-                    <span class="agent-panel-summary-status">Idle</span>
+                    <span class="agent-panel-summary-status">${t('subagent.status_idle')}</span>
                     <span class="agent-panel-summary-updated"></span>
                 </span>
             </div>
             <div class="agent-panel-section-body agent-panel-summary-body">
-                <div class="agent-panel-summary-tasks">No delegated tasks yet.</div>
+                <div class="agent-panel-summary-tasks">${t('subagent.no_tasks')}</div>
             </div>
         </div>
         <div class="agent-panel-scroll"></div>
         <div class="agent-panel-input">
             <div class="panel-input-wrapper">
-                <textarea class="panel-inject-input" placeholder="Inject message to this agent..." rows="1"></textarea>
-                <div class="context-indicator panel-context-indicator" data-instance-id="${instanceId}" data-state="idle" title="Latest provider context usage">-- / --</div>
-                <button class="panel-send-btn" type="button" title="Send">
+                <textarea class="panel-inject-input" placeholder="${t('subagent.inject_placeholder')}" rows="1"></textarea>
+                <div class="context-indicator panel-context-indicator" data-instance-id="${instanceId}" data-state="idle" title="${t('composer.context_title')}">-- / --</div>
+                <button class="panel-send-btn" type="button" title="${t('composer.send_title')}">
                     <svg viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
                 </button>
             </div>
@@ -149,7 +150,7 @@ export function createPanel(instanceId, roleId, onClose) {
         deleteReflectionBtn.onclick = async () => {
             if (!state.currentSessionId) return;
             const confirmed = typeof window.confirm === 'function'
-                ? window.confirm('Delete reflection memory for this subagent role?')
+                ? window.confirm(t('subagent.delete_reflection_confirm'))
                 : true;
             if (!confirmed) return;
             setReflectionActionButtonsDisabled(panelEl, true);
@@ -275,7 +276,7 @@ function openReflectionEditor(panelEl, instanceId, roleId) {
     bodyEl.dataset.mode = 'editing';
     bodyEl.innerHTML = `
         <div class="agent-panel-reflection-editor">
-            <textarea class="agent-panel-reflection-editor-input" rows="8" placeholder="Write long-term notes for this subagent role...">${escapeHtml(currentSummary)}</textarea>
+            <textarea class="agent-panel-reflection-editor-input" rows="8" placeholder="${t('subagent.reflection_placeholder')}">${escapeHtml(currentSummary)}</textarea>
             <div class="agent-panel-reflection-editor-actions">
                 <button class="agent-panel-reflection-cancel" type="button">Cancel</button>
                 <button class="agent-panel-reflection-save" type="button">Save</button>

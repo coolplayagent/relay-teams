@@ -26,7 +26,10 @@ from agent_teams.interfaces.server.deps import (
     get_orchestration_settings_service,
     get_proxy_config_service,
     get_skills_config_reload_service,
+    get_ui_language_settings_service,
 )
+from agent_teams.interfaces.server.ui_language_models import UiLanguageSettings
+from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
@@ -61,6 +64,25 @@ def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
     return service.get_config_status()
+
+
+@router.get("/configs/ui-language")
+def get_ui_language_settings(
+    service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
+) -> UiLanguageSettings:
+    return service.get_ui_language_settings()
+
+
+@router.put("/configs/ui-language")
+def save_ui_language_settings(
+    req: UiLanguageSettings,
+    service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
+) -> dict[str, str]:
+    try:
+        service.save_ui_language_settings(req)
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/configs/model")

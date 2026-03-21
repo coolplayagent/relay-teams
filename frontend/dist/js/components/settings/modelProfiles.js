@@ -11,6 +11,7 @@ import {
     saveModelProfile,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let profiles = {};
@@ -728,7 +729,7 @@ function renderProfileEditorTitle() {
     if (!titleEl) {
         return;
     }
-    titleEl.textContent = editingProfile ? 'Edit Profile' : 'Add Profile';
+    titleEl.textContent = editingProfile ? t('settings.model.edit_profile') : t('settings.model.add_profile');
 }
 
 function createDraftApiKeyState() {

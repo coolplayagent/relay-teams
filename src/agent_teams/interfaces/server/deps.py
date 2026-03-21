@@ -13,6 +13,7 @@ from agent_teams.env.environment_variable_service import EnvironmentVariableServ
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
+from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.mcp.mcp_service import McpService
@@ -92,6 +93,10 @@ def get_proxy_config_service(request: Request) -> ProxyConfigService:
 
 def get_environment_variable_service(request: Request) -> EnvironmentVariableService:
     return get_container(request).environment_variable_service
+
+
+def get_ui_language_settings_service(request: Request) -> UiLanguageSettingsService:
+    return get_container(request).ui_language_settings_service
 
 
 def get_task_repo(request: Request) -> TaskRepository:

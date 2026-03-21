@@ -4,6 +4,7 @@
  */
 import { fetchNotificationConfig, saveNotificationConfig } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
 
 const NOTIFICATION_TYPES = [
@@ -24,14 +25,14 @@ export function bindNotificationSettingsHandlers() {
                 const config = collectNotificationConfigFromPanel();
                 await saveNotificationConfig(config);
                 showToast({
-                    title: 'Notifications Saved',
-                    message: 'Notification settings saved.',
+                    title: t('settings.notifications.saved'),
+                    message: t('settings.notifications.saved_message'),
                     tone: 'success',
                 });
                 sysLog('Notification settings saved.');
             } catch (e) {
                 showToast({
-                    title: 'Save Failed',
+                    title: t('settings.notifications.save_failed'),
                     message: `Failed to save notification settings: ${e.message}`,
                     tone: 'danger',
                 });
@@ -47,6 +48,14 @@ export function bindNotificationSettingsHandlers() {
             });
         }
     });
+    if (typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            const panel = document.getElementById('notifications-panel');
+            if (panel && panel.style.display !== 'none') {
+                void loadNotificationSettingsPanel();
+            }
+        });
+    }
     handlersBound = true;
 }
 

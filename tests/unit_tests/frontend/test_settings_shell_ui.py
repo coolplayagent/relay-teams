@@ -338,6 +338,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "index.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -429,6 +430,35 @@ export async function loadSkillsStatusPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+export function t(key) {
+    return {
+        'settings.panel.model.title': 'Model',
+        'settings.panel.model.description': 'Manage providers, endpoints, request limits, and sampling defaults.',
+        'settings.panel.skills.title': 'Skills',
+        'settings.panel.skills.description': 'Check installed skills and refresh the server-side registry.',
+        'settings.panel.mcp.title': 'MCP',
+        'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
+        'settings.panel.roles.title': 'Roles',
+        'settings.panel.roles.description': 'Edit role metadata, allowed tools, memory profile, and prompt text.',
+        'settings.panel.orchestration.title': 'Orchestration',
+        'settings.panel.orchestration.description': 'Manage orchestrations for Orchestrated Mode. Main Agent and Coordinator base prompts are edited in Roles.',
+        'settings.panel.notifications.title': 'Notifications',
+        'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
+        'settings.panel.proxy.title': 'Proxy',
+        'settings.panel.proxy.description': 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
+        'settings.panel.environment.title': 'Environment',
+        'settings.panel.environment.description': 'Inspect effective runtime environment values and manage Agent Teams app environment variables.',
+    }[key] || key;
+}
+
+export function translateDocument() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -439,6 +469,7 @@ export async function loadSkillsStatusPanel() {
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 

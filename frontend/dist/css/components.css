@@ -69,6 +69,27 @@
     color: var(--primary);
 }
 
+.language-toggle-btn {
+    min-width: 56px;
+    height: 32px;
+    padding: 0 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.language-toggle-btn:hover {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, var(--bg-surface));
+    color: var(--primary);
+}
+
 .projects-empty-state {
     display: flex;
     flex-direction: column;
@@ -5804,4 +5825,3 @@ body.light-theme .composer-mode-inline-select {
 .typing-dot:nth-child(2) {
     animation-delay: -0.16s;
 }
-

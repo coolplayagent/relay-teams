@@ -16,6 +16,7 @@ import { setCoordinatorRoleId, setMainAgentRoleId, state } from '../core/state.j
 import { setupNavbarBindings } from '../components/navbar.js';
 import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
+import { initializeLanguage, toggleLanguage } from '../utils/i18n.js';
 import { resumeRecoverableRun } from './recovery.js';
 import {
     initializeSessionTopologyControls,
@@ -73,7 +74,13 @@ export function setupEventBindings(handleSend) {
 }
 
 function setupSettingsButton() {
+    const languageToggleBtn = document.getElementById('language-toggle-btn');
     const settingsBtn = document.getElementById('settings-btn');
+    if (languageToggleBtn) {
+        languageToggleBtn.onclick = () => {
+            void toggleLanguage();
+        };
+    }
     if (settingsBtn) {
         settingsBtn.onclick = openSettings;
     }
@@ -98,6 +105,7 @@ async function hydrateCoordinatorRoleId() {
 export async function initApp(selectSession, handleSend) {
     installGlobalErrorLogging();
     logInfo('frontend.bootstrap.started', 'Frontend bootstrap started');
+    await initializeLanguage();
     sysLog('System Initialized');
     initUiFeedback();
     initBackendStatusMonitor();

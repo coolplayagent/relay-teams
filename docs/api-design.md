@@ -47,6 +47,18 @@ Returns service health.
 
 Returns runtime config load status for model, MCP, skills, and effective proxy settings.
 
+### `GET /system/configs/ui-language`
+
+Returns the persisted web UI language preference.
+Response field:
+- `language`: `en-US` or `zh-CN`
+
+### `PUT /system/configs/ui-language`
+
+Persists the web UI language preference used by the frontend language toggle.
+Request field:
+- `language`: `en-US` or `zh-CN`
+
 ### `GET /system/configs/model`
 
 Returns raw `model.json`.

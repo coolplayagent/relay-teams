@@ -235,6 +235,7 @@ def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, o
         "../../app/recovery.js": "./mockRecovery.mjs",
         "../contextIndicators.js": "./mockContextIndicators.mjs",
         "../../core/state.js": "./mockState.mjs",
+        "../../utils/i18n.js": "./mockI18n.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "./dom.js": "./mockDom.mjs",
         "./history.js": "./mockHistory.mjs",
@@ -304,6 +305,39 @@ export function bindPanelContextIndicator() {
 
 export function schedulePanelContextPreview() {
     return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+const translations = {
+    "subagent.reflect_title": "Refresh reflection memory",
+    "subagent.reflect": "Reflect",
+    "subagent.stop_title": "Stop this subagent",
+    "subagent.stop": "Stop",
+    "subagent.sections": "Agent sections",
+    "subagent.prompt": "Prompt",
+    "subagent.tools": "Tools",
+    "subagent.memory": "Memory",
+    "subagent.tasks": "Tasks",
+    "subagent.no_runtime_prompt": "No runtime system prompt yet.",
+    "subagent.no_runtime_tools": "No runtime tools snapshot yet.",
+    "subagent.reflection_actions": "Reflection memory actions",
+    "subagent.edit_reflection": "Edit reflection memory",
+    "subagent.delete_reflection": "Delete reflection memory",
+    "subagent.no_reflection_memory": "No reflection memory yet.",
+    "subagent.status_idle": "Idle",
+    "subagent.no_tasks": "No delegated tasks yet.",
+    "subagent.inject_placeholder": "Inject message to this agent...",
+    "composer.context_title": "Latest provider context usage",
+    "composer.send_title": "Send (Enter)",
+    "subagent.delete_reflection_confirm": "Delete reflection memory for this subagent role?",
+    "subagent.reflection_placeholder": "Write long-term notes for this subagent role...",
+};
+
+export function t(key) {
+    return translations[key] || key;
 }
 """.strip(),
         encoding="utf-8",

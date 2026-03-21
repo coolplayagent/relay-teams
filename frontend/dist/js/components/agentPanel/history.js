@@ -4,6 +4,7 @@
  */
 import { fetchAgentMessages, fetchAgentReflection, fetchRunTokenUsage } from '../../core/api.js';
 import { state } from '../../core/state.js';
+import { t } from '../../utils/i18n.js';
 import {
     getInstanceStreamOverlay,
     renderHistoricalMessageList,
@@ -54,10 +55,12 @@ function renderRuntimePrompt(panelEl, sessionAgent) {
 
     const prompt = String(sessionAgent?.runtime_system_prompt || '').trim();
     const lineCount = prompt ? prompt.split(/\r?\n/).length : 0;
-    metaEl.textContent = lineCount > 0 ? `${lineCount} lines` : 'No snapshot yet';
+    metaEl.textContent = lineCount > 0
+        ? t('subagent.prompt_lines').replace('{count}', String(lineCount))
+        : t('subagent.no_snapshot');
     bodyEl.innerHTML = prompt
         ? `<pre class="agent-panel-runtime-pre">${escapeHtml(prompt)}</pre>`
-        : 'No runtime system prompt yet.';
+        : t('subagent.no_runtime_prompt');
 }
 
 function renderRuntimeTools(panelEl, sessionAgent) {
@@ -67,8 +70,8 @@ function renderRuntimeTools(panelEl, sessionAgent) {
 
     const raw = String(sessionAgent?.runtime_tools_json || '').trim();
     if (!raw) {
-        metaEl.textContent = 'No snapshot yet';
-        bodyEl.textContent = 'No runtime tools snapshot yet.';
+        metaEl.textContent = t('subagent.no_snapshot');
+        bodyEl.textContent = t('subagent.no_runtime_tools');
         return;
     }
 
@@ -81,7 +84,9 @@ function renderRuntimeTools(panelEl, sessionAgent) {
 
     const pretty = parsed ? JSON.stringify(parsed, null, 2) : raw;
     const toolCount = parsed ? countRuntimeTools(parsed) : 0;
-    metaEl.textContent = toolCount > 0 ? `${toolCount} tools` : 'JSON snapshot';
+    metaEl.textContent = toolCount > 0
+        ? t('subagent.tools_count').replace('{count}', String(toolCount))
+        : t('subagent.json_snapshot');
     bodyEl.innerHTML = `<pre class="agent-panel-json-pre"><code>${escapeHtml(pretty)}</code></pre>`;
 }
 
@@ -100,12 +105,12 @@ function renderReflection(panelEl, reflection) {
 
     const updatedAt = String(reflection?.updated_at || '').trim();
     const summary = String(reflection?.summary || '').trim();
-    metaEl.textContent = updatedAt ? new Date(updatedAt).toLocaleString() : 'No reflection yet';
+    metaEl.textContent = updatedAt ? new Date(updatedAt).toLocaleString() : t('subagent.no_reflection');
     bodyEl.dataset.summary = summary;
     bodyEl.dataset.updatedAt = updatedAt;
     bodyEl.dataset.source = String(reflection?.source || 'stored');
     if (bodyEl.dataset.mode === 'editing') return;
-    bodyEl.textContent = summary || 'No reflection memory yet.';
+    bodyEl.textContent = summary || t('subagent.no_reflection_memory');
 }
 
 function renderPanelSummary(panelEl, instanceId, roleId) {
@@ -135,13 +140,13 @@ function renderPanelSummary(panelEl, instanceId, roleId) {
         .slice(0, 4);
 
     if (tasks.length === 0) {
-        tasksEl.innerHTML = '<div class="agent-panel-summary-empty">No delegated tasks yet.</div>';
+        tasksEl.innerHTML = `<div class="agent-panel-summary-empty">${escapeHtml(t('subagent.no_tasks'))}</div>`;
         return;
     }
 
     tasksEl.innerHTML = tasks.map(task => `
         <div class="agent-panel-summary-task-row">
-            <span class="agent-panel-summary-task-title">${escapeHtml(task.title || task.task_id || 'Task')}</span>
+            <span class="agent-panel-summary-task-title">${escapeHtml(task.title || task.task_id || t('subagent.task'))}</span>
             <span class="agent-panel-summary-task-state is-${escapeAttribute(String(task.status || 'created'))}">
                 ${escapeHtml(humanizeStatus(task.status || 'created'))}
             </span>
@@ -151,7 +156,7 @@ function renderPanelSummary(panelEl, instanceId, roleId) {
 
 function humanizeStatus(value) {
     const safeValue = String(value || 'idle').trim();
-    if (!safeValue) return 'Idle';
+    if (!safeValue) return t('subagent.status_idle');
     return safeValue.charAt(0).toUpperCase() + safeValue.slice(1);
 }
 

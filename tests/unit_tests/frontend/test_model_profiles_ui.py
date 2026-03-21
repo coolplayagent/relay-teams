@@ -548,6 +548,7 @@ def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "modelProfiles.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -646,12 +647,26 @@ export async function showConfirmDialog(payload) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "settings.model.add_profile": "Add Profile",
+    "settings.model.edit_profile": "Edit Profile",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 

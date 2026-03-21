@@ -208,6 +208,7 @@ def _run_environment_variables_script(
 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "environmentVariables.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -279,6 +280,36 @@ export async function showConfirmDialog() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "settings.proxy.load_failed": "Load Failed",
+    "settings.env.no_app": "No app variables yet.",
+    "settings.env.app": "App Variables",
+    "settings.env.system": "System Variables",
+    "settings.env.hide": "Hide",
+    "settings.env.show": "Show",
+    "settings.env.no_system": "No system variables available.",
+    "settings.env.key": "Key",
+    "settings.env.value": "Value",
+    "settings.env.edit": "Edit",
+    "settings.env.delete": "Delete",
+    "settings.env.missing_key": "Missing Key",
+    "settings.env.missing_key_message": "Enter an environment variable key before saving.",
+    "settings.env.saved": "Environment Variable Saved",
+    "settings.env.save_failed": "Save Failed",
+    "settings.env.deleted": "Environment Variable Deleted",
+    "settings.env.delete_failed": "Delete Failed",
+    "settings.env.delete_title": "Delete Environment Variable",
+    "settings.env.load_failed_title": "Failed to load environment variables",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_logger_path.write_text(
         """
 export function errorToPayload(error, extra = {}) {
@@ -299,6 +330,7 @@ export function logError() {
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")

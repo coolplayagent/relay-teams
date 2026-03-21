@@ -209,6 +209,7 @@ def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     module_under_test_path = tmp_path / "sidebar.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
@@ -450,6 +451,39 @@ export async function showTextInputDialog(options = {}) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "sidebar.project": "Project",
+    "sidebar.sort_name": "Sort by name",
+    "sidebar.sort_recent": "Sort by recent",
+    "sidebar.new_project": "New project",
+    "sidebar.fork": "Fork",
+    "sidebar.remove": "Remove",
+    "sidebar.fork_project": "Fork Project",
+    "sidebar.fork_project_message": "Enter the name for the forked project.",
+    "sidebar.fork_project_placeholder": "Forked project name",
+    "sidebar.remove_workspace": "Remove Workspace",
+    "sidebar.remove_workspace_message": "Remove workspace {workspace}? This will also delete its sessions from the sidebar.",
+    "sidebar.remove_project_worktree": "Remove Project Worktree",
+    "sidebar.remove_project_worktree_message": "Delete the git worktree for {workspace} too? Choose Cancel to keep the worktree on disk.",
+    "sidebar.delete_worktree": "Delete Worktree",
+    "sidebar.keep_worktree": "Keep Worktree",
+    "sidebar.no_projects_title": "No projects yet",
+    "sidebar.no_projects_copy": "Add a project below to attach a workspace and start sessions.",
+    "sidebar.workspace": "Workspace",
+    "sidebar.project_options": "Project options",
+    "sidebar.new_session": "New session",
+    "sidebar.no_sessions": "No sessions yet",
+    "settings.action.cancel": "Cancel",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     mock_logger_path.write_text(
         """
@@ -593,6 +627,7 @@ export const state = {
         source_path.read_text(encoding="utf-8")
         .replace("../utils/dom.js", "./mockDom.mjs")
         .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("../core/state.js", "./mockState.mjs")

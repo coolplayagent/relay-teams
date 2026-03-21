@@ -312,6 +312,7 @@ def _run_system_status_script(
 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "systemStatus.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -324,6 +325,30 @@ def _run_system_status_script(
         """
 export function showToast(payload) {
     globalThis.__toasts.push(payload);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "settings.system.no_mcp": "No MCP servers loaded",
+    "settings.system.no_mcp_copy": "Add or enable a server, then reload to refresh the runtime view.",
+    "settings.system.no_skills": "No skills loaded",
+    "settings.system.no_skills_copy": "Reload after updating the configured skill directories.",
+    "settings.system.mcp_reloaded": "MCP Reloaded",
+    "settings.system.skills_reloaded": "Skills Reloaded",
+    "settings.system.reload_failed": "Reload Failed",
+    "settings.system.mcp_reloaded_message": "MCP config reloaded.",
+    "settings.system.skills_reloaded_message": "Skills reloaded.",
+    "settings.system.expand_all": "Expand all tools",
+    "settings.system.collapse_all": "Collapse all tools",
+    "settings.system.expand_tools": "Expand tools",
+    "settings.system.collapse_tools": "Collapse tools",
+};
+
+export function t(key) {
+    return translations[key] || key;
 }
 """.strip(),
         encoding="utf-8",
@@ -348,6 +373,7 @@ export function logError(eventName, message, payload) {
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")

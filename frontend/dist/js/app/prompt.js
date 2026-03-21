@@ -20,6 +20,7 @@ import {
 import { startIntentStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { showToast } from '../utils/feedback.js';
+import { t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
 const YOLO_STORAGE_KEY = 'agent_teams_yolo';
@@ -89,7 +90,9 @@ export function refreshSessionTopologyControls() {
     els.sessionModeOrchestrationBtn.classList.toggle('active', mode === 'orchestration');
 
     if (els.sessionModeLabel) {
-        els.sessionModeLabel.textContent = mode === 'orchestration' ? '编排模式' : '普通模式';
+        els.sessionModeLabel.textContent = mode === 'orchestration'
+            ? t('composer.mode_orchestration')
+            : t('composer.mode_normal');
     }
 
     if (els.orchestrationPresetField) {
@@ -203,9 +206,14 @@ function bindSessionTopologyControls() {
             void persistSessionTopology('orchestration', nextPresetId);
         });
     }
-    document.addEventListener('orchestration-settings-updated', () => {
-        void refreshOrchestrationConfig({ refreshControls: true });
-    });
+    if (typeof document.addEventListener === 'function') {
+        document.addEventListener('orchestration-settings-updated', () => {
+            void refreshOrchestrationConfig({ refreshControls: true });
+        });
+        document.addEventListener('agent-teams-language-changed', () => {
+            refreshSessionTopologyControls();
+        });
+    }
 }
 
 async function handleTopologyModeChange(nextMode) {
@@ -219,7 +227,7 @@ async function handleTopologyModeChange(nextMode) {
     if (normalizedMode === 'orchestration' && !resolveSelectedPresetId()) {
         showToast({
             title: 'No Preset Available',
-            message: 'Create an orchestration preset in Settings before switching to orchestration mode.',
+            message: resolveMissingPresetMessage(),
             tone: 'warning',
         });
         return;
@@ -241,7 +249,13 @@ async function persistSessionTopology(sessionMode, orchestrationPresetId) {
         });
         applyCurrentSessionRecord(updated);
         refreshSessionTopologyControls();
-        sysLog(`Session mode updated: ${sessionMode === 'orchestration' ? '编排模式' : '普通模式'}`);
+        sysLog(
+            `Session mode updated: ${
+                sessionMode === 'orchestration'
+                    ? t('composer.mode_orchestration')
+                    : t('composer.mode_normal')
+            }`,
+        );
     } catch (error) {
         refreshSessionTopologyControls();
         showToast({
@@ -254,7 +268,7 @@ async function persistSessionTopology(sessionMode, orchestrationPresetId) {
 
 function resolveTopologyDisabledReason({ canSwitch, hasPresets }) {
     if (!state.currentSessionId) {
-        return 'Select a session before changing the run mode.';
+        return t('composer.session_mode_title');
     }
     if (state.isGenerating) {
         return 'The session mode is locked while a run is active.';
@@ -263,7 +277,7 @@ function resolveTopologyDisabledReason({ canSwitch, hasPresets }) {
         return 'Only sessions that have not started their first run can switch mode.';
     }
     if (!hasPresets) {
-        return 'Create an orchestration preset in Settings before enabling orchestration mode.';
+        return resolveMissingPresetMessage();
     }
     return 'Only sessions that have not started their first run can switch mode.';
 }
@@ -284,7 +298,7 @@ function resolveSelectedPresetId() {
 function buildPresetOptions(selectedPresetId) {
     const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
     if (presets.length === 0) {
-        return '<option value="">No presets</option>';
+        return `<option value="">${escapeHtml(t('composer.no_presets'))}</option>`;
     }
     return presets.map(preset => {
         const presetId = String(preset?.preset_id || '').trim();
@@ -292,6 +306,10 @@ function buildPresetOptions(selectedPresetId) {
         const selected = presetId === selectedPresetId ? ' selected' : '';
         return `<option value="${escapeHtml(presetId)}"${selected}>${escapeHtml(name)}</option>`;
     }).join('');
+}
+
+function resolveMissingPresetMessage() {
+    return 'Create an orchestration preset in Settings before switching to Orchestrated Mode.';
 }
 
 function normalizeOrchestrationConfig(config) {

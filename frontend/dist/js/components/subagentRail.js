@@ -6,6 +6,7 @@ import { fetchSessionAgents, fetchSessionTasks } from '../core/api.js';
 import { isReservedSystemRoleId, state } from '../core/state.js';
 import { openAgentPanel } from './agentPanel.js';
 import { els } from '../utils/dom.js';
+import { t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
 const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
@@ -168,14 +169,16 @@ function updateSubagentSummary() {
     const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
     const runningCount = roles.filter(agent => String(agent.status || '') === 'running').length;
     const summary = roles.length === 0
-        ? 'idle / 0 roles'
-        : `${runningCount} running / ${roles.length} roles`;
+        ? t('subagent.summary_idle').replace('{roles}', '0')
+        : t('subagent.summary_running')
+            .replace('{running}', String(runningCount))
+            .replace('{roles}', String(roles.length));
     if (els.subagentStatusSummary) {
         els.subagentStatusSummary.textContent = summary;
     }
     if (els.toggleSubagentsBtn) {
         els.toggleSubagentsBtn.innerHTML = `
-            <span class="subagent-toggle-label">Subagents</span>
+            <span class="subagent-toggle-label">${t('topbar.subagents')}</span>
             <span class="subagent-toggle-summary">${summary}</span>
         `;
     }
@@ -189,7 +192,7 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
     const selectedRoleId = preserveSelection ? resolveSelectedRoleId() : resolveDefaultRoleId();
 
     if (roles.length === 0) {
-        select.innerHTML = '<option value="">No subagents</option>';
+        select.innerHTML = `<option value="">${escapeHtml(t('subagent.none'))}</option>`;
         select.disabled = true;
         state.selectedRoleId = null;
         return;

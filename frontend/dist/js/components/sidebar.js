@@ -16,6 +16,7 @@ import {
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
+import { t } from '../utils/i18n.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
 
@@ -28,6 +29,7 @@ const sessionWorkspaceMap = new Map();
 let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
+let languageRefreshBound = false;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
@@ -43,7 +45,8 @@ function escapeHtml(value) {
 }
 
 function formatProjectLabel(workspace) {
-    const workspaceId = String(workspace?.workspace_id || 'Project').trim() || 'Project';
+    const fallbackProject = t('sidebar.project');
+    const workspaceId = String(workspace?.workspace_id || fallbackProject).trim() || fallbackProject;
     if (String(workspace?.profile?.file_scope?.backend || '').trim() === 'git_worktree') {
         return workspaceId;
     }
@@ -166,7 +169,7 @@ function syncProjectSortButton() {
     if (!projectSortBtn) {
         return;
     }
-    const sortLabel = projectSortMode === 'name' ? 'Sort by name' : 'Sort by recent';
+    const sortLabel = projectSortMode === 'name' ? t('sidebar.sort_name') : t('sidebar.sort_recent');
     projectSortBtn.title = sortLabel;
     projectSortBtn.setAttribute('aria-label', sortLabel);
     projectSortBtn.dataset.sortMode = projectSortMode;
@@ -194,8 +197,8 @@ async function requestWorkspaceRootPath() {
         title: 'Enter Project Path',
         message: 'Native directory picker is unavailable. Enter an existing project directory path.',
         tone: 'info',
-        confirmLabel: 'Add Project',
-        cancelLabel: 'Cancel',
+        confirmLabel: t('sidebar.new_project'),
+        cancelLabel: t('settings.action.cancel'),
         placeholder: '/path/to/project',
     });
     const rootPath = String(enteredPath || '').trim();
@@ -217,8 +220,8 @@ function renderEmptyProjectsState() {
     const emptyState = document.createElement('div');
     emptyState.className = 'projects-empty-state';
     emptyState.innerHTML = `
-        <p class="projects-empty-title">No projects yet</p>
-        <p class="projects-empty-copy">Add a project below to attach a workspace and start sessions.</p>
+        <p class="projects-empty-title">${escapeHtml(t('sidebar.no_projects_title'))}</p>
+        <p class="projects-empty-copy">${escapeHtml(t('sidebar.no_projects_copy'))}</p>
     `;
     return emptyState;
 }
@@ -227,14 +230,14 @@ function renderProjectsToolbar() {
     const toolbar = document.createElement('div');
     toolbar.className = 'projects-toolbar';
     toolbar.innerHTML = `
-        <div class="projects-toolbar-title">Workspace</div>
+        <div class="projects-toolbar-title">${escapeHtml(t('sidebar.workspace'))}</div>
         <div class="projects-toolbar-actions">
-            <button class="sidebar-header-btn projects-toolbar-new-btn" type="button" title="New project" aria-label="New project">
+            <button class="sidebar-header-btn projects-toolbar-new-btn" type="button" title="${escapeHtml(t('sidebar.new_project'))}" aria-label="${escapeHtml(t('sidebar.new_project'))}">
                 <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                 </svg>
             </button>
-            <button class="sidebar-header-btn projects-toolbar-sort-btn" type="button" title="Sort by recent" aria-label="Sort by recent">
+            <button class="sidebar-header-btn projects-toolbar-sort-btn" type="button" title="${escapeHtml(t('sidebar.sort_recent'))}" aria-label="${escapeHtml(t('sidebar.sort_recent'))}">
                 <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                     <path d="M7 6h10M7 12h7M7 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                     <path d="M17 8l2-2 2 2M19 6v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -485,12 +488,12 @@ function renderProjectCard(group) {
                 <span class="project-title">${escapeHtml(workspaceLabel)}</span>
             </button>
             <div class="project-actions">
-                <button class="project-options-btn project-action-btn" type="button" title="Project options" aria-label="Project options">
+                <button class="project-options-btn project-action-btn" type="button" title="${escapeHtml(t('sidebar.project_options'))}" aria-label="${escapeHtml(t('sidebar.project_options'))}">
                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                         <path d="M6 12a1.25 1.25 0 1 0 0 .01M12 12a1.25 1.25 0 1 0 0 .01M18 12a1.25 1.25 0 1 0 0 .01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
                 </button>
-                <button class="project-new-session-btn project-action-btn" type="button" title="New session" aria-label="New session">
+                <button class="project-new-session-btn project-action-btn" type="button" title="${escapeHtml(t('sidebar.new_session'))}" aria-label="${escapeHtml(t('sidebar.new_session'))}">
                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                         <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
                     </svg>
@@ -506,13 +509,13 @@ function renderProjectCard(group) {
                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                 <path d="M7 5.5a2.5 2.5 0 1 1 2.36 3.32v1.36a4.5 4.5 0 0 0 2.64 4.1V6.82A2.5 2.5 0 1 1 14 4.5v9.78a4.5 4.5 0 0 0 2.64-4.1V8.82A2.5 2.5 0 1 1 18.5 9c0 3.16-2.6 5.74-6 5.98V18a2 2 0 1 1-1 0v-3.02C8.1 14.74 5.5 12.16 5.5 9a2.5 2.5 0 0 1 1.5-2.29" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
-                            <span>Fork</span>
+                            <span>${escapeHtml(t('sidebar.fork'))}</span>
                         </button>
                         <button class="project-remove-btn" type="button" role="menuitem">
                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                 <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
-                            <span>Remove</span>
+                            <span>${escapeHtml(t('sidebar.remove'))}</span>
                         </button>
                     </div>
                 `
@@ -557,7 +560,7 @@ function renderProjectCard(group) {
                         }).join('')
                         : `
                             <div class="project-empty-sessions">
-                                <p>No sessions yet</p>
+                                <p>${escapeHtml(t('sidebar.no_sessions'))}</p>
                             </div>
                         `
                 }
@@ -581,6 +584,12 @@ function renderProjectCard(group) {
 export async function loadProjects() {
     if (!els.projectsList) {
         return;
+    }
+    if (!languageRefreshBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            void loadProjects();
+        });
+        languageRefreshBound = true;
     }
 
     try {
@@ -678,14 +687,14 @@ export async function handleForkWorkspaceClick(workspace) {
     if (!workspaceId) {
         return;
     }
-    const suggestedName = `${formatProjectLabel(workspace)} Fork`;
+    const suggestedName = `${formatProjectLabel(workspace)} ${t('sidebar.fork')}`;
     const enteredName = await showTextInputDialog({
-        title: 'Fork Project',
-        message: 'Enter the name for the forked project.',
+        title: t('sidebar.fork_project'),
+        message: t('sidebar.fork_project_message'),
         tone: 'info',
-        confirmLabel: 'Fork',
-        cancelLabel: 'Cancel',
-        placeholder: 'Forked project name',
+        confirmLabel: t('sidebar.fork'),
+        cancelLabel: t('settings.action.cancel'),
+        placeholder: t('sidebar.fork_project_placeholder'),
         value: suggestedName,
     });
     const nextName = String(enteredName || '').trim();
@@ -714,11 +723,11 @@ export async function handleRemoveWorkspaceClick(workspace) {
     }
     const workspaceLabel = formatProjectLabel(workspace);
     const shouldDelete = await showConfirmDialog({
-        title: 'Remove Workspace',
-        message: `Remove workspace ${workspaceLabel}? This will also delete its sessions from the sidebar.`,
+        title: t('sidebar.remove_workspace'),
+        message: t('sidebar.remove_workspace_message').replace('{workspace}', workspaceLabel),
         tone: 'warning',
-        confirmLabel: 'Remove',
-        cancelLabel: 'Cancel',
+        confirmLabel: t('sidebar.remove'),
+        cancelLabel: t('settings.action.cancel'),
     });
     if (!shouldDelete) {
         return;
@@ -727,11 +736,11 @@ export async function handleRemoveWorkspaceClick(workspace) {
     let removeWorktree = false;
     if (isForkedWorkspace(workspace)) {
         removeWorktree = await showConfirmDialog({
-            title: 'Remove Project Worktree',
-            message: `Delete the git worktree for ${workspaceLabel} too? Choose Cancel to keep the worktree on disk.`,
+            title: t('sidebar.remove_project_worktree'),
+            message: t('sidebar.remove_project_worktree_message').replace('{workspace}', workspaceLabel),
             tone: 'warning',
-            confirmLabel: 'Delete Worktree',
-            cancelLabel: 'Keep Worktree',
+            confirmLabel: t('sidebar.delete_worktree'),
+            cancelLabel: t('sidebar.keep_worktree'),
         });
     }
 

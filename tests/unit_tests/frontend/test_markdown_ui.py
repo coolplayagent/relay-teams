@@ -64,6 +64,7 @@ def _run_markdown_script(tmp_path: Path, runner_source: str) -> dict[str, str]:
     source_path = repo_root / "frontend" / "dist" / "js" / "utils" / "markdown.js"
 
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "markdown.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -75,9 +76,26 @@ export function showToast() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "composer.thinking": "Thinking",
+    "thinking.live": "Live",
+    "markdown.copy": "Copy",
+    "markdown.copied": "Copied",
+};
 
-    source_text = source_path.read_text(encoding="utf-8").replace(
-        "./feedback.js", "./mockFeedback.mjs"
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("./feedback.js", "./mockFeedback.mjs")
+        .replace("./i18n.js", "./mockI18n.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
     runner_path.write_text(runner_source, encoding="utf-8")

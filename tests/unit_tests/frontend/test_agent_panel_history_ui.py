@@ -183,6 +183,7 @@ def _run_history_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     replacements = {
         "../../core/api.js": "./mockApi.mjs",
         "../../core/state.js": "./mockState.mjs",
+        "../../utils/i18n.js": "./mockI18n.mjs",
         "../messageRenderer.js": "./mockMessageRenderer.mjs",
         "./state.js": "./mockPanelState.mjs",
     }
@@ -237,6 +238,28 @@ export function getInstanceStreamOverlay() {
 
 export function renderHistoricalMessageList() {
     return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+const translations = {
+    "subagent.no_snapshot": "No snapshot yet",
+    "subagent.no_runtime_prompt": "No runtime system prompt yet.",
+    "subagent.no_runtime_tools": "No runtime tools snapshot yet.",
+    "subagent.prompt_lines": "{count} lines",
+    "subagent.tools_count": "{count} tools",
+    "subagent.json_snapshot": "JSON snapshot",
+    "subagent.no_reflection": "No reflection yet",
+    "subagent.no_reflection_memory": "No reflection memory yet.",
+    "subagent.no_tasks": "No delegated tasks yet.",
+    "subagent.task": "Task",
+    "subagent.status_idle": "Idle",
+};
+
+export function t(key) {
+    return translations[key] || key;
 }
 """.strip(),
         encoding="utf-8",

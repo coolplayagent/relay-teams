@@ -8,9 +8,11 @@ import {
     saveProxyConfig,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let lastProbeState = null;
+let languageBound = false;
 
 export function bindProxySettingsHandlers() {
     const saveBtn = document.getElementById('save-proxy-btn');
@@ -21,6 +23,12 @@ export function bindProxySettingsHandlers() {
     const probeBtn = document.getElementById('test-proxy-web-btn');
     if (probeBtn) {
         probeBtn.onclick = handleProbeWeb;
+    }
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            renderProxyProbeState();
+        });
+        languageBound = true;
     }
 }
 
@@ -36,7 +44,7 @@ export async function loadProxyStatusPanel() {
             errorToPayload(e),
         );
         showToast({
-            title: 'Load Failed',
+            title: t('settings.proxy.load_failed'),
             message: `Failed to load proxy config: ${e.message}`,
             tone: 'danger',
         });
@@ -47,14 +55,14 @@ async function handleSaveProxy() {
     try {
         await saveProxyConfig(readProxyFormValues());
         showToast({
-            title: 'Proxy Saved',
-            message: 'Proxy settings saved and reloaded.',
+            title: t('settings.proxy.saved'),
+            message: t('settings.proxy.saved_message'),
             tone: 'success',
         });
         await loadProxyStatusPanel();
     } catch (e) {
         showToast({
-            title: 'Save Failed',
+            title: t('settings.proxy.save_failed'),
             message: `Failed to save proxy config: ${e.message}`,
             tone: 'danger',
         });
@@ -73,7 +81,7 @@ async function handleProbeWeb() {
     if (!url) {
         lastProbeState = {
             status: 'failed',
-            message: 'Enter a target URL before testing connectivity.',
+            message: t('settings.proxy.enter_url'),
         };
         renderProxyProbeState();
         return;
@@ -81,7 +89,7 @@ async function handleProbeWeb() {
 
     lastProbeState = {
         status: 'probing',
-        message: 'Testing connectivity...',
+        message: t('settings.proxy.testing_message'),
     };
     renderProxyProbeState();
 
@@ -130,7 +138,7 @@ function renderProxyProbeState() {
         statusEl.textContent = '';
         statusEl.className = 'proxy-probe-status';
         probeBtn.disabled = false;
-        probeBtn.textContent = 'Test URL';
+        probeBtn.textContent = t('settings.proxy.test_url');
         return;
     }
 
@@ -138,7 +146,9 @@ function renderProxyProbeState() {
     statusEl.textContent = lastProbeState.message;
     statusEl.className = `proxy-probe-status probe-status probe-status-${lastProbeState.status}`;
     probeBtn.disabled = lastProbeState.status === 'probing';
-    probeBtn.textContent = lastProbeState.status === 'probing' ? 'Testing...' : 'Test URL';
+    probeBtn.textContent = lastProbeState.status === 'probing'
+        ? t('settings.proxy.testing')
+        : t('settings.proxy.test_url');
 }
 
 function writeProxyFormValues(config) {

@@ -4,6 +4,7 @@
  */
 import { resolveGate } from '../../core/api.js';
 import { state } from '../../core/state.js';
+import { t } from '../../utils/i18n.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import { closeDrawerUi, getDrawer, openDrawerUi } from './dom.js';
 import { schedulePanelContextPreview } from '../contextIndicators.js';
@@ -130,7 +131,7 @@ function _resetRailHeader() {
     const railReflect = document.getElementById('subagent-rail-reflect');
     const railStop = document.getElementById('subagent-rail-stop');
 
-    if (nameEl) nameEl.textContent = 'Subagents';
+    if (nameEl) nameEl.textContent = t('subagent.header');
     if (idEl) idEl.textContent = '';
     if (railTokenBadge) railTokenBadge.innerHTML = '';
     if (railReflect) { railReflect.hidden = true; railReflect.onclick = null; }
@@ -154,16 +155,16 @@ export function showGateCard(instanceId, roleId, gatePayload) {
     card.className = 'gate-card';
     card.dataset.taskId = task_id;
     card.innerHTML = `
-        <div class="gate-header">Sub-task completed - please confirm</div>
+        <div class="gate-header">${t('subagent.gate_header')}</div>
         <div class="gate-summary">${parseMarkdown(summary || '')}</div>
-        <div class="gate-role">Role: <strong>${role_id || roleId || ''}</strong></div>
+        <div class="gate-role">${t('subagent.gate_role')} <strong>${role_id || roleId || ''}</strong></div>
         <div class="gate-actions">
-            <button class="gate-approve-btn">Approve</button>
-            <button class="gate-revise-btn">Request Revision</button>
+            <button class="gate-approve-btn">${t('subagent.gate_approve')}</button>
+            <button class="gate-revise-btn">${t('subagent.gate_revise')}</button>
         </div>
         <div class="gate-feedback-area" style="display:none">
-            <textarea class="gate-feedback-input" placeholder="Please describe required changes..." rows="3"></textarea>
-            <button class="gate-submit-revise-btn">Submit</button>
+            <textarea class="gate-feedback-input" placeholder="${t('subagent.gate_feedback_placeholder')}" rows="3"></textarea>
+            <button class="gate-submit-revise-btn">${t('subagent.gate_submit')}</button>
         </div>
     `;
 

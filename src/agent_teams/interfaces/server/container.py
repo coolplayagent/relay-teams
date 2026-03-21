@@ -24,6 +24,7 @@ from agent_teams.env.environment_variable_service import EnvironmentVariableServ
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
+from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
@@ -113,6 +114,9 @@ class ServerContainer:
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
+        )
+        self.ui_language_settings_service = UiLanguageSettingsService(
+            config_dir=config_dir
         )
         self.environment_variable_service: EnvironmentVariableService = (
             EnvironmentVariableService()

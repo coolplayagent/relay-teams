@@ -43,6 +43,7 @@ export {
     deleteEnvironmentVariable,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchUiLanguageSettings,
     fetchEnvironmentVariables,
     fetchMcpServerTools,
     fetchModelConfig,
@@ -64,6 +65,7 @@ export {
     saveNotificationConfig,
     saveOrchestrationConfig,
     saveProxyConfig,
+    saveUiLanguageSettings,
 } from './system.js';
 
 export {

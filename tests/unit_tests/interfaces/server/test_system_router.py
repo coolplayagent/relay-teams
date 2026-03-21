@@ -15,6 +15,11 @@ from agent_teams.interfaces.server.deps import (
     get_orchestration_settings_service,
     get_proxy_config_service,
     get_skills_config_reload_service,
+    get_ui_language_settings_service,
+)
+from agent_teams.interfaces.server.ui_language_models import (
+    UiLanguage,
+    UiLanguageSettings,
 )
 from agent_teams.interfaces.server.routers import system
 from agent_teams.providers.model_connectivity import (
@@ -32,10 +37,21 @@ class _FakeSystemService:
             None
         )
         self.saved_proxy_config: dict[str, object] | None = None
+        self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
 
     def get_config_status(self) -> dict[str, object]:
         return {"model": {"loaded": True}}
+
+    def get_ui_language_settings(self) -> UiLanguageSettings:
+        return UiLanguageSettings(language=UiLanguage.ZH_CN)
+
+    def save_ui_language_settings(
+        self,
+        settings: UiLanguageSettings,
+    ) -> UiLanguageSettings:
+        self.saved_ui_language_settings = settings.model_dump(mode="json")
+        return settings
 
     def get_model_config(self) -> dict[str, object]:
         return {}
@@ -229,6 +245,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
+    app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -239,6 +256,29 @@ def test_get_notification_config() -> None:
     payload = response.json()
     assert payload["tool_approval_requested"]["enabled"] is True
     assert payload["run_completed"]["channels"] == ["toast"]
+
+
+def test_get_ui_language_settings() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/ui-language")
+
+    assert response.status_code == 200
+    assert response.json() == {"language": "zh-CN"}
+
+
+def test_save_ui_language_settings() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/ui-language",
+        json={"language": "en-US"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_ui_language_settings == {"language": "en-US"}
 
 
 def test_save_model_profile_includes_connect_timeout_seconds() -> None:

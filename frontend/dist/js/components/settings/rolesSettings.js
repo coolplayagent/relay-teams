@@ -12,6 +12,7 @@ import {
 } from '../../core/api.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import { showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let roleSummaries = [];
@@ -33,6 +34,7 @@ let currentSelections = {
     mcp_servers: [],
     skills: [],
 };
+let languageBound = false;
 
 export function bindRoleSettingsHandlers() {
     bindActionButton('add-role-btn', handleAddRole);
@@ -49,6 +51,12 @@ export function bindRoleSettingsHandlers() {
                 renderPromptPreview();
             }
         };
+    }
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            renderRolesList();
+        });
+        languageBound = true;
     }
 }
 
@@ -158,7 +166,7 @@ function renderRolesList() {
                     </div>
                 </div>
                 <div class="role-record-actions">
-                    <button class="settings-inline-action settings-list-action role-record-edit-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">Edit</button>
+                    <button class="settings-inline-action settings-list-action role-record-edit-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
                 </div>
             </div>
         `)
@@ -214,16 +222,18 @@ function applyRoleRecord(record) {
     setInputValue('role-description-input', record.description || '');
     setInputValue('role-version-input', record.version || '');
     renderModelProfileSelect(record.model_profile || 'default');
-    renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, 'No tools loaded.');
-    renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, 'No MCP servers loaded.');
-    renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, 'No skills loaded.');
+    renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+    renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
+    renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, t('settings.roles.no_skills'));
     renderMemoryProfileSelects(currentMemoryProfile);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
     setPromptPreviewMode('edit');
 
     const fileMetaEl = document.getElementById('role-file-meta');
     if (fileMetaEl) {
-        fileMetaEl.textContent = record.file_name ? `File: ${record.file_name}` : 'New role';
+        fileMetaEl.textContent = record.file_name
+            ? t('settings.roles.file_label').replace('{file}', record.file_name)
+            : t('settings.roles.new_role');
     }
     renderRoleStatus('', '');
     applyReservedRoleUi(record);
@@ -249,8 +259,8 @@ function applyReservedRoleUi(record) {
     statusEl.style.display = 'block';
     statusEl.className = 'role-editor-status';
     statusEl.textContent = roleId === roleConfigOptions.main_agent_role_id
-        ? 'Main Agent keeps a fixed identity. Its base prompt is edited here and is only used in normal mode.'
-        : 'Coordinator keeps a fixed identity. Its base prompt is edited here and is combined with the selected preset orchestration prompt in orchestration mode.';
+        ? t('settings.roles.main_agent_fixed')
+        : t('settings.roles.coordinator_fixed');
 }
 
 function renderOptionPicker(containerId, availableValues, selectedValues, emptyMessage) {
@@ -317,8 +327,8 @@ function renderBooleanSelect(id, selected) {
     const selectEl = document.getElementById(id);
     if (!selectEl) return;
     selectEl.innerHTML = [
-        `<option value="true"${selected ? ' selected' : ''}>Enabled</option>`,
-        `<option value="false"${selected ? '' : ' selected'}>Disabled</option>`,
+        `<option value="true"${selected ? ' selected' : ''}>${escapeHtml(t('settings.field.enabled'))}</option>`,
+        `<option value="false"${selected ? '' : ' selected'}>${escapeHtml(t('settings.roles.disabled'))}</option>`,
     ].join('');
 }
 
@@ -368,8 +378,8 @@ function renderModelProfileSelect(selectedProfile) {
 }
 
 function renderEmptyRolesList(
-    title = 'No roles found',
-    description = 'Add a role to edit its metadata and prompt.',
+    title = t('settings.roles.none'),
+    description = t('settings.roles.none_copy'),
 ) {
     const listEl = document.getElementById('roles-list');
     const editorPanel = document.getElementById('role-editor-panel');
@@ -417,17 +427,17 @@ async function handleValidateRole() {
     try {
         const draft = buildDraftFromForm();
         const result = await validateRoleConfig(draft);
-        renderRoleStatus('Validated successfully.', 'success');
+        renderRoleStatus(t('settings.roles.validated_message'), 'success');
         showToast({
-            title: 'Role Validated',
-            message: `${result.role.role_id} passed validation.`,
+            title: t('settings.roles.validated'),
+            message: t('settings.roles.validated_toast').replace('{role_id}', result.role.role_id),
             tone: 'success',
         });
     } catch (error) {
-        renderRoleStatus(error.message || 'Validation failed.', 'danger');
+        renderRoleStatus(error.message || t('settings.roles.validation_failed_message'), 'danger');
         showToast({
-            title: 'Validation Failed',
-            message: error.message || 'Failed to validate role config.',
+            title: t('settings.roles.validation_failed'),
+            message: error.message || t('settings.roles.validation_failed_toast'),
             tone: 'danger',
         });
     }
@@ -440,17 +450,17 @@ async function handleSaveRole() {
         selectedRoleId = saved.role_id;
         selectedSourceRoleId = saved.role_id;
         showToast({
-            title: 'Role Saved',
-            message: `${saved.role_id} saved and reloaded.`,
+            title: t('settings.roles.saved'),
+            message: t('settings.roles.saved_toast').replace('{role_id}', saved.role_id),
             tone: 'success',
         });
         await loadRoleSettingsPanel(saved.role_id);
-        renderRoleStatus('Saved and validated.', 'success');
+        renderRoleStatus(t('settings.roles.saved_message'), 'success');
     } catch (error) {
-        renderRoleStatus(error.message || 'Save failed.', 'danger');
+        renderRoleStatus(error.message || t('settings.roles.save_failed_message'), 'danger');
         showToast({
-            title: 'Save Failed',
-            message: error.message || 'Failed to save role config.',
+            title: t('settings.roles.save_failed'),
+            message: error.message || t('settings.roles.save_failed_toast'),
             tone: 'danger',
         });
     }
@@ -623,7 +633,7 @@ function formatDefaultProfileOptionLabel() {
     if (!defaultModelProfileName || defaultModelProfileName === 'default') {
         return 'default';
     }
-    return `default (current: ${defaultModelProfileName})`;
+    return t('settings.roles.default_current').replace('{profile}', defaultModelProfileName);
 }
 
 function isReservedSystemRoleId(roleId) {
@@ -635,10 +645,10 @@ function isReservedSystemRoleId(roleId) {
 function renderRoleUsageChips(roleId) {
     const safeRoleId = String(roleId || '').trim();
     if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
-        return '<div class="profile-card-chips role-record-chips"><span class="profile-card-chip profile-card-chip-accent">Normal Mode</span></div>';
+        return `<div class="profile-card-chips role-record-chips"><span class="profile-card-chip profile-card-chip-accent">${escapeHtml(t('composer.mode_normal'))}</span></div>`;
     }
     if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
-        return '<div class="profile-card-chips role-record-chips"><span class="profile-card-chip">Orchestration</span></div>';
+        return `<div class="profile-card-chips role-record-chips"><span class="profile-card-chip">${escapeHtml(t('settings.tab.orchestration'))}</span></div>`;
     }
     return '';
 }
@@ -646,10 +656,10 @@ function renderRoleUsageChips(roleId) {
 function renderRoleUsageMeta(roleId) {
     const safeRoleId = String(roleId || '').trim();
     if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
-        return '<span>Main Agent only</span>';
+        return `<span>${escapeHtml(t('settings.roles.main_agent_only'))}</span>`;
     }
     if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
-        return '<span>Coordinator root</span>';
+        return `<span>${escapeHtml(t('settings.roles.coordinator_root'))}</span>`;
     }
     return '';
 }
@@ -657,10 +667,10 @@ function renderRoleUsageMeta(roleId) {
 function buildReservedPromptTitle(roleId) {
     const safeRoleId = String(roleId || '').trim();
     if (safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim()) {
-        return 'Main Agent base prompt is edited here and used only in normal mode.';
+        return t('settings.roles.main_agent_title');
     }
     if (safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()) {
-        return 'Coordinator base prompt is edited here and combined with the selected preset orchestration prompt in orchestration mode.';
+        return t('settings.roles.coordinator_title');
     }
     return '';
 }
@@ -678,4 +688,3 @@ function setActionDisplay(id, visible) {
         button.style.display = visible ? 'inline-flex' : 'none';
     }
 }
-

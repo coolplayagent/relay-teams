@@ -23,6 +23,7 @@ export const els = {
     rightRailResizer: qs('#right-rail-resizer'),
     newProjectBtn: qs('#new-project-btn'),
     projectSortBtn: qs('#project-sort-btn'),
+    languageToggleBtn: qs('#language-toggle-btn'),
     themeToggleBtn: qs('#toggle-theme'),
     toggleSubagentsBtn: qs('#toggle-subagents'),
     backendStatus: qs('#backend-status'),

@@ -8,6 +8,22 @@ export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
 }
 
+export async function fetchUiLanguageSettings() {
+    return requestJson('/api/system/configs/ui-language', undefined, 'Failed to fetch UI language');
+}
+
+export async function saveUiLanguageSettings(payload) {
+    return requestJson(
+        '/api/system/configs/ui-language',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save UI language',
+    );
+}
+
 export async function fetchEnvironmentVariables() {
     return requestJson(
         '/api/system/configs/environment-variables',

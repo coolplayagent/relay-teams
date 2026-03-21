@@ -4,6 +4,7 @@
  * built-in fallback for offline environments.
  */
 import { showToast } from './feedback.js';
+import { t } from './i18n.js';
 
 let markdownInteractionsBound = false;
 let markedConfigured = false;
@@ -44,7 +45,7 @@ export function parseMarkdown(source = '') {
     rendered = rendered.replace(/::THINK_START::/g, () => {
         thinkBlockCount++;
         const isOpen = isStreamingThink && thinkBlockCount === totalThinkBlocks;
-        return `<details class="thinking-block"${isOpen ? ' open' : ''}><summary class="thinking-summary"><span class="thinking-label">Thinking</span><span class="thinking-live" style="display:${isOpen ? 'inline-flex' : 'none'};">Live</span></summary><div class="thinking-body"><div class="msg-text thinking-text">`;
+        return `<details class="thinking-block"${isOpen ? ' open' : ''}><summary class="thinking-summary"><span class="thinking-label">${escapeHtml(t('composer.thinking'))}</span><span class="thinking-live" style="display:${isOpen ? 'inline-flex' : 'none'};">${escapeHtml(t('thinking.live'))}</span></summary><div class="thinking-body"><div class="msg-text thinking-text">`;
     });
     rendered = rendered.replace(/::THINK_END::/g, '</div></div></details>');
 
@@ -71,10 +72,10 @@ export function parseMarkdown(source = '') {
         const copyButton = document.createElement('button');
         copyButton.type = 'button';
         copyButton.className = 'markdown-code-copy';
-        copyButton.dataset.copyLabel = 'Copy';
-        copyButton.dataset.copiedLabel = 'Copied';
-        copyButton.textContent = 'Copy';
-        copyButton.setAttribute('aria-label', `Copy ${formatCodeLanguage(language)} code`);
+        copyButton.dataset.copyLabel = t('markdown.copy');
+        copyButton.dataset.copiedLabel = t('markdown.copied');
+        copyButton.textContent = t('markdown.copy');
+        copyButton.setAttribute('aria-label', `${t('markdown.copy')} ${formatCodeLanguage(language)} code`);
         header.appendChild(copyButton);
 
         pre.parentNode?.insertBefore(wrapper, pre);

@@ -101,6 +101,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert '<div class="workspace-title">agent-teams</div>' in index_html
     assert 'id="backend-status"' in index_html
     assert 'id="backend-status-label"' in index_html
+    assert 'id="language-toggle-btn"' in index_html
+    assert index_html.index('id="language-toggle-btn"') < index_html.index(
+        'id="settings-btn"'
+    )
     assert 'id="main-context-indicator"' in index_html
     assert 'id="session-mode-lock"' in index_html
     assert 'id="session-mode-normal-btn"' in index_html

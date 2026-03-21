@@ -32,20 +32,21 @@
                 </div>
             </div>
             <div class="topbar-section topbar-section-right">
-                <button id="settings-btn" class="icon-btn" title="Settings">
+                <button id="language-toggle-btn" class="language-toggle-btn" type="button" title="Switch language" aria-label="Switch language">EN</button>
+                <button id="settings-btn" class="icon-btn" title="Settings" data-i18n-title="topbar.settings_title" data-i18n-aria-label="topbar.settings_title">
                     <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                         <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2" />
                         <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2" />
                     </svg>
                 </button>
-                <button id="toggle-theme" class="icon-btn" title="Toggle Theme">
+                <button id="toggle-theme" class="icon-btn" title="Toggle Theme" data-i18n-title="topbar.theme_title" data-i18n-aria-label="topbar.theme_title">
                     <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
                 </button>
-                <button id="toggle-subagents" class="subagent-toggle-btn" title="Toggle Subagents">
-                    <span class="subagent-toggle-label">Subagents</span>
+                <button id="toggle-subagents" class="subagent-toggle-btn" title="Toggle Subagents" data-i18n-title="topbar.subagents_title">
+                    <span class="subagent-toggle-label" data-i18n="topbar.subagents">Subagents</span>
                     <span class="subagent-toggle-summary">idle / 0 roles</span>
                 </button>
             </div>
@@ -60,7 +61,7 @@
                         <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                             stroke-linejoin="round" />
                     </svg>
-                    Back
+                    <span data-i18n="sidebar.back">Back</span>
                 </button>
 
                 <div class="rounds-list" id="rounds-list" style="display: none;"></div>
@@ -69,7 +70,7 @@
                 <div class="sidebar-footer">
                     <div id="backend-status" class="status-indicator checking">
                         <span></span>
-                        <span id="backend-status-label">Checking backend...</span>
+                        <span id="backend-status-label" data-i18n="sidebar.backend_checking">Checking backend...</span>
                     </div>
                 </div>
             </aside>
@@ -87,52 +88,52 @@
                     <div id="recovery-banner-host" class="recovery-banner-host" style="display:none;"></div>
                     <form id="chat-form">
                         <div class="input-wrapper">
-                            <textarea id="prompt-input" placeholder="What would you like the agents to do?" rows="1"
+                            <textarea id="prompt-input" placeholder="What would you like the agents to do?" data-i18n-placeholder="composer.placeholder" rows="1"
                                 required></textarea>
-                            <div id="main-context-indicator" class="context-indicator" data-state="idle" title="Latest provider context usage">-- / --</div>
-                            <button type="submit" id="send-btn" title="Send (Enter)">
+                            <div id="main-context-indicator" class="context-indicator" data-state="idle" title="Latest provider context usage" data-i18n-title="composer.context_title">-- / --</div>
+                            <button type="submit" id="send-btn" title="Send (Enter)" data-i18n-title="composer.send_title">
                                 <svg viewBox="0 0 24 24" fill="none">
                                     <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z" stroke="currentColor"
                                         stroke-width="2" stroke-linejoin="round" />
                                 </svg>
                             </button>
-                            <button type="button" id="stop-btn" title="Stop run" style="display:none;">
+                            <button type="button" id="stop-btn" title="Stop run" data-i18n-title="composer.stop_title" style="display:none;">
                                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                     <rect x="7" y="7" width="10" height="10" rx="2" stroke="currentColor" stroke-width="2" />
                                 </svg>
-                                <span>Stop</span>
+                                <span data-i18n="composer.stop">Stop</span>
                             </button>
-                            <div id="prompt-input-hint" class="input-footer-hint">Enter to send · Shift+Enter for new line</div>
+                            <div id="prompt-input-hint" class="input-footer-hint" data-i18n="composer.hint">Enter to send · Shift+Enter for new line</div>
                         </div>
                     </form>
                     <div class="input-controls">
-                        <div class="composer-topology" id="session-mode-lock" title="Select a session before changing the run mode.">
-                            <span class="composer-topology-label" id="session-mode-label">普通模式</span>
-                            <div class="composer-segmented" role="group" aria-label="Session mode">
-                                <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn">普通模式</button>
-                                <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn">编排模式</button>
+                        <div class="composer-topology" id="session-mode-lock" title="Select a session before changing the run mode." data-i18n-title="composer.session_mode_title">
+                            <span class="composer-topology-label" id="session-mode-label" data-i18n="composer.mode_normal">普通模式</span>
+                            <div class="composer-segmented" role="group" aria-label="Session mode" data-i18n-aria-label="composer.session_mode">
+                                <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn" data-i18n="composer.mode_normal">普通模式</button>
+                                <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn" data-i18n="composer.mode_orchestration">编排模式</button>
                             </div>
                             <label class="composer-preset-field" id="orchestration-preset-field" hidden>
-                                <span class="composer-preset-label">预设</span>
+                                <span class="composer-preset-label" data-i18n="composer.preset">预设</span>
                                 <select id="orchestration-preset-select" class="composer-preset-select">
-                                    <option value="">No presets</option>
+                                    <option value="" data-i18n="composer.no_presets">No presets</option>
                                 </select>
                             </label>
                         </div>
-                        <label class="composer-mode-toggle" for="yolo-toggle" title="开启后所有工具调用都不需审核">
+                        <label class="composer-mode-toggle" for="yolo-toggle" title="开启后所有工具调用都不需审核" data-i18n-title="composer.yolo_title">
                             <input type="checkbox" id="yolo-toggle" checked>
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
                                 <span class="composer-mode-title">YOLO</span>
                             </span>
                         </label>
-                        <label class="composer-mode-toggle has-inline-select" for="thinking-mode-toggle" title="关掉后是否仍思考由后端决定；Effort 生效取决于后端支持">
+                        <label class="composer-mode-toggle has-inline-select" for="thinking-mode-toggle" title="关掉后是否仍思考由后端决定；Effort 生效取决于后端支持" data-i18n-title="composer.thinking_title">
                             <input type="checkbox" id="thinking-mode-toggle">
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
-                                <span class="composer-mode-title">Thinking</span>
+                                <span class="composer-mode-title" data-i18n="composer.thinking">Thinking</span>
                                 <span class="composer-mode-inline">
-                                    <span class="composer-mode-inline-label">Effort</span>
+                                    <span class="composer-mode-inline-label" data-i18n="composer.effort">Effort</span>
                                     <select id="thinking-effort-select" class="composer-mode-inline-select">
                                         <option value="minimal">Minimal</option>
                                         <option value="low">Low</option>
@@ -142,7 +143,7 @@
                                 </span>
                             </span>
                         </label>
-                        <div id="session-token-usage" class="session-token-usage" title="Session token usage">Tokens --</div>
+                        <div id="session-token-usage" class="session-token-usage" title="Session token usage" data-i18n-title="composer.tokens_title" data-i18n="composer.tokens">Tokens --</div>
                     </div>
                 </div>
                 </div>
@@ -152,18 +153,18 @@
             <aside class="right-rail" id="right-rail">
                 <section class="rail-subagent-card">
                     <div class="subagent-rail-header">
-                        <span class="subagent-rail-agent-name" id="subagent-rail-agent-name">Subagents</span>
+                        <span class="subagent-rail-agent-name" id="subagent-rail-agent-name" data-i18n="subagent.header">Subagents</span>
                         <span class="subagent-rail-agent-id" id="subagent-rail-agent-id"></span>
                         <select id="subagent-role-select" class="subagent-role-select" disabled>
-                            <option value="">No subagents</option>
+                            <option value="" data-i18n="subagent.none">No subagents</option>
                         </select>
                         <div id="subagent-rail-token-badge" class="subagent-rail-token-badge"></div>
-                        <button id="subagent-rail-reflect" class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory" hidden>Reflect</button>
-                        <button id="subagent-rail-stop" class="agent-panel-stop" type="button" title="Stop this subagent" hidden>Stop</button>
+                        <button id="subagent-rail-reflect" class="agent-panel-refresh-reflection" type="button" title="Refresh reflection memory" data-i18n-title="subagent.reflect_title" data-i18n="subagent.reflect" hidden>Reflect</button>
+                        <button id="subagent-rail-stop" class="agent-panel-stop" type="button" title="Stop this subagent" data-i18n-title="subagent.stop_title" data-i18n="subagent.stop" hidden>Stop</button>
                         <span id="subagent-status-summary" class="subagent-status-summary">--</span>
                     </div>
                     <div id="subagent-role-meta" class="subagent-role-meta">
-                        <div class="subagent-meta-empty">No delegated subagent instances in this session.</div>
+                        <div class="subagent-meta-empty" data-i18n="subagent.empty">No delegated subagent instances in this session.</div>
                     </div>
                     <aside class="agent-drawer open" id="agent-drawer"></aside>
                 </section>
@@ -171,8 +172,8 @@
                 <section class="rail-inspector-card" id="rail-inspector">
                     <div id="inspector-panel" class="inspector-panel">
                         <div class="inspector-header">
-                            <h4>System Logs</h4>
-                            <button id="toggle-inspector" class="icon-btn" title="Toggle Logs">
+                            <h4 data-i18n="inspector.system_logs">System Logs</h4>
+                            <button id="toggle-inspector" class="icon-btn" title="Toggle Logs" data-i18n-title="inspector.toggle_logs_title" data-i18n-aria-label="inspector.toggle_logs_title">
                                 <svg viewBox="0 0 24 24" fill="none" class="icon">
                                     <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                                 </svg>

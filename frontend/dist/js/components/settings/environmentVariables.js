@@ -8,6 +8,7 @@ import {
     saveEnvironmentVariable,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const DEFAULT_EXPANDED_SCOPES = {
@@ -40,11 +41,18 @@ let environmentState = {
         sourceKey: '',
     },
 };
+let languageBound = false;
 
 export function bindEnvironmentVariableSettingsHandlers() {
     bindActionButton('add-env-btn', handleAddEnvironmentVariable);
     bindActionButton('save-env-btn', handleSaveEnvironmentVariable);
     bindActionButton('cancel-env-btn', handleCancelEnvironmentVariable);
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            renderEnvironmentVariablesPanel();
+        });
+        languageBound = true;
+    }
 }
 
 export async function loadEnvironmentVariablesPanel() {
@@ -74,7 +82,7 @@ export async function loadEnvironmentVariablesPanel() {
             error?.message || 'Unable to load environment variables.',
         );
         showToast({
-            title: 'Load Failed',
+            title: t('settings.proxy.load_failed'),
             message: `Failed to load environment variables: ${error.message}`,
             tone: 'danger',
         });
@@ -161,7 +169,7 @@ function renderAppEnvironmentScope(records) {
     const recordsMarkup =
         records.length === 0 && !environmentState.editor.visible
             ? `
-                <div class="env-scope-empty">No app variables yet.</div>
+                <div class="env-scope-empty">${escapeHtml(t('settings.env.no_app'))}</div>
             `
             : `
                 <div class="env-records">
@@ -183,7 +191,7 @@ function renderAppEnvironmentScope(records) {
 
     return `
         <section class="env-scope-section" data-env-scope="app">
-            <div class="env-scope-heading">App Variables</div>
+            <div class="env-scope-heading">${escapeHtml(t('settings.env.app'))}</div>
             <div class="env-scope-content" style="display:block;">
                 ${recordsMarkup}
             </div>
@@ -196,14 +204,14 @@ function renderSystemEnvironmentScope(records) {
     return `
         <section class="env-scope-section" data-env-scope="system">
             <button class="env-scope-toggle" data-env-toggle-scope="system" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
-                <span class="env-scope-toggle-title">System Variables</span>
-                <span class="env-scope-toggle-icon">${expanded ? 'Hide' : 'Show'}</span>
+                <span class="env-scope-toggle-title">${escapeHtml(t('settings.env.system'))}</span>
+                <span class="env-scope-toggle-icon">${expanded ? escapeHtml(t('settings.env.hide')) : escapeHtml(t('settings.env.show'))}</span>
             </button>
             <div class="env-scope-content" style="display:${expanded ? 'block' : 'none'};">
                 ${
                     records.length === 0
                         ? `
-                    <div class="env-scope-empty">No system variables available.</div>
+                    <div class="env-scope-empty">${escapeHtml(t('settings.env.no_system'))}</div>
                 `
                         : `
                     <div class="env-records">
@@ -225,7 +233,7 @@ function renderEnvironmentEditorRow() {
                     type="text"
                     id="env-key-input"
                     class="env-record-editor-input env-record-editor-input-key"
-                    placeholder="Key"
+                    placeholder="${escapeHtml(t('settings.env.key'))}"
                     autocomplete="off"
                     value="${escapeHtml(environmentState.editor.key || '')}"
                 >
@@ -233,7 +241,7 @@ function renderEnvironmentEditorRow() {
                     type="text"
                     id="env-value-input"
                     class="env-record-editor-input env-record-editor-input-value"
-                    placeholder="Value"
+                    placeholder="${escapeHtml(t('settings.env.value'))}"
                     autocomplete="off"
                     value="${escapeHtml(environmentState.editor.value || '')}"
                 >
@@ -260,8 +268,8 @@ function renderEnvironmentRecord(record) {
                 isEditable
                     ? `
                 <div class="env-record-actions">
-                    <button class="settings-inline-action settings-list-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Edit</button>
-                    <button class="settings-inline-action settings-list-action settings-list-action-danger env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">Delete</button>
+                    <button class="settings-inline-action settings-list-action env-edit-btn" data-env-edit="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">${escapeHtml(t('settings.env.edit'))}</button>
+                    <button class="settings-inline-action settings-list-action settings-list-action-danger env-delete-btn" data-env-delete="${escapeHtml(record.scope)}::${escapeHtml(record.key)}" type="button">${escapeHtml(t('settings.env.delete'))}</button>
                 </div>
             `
                     : ''
@@ -344,8 +352,8 @@ async function handleSaveEnvironmentVariable() {
 
     if (!key) {
         showToast({
-            title: 'Missing Key',
-            message: 'Enter an environment variable key before saving.',
+            title: t('settings.env.missing_key'),
+            message: t('settings.env.missing_key_message'),
             tone: 'danger',
         });
         return;
@@ -357,14 +365,14 @@ async function handleSaveEnvironmentVariable() {
             value,
         });
         showToast({
-            title: 'Environment Variable Saved',
+            title: t('settings.env.saved'),
             message: `${key} saved in app scope.`,
             tone: 'success',
         });
         await loadEnvironmentVariablesPanel();
     } catch (error) {
         showToast({
-            title: 'Save Failed',
+            title: t('settings.env.save_failed'),
             message: `Failed to save environment variable: ${error.message}`,
             tone: 'danger',
         });
@@ -378,10 +386,10 @@ async function handleDeleteEnvironmentVariable(recordRef) {
     }
 
     const confirmed = await showConfirmDialog({
-        title: 'Delete Environment Variable',
+        title: t('settings.env.delete_title'),
         message: `Delete ${key} from ${scope} scope?`,
         tone: 'warning',
-        confirmLabel: 'Delete',
+        confirmLabel: t('settings.env.delete'),
     });
     if (!confirmed) {
         return;
@@ -390,14 +398,14 @@ async function handleDeleteEnvironmentVariable(recordRef) {
     try {
         await deleteEnvironmentVariable(scope, key);
         showToast({
-            title: 'Environment Variable Deleted',
+            title: t('settings.env.deleted'),
             message: `${key} removed from ${scope} scope.`,
             tone: 'success',
         });
         await loadEnvironmentVariablesPanel();
     } catch (error) {
         showToast({
-            title: 'Delete Failed',
+            title: t('settings.env.delete_failed'),
             message: `Failed to delete environment variable: ${error.message}`,
             tone: 'danger',
         });
@@ -411,7 +419,7 @@ function renderEnvironmentFailure(message) {
     }
     groupsEl.innerHTML = `
         <div class="settings-empty-state settings-empty-state-compact">
-            <h4>Failed to load environment variables</h4>
+            <h4>${escapeHtml(t('settings.env.load_failed_title'))}</h4>
             <p>${escapeHtml(message)}</p>
         </div>
     `;

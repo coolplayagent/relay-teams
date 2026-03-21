@@ -9,11 +9,13 @@ import {
     reloadSkillsConfig,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const collapsedMcpServers = new Set();
 let lastLoadedMcpServerViews = [];
 let activeMcpLoadRequestId = 0;
+let languageBound = false;
 
 export function bindSystemStatusHandlers() {
     const reloadMcpBtn = document.getElementById('reload-mcp-btn');
@@ -28,6 +30,13 @@ export function bindSystemStatusHandlers() {
 
     globalThis.__agentTeamsToggleMcpTools = toggleMcpTools;
     globalThis.__agentTeamsToggleAllMcpTools = toggleAllMcpTools;
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            renderMcpStatusPanel();
+            void loadSkillsStatusPanel();
+        });
+        languageBound = true;
+    }
 }
 
 export async function loadMcpStatusPanel() {
@@ -48,7 +57,7 @@ export async function loadMcpStatusPanel() {
         if (servers.length === 0) {
             lastLoadedMcpServerViews = [];
             collapsedMcpServers.clear();
-            mcpStatus.innerHTML = renderEmptyState('No MCP servers loaded', 'Add or enable a server, then reload to refresh the runtime view.');
+            mcpStatus.innerHTML = renderEmptyState(t('settings.system.no_mcp'), t('settings.system.no_mcp_copy'));
             return;
         }
 
@@ -74,7 +83,7 @@ export async function loadSkillsStatusPanel() {
         const skillsStatus = document.getElementById('skills-status');
         const skills = status.skills?.skills || [];
         if (skills.length === 0) {
-            skillsStatus.innerHTML = renderEmptyState('No skills loaded', 'Reload after updating the configured skill directories.');
+            skillsStatus.innerHTML = renderEmptyState(t('settings.system.no_skills'), t('settings.system.no_skills_copy'));
         } else {
             skillsStatus.innerHTML = renderStatusList(skills, 'Ready');
         }
@@ -90,20 +99,20 @@ export async function loadSkillsStatusPanel() {
 async function handleReloadMcp() {
     try {
         await reloadMcpConfig();
-        showToast({ title: 'MCP Reloaded', message: 'MCP config reloaded.', tone: 'success' });
+        showToast({ title: t('settings.system.mcp_reloaded'), message: t('settings.system.mcp_reloaded_message'), tone: 'success' });
         await loadMcpStatusPanel();
     } catch (e) {
-        showToast({ title: 'Reload Failed', message: `Failed to reload: ${e.message}`, tone: 'danger' });
+        showToast({ title: t('settings.system.reload_failed'), message: `Failed to reload: ${e.message}`, tone: 'danger' });
     }
 }
 
 async function handleReloadSkills() {
     try {
         await reloadSkillsConfig();
-        showToast({ title: 'Skills Reloaded', message: 'Skills reloaded.', tone: 'success' });
+        showToast({ title: t('settings.system.skills_reloaded'), message: t('settings.system.skills_reloaded_message'), tone: 'success' });
         await loadSkillsStatusPanel();
     } catch (e) {
-        showToast({ title: 'Reload Failed', message: `Failed to reload: ${e.message}`, tone: 'danger' });
+        showToast({ title: t('settings.system.reload_failed'), message: `Failed to reload: ${e.message}`, tone: 'danger' });
     }
 }
 
@@ -222,7 +231,7 @@ function renderMcpStatusToolbar(serverCount, collapsibleCount, allCollapsed, loa
                     type="button"
                     onclick="globalThis.__agentTeamsToggleAllMcpTools()"
                 >
-                    ${allCollapsed ? 'Expand all tools' : 'Collapse all tools'}
+                    ${allCollapsed ? t('settings.system.expand_all') : t('settings.system.collapse_all')}
                 </button>
             ` : ''}
         </div>
@@ -247,7 +256,7 @@ function renderMcpServerCard(serverView) {
                             type="button"
                             onclick='globalThis.__agentTeamsToggleMcpTools(${serializeForInlineScript(serverView.name)})'
                         >
-                            ${collapsed ? 'Expand tools' : 'Collapse tools'}
+                            ${collapsed ? t('settings.system.expand_tools') : t('settings.system.collapse_tools')}
                         </button>
                     ` : ''}
                     <div class="status-list-state">${escapeHtml(getMcpServerStateLabel(serverView))}</div>

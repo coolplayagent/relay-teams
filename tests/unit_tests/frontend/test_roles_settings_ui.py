@@ -244,6 +244,7 @@ def _run_roles_settings_script(tmp_path: Path, runner_source: str) -> dict[str, 
 
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_markdown_path = tmp_path / "mockMarkdown.mjs"
     module_under_test_path = tmp_path / "rolesSettings.mjs"
@@ -386,6 +387,47 @@ export function showToast(payload) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "composer.mode_normal": "Normal Mode",
+    "settings.tab.orchestration": "Orchestration",
+    "settings.roles.edit": "Edit",
+    "settings.roles.disabled": "Disabled",
+    "settings.roles.none": "No roles found",
+    "settings.roles.none_copy": "Add a role to edit its metadata and prompt.",
+    "settings.roles.file_label": "File: {file}",
+    "settings.roles.new_role": "New role",
+    "settings.roles.validated": "Role Validated",
+    "settings.roles.validated_message": "Validated successfully.",
+    "settings.roles.validated_toast": "{role_id} passed validation.",
+    "settings.roles.validation_failed": "Validation Failed",
+    "settings.roles.validation_failed_message": "Validation failed.",
+    "settings.roles.validation_failed_toast": "Failed to validate role config.",
+    "settings.roles.saved": "Role Saved",
+    "settings.roles.saved_message": "Saved and validated.",
+    "settings.roles.saved_toast": "{role_id} saved and reloaded.",
+    "settings.roles.save_failed": "Save Failed",
+    "settings.roles.save_failed_message": "Save failed.",
+    "settings.roles.save_failed_toast": "Failed to save role config.",
+    "settings.roles.default_current": "default (current: {profile})",
+    "settings.roles.main_agent_only": "Main Agent only",
+    "settings.roles.coordinator_root": "Coordinator root",
+    "settings.roles.main_agent_fixed": "Main Agent keeps a fixed identity. Its base prompt is edited here and is only used in normal mode.",
+    "settings.roles.coordinator_fixed": "Coordinator keeps a fixed identity. Its base prompt is edited here and is combined with the selected preset orchestration prompt in Orchestrated Mode.",
+    "settings.roles.main_agent_title": "Main Agent base prompt is edited here and used only in normal mode.",
+    "settings.roles.coordinator_title": "Coordinator base prompt is edited here and combined with the selected preset orchestration prompt in Orchestrated Mode.",
+    "settings.roles.no_tools": "No tools loaded.",
+    "settings.roles.no_mcp": "No MCP servers loaded.",
+    "settings.roles.no_skills": "No skills loaded.",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_logger_path.write_text(
         """
 export function errorToPayload(error, extra = {}) {
@@ -414,6 +456,7 @@ export function parseMarkdown(source = "") {
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
         .replace("../../utils/markdown.js", "./mockMarkdown.mjs")
     )
