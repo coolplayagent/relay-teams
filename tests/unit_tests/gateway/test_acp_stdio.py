@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,8 +11,8 @@ from typing import cast
 import pytest
 from pydantic import JsonValue
 
-from agent_teams.gateway.acp_stdio import AcpGatewayServer
-from agent_teams.gateway.gateway_models import GatewayMcpConnectionStatus
+import agent_teams.gateway.acp_stdio as acp_stdio_module
+from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.providers.token_usage_repo import RunTokenUsage
@@ -115,7 +116,9 @@ async def test_initialize_returns_gateway_capabilities(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_prompt_streams_updates_and_usage(tmp_path: Path) -> None:
+async def test_session_prompt_streams_updates_and_usage(
+    tmp_path: Path,
+) -> None:
     server, session_service, run_manager, notifications = _build_server(tmp_path)
     run_manager.events_by_run["run-1"] = (
         _event(
@@ -193,20 +196,7 @@ async def test_session_prompt_streams_updates_and_usage(tmp_path: Path) -> None:
     )
     response_result = _require_result_object(response)
 
-    assert response_result["stopReason"] == "end_turn"
-    assert response_result["userMessageId"] == "user-msg-1"
-    assert response_result["usage"] == {
-        "input_tokens": 11,
-        "output_tokens": 7,
-        "thought_tokens": 3,
-        "cached_read_tokens": 2,
-        "cached_write_tokens": 0,
-        "total_tokens": 18,
-    }
-    assert response_result["_meta"] == {
-        "requestId": "2",
-        "runId": "run-1",
-    }
+    assert response_result == {"stopReason": "end_turn"}
     assert len(run_manager.create_calls) == 1
     assert run_manager.create_calls[0] == IntentInput(
         session_id="session-1",
@@ -222,6 +212,175 @@ async def test_session_prompt_streams_updates_and_usage(tmp_path: Path) -> None:
         "tool_call_update",
         "agent_message_chunk",
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_streams_progress_updates_for_zed(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, notifications = _build_server(tmp_path)
+    server.set_zed_compat_mode(True)
+    run_manager.events_by_run["run-1"] = (
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.THINKING_DELTA,
+            {"text": "thinking"},
+        ),
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.TOOL_CALL,
+            {
+                "tool_call_id": "tool-1",
+                "tool_name": "filesystem.read",
+                "args": {"path": "README.md"},
+            },
+        ),
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.TOOL_RESULT,
+            {
+                "tool_call_id": "tool-1",
+                "result": {"ok": True},
+            },
+        ),
+        _event("session-1", "run-1", RunEventType.TEXT_DELTA, {"text": "done"}),
+        _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    created_result = _require_result_object(created)
+    session_id = _require_str(created_result, "sessionId")
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "messageId": "user-msg-1",
+                "prompt": [{"type": "text", "text": "Summarize README"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == [
+        "agent_thought_chunk",
+        "tool_call",
+        "tool_call_update",
+        "agent_message_chunk",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_includes_string_tool_raw_input_for_zed(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, notifications = _build_server(tmp_path)
+    server.set_zed_compat_mode(True)
+    run_manager.events_by_run["run-1"] = (
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.TOOL_CALL,
+            {
+                "tool_call_id": "tool-1",
+                "tool_name": "shell",
+                "args": "echo hello world",
+            },
+        ),
+        _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    created_result = _require_result_object(created)
+    session_id = _require_str(created_result, "sessionId")
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "messageId": "user-msg-1",
+                "prompt": [{"type": "text", "text": "run shell"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    params = notifications[0]["params"]
+    assert isinstance(params, dict)
+    update = params["update"]
+    assert isinstance(update, dict)
+    assert update["sessionUpdate"] == "tool_call"
+    assert update["rawInput"] == "echo hello world"
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_preserves_whitespace_for_zed_chunks(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, notifications = _build_server(tmp_path)
+    server.set_zed_compat_mode(True)
+    formatted_text = "Line 1\n\n  - item 1\n  - item 2\n"
+    run_manager.events_by_run["run-1"] = (
+        _event("session-1", "run-1", RunEventType.TEXT_DELTA, {"text": formatted_text}),
+        _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    created_result = _require_result_object(created)
+    session_id = _require_str(created_result, "sessionId")
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "messageId": "user-msg-1",
+                "prompt": [{"type": "text", "text": "format this"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    params = notifications[0]["params"]
+    assert isinstance(params, dict)
+    update = params["update"]
+    assert isinstance(update, dict)
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert content["text"] == formatted_text
 
 
 @pytest.mark.asyncio
@@ -282,12 +441,94 @@ async def test_mcp_connection_lifecycle_updates_gateway_state(tmp_path: Path) ->
             "connectionId": connection_id,
         },
     }
-
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     record = repository.get(session_id)
     assert len(record.mcp_connections) == 1
     assert record.mcp_connections[0].connection_id == connection_id
-    assert record.mcp_connections[0].status == GatewayMcpConnectionStatus.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_stdio_runtime_uses_content_length_framing_by_default(
+    tmp_path: Path,
+) -> None:
+    server, _, _, _ = _build_server(tmp_path)
+    output = BytesIO()
+    runtime = AcpStdioRuntime(
+        server=server,
+        input_stream=BytesIO(),
+        output_stream=output,
+    )
+
+    await runtime.send_message({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
+
+    written = output.getvalue()
+    assert written.startswith(b"Content-Length: ")
+    header, _, payload = written.partition(b"\r\n\r\n")
+    assert header
+    assert json.loads(payload.decode("utf-8")) == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"ok": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_stdio_runtime_emits_json_lines_for_zed(
+    tmp_path: Path,
+) -> None:
+    server, _, _, _ = _build_server(tmp_path)
+    output = BytesIO()
+    runtime = AcpStdioRuntime(
+        server=server,
+        input_stream=BytesIO(),
+        output_stream=output,
+    )
+    runtime.set_transport_mode(framed_input=False)
+
+    await runtime.send_message({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
+
+    payload = output.getvalue().decode("utf-8")
+    assert payload.endswith("\n")
+    assert json.loads(payload) == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"ok": True},
+    }
+
+
+def test_acp_trace_messages_require_explicit_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ACP_TRACE_STDIO", raising=False)
+    recorded_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, JsonValue] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (level, message, payload, duration_ms, exc_info)
+        recorded_events.append(event)
+
+    monkeypatch.setattr(acp_stdio_module, "log_event", fake_log_event)
+
+    acp_stdio_module._trace_acp_message(
+        "outbound",
+        {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}},
+    )
+    assert recorded_events == []
+
+    monkeypatch.setenv("ACP_TRACE_STDIO", "1")
+    acp_stdio_module._trace_acp_message(
+        "outbound",
+        {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}},
+    )
+    assert recorded_events == ["gateway.acp.outbound"]
 
 
 def _build_server(

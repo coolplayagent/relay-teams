@@ -176,7 +176,11 @@ class HumanReadableFormatter(logging.Formatter):
         return " | ".join(parts)
 
 
-def configure_logging(*, config_dir: Path | None = None) -> None:
+def configure_logging(
+    *,
+    config_dir: Path | None = None,
+    console_enabled_override: bool | None = None,
+) -> None:
     global _LOGGING_RUNTIME
     with _LOGGING_LOCK:
         shutdown_logging()
@@ -227,7 +231,10 @@ def configure_logging(*, config_dir: Path | None = None) -> None:
         )
 
         console_handler: logging.Handler | None = None
-        if _console_enabled(default_enabled=logger_settings.console_enabled):
+        if _console_enabled(
+            default_enabled=logger_settings.console_enabled,
+            override_enabled=console_enabled_override,
+        ):
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(backend_level)
             console_handler.setFormatter(backend_formatter)
@@ -446,7 +453,12 @@ class _LoggerSettings:
         self.console_enabled = console_enabled
 
 
-def _console_enabled(default_enabled: bool | None = None) -> bool:
+def _console_enabled(
+    default_enabled: bool | None = None,
+    override_enabled: bool | None = None,
+) -> bool:
+    if override_enabled is not None:
+        return override_enabled
     raw = _get_runtime_env_value("AGENT_TEAMS_LOG_CONSOLE", DEFAULT_LOG_CONSOLE)
     normalized = raw.strip().lower()
     if normalized in {"1", "true", "yes", "on"}:

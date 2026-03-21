@@ -10,8 +10,10 @@ from uuid import uuid4
 
 from pydantic import JsonValue
 
+from agent_teams.env import get_env_var
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
@@ -21,6 +23,9 @@ from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
 type JsonRpcId = str | int
 
 type AcpNotifier = Callable[[dict[str, JsonValue]], Awaitable[None]]
+
+
+LOGGER = get_logger(__name__)
 
 
 class AcpProtocolError(ValueError):
@@ -44,9 +49,13 @@ class AcpGatewayServer:
         self._run_service = run_service
         self._notify = notify
         self._active_runs: dict[str, str] = {}
+        self._zed_compat_mode = False
 
     def set_notify(self, notify: AcpNotifier) -> None:
         self._notify = notify
+
+    def set_zed_compat_mode(self, enabled: bool) -> None:
+        self._zed_compat_mode = enabled
 
     async def handle_jsonrpc_message(
         self,
@@ -183,7 +192,6 @@ class AcpGatewayServer:
                     gateway_session_id,
                     {
                         "sessionUpdate": "user_message_chunk",
-                        "messageId": f"msg_{uuid4().hex[:12]}",
                         "content": {
                             "type": "text",
                             "text": text,
@@ -195,7 +203,6 @@ class AcpGatewayServer:
                 gateway_session_id,
                 {
                     "sessionUpdate": "agent_message_chunk",
-                    "messageId": f"msg_{uuid4().hex[:12]}",
                     "content": {
                         "type": "text",
                         "text": text,
@@ -216,10 +223,6 @@ class AcpGatewayServer:
             raise AcpProtocolError(
                 -32602, "prompt must contain at least one text block"
             )
-        user_message_id = (
-            _optional_str(params, "messageId") or f"msg_{uuid4().hex[:12]}"
-        )
-
         record = self._gateway_session_service.get_session(gateway_session_id)
         run_id, _ = self._run_service.create_run(
             IntentInput(
@@ -230,20 +233,18 @@ class AcpGatewayServer:
         )
         self._active_runs[gateway_session_id] = run_id
         _ = self._gateway_session_service.bind_active_run(gateway_session_id, run_id)
-        await self._publish_session_update(
-            gateway_session_id,
-            {
-                "sessionUpdate": "user_message_chunk",
-                "messageId": user_message_id,
-                "content": {
-                    "type": "text",
-                    "text": prompt_text,
+        if not self._zed_compat_mode:
+            await self._publish_session_update(
+                gateway_session_id,
+                {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": prompt_text,
+                    },
                 },
-            },
-        )
+            )
 
-        agent_message_id = f"msg_{uuid4().hex[:12]}"
-        thought_message_id = f"msg_{uuid4().hex[:12]}"
         stop_reason = "end_turn"
         terminal_error: str | None = None
 
@@ -251,8 +252,6 @@ class AcpGatewayServer:
             maybe_stop_reason, maybe_error = await self._map_run_event(
                 gateway_session_id=gateway_session_id,
                 event=event,
-                agent_message_id=agent_message_id,
-                thought_message_id=thought_message_id,
             )
             if maybe_stop_reason is not None:
                 stop_reason = maybe_stop_reason
@@ -263,33 +262,22 @@ class AcpGatewayServer:
         _ = self._gateway_session_service.bind_active_run(gateway_session_id, None)
         if terminal_error is not None:
             raise AcpProtocolError(-32000, terminal_error)
-        return {
-            "stopReason": stop_reason,
-            "userMessageId": user_message_id,
-            "usage": self._usage_for_run(run_id),
-            "_meta": {
-                "requestId": str(message_id),
-                "runId": run_id,
-            },
-        }
+        return {"stopReason": stop_reason}
 
     async def _map_run_event(
         self,
         *,
         gateway_session_id: str,
         event: RunEvent,
-        agent_message_id: str,
-        thought_message_id: str,
     ) -> tuple[str | None, str | None]:
         payload = _load_payload(event.payload_json)
         if event.event_type == RunEventType.TEXT_DELTA:
-            text = _optional_str(payload, "text")
+            text = _optional_text(payload, "text")
             if text:
                 await self._publish_session_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "agent_message_chunk",
-                        "messageId": agent_message_id,
                         "content": {
                             "type": "text",
                             "text": text,
@@ -298,13 +286,12 @@ class AcpGatewayServer:
                 )
             return None, None
         if event.event_type == RunEventType.THINKING_DELTA:
-            text = _optional_str(payload, "text")
+            text = _optional_text(payload, "text")
             if text:
                 await self._publish_session_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "agent_thought_chunk",
-                        "messageId": thought_message_id,
                         "content": {
                             "type": "text",
                             "text": text,
@@ -321,10 +308,9 @@ class AcpGatewayServer:
                 "sessionUpdate": "tool_call",
                 "toolCallId": tool_call_id,
                 "title": _optional_str(payload, "tool_name") or "tool",
-                "kind": "function",
                 "status": "in_progress",
             }
-            if isinstance(raw_input, dict):
+            if raw_input is not None:
                 update["rawInput"] = raw_input
             await self._publish_session_update(gateway_session_id, update)
             return None, None
@@ -442,13 +428,21 @@ class AcpStdioRuntime:
         self._input_stream = input_stream
         self._output_stream = output_stream
         self._write_lock = asyncio.Lock()
+        self._emit_framed_messages = True
+        self._server.set_zed_compat_mode(False)
+
+    def set_transport_mode(self, *, framed_input: bool) -> None:
+        self._emit_framed_messages = framed_input
+        self._server.set_zed_compat_mode(not framed_input)
 
     async def serve_forever(self) -> None:
         tasks: set[asyncio.Task[None]] = set()
         while True:
-            raw_message = await asyncio.to_thread(
+            raw_message, framed_input = await asyncio.to_thread(
                 _read_message_bytes, self._input_stream
             )
+            if framed_input is not None:
+                self.set_transport_mode(framed_input=framed_input)
             if raw_message is None:
                 break
             if not raw_message:
@@ -486,25 +480,30 @@ class AcpStdioRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _handle_message(self, parsed: dict[str, JsonValue]) -> None:
+        _trace_acp_message("inbound", parsed)
         response = await self._server.handle_jsonrpc_message(parsed)
         if response is None:
             return
         await self.send_message(response)
 
     async def send_message(self, message: dict[str, JsonValue]) -> None:
+        _trace_acp_message("outbound", message)
         payload = json.dumps(message, ensure_ascii=False).encode("utf-8")
-        header = f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii")
         async with self._write_lock:
-            await asyncio.to_thread(self._output_stream.write, header)
+            if self._emit_framed_messages:
+                header = f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii")
+                await asyncio.to_thread(self._output_stream.write, header)
+            else:
+                payload += b"\n"
             await asyncio.to_thread(self._output_stream.write, payload)
             await asyncio.to_thread(self._output_stream.flush)
 
 
-def _read_message_bytes(stream: BinaryIO) -> bytes | None:
+def _read_message_bytes(stream: BinaryIO) -> tuple[bytes | None, bool | None]:
     while True:
         first_line = stream.readline()
         if not first_line:
-            return None
+            return None, None
         if first_line in {b"\r\n", b"\n"}:
             continue
         stripped = first_line.strip()
@@ -517,11 +516,11 @@ def _read_message_bytes(stream: BinaryIO) -> bytes | None:
             while True:
                 header_line = stream.readline()
                 if not header_line:
-                    return None
+                    return None, True
                 if header_line in {b"\r\n", b"\n"}:
                     break
-            return stream.read(length)
-        return stripped
+            return stream.read(length), True
+        return stripped, False
 
 
 def _optional_id(message: dict[str, JsonValue]) -> JsonRpcId | None:
@@ -559,6 +558,13 @@ def _optional_str(payload: dict[str, JsonValue], key: str) -> str | None:
     if isinstance(value, str):
         stripped = value.strip()
         return stripped or None
+    return None
+
+
+def _optional_text(payload: dict[str, JsonValue], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
     return None
 
 
@@ -618,7 +624,7 @@ def _prompt_blocks_to_text(prompt_blocks: list[JsonValue]) -> str:
         if block_type == "text":
             text = item.get("text")
             if isinstance(text, str) and text.strip():
-                collected.append(text.strip())
+                collected.append(text)
             continue
         if block_type == "resource_link":
             uri = item.get("uri")
@@ -641,8 +647,8 @@ def _message_payload_to_text(message: object) -> str:
         if part_kind in {"user-prompt", "text", "thinking", "system-prompt"}:
             content = part.get("content")
             if isinstance(content, str) and content.strip():
-                collected.append(content.strip())
-    return "\n\n".join(collected).strip()
+                collected.append(content)
+    return "\n\n".join(collected)
 
 
 def _load_payload(raw_payload: str) -> dict[str, JsonValue]:
@@ -653,6 +659,23 @@ def _load_payload(raw_payload: str) -> dict[str, JsonValue]:
     if isinstance(parsed, dict):
         return parsed
     return {}
+
+
+def _trace_acp_message(direction: str, message: dict[str, JsonValue]) -> None:
+    if not _env_flag_enabled("ACP_TRACE_STDIO"):
+        return
+    log_event(
+        LOGGER,
+        level=10,
+        event=f"gateway.acp.{direction}",
+        message=f"ACP {direction} message",
+        payload={"message": message},
+    )
+
+
+def _env_flag_enabled(key: str) -> bool:
+    raw = get_env_var(key, "") or ""
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def run_acp_stdio_server(server: AcpGatewayServer) -> None:

@@ -13,6 +13,7 @@ from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.interfaces.server.container import ServerContainer
+from agent_teams.logger import configure_logging
 from agent_teams.paths import get_app_config_dir
 
 
@@ -33,6 +34,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     config_dir = get_app_config_dir()
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
+    configure_logging(config_dir=config_dir, console_enabled_override=False)
     container = ServerContainer(config_dir=config_dir)
     gateway_session_repository = GatewaySessionRepository(
         container.runtime.paths.db_path
