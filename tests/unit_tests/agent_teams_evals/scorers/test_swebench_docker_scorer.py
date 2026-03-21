@@ -487,3 +487,67 @@ def test_cached_report_is_cleaned(
     _score(_make_item(), _make_workspace())
 
     assert deleted_paths == [cached]
+
+
+def test_run_instance_wrapper_forces_utf8_open_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Handle:
+        def __enter__(self) -> _Handle:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def write(self, _data: str) -> int:
+            return 0
+
+    def _fake_open(
+        file: str | bytes | int | Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+        closefd: bool = True,
+        opener: Callable[[str, int], int] | None = None,
+    ) -> _Handle:
+        captured["file"] = file
+        captured["mode"] = mode
+        captured["buffering"] = buffering
+        captured["encoding"] = encoding
+        captured["errors"] = errors
+        captured["newline"] = newline
+        captured["closefd"] = closefd
+        captured["opener"] = opener
+        return _Handle()
+
+    def _fake_upstream_run_instance(**_kwargs: object) -> dict[str, object]:
+        with open("test_output.txt", "w") as handle:
+            handle.write("contains angstrom Å")
+        return {"completed": True, "resolved": True}
+
+    monkeypatch.setattr(swebench_docker_scorer, "_IS_WINDOWS", True)
+    monkeypatch.setattr(swebench_docker_scorer, "_ORIGINAL_OPEN", _fake_open)
+    monkeypatch.setattr(
+        swebench_docker_scorer,
+        "_upstream_run_instance",
+        _fake_upstream_run_instance,
+    )
+
+    result = swebench_docker_scorer._run_instance_crlf_safe(
+        test_spec=MagicMock(),
+        pred={},
+        rm_image=False,
+        force_rebuild=False,
+        client=MagicMock(),
+        run_id="run-1",
+        timeout=300,
+    )
+
+    assert result == {"completed": True, "resolved": True}
+    assert captured["mode"] == "w"
+    assert captured["encoding"] == "utf-8"
+    assert captured["newline"] == "\n"

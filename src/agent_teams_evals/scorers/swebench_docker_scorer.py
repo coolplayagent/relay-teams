@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable, Mapping
 from importlib import import_module
 import json
@@ -121,6 +122,7 @@ def _load_swebench_dependencies() -> tuple[
 ) = _load_swebench_dependencies()
 
 _IS_WINDOWS = platform.system() == "Windows"
+_ORIGINAL_OPEN = builtins.open
 
 
 def _write_text_unix_newlines(
@@ -141,6 +143,43 @@ def _write_text_unix_newlines(
     return self.write_bytes(data.encode(encoding or "utf-8", errors or "strict"))
 
 
+def _open_text_utf8_unix_newlines(
+    file: str | bytes | int | Path,
+    mode: str = "r",
+    buffering: int = -1,
+    encoding: str | None = None,
+    errors: str | None = None,
+    newline: str | None = None,
+    closefd: bool = True,
+    opener: Callable[[str, int], int] | None = None,
+):
+    """``open`` replacement that forces UTF-8 text writes on Windows.
+
+    The upstream swebench harness writes ``test_output.txt`` and
+    ``report.json`` with bare ``open(..., "w")`` calls. On Windows, that uses
+    the process locale, which may be GBK and can fail when test logs contain
+    non-ASCII characters.
+    """
+
+    is_text_mode = "b" not in mode
+    is_write_mode = any(flag in mode for flag in ("w", "a", "x", "+"))
+    if is_text_mode:
+        if encoding is None:
+            encoding = "utf-8"
+        if is_write_mode and newline is None:
+            newline = "\n"
+    return _ORIGINAL_OPEN(
+        file,
+        mode,
+        buffering=buffering,
+        encoding=encoding,
+        errors=errors,
+        newline=newline,
+        closefd=closefd,
+        opener=opener,
+    )
+
+
 def _run_instance_crlf_safe(
     test_spec: object,
     pred: dict[str, str | None],
@@ -150,8 +189,7 @@ def _run_instance_crlf_safe(
     run_id: str,
     timeout: int | None = None,
 ) -> dict[str, object]:
-    """Thin wrapper around the upstream ``run_instance`` that fixes
-    Windows CRLF issues transparently."""
+    """Thin wrapper around upstream ``run_instance`` for Windows text IO quirks."""
     if not _IS_WINDOWS:
         return _upstream_run_instance(
             test_spec=test_spec,
@@ -163,7 +201,10 @@ def _run_instance_crlf_safe(
             timeout=timeout,
         )
 
-    with patch.object(Path, "write_text", _write_text_unix_newlines):
+    with (
+        patch.object(Path, "write_text", _write_text_unix_newlines),
+        patch("builtins.open", _open_text_utf8_unix_newlines),
+    ):
         return _upstream_run_instance(
             test_spec=test_spec,
             pred=pred,
