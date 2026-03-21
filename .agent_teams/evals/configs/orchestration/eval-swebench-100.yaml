@@ -28,18 +28,18 @@ docker:
   build_instance_images: true
   swebench_dataset: "SWE-bench/SWE-bench_Verified"
   container_startup_timeout_seconds: 60
-  extra_env:
-    HTTP_PROXY: "http://host.docker.internal:7897"
-    HTTPS_PROXY: "http://host.docker.internal:7897"
-    http_proxy: "http://host.docker.internal:7897"
-    https_proxy: "http://host.docker.internal:7897"
-    NO_PROXY: "localhost,127.0.0.1"
-    no_proxy: "localhost,127.0.0.1"
+#  extra_env:
+#    HTTP_PROXY: "http://host.docker.internal:7897"
+#    HTTPS_PROXY: "http://host.docker.internal:7897"
+#    http_proxy: "http://host.docker.internal:7897"
+#    https_proxy: "http://host.docker.internal:7897"
+#    NO_PROXY: "localhost,127.0.0.1"
+#    no_proxy: "localhost,127.0.0.1"
 
 limit: null
 item_ids: []
 
-concurrency: 1
+concurrency: 2
 keep_workspaces: false
 
 output_dir: .agent_teams/evals/results/orchestration/swebench-verified-100

@@ -30,13 +30,13 @@ docker:
   container_startup_timeout_seconds: 60
   # Proxy addresses must use host.docker.internal inside containers
   # (127.0.0.1 refers to the container itself, not the host).
-  extra_env:
-    HTTP_PROXY: "http://host.docker.internal:7897"
-    HTTPS_PROXY: "http://host.docker.internal:7897"
-    http_proxy: "http://host.docker.internal:7897"
-    https_proxy: "http://host.docker.internal:7897"
-    NO_PROXY: "localhost,127.0.0.1"
-    no_proxy: "localhost,127.0.0.1"
+#  extra_env:
+#    HTTP_PROXY: "http://host.docker.internal:7897"
+#    HTTPS_PROXY: "http://host.docker.internal:7897"
+#    http_proxy: "http://host.docker.internal:7897"
+#    https_proxy: "http://host.docker.internal:7897"
+#    NO_PROXY: "localhost,127.0.0.1"
+#    no_proxy: "localhost,127.0.0.1"
 
 limit: null
 item_ids: []
