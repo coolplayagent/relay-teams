@@ -108,6 +108,7 @@ class EvalResult(BaseModel):
     workspace_path: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     error: str | None = None
+    rerun_command: str | None = None
 
 
 class EvalReport(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,8 @@ class ArtifactCollector:
         workspace: PreparedWorkspace | None,
     ) -> None:
         artifact_dir = self._output_dir / "artifacts" / item.item_id
+        if artifact_dir.exists():
+            shutil.rmtree(artifact_dir, ignore_errors=True)
         artifact_dir.mkdir(parents=True, exist_ok=True)
 
         self._write_metadata(artifact_dir, item, result)
@@ -77,6 +80,7 @@ class ArtifactCollector:
             "input_tokens": result.token_usage.input_tokens,
             "output_tokens": result.token_usage.output_tokens,
             "error": result.error,
+            "rerun_command": result.rerun_command,
             "collected_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         path = artifact_dir / "metadata.json"

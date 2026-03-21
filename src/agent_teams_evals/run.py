@@ -40,6 +40,29 @@ def _validate_unique_item_ids(items: list[EvalItem]) -> None:
         )
 
 
+def _signature_without_item_ids(
+    signature: EvalCheckpointSignature,
+) -> dict[str, object]:
+    payload = signature.model_dump()
+    del payload["item_ids"]
+    return payload
+
+
+def _quote_cli_arg(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _build_rerun_command(config_file: Path, item_id: str, base_url: str | None) -> str:
+    command = (
+        "uv run agent-teams-evals run "
+        f"--config {_quote_cli_arg(str(config_file))} "
+        f"--item-ids {_quote_cli_arg(item_id)} --rerun"
+    )
+    if base_url is not None:
+        command += f" --base-url {_quote_cli_arg(base_url)}"
+    return command
+
+
 def _ordered_results(
     item_ids: tuple[str, ...],
     results_by_item_id: dict[str, EvalResult],
@@ -91,6 +114,7 @@ def _load_checkpoint_results(
     *,
     cfg: RunConfig,
     signature: EvalCheckpointSignature,
+    rerun_item_ids: tuple[str, ...] = (),
 ) -> dict[str, EvalResult]:
     from agent_teams_evals.checkpoint import EvalCheckpointStore
 
@@ -104,11 +128,30 @@ def _load_checkpoint_results(
         store.ensure_initialized(signature)
         return {}
 
-    if store.load_meta() is None:
+    existing_meta = store.load_meta()
+    if existing_meta is None:
         raise ValueError(
             f"Checkpoint metadata is missing from output_dir: {cfg.output_dir}"
         )
-    store.ensure_initialized(signature)
+    existing_signature = existing_meta.signature
+    if rerun_item_ids:
+        if _signature_without_item_ids(
+            existing_signature
+        ) != _signature_without_item_ids(signature):
+            raise ValueError(
+                "Checkpoint signature does not match the current eval configuration."
+            )
+        existing_item_ids = set(existing_signature.item_ids)
+        missing_item_ids = [
+            item_id for item_id in rerun_item_ids if item_id not in existing_item_ids
+        ]
+        if missing_item_ids:
+            missing_text = ", ".join(sorted(missing_item_ids))
+            raise ValueError(
+                f"Cannot rerun items that are not in the checkpoint: {missing_text}"
+            )
+    else:
+        store.ensure_initialized(signature)
     return store.load_results()
 
 
@@ -124,6 +167,10 @@ def run(
     base_url: str | None = typer.Option(None, help="Override: backend base URL"),
     restart: bool = typer.Option(
         False, help="Archive the current output_dir and start a fresh eval run"
+    ),
+    rerun: bool = typer.Option(
+        False,
+        help="Force rerunning the selected --item-ids and overwrite their report/artifacts",
     ),
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -172,6 +219,9 @@ def run(
 
     if cfg.dataset_path is None:
         typer.echo("Error: dataset_path is required in the config file.", err=True)
+        raise typer.Exit(1)
+    if rerun and not item_ids:
+        typer.echo("Error: --rerun requires at least one --item-ids value.", err=True)
         raise typer.Exit(1)
 
     typer.echo(f"Config: {config_file}")
@@ -268,17 +318,28 @@ def run(
             results_by_item_id = _load_checkpoint_results(
                 cfg=cfg,
                 signature=checkpoint_signature,
+                rerun_item_ids=tuple(item_ids) if rerun else (),
             )
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc
 
+    report_item_ids = ordered_item_ids
     completed_item_ids = set(results_by_item_id)
     items_to_run = [item for item in items if item.item_id not in completed_item_ids]
-    if results_by_item_id:
+    if rerun and results_by_item_id:
+        existing_meta = checkpoint_store.load_meta()
+        if existing_meta is not None:
+            report_item_ids = existing_meta.signature.item_ids
+        items_to_run = list(items)
+    if results_by_item_id and not rerun:
         typer.echo(
             f"Resuming from checkpoint: {len(results_by_item_id)} completed, "
             f"{len(items_to_run)} remaining"
+        )
+    elif rerun:
+        typer.echo(
+            f"Rerunning {len(items_to_run)} item(s) against existing results in {cfg.output_dir}"
         )
 
     artifact_collector = (
@@ -293,14 +354,19 @@ def run(
         artifact_collector=artifact_collector,
         keep_workspaces=cfg.keep_workspaces,
         concurrency=cfg.concurrency,
+        infra_retry_attempts=cfg.infra_retry_attempts,
+        infra_retry_backoff_seconds=cfg.infra_retry_backoff_seconds,
+        rerun_command_factory=lambda item: _build_rerun_command(
+            config_file, item.item_id, base_url
+        ),
     )
 
-    total = len(items)
+    total = len(items_to_run)
     typer.echo(
         f"Running {total} items (concurrency={cfg.concurrency}) "
         f"[remaining={len(items_to_run)}] ..."
     )
-    completed = len(results_by_item_id)
+    completed = 0
     reporter = EvalReporter()
 
     def _format_usage_for_progress(result: object) -> str:
@@ -334,6 +400,8 @@ def run(
         )
         if result.error:
             typer.echo(f"  error: {result.error}")
+        if result.rerun_command:
+            typer.echo(f"  rerun: {result.rerun_command}")
 
     try:
         if cfg.concurrency <= 1:
@@ -344,7 +412,7 @@ def run(
                 report_snapshot = _build_report_snapshot(
                     cfg=cfg,
                     scorer_name=scorer.name,
-                    item_ids=ordered_item_ids,
+                    item_ids=report_item_ids,
                     results_by_item_id=results_by_item_id,
                 )
                 _write_report_snapshot(
@@ -365,7 +433,7 @@ def run(
                     report_snapshot = _build_report_snapshot(
                         cfg=cfg,
                         scorer_name=scorer.name,
-                        item_ids=ordered_item_ids,
+                        item_ids=report_item_ids,
                         results_by_item_id=results_by_item_id,
                     )
                     _write_report_snapshot(
@@ -381,7 +449,7 @@ def run(
     report = _build_report_snapshot(
         cfg=cfg,
         scorer_name=scorer.name,
-        item_ids=ordered_item_ids,
+        item_ids=report_item_ids,
         results_by_item_id=results_by_item_id,
     )
     reporter.print_summary(report)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from agent_teams_evals.backends.base import AgentBackend, AgentEvent
@@ -123,6 +124,19 @@ class FakeScorer(Scorer):
         )
 
 
+class FakeArtifactCollector:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, EvalResult, PreparedWorkspace | None]] = []
+
+    def collect(
+        self,
+        item: EvalItem,
+        result: EvalResult,
+        workspace: PreparedWorkspace | None,
+    ) -> None:
+        self.calls.append((item.item_id, result, workspace))
+
+
 def test_runner_extracts_patch_and_passes_to_scorer() -> None:
     item = EvalItem(
         item_id="demo",
@@ -169,3 +183,83 @@ def test_runner_extracts_patch_and_passes_to_scorer() -> None:
         total_requests=2,
         total_tool_calls=1,
     )
+
+
+def test_runner_retries_retryable_prepare_failures_and_returns_success() -> None:
+    item = EvalItem(item_id="demo", dataset="swebench", intent="demo")
+    backend = FakeBackend()
+    scorer = FakeScorer()
+    artifact_collector = FakeArtifactCollector()
+
+    class FlakyWorkspaceSetup(FakeWorkspaceSetup):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepare_attempts = 0
+
+        def prepare(self, item: EvalItem) -> PreparedWorkspace:
+            self.prepare_attempts += 1
+            if self.prepare_attempts < 3:
+                raise subprocess.CalledProcessError(125, ["docker", "run"])
+            return super().prepare(item)
+
+    workspace_setup = FlakyWorkspaceSetup()
+    runner = EvalRunner(
+        backend=backend,
+        scorer=scorer,
+        workspace_setup=workspace_setup,
+        artifact_collector=artifact_collector,
+        keep_workspaces=False,
+        infra_retry_attempts=2,
+        infra_retry_backoff_seconds=0.0,
+    )
+
+    result = runner.run_item(item)
+
+    assert result.passed is True
+    assert workspace_setup.prepare_attempts == 3
+    assert workspace_setup.cleaned == ["agent-container"]
+    assert len(artifact_collector.calls) == 1
+    assert artifact_collector.calls[0][1].passed is True
+
+
+def test_runner_returns_failed_result_with_rerun_command_after_retry_exhausted() -> (
+    None
+):
+    item = EvalItem(item_id="demo", dataset="swebench", intent="demo")
+    artifact_collector = FakeArtifactCollector()
+
+    class BrokenWorkspaceSetup(FakeWorkspaceSetup):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepare_attempts = 0
+
+        def prepare(self, item: EvalItem) -> PreparedWorkspace:
+            self.prepare_attempts += 1
+            raise subprocess.CalledProcessError(125, ["docker", "run"])
+
+    workspace_setup = BrokenWorkspaceSetup()
+    runner = EvalRunner(
+        backend=FakeBackend(),
+        scorer=FakeScorer(),
+        workspace_setup=workspace_setup,
+        artifact_collector=artifact_collector,
+        keep_workspaces=False,
+        infra_retry_attempts=1,
+        infra_retry_backoff_seconds=0.0,
+        rerun_command_factory=(
+            lambda item: (
+                "uv run agent-teams-evals run --config 'eval.yaml' "
+                f"--item-ids '{item.item_id}' --rerun"
+            )
+        ),
+    )
+
+    result = runner.run_item(item)
+
+    assert result.passed is False
+    assert result.scorer_detail == "exception during run"
+    assert result.rerun_command is not None
+    assert "--item-ids 'demo' --rerun" in result.rerun_command
+    assert workspace_setup.prepare_attempts == 2
+    assert len(artifact_collector.calls) == 1
+    assert artifact_collector.calls[0][1].rerun_command == result.rerun_command

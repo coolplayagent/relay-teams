@@ -170,3 +170,35 @@ def test_write_json_includes_swebench_diagnostics() -> None:
     assert diagnostics["tests_status"]["fail_to_pass"]["success"] == [
         "tests/test_fix.py::test_fix"
     ]
+
+
+def test_write_html_includes_rerun_command() -> None:
+    report = build_report(
+        [
+            EvalResult(
+                item_id="demo",
+                dataset="swebench",
+                run_id="run-1",
+                session_id="session-1",
+                outcome=RunOutcome.FAILED,
+                passed=False,
+                score=0.0,
+                scorer_name="swebench_docker",
+                error="docker run failed",
+                rerun_command=(
+                    "uv run agent-teams-evals run --config 'eval.yaml' "
+                    "--item-ids 'demo' --rerun"
+                ),
+                token_usage=TokenUsage(),
+            )
+        ],
+        dataset="swebench",
+        scorer_name="swebench_docker",
+    )
+    path = _local_tmp_dir("reporter-html") / "report.html"
+
+    EvalReporter().write_html(report, path)
+
+    html = path.read_text(encoding="utf-8")
+    assert "<th>rerun</th>" in html
+    assert "--item-ids 'demo' --rerun" in html

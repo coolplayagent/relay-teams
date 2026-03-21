@@ -38,6 +38,7 @@ def test_artifact_collector_writes_auxiliary_scores(tmp_path) -> None:
     assert metadata["auxiliary_scores"]["patch_jaccard"]["score"] == 0.6
     assert metadata["auxiliary_scores"]["patch_jaccard"]["detail"] == "aux"
     assert metadata["token_usage"] == TokenUsage().model_dump()
+    assert metadata["rerun_command"] is None
 
 
 def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> None:
@@ -155,3 +156,48 @@ def test_artifact_collector_skips_empty_scorer_log(tmp_path) -> None:
 
     log_path = tmp_path / "artifacts" / "demo-nolog" / "scorer_log.txt"
     assert not log_path.exists()
+
+
+def test_artifact_collector_overwrites_previous_artifacts_for_rerun(tmp_path) -> None:
+    collector = ArtifactCollector(tmp_path)
+    item = EvalItem(item_id="demo-rerun", dataset="swebench", intent="demo")
+    first = EvalResult(
+        item_id="demo-rerun",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=False,
+        score=0.0,
+        scorer_name="swebench_docker",
+        generated_patch="diff --git a/src/app.py b/src/app.py\n",
+        raw_generated_patch=(
+            "diff --git a/src/app.py b/src/app.py\n"
+            "diff --git a/tests/test_app.py b/tests/test_app.py\n"
+        ),
+        scorer_log="old scorer log",
+        token_usage=TokenUsage(),
+    )
+    second = EvalResult(
+        item_id="demo-rerun",
+        dataset="swebench",
+        run_id="run-2",
+        session_id="session-2",
+        outcome=RunOutcome.FAILED,
+        passed=False,
+        score=0.0,
+        scorer_name="swebench_docker",
+        rerun_command="uv run agent-teams-evals run --config 'eval.yaml' --item-ids 'demo-rerun' --rerun",
+        token_usage=TokenUsage(),
+    )
+
+    collector.collect(item, first, workspace=None)
+    collector.collect(item, second, workspace=None)
+
+    artifact_dir = tmp_path / "artifacts" / "demo-rerun"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["run_id"] == "run-2"
+    assert metadata["rerun_command"] == second.rerun_command
+    assert not (artifact_dir / "patch.diff").exists()
+    assert not (artifact_dir / "raw_patch.diff").exists()
+    assert not (artifact_dir / "scorer_log.txt").exists()

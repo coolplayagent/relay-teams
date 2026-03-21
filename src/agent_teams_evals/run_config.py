@@ -74,6 +74,8 @@ item_ids: []                            # run only these item IDs, [] = all
 concurrency: 1
 keep_workspaces: false
 save_artifacts: true                    # persist replay data (patch, output, db, logs)
+infra_retry_attempts: 2                 # retry infra-only failures before recording a final failure
+infra_retry_backoff_seconds: 5.0        # fixed backoff between infra retry attempts
 
 # --- Output ---
 output_dir: .agent_teams/evals/results
@@ -117,6 +119,8 @@ class RunConfig(BaseModel):
     concurrency: int = 1
     keep_workspaces: bool = False
     save_artifacts: bool = True
+    infra_retry_attempts: int = 2
+    infra_retry_backoff_seconds: float = 5.0
 
     # Output
     output_dir: Path = Path(".agent_teams/evals/results")

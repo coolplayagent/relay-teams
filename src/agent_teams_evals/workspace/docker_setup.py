@@ -287,31 +287,40 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             )
 
         port = _find_free_port()
-        container_id = self._run_container(
-            item=item,
-            image=image,
-            port=port,
-            command=[
-                "/opt/agent-runtime/eval-entrypoint.sh",
-                self._docker_cfg.agent_runtime_bin,
-                "server",
-                "start",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                str(self._docker_cfg.container_server_port),
-            ],
-            with_runtime=True,
-            log_msg=f"starting container {image} on port {port} ...",
-        )
-        _log(item.item_id, f"container: {container_id[:12]}")
+        container_id: str | None = None
+        try:
+            container_id = self._run_container(
+                item=item,
+                image=image,
+                port=port,
+                command=[
+                    "/opt/agent-runtime/eval-entrypoint.sh",
+                    self._docker_cfg.agent_runtime_bin,
+                    "server",
+                    "start",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(self._docker_cfg.container_server_port),
+                ],
+                with_runtime=True,
+                log_msg=f"starting container {image} on port {port} ...",
+            )
+            _log(item.item_id, f"container: {container_id[:12]}")
 
-        agent_base_url = f"http://localhost:{port}"
-        _log(item.item_id, f"waiting for server at {agent_base_url} ...")
-        _wait_for_server(
-            agent_base_url, self._docker_cfg.container_startup_timeout_seconds
-        )
-        _log(item.item_id, "server ready")
+            agent_base_url = f"http://localhost:{port}"
+            _log(item.item_id, f"waiting for server at {agent_base_url} ...")
+            _wait_for_server(
+                agent_base_url, self._docker_cfg.container_startup_timeout_seconds
+            )
+            _log(item.item_id, "server ready")
+        except Exception:
+            if container_id:
+                subprocess.run(
+                    ["docker", "rm", "-f", container_id],
+                    capture_output=True,
+                )
+            raise
 
         return PreparedWorkspace(
             item_id=item.item_id,

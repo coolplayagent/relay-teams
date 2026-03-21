@@ -36,19 +36,23 @@ class GitWorkspaceSetup(WorkspaceSetup):
         repo_path = item_dir / run_hash / "repo"
         repo_path.mkdir(parents=True, exist_ok=True)
 
-        subprocess.run(
-            ["git", "clone", item.repo_url, str(repo_path)],
-            check=True,
-            capture_output=True,
-            timeout=self._clone_timeout,
-        )
-        subprocess.run(
-            ["git", "checkout", item.base_commit],
-            cwd=repo_path,
-            check=True,
-            capture_output=True,
-            timeout=self._clone_timeout,
-        )
+        try:
+            subprocess.run(
+                ["git", "clone", item.repo_url, str(repo_path)],
+                check=True,
+                capture_output=True,
+                timeout=self._clone_timeout,
+            )
+            subprocess.run(
+                ["git", "checkout", item.base_commit],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                timeout=self._clone_timeout,
+            )
+        except Exception:
+            shutil.rmtree(repo_path.parent, ignore_errors=True)
+            raise
 
         return PreparedWorkspace(
             item_id=item.item_id,

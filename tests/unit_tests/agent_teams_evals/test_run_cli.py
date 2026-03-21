@@ -266,3 +266,163 @@ def test_run_fails_when_checkpoint_signature_does_not_match(
         in result.output
     )
     assert run_calls == []
+
+
+def test_run_rejects_rerun_without_item_ids(monkeypatch, tmp_path: Path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "results",
+        save_artifacts=False,
+        report_format="json",
+    )
+    monkeypatch.setattr(
+        "agent_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file), "--rerun"])
+
+    assert result.exit_code == 1
+    assert "--rerun requires at least one --item-ids value" in result.output
+
+
+def test_run_rerun_reexecutes_selected_item_and_updates_full_report(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    items = [_item("a"), _item("b"), _item("c")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        save_artifacts=False,
+        report_format="json",
+    )
+    checkpoint_store = EvalCheckpointStore(output_dir)
+    checkpoint_store.ensure_initialized(
+        build_checkpoint_signature(
+            cfg,
+            dataset_path=dataset_path,
+            item_ids=tuple(item.item_id for item in items),
+        )
+    )
+    checkpoint_store.append_result(_result("a", score=0.1, passed=False))
+    checkpoint_store.append_result(_result("b", score=0.2, passed=False))
+    checkpoint_store.append_result(_result("c", score=0.3, passed=True))
+
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "agent_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "agent_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "agent_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("agent_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["run", "--config", str(config_file), "--item-ids", "b", "--rerun"],
+    )
+
+    assert result.exit_code == 0
+    assert run_calls == ["b"]
+    assert "Rerunning 1 item(s) against existing results" in result.output
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    by_id = {entry["item_id"]: entry for entry in report["results"]}
+    assert [entry["item_id"] for entry in report["results"]] == ["a", "b", "c"]
+    assert by_id["a"]["score"] == 0.1
+    assert by_id["b"]["score"] == 1.0
+    assert by_id["c"]["score"] == 0.3
+
+    loaded = checkpoint_store.load_results()
+    assert loaded["b"].score == 1.0
+
+
+def test_run_prints_rerun_command_for_failed_result(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "results",
+        save_artifacts=False,
+        report_format="json",
+    )
+    items = [_item("demo")]
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            return EvalResult(
+                item_id=item.item_id,
+                dataset="jsonl",
+                run_id="",
+                session_id="",
+                outcome=RunOutcome.FAILED,
+                passed=False,
+                score=0.0,
+                scorer_name="keyword",
+                scorer_detail="exception during run",
+                error="docker run failed",
+                rerun_command=(
+                    "uv run agent-teams-evals run --config 'eval.yaml' "
+                    "--item-ids 'demo' --rerun"
+                ),
+                token_usage=TokenUsage(),
+                duration_seconds=0.1,
+            )
+
+    monkeypatch.setattr(
+        "agent_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "agent_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "agent_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("agent_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert "rerun: uv run agent-teams-evals run" in result.output

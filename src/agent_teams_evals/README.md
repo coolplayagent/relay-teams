@@ -34,6 +34,7 @@ CLI overrides are available for quick one-offs without editing the file:
 ```bash
 agent-teams-evals run --config eval.yaml --limit 5 --concurrency 2
 agent-teams-evals run --config eval.yaml --restart
+agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
 ```
 
 ## Workspace modes
@@ -143,6 +144,9 @@ item_ids: []                            # run only these item IDs, [] = all
 # --- Execution ---
 concurrency: 1
 keep_workspaces: false
+save_artifacts: true                    # persist replay data (patch, output, db, logs)
+infra_retry_attempts: 2                 # retry infra-only failures before recording a final failure
+infra_retry_backoff_seconds: 5.0        # fixed backoff between infra retry attempts
 
 # --- Output ---
 output_dir: .agent_teams/evals/results
@@ -246,6 +250,15 @@ rerunning the same command resumes from the checkpoint and rebuilds the report
 from the saved results. If the new command changes the dataset, filtered item
 set, scorer, backend execution settings, or workspace mode, resume is rejected
 and you should rerun with `--restart`.
+
+To rerun one or more items within an existing result set, pass explicit item ids
+with `--rerun`. This re-executes only the selected items, appends the new result
+to the checkpoint log, overwrites that item's artifact directory, and refreshes
+`report.json` / `report.html` so they show the latest result for the rerun item:
+
+```bash
+agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
+```
 
 Token usage is recorded in detail for each result and the final report:
 

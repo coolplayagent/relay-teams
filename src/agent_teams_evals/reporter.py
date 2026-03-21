@@ -126,6 +126,7 @@ class EvalReporter:
             status_class = "pass" if r.passed else "fail"
             error_cell = r.error or ""
             aux_cell = _format_auxiliary_scores(r.auxiliary_scores)
+            rerun_cell = r.rerun_command or ""
             rows_html += (
                 f"<tr class='{status_class}'>"
                 f"<td>{r.item_id}</td>"
@@ -137,6 +138,7 @@ class EvalReporter:
                 f"<td>{r.scorer_name}</td>"
                 f"<td>{r.scorer_detail}</td>"
                 f"<td>{aux_cell}</td>"
+                f"<td>{rerun_cell}</td>"
                 f"<td>{error_cell}</td>"
                 "</tr>\n"
             )
@@ -176,7 +178,7 @@ tr.fail td {{ background: #ffe6e6; }}
 <thead>
 <tr>
 <th>item_id</th><th>outcome</th><th>passed</th><th>score</th>
-<th>duration</th><th>usage</th><th>scorer</th><th>detail</th><th>aux</th><th>error</th>
+<th>duration</th><th>usage</th><th>scorer</th><th>detail</th><th>aux</th><th>rerun</th><th>error</th>
 </tr>
 </thead>
 <tbody>
