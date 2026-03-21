@@ -40,12 +40,48 @@ from swebench.harness.constants import (  # type: ignore[import-untyped]
     RUN_EVALUATION_LOG_DIR,
 )
 from swebench.harness.run_evaluation import (  # type: ignore[import-untyped]
-    run_instance,
+    run_instance as _upstream_run_instance,
 )
 from swebench.harness.test_spec.test_spec import (  # type: ignore[import-untyped]
     TestSpec,
     make_test_spec,
 )
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+
+def _write_text_unix_newlines(
+    self: Path,  # type: ignore[override]
+    data: str,
+    encoding: str | None = None,
+    errors: str | None = None,
+    **kwargs: object,
+) -> int:
+    """``Path.write_text`` replacement that always writes Unix newlines.
+
+    The swebench harness uses ``Path.write_text`` to create ``eval.sh`` and
+    ``patch.diff`` locally before copying them into a Linux container.  On
+    Windows, ``write_text`` defaults to CRLF which causes ``\\r`` to leak
+    into the container scripts and break every shell command.
+    """
+    return self.write_bytes(data.encode(encoding or "utf-8", errors or "strict"))
+
+
+def run_instance(
+    **kwargs: object,
+) -> dict[str, object]:
+    """Thin wrapper around the upstream ``run_instance`` that fixes
+    Windows CRLF issues transparently."""
+    if not _IS_WINDOWS:
+        return _upstream_run_instance(**kwargs)  # type: ignore[no-any-return]
+
+    original_write_text = Path.write_text
+    Path.write_text = _write_text_unix_newlines  # type: ignore[assignment,method-assign]
+    try:
+        return _upstream_run_instance(**kwargs)  # type: ignore[no-any-return]
+    finally:
+        Path.write_text = original_write_text  # type: ignore[method-assign]
+
 
 _logger = logging.getLogger(__name__)
 
