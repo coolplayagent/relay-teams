@@ -20,17 +20,25 @@
 FROM python:3.12-slim-bullseye
 
 WORKDIR /build
+
+# -- Stage 1: dependency wheels (cached when pyproject.toml is unchanged) --
 COPY pyproject.toml ./
 COPY README.md ./
-COPY src/ src/
-COPY src/agent_teams/builtin/config/orchestration.json /opt/agent-runtime/config/orchestration.json
-COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
+COPY docker/prepare_runtime_pyproject.py /build/docker/prepare_runtime_pyproject.py
 
-RUN apt-get update && \
+RUN echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye main" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye-updates main" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian-security bullseye-security main" >> /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install --yes --no-install-recommends ripgrep && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --quiet --no-cache-dir uv
+RUN python3 -m pip install --quiet --no-cache-dir \
+        -i http://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+        --trusted-host mirrors.tuna.tsinghua.edu.cn uv
+
+# Build a runtime-only wheel. The eval package lives in the same repository but is not needed inside the runtime image.
+RUN python3 /build/docker/prepare_runtime_pyproject.py
 
 RUN mkdir -p /opt/agent-runtime/bin /opt/agent-runtime/python /opt/agent-runtime/wheels && \
     cp /usr/local/bin/uv /opt/agent-runtime/bin/uv && \
@@ -41,7 +49,23 @@ RUN /opt/agent-runtime/bin/uv python install 3.12 --install-dir /opt/agent-runti
     test -n "$MANAGED_PY" && \
     ln -s "$MANAGED_PY" /opt/agent-runtime/bin/python3.12
 
-RUN python3 -m pip wheel --quiet --no-cache-dir --wheel-dir /opt/agent-runtime/wheels .
+# Download dependency wheels only (no project source needed yet).
+# This layer is cached as long as pyproject.toml does not change.
+RUN python3 -m pip wheel --quiet --no-cache-dir \
+        -i http://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+        --trusted-host mirrors.tuna.tsinghua.edu.cn \
+        --wheel-dir /opt/agent-runtime/wheels \
+        pydantic">=2.7.0" pydantic-ai "pydantic-ai-slim[fastmcp]" \
+        PyYAML">=6.0.1" typer">=0.12.3" "fastapi>=0.100.0" \
+        "uvicorn[standard]>=0.23.0" "httpx>=0.27.0"
+
+# -- Stage 2: project wheel (rebuilds when source changes) --
+COPY src/agent_teams/ src/agent_teams/
+COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
+
+# Build only the project wheel; dependencies are already in the wheelhouse.
+RUN python3 -m pip wheel --quiet --no-cache-dir --no-deps \
+        --wheel-dir /opt/agent-runtime/wheels .
 
 RUN printf '#!/bin/sh\n\
 set -eu\n\
