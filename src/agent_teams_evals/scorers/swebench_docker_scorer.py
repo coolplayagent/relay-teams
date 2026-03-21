@@ -67,18 +67,40 @@ def _write_text_unix_newlines(
     return self.write_bytes(data.encode(encoding or "utf-8", errors or "strict"))
 
 
-def run_instance(
-    **kwargs: object,
+def _run_instance_crlf_safe(
+    test_spec: TestSpec,
+    pred: dict[str, str | None],
+    rm_image: bool,
+    force_rebuild: bool,
+    client: docker_sdk.DockerClient,
+    run_id: str,
+    timeout: int | None = None,
 ) -> dict[str, object]:
     """Thin wrapper around the upstream ``run_instance`` that fixes
     Windows CRLF issues transparently."""
     if not _IS_WINDOWS:
-        return _upstream_run_instance(**kwargs)  # type: ignore[no-any-return]
+        return _upstream_run_instance(  # type: ignore[no-any-return]
+            test_spec=test_spec,
+            pred=pred,
+            rm_image=rm_image,
+            force_rebuild=force_rebuild,
+            client=client,
+            run_id=run_id,
+            timeout=timeout,
+        )
 
     original_write_text = Path.write_text
     Path.write_text = _write_text_unix_newlines  # type: ignore[assignment,method-assign]
     try:
-        return _upstream_run_instance(**kwargs)  # type: ignore[no-any-return]
+        return _upstream_run_instance(  # type: ignore[no-any-return]
+            test_spec=test_spec,
+            pred=pred,
+            rm_image=rm_image,
+            force_rebuild=force_rebuild,
+            client=client,
+            run_id=run_id,
+            timeout=timeout,
+        )
     finally:
         Path.write_text = original_write_text  # type: ignore[method-assign]
 
@@ -185,7 +207,7 @@ class SWEBenchDockerScorer(Scorer):
             if cached_report.exists():
                 cached_report.unlink()
 
-            result = run_instance(
+            result = _run_instance_crlf_safe(
                 test_spec=test_spec,
                 pred=pred,
                 rm_image=False,
@@ -201,11 +223,6 @@ class SWEBenchDockerScorer(Scorer):
             test_output = _read_test_output(scorer_run_id, item.item_id)
 
             log_parts: list[str] = []
-            if filtered_generated_files:
-                filtered_listing = "\n".join(filtered_generated_files)
-                log_parts.append(
-                    f"=== filtered benchmark test file changes ===\n{filtered_listing}"
-                )
             if not completed:
                 log_parts.append(
                     "=== swebench harness ===\nevaluation did not complete"
@@ -237,10 +254,6 @@ class SWEBenchDockerScorer(Scorer):
         if not detail:
             score_val = 1.0 if resolved else 0.0
             detail = "resolved" if resolved else "not resolved"
-            if filtered_generated_files:
-                detail = (
-                    f"{detail}; filtered_test_files={len(filtered_generated_files)}"
-                )
             patch_aux = auxiliary_scores.get("patch_jaccard")
             if patch_aux is not None:
                 detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"

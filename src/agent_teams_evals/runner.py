@@ -13,7 +13,6 @@ from agent_teams_evals.scorers.base import Scorer
 from agent_teams_evals.workspace.artifact_collector import ArtifactCollector
 from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
-from agent_teams_evals.workspace.patch_filter import filter_patch_for_swebench
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -117,21 +116,9 @@ class EvalRunner:
 
             generated_patch = ""
             raw_generated_patch = ""
-            filtered_generated_files: tuple[str, ...] = ()
             if self._patch_extractor is not None and prepared is not None:
                 raw_generated_patch = self._patch_extractor.extract(prepared)
                 generated_patch = raw_generated_patch
-                if self._scorer.name == "swebench_docker":
-                    filtered_patch = filter_patch_for_swebench(
-                        item, raw_generated_patch
-                    )
-                    generated_patch = filtered_patch.scored_patch
-                    filtered_generated_files = filtered_patch.filtered_files
-                    if filtered_generated_files:
-                        _log(
-                            item.item_id,
-                            f"filtered {len(filtered_generated_files)} benchmark test file change(s)",
-                        )
                 _log(item.item_id, f"generated patch: {len(generated_patch)} chars")
 
             duration = time.monotonic() - t_start
@@ -144,7 +131,7 @@ class EvalRunner:
                 agent_output=agent_output,
                 generated_patch=generated_patch,
                 raw_generated_patch=raw_generated_patch,
-                filtered_generated_files=filtered_generated_files,
+                filtered_generated_files=(),
                 token_usage=token_usage,
                 duration_seconds=duration,
                 workspace=prepared,

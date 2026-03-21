@@ -79,7 +79,7 @@ def _score(
     )
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
 def test_resolved_gives_score_one(
@@ -97,7 +97,7 @@ def test_resolved_gives_score_one(
     assert "resolved" in result.scorer_detail
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
 def test_not_resolved_gives_score_zero(
@@ -115,7 +115,7 @@ def test_not_resolved_gives_score_zero(
     assert "not resolved" in result.scorer_detail
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
 def test_evaluation_not_completed(
@@ -133,7 +133,7 @@ def test_evaluation_not_completed(
     assert "evaluation did not complete" in result.scorer_log
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(
     swebench_docker_scorer, "_read_test_output", return_value="PASSED all tests"
@@ -152,7 +152,7 @@ def test_scorer_log_includes_test_output(
     assert "test output" in result.scorer_log
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
 def test_records_patch_jaccard_auxiliary_score(
@@ -172,7 +172,9 @@ def test_records_patch_jaccard_auxiliary_score(
 
 
 @patch.object(
-    swebench_docker_scorer, "run_instance", side_effect=RuntimeError("docker crash")
+    swebench_docker_scorer,
+    "_run_instance_crlf_safe",
+    side_effect=RuntimeError("docker crash"),
 )
 @patch.object(swebench_docker_scorer, "make_test_spec")
 def test_scoring_error_returns_zero(
@@ -202,40 +204,7 @@ def test_missing_swebench_instance_raises() -> None:
     assert "scoring error" in result.scorer_detail
 
 
-@patch.object(swebench_docker_scorer, "run_instance")
-@patch.object(swebench_docker_scorer, "make_test_spec")
-@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
-def test_filtered_test_files_are_reported(
-    _mock_read: MagicMock,
-    mock_make_spec: MagicMock,
-    mock_run: MagicMock,
-) -> None:
-    mock_make_spec.return_value = MagicMock()
-    mock_run.return_value = {"completed": True, "resolved": True}
-
-    scorer = _make_scorer()
-    result = scorer.score(
-        item=_make_item(),
-        run_id="run-1",
-        session_id="session-1",
-        outcome=RunOutcome.COMPLETED,
-        agent_output="",
-        generated_patch=_PATCH,
-        raw_generated_patch=_PATCH,
-        filtered_generated_files=("tests/test_fix.py",),
-        token_usage=TokenUsage(),
-        duration_seconds=1.0,
-        workspace=_make_workspace(),
-        error=None,
-    )
-
-    assert result.passed is True
-    assert "filtered_test_files=1" in result.scorer_detail
-    assert "filtered benchmark test file changes" in result.scorer_log
-    assert "tests/test_fix.py" in result.scorer_log
-
-
-@patch.object(swebench_docker_scorer, "run_instance")
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
 @patch.object(swebench_docker_scorer, "make_test_spec")
 @patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
 def test_cached_report_is_cleaned(

@@ -123,9 +123,7 @@ class FakeScorer(Scorer):
         )
 
 
-def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files() -> (
-    None
-):
+def test_runner_extracts_patch_and_passes_to_scorer() -> None:
     item = EvalItem(
         item_id="demo",
         dataset="swebench",
@@ -160,9 +158,8 @@ def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files()
     assert scorer.received_workspace is not None
     assert scorer.received_workspace.container_id == "agent-container"
     assert "src/app.py" in scorer.received_patch
-    assert "tests/test_fix.py" not in scorer.received_patch
-    assert "tests/test_fix.py" in scorer.received_raw_patch
-    assert scorer.received_filtered_files == ("tests/test_fix.py",)
+    assert "tests/test_fix.py" in scorer.received_patch
+    assert scorer.received_patch == scorer.received_raw_patch
     assert scorer.received_token_usage == TokenUsage(
         input_tokens=120,
         cached_input_tokens=30,
