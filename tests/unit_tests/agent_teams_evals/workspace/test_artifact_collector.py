@@ -38,6 +38,8 @@ def test_artifact_collector_writes_auxiliary_scores(tmp_path) -> None:
     assert metadata["auxiliary_scores"]["patch_jaccard"]["score"] == 0.6
     assert metadata["auxiliary_scores"]["patch_jaccard"]["detail"] == "aux"
     assert metadata["token_usage"] == TokenUsage().model_dump()
+    assert metadata["build_log_path"] is None
+    assert metadata["build_error_summary"] is None
     assert metadata["rerun_command"] is None
 
 
@@ -62,6 +64,8 @@ def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> No
         passed=True,
         score=1.0,
         scorer_name="swebench_docker",
+        build_log_path="logs/build_images/demo/build_image.log",
+        build_error_summary="ModuleNotFoundError: No module named 'pkg_resources'",
         token_usage=usage,
     )
 
@@ -75,6 +79,8 @@ def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> No
     assert metadata["token_usage"] == usage.model_dump()
     assert metadata["input_tokens"] == 10
     assert metadata["output_tokens"] == 5
+    assert metadata["build_log_path"] == "logs/build_images/demo/build_image.log"
+    assert "pkg_resources" in metadata["build_error_summary"]
 
 
 def test_artifact_collector_writes_filtered_patch_metadata_and_raw_patch(

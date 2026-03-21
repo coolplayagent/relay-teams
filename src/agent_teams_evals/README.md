@@ -94,6 +94,11 @@ docker:
 
 The runtime image is a data container -- it is created once (`docker create`) and mounted into every eval container via `--volumes-from`. It provides a standalone `uv` binary, a uv-managed Python 3.12, and an offline wheelhouse at `/opt/agent-runtime/`. Each eval container creates its own local venv under `/tmp/agent-runtime/venv` before starting the server.
 
+When auto-building SWE-bench instance images, agent-teams now uses the
+generated `setup_repo.sh` as-is. If an instance image build fails, the run
+fails during workspace preparation and surfaces the exact `build_image.log`
+path instead of continuing into `docker run` retries for a missing image.
+
 ## Config file reference
 
 All settings live in a single YAML file. Use `init-config` to generate a commented template.

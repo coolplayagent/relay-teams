@@ -80,6 +80,8 @@ class ArtifactCollector:
             "input_tokens": result.token_usage.input_tokens,
             "output_tokens": result.token_usage.output_tokens,
             "error": result.error,
+            "build_log_path": result.build_log_path,
+            "build_error_summary": result.build_error_summary,
             "rerun_command": result.rerun_command,
             "collected_at": datetime.now(tz=timezone.utc).isoformat(),
         }

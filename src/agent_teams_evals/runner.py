@@ -12,7 +12,11 @@ import typer
 from agent_teams_evals.backends.base import AgentBackend
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers.base import Scorer
-from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
+from agent_teams_evals.workspace.base import (
+    PreparedWorkspace,
+    WorkspaceSetup,
+    WorkspaceSetupError,
+)
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
 
@@ -86,7 +90,10 @@ class EvalRunner:
         item: EvalItem,
         started_at: datetime,
         duration_seconds: float,
+        scorer_detail: str,
         error: str,
+        build_log_path: str | None,
+        build_error_summary: str | None,
         rerun_command: str | None,
     ) -> EvalResult:
         return EvalResult(
@@ -98,13 +105,15 @@ class EvalRunner:
             passed=False,
             score=0.0,
             scorer_name=self._scorer.name,
-            scorer_detail="exception during run",
+            scorer_detail=scorer_detail,
             generated_patch="",
             raw_generated_patch="",
             filtered_generated_files=(),
             duration_seconds=duration_seconds,
             started_at=started_at,
             error=error,
+            build_log_path=build_log_path,
+            build_error_summary=build_error_summary,
             rerun_command=rerun_command,
         )
 
@@ -127,6 +136,8 @@ class EvalRunner:
     def _is_retryable_infra_failure(self, error: _AttemptFailedError) -> bool:
         cause = error.cause
         if error.stage == "prepare":
+            if isinstance(cause, WorkspaceSetupError):
+                return cause.retryable
             return not isinstance(cause, ValueError)
         if error.stage == "backend" and not error.metadata_emitted:
             return isinstance(cause, (OSError, RuntimeError, TimeoutError))
@@ -307,11 +318,22 @@ class EvalRunner:
                         continue
 
                     _log(item.item_id, f"ERROR: {exc.cause}")
+                    build_log_path = None
+                    build_error_summary = None
+                    scorer_detail = "exception during run"
+                    if isinstance(exc.cause, WorkspaceSetupError):
+                        build_log_path = exc.cause.build_log_path
+                        build_error_summary = exc.cause.build_error_summary
+                        if build_log_path is not None:
+                            scorer_detail = "instance image build failed"
                     result = self._build_exception_result(
                         item=item,
                         started_at=started_at,
                         duration_seconds=0.0,
+                        scorer_detail=scorer_detail,
                         error=str(exc.cause),
+                        build_log_path=build_log_path,
+                        build_error_summary=build_error_summary,
                         rerun_command=self._rerun_command(item),
                     )
                     prepared = exc.prepared

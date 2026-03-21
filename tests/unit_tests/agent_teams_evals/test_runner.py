@@ -7,7 +7,11 @@ from agent_teams_evals.backends.base import AgentBackend, AgentEvent
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.runner import EvalRunner
 from agent_teams_evals.scorers.base import Scorer
-from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
+from agent_teams_evals.workspace.base import (
+    PreparedWorkspace,
+    WorkspaceSetup,
+    WorkspaceSetupError,
+)
 from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
 
@@ -263,3 +267,44 @@ def test_runner_returns_failed_result_with_rerun_command_after_retry_exhausted()
     assert workspace_setup.prepare_attempts == 2
     assert len(artifact_collector.calls) == 1
     assert artifact_collector.calls[0][1].rerun_command == result.rerun_command
+
+
+def test_runner_does_not_retry_non_retryable_workspace_build_failures() -> None:
+    item = EvalItem(item_id="demo", dataset="swebench", intent="demo")
+    artifact_collector = FakeArtifactCollector()
+
+    class BrokenWorkspaceSetup(FakeWorkspaceSetup):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepare_attempts = 0
+
+        def prepare(self, item: EvalItem) -> PreparedWorkspace:
+            _ = item
+            self.prepare_attempts += 1
+            raise WorkspaceSetupError(
+                "Instance image 'sweb.eval.x86_64.demo:latest' failed to build.",
+                retryable=False,
+                build_log_path="logs/build_images/demo/build_image.log",
+                build_error_summary="ModuleNotFoundError: No module named 'pkg_resources'",
+            )
+
+    workspace_setup = BrokenWorkspaceSetup()
+    runner = EvalRunner(
+        backend=FakeBackend(),
+        scorer=FakeScorer(),
+        workspace_setup=workspace_setup,
+        artifact_collector=artifact_collector,
+        keep_workspaces=False,
+        infra_retry_attempts=2,
+        infra_retry_backoff_seconds=0.0,
+    )
+
+    result = runner.run_item(item)
+
+    assert result.passed is False
+    assert result.scorer_detail == "instance image build failed"
+    assert result.build_log_path == "logs/build_images/demo/build_image.log"
+    assert result.build_error_summary is not None
+    assert "pkg_resources" in result.build_error_summary
+    assert workspace_setup.prepare_attempts == 1
+    assert len(artifact_collector.calls) == 1

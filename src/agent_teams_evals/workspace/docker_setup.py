@@ -18,7 +18,11 @@ import typer
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams_evals.models import EvalItem
-from agent_teams_evals.workspace.base import PreparedWorkspace, WorkspaceSetup
+from agent_teams_evals.workspace.base import (
+    PreparedWorkspace,
+    WorkspaceSetup,
+    WorkspaceSetupError,
+)
 
 # Environment variables forwarded from the host into each container by default.
 _DEFAULT_FORWARD_ENV = (
@@ -58,16 +62,49 @@ class _SWEConstantsModule(Protocol):
     INSTANCE_IMAGE_BUILD_DIR: Path
 
 
+class _SWETestSpec(Protocol):
+    instance_id: str
+    env_image_key: str
+    instance_image_key: str
+    install_repo_script: str
+    instance_dockerfile: str
+    platform: str
+
+
+class _SWETestSpecModule(Protocol):
+    def make_test_spec(
+        self,
+        instance: DatasetRow,
+        namespace: str | None = None,
+        base_image_tag: str = "latest",
+        env_image_tag: str = "latest",
+        instance_image_tag: str = "latest",
+        arch: str = "x86_64",
+    ) -> _SWETestSpec: ...
+
+
 class _SWEDockerBuildModule(Protocol):
-    def build_instance_images(
+    def build_env_images(
         self,
         *,
         client: _DockerClient,
-        dataset: Sequence[DatasetRow],
+        dataset: Sequence[object],
         force_rebuild: bool,
         max_workers: int,
-        tag: str,
+        namespace: str | None = None,
+        instance_image_tag: str | None = None,
         env_image_tag: str,
+    ) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]: ...
+
+    def build_image(
+        self,
+        image_name: str,
+        setup_scripts: dict[str, str],
+        dockerfile: str,
+        platform: str,
+        client: _DockerClient,
+        build_dir: Path,
+        nocache: bool = False,
     ) -> None: ...
 
 
@@ -116,6 +153,13 @@ def _load_swebench_docker_build_module() -> _SWEDockerBuildModule:
     return cast(
         _SWEDockerBuildModule,
         import_module("swebench.harness.docker_build"),
+    )
+
+
+def _load_swebench_test_spec_module() -> _SWETestSpecModule:
+    return cast(
+        _SWETestSpecModule,
+        import_module("swebench.harness.test_spec.test_spec"),
     )
 
 
@@ -192,6 +236,67 @@ def _image_exists(image: str) -> bool:
     return result.returncode == 0
 
 
+def _read_log_tail(log_path: Path, *, max_lines: int = 20) -> str:
+    if not log_path.exists():
+        return ""
+    lines = [
+        line.rstrip()
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return ""
+    return "\n".join(lines[-max_lines:])
+
+
+def _format_build_failure_message(
+    *,
+    image: str,
+    build_log_path: Path,
+    build_error_summary: str,
+) -> str:
+    image_kind = "Environment image" if ".env." in image else "Instance image"
+    message = f"{image_kind} {image!r} failed to build."
+    if build_error_summary:
+        message += f"\n{build_error_summary}"
+    message += f"\nCheck ({build_log_path}) for more information."
+    return message
+
+
+def _raise_build_failure(
+    *,
+    image: str,
+    build_log_path: Path,
+    fallback_summary: str | None = None,
+) -> None:
+    build_error_summary = _read_log_tail(build_log_path) or (fallback_summary or "")
+    raise WorkspaceSetupError(
+        _format_build_failure_message(
+            image=image,
+            build_log_path=build_log_path,
+            build_error_summary=build_error_summary,
+        ),
+        retryable=False,
+        build_log_path=str(build_log_path),
+        build_error_summary=build_error_summary,
+    )
+
+
+def _configure_swebench_log_dirs() -> _SWEConstantsModule:
+    swe_constants = _load_swebench_constants_module()
+
+    # swebench hardcodes relative Path("logs/build_images/...") constants, which
+    # creates a logs/ directory in CWD (the project root). Redirect them to the
+    # project's configured log directory so build artifacts land alongside other logs.
+    from agent_teams.paths import get_project_log_dir
+
+    log_dir = get_project_log_dir() / "build_images"
+    swe_constants.BASE_IMAGE_BUILD_DIR = log_dir / "base"
+    swe_constants.ENV_IMAGE_BUILD_DIR = log_dir / "env"
+    swe_constants.INSTANCE_IMAGE_BUILD_DIR = log_dir / "instances"
+    return swe_constants
+
+
 def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
     """Build a SWE-bench instance image if it does not already exist."""
     if _image_exists(image):
@@ -208,18 +313,9 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         ) from exc
 
     docker_sdk = _load_docker_module()
-    swe_constants = _load_swebench_constants_module()
+    swe_constants = _configure_swebench_log_dirs()
     swe_docker_build = _load_swebench_docker_build_module()
-
-    # swebench hardcodes relative Path("logs/build_images/...") constants, which
-    # creates a logs/ directory in CWD (the project root).  Redirect them to the
-    # project's configured log directory so build artifacts land alongside other logs.
-    from agent_teams.paths import get_project_log_dir
-
-    _log_dir = get_project_log_dir() / "build_images"
-    swe_constants.BASE_IMAGE_BUILD_DIR = _log_dir / "base"
-    swe_constants.ENV_IMAGE_BUILD_DIR = _log_dir / "env"
-    swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
+    swe_test_spec = _load_swebench_test_spec_module()
 
     ds = _load_dataset(dataset_name, split="test")
     instances = [
@@ -231,17 +327,63 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         )
 
     client = docker_sdk.from_env()
-    # build_instance_images chains build_env_images -> build_base_images internally.
-    # Tag parameters must be passed explicitly because swebench 4.x defaults them to
-    # None which triggers an assertion inside make_test_spec.
-    swe_docker_build.build_instance_images(
-        client=client,
-        dataset=instances,
-        force_rebuild=False,
-        max_workers=1,
-        tag="latest",
+    test_spec = swe_test_spec.make_test_spec(
+        instances[0],
         env_image_tag="latest",
+        instance_image_tag="latest",
     )
+
+    env_build_log_path = (
+        swe_constants.ENV_IMAGE_BUILD_DIR
+        / test_spec.env_image_key.replace(":", "__")
+        / "build_image.log"
+    )
+    try:
+        swe_docker_build.build_env_images(
+            client=client,
+            dataset=[test_spec],
+            force_rebuild=False,
+            max_workers=1,
+            env_image_tag="latest",
+        )
+    except Exception as exc:
+        _raise_build_failure(
+            image=test_spec.env_image_key,
+            build_log_path=env_build_log_path,
+            fallback_summary=str(exc),
+        )
+    if not _image_exists(test_spec.env_image_key):
+        _raise_build_failure(
+            image=test_spec.env_image_key,
+            build_log_path=env_build_log_path,
+        )
+
+    build_dir = (
+        swe_constants.INSTANCE_IMAGE_BUILD_DIR
+        / test_spec.instance_image_key.replace(":", "__")
+    )
+    build_log_path = build_dir / "build_image.log"
+    try:
+        swe_docker_build.build_image(
+            image_name=test_spec.instance_image_key,
+            setup_scripts={"setup_repo.sh": test_spec.install_repo_script},
+            dockerfile=test_spec.instance_dockerfile,
+            platform=test_spec.platform,
+            client=client,
+            build_dir=build_dir,
+            nocache=False,
+        )
+    except Exception as exc:
+        _raise_build_failure(
+            image=test_spec.instance_image_key,
+            build_log_path=build_log_path,
+            fallback_summary=str(exc),
+        )
+    if not _image_exists(image):
+        _raise_build_failure(
+            image=test_spec.instance_image_key,
+            build_log_path=build_log_path,
+        )
     typer.echo(f"  [{item_id}] instance image ready.")
 
 

@@ -395,8 +395,10 @@ def test_run_prints_rerun_command_for_failed_result(
                 passed=False,
                 score=0.0,
                 scorer_name="keyword",
-                scorer_detail="exception during run",
-                error="docker run failed",
+                scorer_detail="instance image build failed",
+                error="Instance image 'sweb.eval.x86_64.demo:latest' failed to build.",
+                build_log_path="logs/build_images/demo/build_image.log",
+                build_error_summary="ModuleNotFoundError: No module named 'pkg_resources'",
                 rerun_command=(
                     "uv run agent-teams-evals run --config 'eval.yaml' "
                     "--item-ids 'demo' --rerun"
@@ -425,4 +427,5 @@ def test_run_prints_rerun_command_for_failed_result(
     result = runner.invoke(app, ["run", "--config", str(config_file)])
 
     assert result.exit_code == 0
+    assert "build_log: logs/build_images/demo/build_image.log" in result.output
     assert "rerun: uv run agent-teams-evals run" in result.output

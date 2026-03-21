@@ -400,6 +400,8 @@ def run(
         )
         if result.error:
             typer.echo(f"  error: {result.error}")
+        if result.build_log_path:
+            typer.echo(f"  build_log: {result.build_log_path}")
         if result.rerun_command:
             typer.echo(f"  rerun: {result.rerun_command}")
 

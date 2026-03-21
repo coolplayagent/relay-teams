@@ -8,6 +8,21 @@ from pydantic import BaseModel, ConfigDict
 from agent_teams_evals.models import EvalItem
 
 
+class WorkspaceSetupError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        build_log_path: str | None = None,
+        build_error_summary: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.build_log_path = build_log_path
+        self.build_error_summary = build_error_summary
+
+
 class PreparedWorkspace(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
