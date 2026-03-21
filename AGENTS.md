@@ -58,7 +58,8 @@
 
 ## Coding Standards
 - Prefer enums and Pydantic models over loose dictionaries.
-- Do not use `typing.Any`, `hasattr`, or unexplained `# type: ignore`.
+- Do not use `typing.Any`, `hasattr`, or `# type: ignore`.
+- If typing is hard, fix it with explicit types, `Protocol`, `cast`, or local `.pyi` stubs instead of suppressing the checker.
 - Changed behavior must come with tests.
 - `tests/unit_tests/` should mirror `src/agent_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.

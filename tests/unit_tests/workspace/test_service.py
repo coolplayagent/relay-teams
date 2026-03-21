@@ -16,6 +16,24 @@ from agent_teams.workspace import (
 )
 
 
+class StorageScopedWorkspaceService(WorkspaceService):
+    def __init__(
+        self,
+        *,
+        repository: WorkspaceRepository,
+        storage_root: Path,
+        git_worktree_client: GitWorktreeClient | None = None,
+    ) -> None:
+        super().__init__(
+            repository=repository,
+            git_worktree_client=git_worktree_client,
+        )
+        self._storage_root = storage_root
+
+    def _workspace_storage_dir(self, workspace_id: str) -> Path:
+        return self._storage_root / workspace_id
+
+
 class FakeGitWorktreeClient(GitWorktreeClient):
     def __init__(self) -> None:
         self.ensure_calls: list[Path] = []
@@ -120,13 +138,11 @@ def test_workspace_service_forks_workspace_into_git_worktree(tmp_path: Path) -> 
     root_path = tmp_path / "workspace-root"
     root_path.mkdir()
     git_client = FakeGitWorktreeClient()
-    service = WorkspaceService(
+    service = StorageScopedWorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
         git_worktree_client=git_client,
     )
-    service._workspace_storage_dir = lambda workspace_id: (
-        tmp_path / "storage" / workspace_id
-    )  # type: ignore[method-assign]
     _ = service.create_workspace(
         workspace_id="project-alpha",
         root_path=root_path,
@@ -160,13 +176,11 @@ def test_workspace_service_forks_workspace_into_git_worktree(tmp_path: Path) -> 
 
 def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -> None:
     git_client = FakeGitWorktreeClient()
-    service = WorkspaceService(
+    service = StorageScopedWorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
         git_worktree_client=git_client,
     )
-    service._workspace_storage_dir = lambda workspace_id: (
-        tmp_path / "storage" / workspace_id
-    )  # type: ignore[method-assign]
     root_path = tmp_path / "storage" / "alpha-project-fork" / "worktree"
     root_path.mkdir(parents=True)
     _ = service.create_workspace(

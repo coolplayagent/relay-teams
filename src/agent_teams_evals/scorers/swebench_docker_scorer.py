@@ -4,8 +4,10 @@ import logging
 import platform
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 from agent_teams_evals.models import (
     AuxiliaryScore,
@@ -20,42 +22,79 @@ from agent_teams_evals.scorers.swebench_scorer import build_patch_jaccard_score
 if TYPE_CHECKING:
     import docker as docker_sdk
 
+    from swebench.harness.test_spec.test_spec import TestSpec
+
     from agent_teams_evals.workspace.base import PreparedWorkspace
 
-# The swebench package imports ``resource`` (Unix-only) at package level via
-# ``prepare_images``.  Stub it on Windows so the import chain succeeds; the
-# stub is never actually called during scoring.
-if platform.system() == "Windows" and "resource" not in sys.modules:
-    _resource_stub = types.ModuleType("resource")
-    _resource_stub.RLIMIT_NOFILE = 0  # type: ignore[attr-defined]
-    _resource_stub.getrlimit = lambda _: (0, 0)  # type: ignore[attr-defined]
-    _resource_stub.setrlimit = lambda _a, _b: None  # type: ignore[attr-defined]
-    sys.modules["resource"] = _resource_stub
 
-from swebench.harness.constants import (  # type: ignore[import-untyped]
+class _ResourceModule(types.ModuleType):
+    RLIMIT_NOFILE: int
+
+    def getrlimit(self, resource: int) -> tuple[int, int]:
+        _ = resource
+        return (0, 0)
+
+    def setrlimit(self, resource: int, limits: tuple[int, int]) -> None:
+        _ = (resource, limits)
+
+
+def _load_swebench_dependencies() -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str | Path,
+    Callable[..., dict[str, object]],
+    Callable[[dict[str, str]], TestSpec],
+]:
+    # The swebench package imports ``resource`` (Unix-only) at package level via
+    # ``prepare_images``. Stub it on Windows so the import chain succeeds; the
+    # stub is never actually called during scoring.
+    if platform.system() == "Windows" and "resource" not in sys.modules:
+        resource_stub = _ResourceModule("resource")
+        resource_stub.RLIMIT_NOFILE = 0
+        sys.modules["resource"] = resource_stub
+
+    from swebench.harness.constants import (
+        KEY_INSTANCE_ID,
+        KEY_MODEL,
+        KEY_PREDICTION,
+        LOG_TEST_OUTPUT,
+        RUN_EVALUATION_LOG_DIR,
+    )
+    from swebench.harness.run_evaluation import run_instance as upstream_run_instance
+    from swebench.harness.test_spec.test_spec import make_test_spec
+
+    return (
+        KEY_INSTANCE_ID,
+        KEY_MODEL,
+        KEY_PREDICTION,
+        LOG_TEST_OUTPUT,
+        RUN_EVALUATION_LOG_DIR,
+        upstream_run_instance,
+        make_test_spec,
+    )
+
+
+(
     KEY_INSTANCE_ID,
     KEY_MODEL,
     KEY_PREDICTION,
     LOG_TEST_OUTPUT,
     RUN_EVALUATION_LOG_DIR,
-)
-from swebench.harness.run_evaluation import (  # type: ignore[import-untyped]
-    run_instance as _upstream_run_instance,
-)
-from swebench.harness.test_spec.test_spec import (  # type: ignore[import-untyped]
-    TestSpec,
+    _upstream_run_instance,
     make_test_spec,
-)
+) = _load_swebench_dependencies()
 
 _IS_WINDOWS = platform.system() == "Windows"
 
 
 def _write_text_unix_newlines(
-    self: Path,  # type: ignore[override]
+    self: Path,
     data: str,
     encoding: str | None = None,
     errors: str | None = None,
-    **kwargs: object,
+    newline: str | None = None,
 ) -> int:
     """``Path.write_text`` replacement that always writes Unix newlines.
 
@@ -64,6 +103,7 @@ def _write_text_unix_newlines(
     Windows, ``write_text`` defaults to CRLF which causes ``\\r`` to leak
     into the container scripts and break every shell command.
     """
+    _ = newline
     return self.write_bytes(data.encode(encoding or "utf-8", errors or "strict"))
 
 
@@ -79,7 +119,7 @@ def _run_instance_crlf_safe(
     """Thin wrapper around the upstream ``run_instance`` that fixes
     Windows CRLF issues transparently."""
     if not _IS_WINDOWS:
-        return _upstream_run_instance(  # type: ignore[no-any-return]
+        return _upstream_run_instance(
             test_spec=test_spec,
             pred=pred,
             rm_image=rm_image,
@@ -89,10 +129,8 @@ def _run_instance_crlf_safe(
             timeout=timeout,
         )
 
-    original_write_text = Path.write_text
-    Path.write_text = _write_text_unix_newlines  # type: ignore[assignment,method-assign]
-    try:
-        return _upstream_run_instance(  # type: ignore[no-any-return]
+    with patch.object(Path, "write_text", _write_text_unix_newlines):
+        return _upstream_run_instance(
             test_spec=test_spec,
             pred=pred,
             rm_image=rm_image,
@@ -101,8 +139,6 @@ def _run_instance_crlf_safe(
             run_id=run_id,
             timeout=timeout,
         )
-    finally:
-        Path.write_text = original_write_text  # type: ignore[method-assign]
 
 
 _logger = logging.getLogger(__name__)
@@ -184,7 +220,7 @@ class SWEBenchDockerScorer(Scorer):
 
         try:
             instance_dict = _build_swebench_instance(item)
-            test_spec: TestSpec = make_test_spec(instance_dict)  # type: ignore[arg-type]
+            test_spec = make_test_spec(instance_dict)
 
             pred = {
                 KEY_INSTANCE_ID: item.item_id,

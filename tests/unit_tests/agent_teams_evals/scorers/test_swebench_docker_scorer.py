@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
 from agent_teams_evals.scorers import swebench_docker_scorer
 from agent_teams_evals.scorers.swebench_docker_scorer import SWEBenchDockerScorer
@@ -212,16 +214,14 @@ def test_cached_report_is_cleaned(
     mock_make_spec: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
-    monkeypatch: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ensure stale report.json is removed before calling run_instance."""
     mock_make_spec.return_value = MagicMock()
     mock_run.return_value = {"completed": True, "resolved": True}
 
     # Point RUN_EVALUATION_LOG_DIR to tmp_path so we can create a fake cached report
-    monkeypatch.setattr(  # type: ignore[union-attr]
-        swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path)
-    )
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
     report_dir = tmp_path / "score-run-1" / "agent-teams" / "demo"
     report_dir.mkdir(parents=True)
     cached = report_dir / "report.json"

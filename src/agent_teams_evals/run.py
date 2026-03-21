@@ -195,7 +195,7 @@ def run(
     # Scorer
     match cfg.scorer:
         case "swebench_docker":
-            import docker as docker_sdk  # type: ignore[import-untyped]
+            import docker as docker_sdk
 
             scorer = SWEBenchDockerScorer(
                 client=docker_sdk.from_env(),

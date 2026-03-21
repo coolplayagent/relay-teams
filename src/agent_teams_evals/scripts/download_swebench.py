@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 import typer
-from datasets import load_dataset  # type: ignore[import-untyped]
+from datasets import load_dataset
 
 app = typer.Typer(add_completion=False)
 
@@ -49,8 +49,10 @@ def main(
     ds = load_dataset(dataset_name, split=split, streaming=True)
 
     items: list[dict[str, object]] = []
-    for item in ds:
-        if id_set and item["instance_id"] not in id_set:
+    for row in ds:
+        item = dict(row)
+        instance_id = str(item["instance_id"])
+        if id_set and instance_id not in id_set:
             continue
         items.append(item)
         if id_set and len(items) >= len(id_set):

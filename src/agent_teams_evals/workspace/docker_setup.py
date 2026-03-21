@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+import sys
+import types
 
 import typer
 from pydantic import BaseModel, ConfigDict
@@ -30,6 +32,25 @@ _DEFAULT_FORWARD_ENV = (
 
 def _log(item_id: str, msg: str) -> None:
     typer.echo(f"  [{item_id}] {msg}")
+
+
+class _ResourceModule(types.ModuleType):
+    RLIMIT_NOFILE: int
+
+    def getrlimit(self, resource: int) -> tuple[int, int]:
+        _ = resource
+        return (0, 0)
+
+    def setrlimit(self, resource: int, limits: tuple[int, int]) -> None:
+        _ = (resource, limits)
+
+
+def _install_resource_stub() -> None:
+    if "resource" in sys.modules or sys.platform != "win32":
+        return
+    resource_stub = _ResourceModule("resource")
+    resource_stub.RLIMIT_NOFILE = 0
+    sys.modules["resource"] = resource_stub
 
 
 def _find_free_port() -> int:
@@ -111,23 +132,15 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         return
     typer.echo(f"  [{item_id}] image {image!r} not found, building ...")
     try:
-        import sys
-        import types
-
         # swebench.harness imports `prepare_images` which imports the Unix-only
         # `resource` module.  Stub it on Windows before the first import so that
         # the package loads; the stub is never actually called during image builds.
-        if "resource" not in sys.modules and sys.platform == "win32":
-            _resource_stub = types.ModuleType("resource")
-            _resource_stub.RLIMIT_NOFILE = 0  # type: ignore[attr-defined]
-            _resource_stub.getrlimit = lambda _: (0, 0)  # type: ignore[attr-defined]
-            _resource_stub.setrlimit = lambda _a, _b: None  # type: ignore[attr-defined]
-            sys.modules["resource"] = _resource_stub
+        _install_resource_stub()
 
-        import docker as docker_sdk  # type: ignore[import-untyped]
-        from datasets import load_dataset  # type: ignore[import-untyped]
-        import swebench.harness.constants as _swe_constants  # type: ignore[import-untyped]
-        from swebench.harness.docker_build import (  # type: ignore[import-untyped]
+        import docker as docker_sdk
+        from datasets import load_dataset
+        import swebench.harness.constants as _swe_constants
+        from swebench.harness.docker_build import (
             build_instance_images,
         )
     except ImportError as exc:
@@ -146,7 +159,9 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
     _swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
 
     ds = load_dataset(dataset_name, split="test")
-    instances = [dict(r) for r in ds if r["instance_id"] == item_id]  # type: ignore[reportCallIssue]
+    instances = [
+        row for item in ds if (row := dict(item)).get("instance_id") == item_id
+    ]
     if not instances:
         raise RuntimeError(
             f"Instance {item_id!r} not found in dataset {dataset_name!r}"

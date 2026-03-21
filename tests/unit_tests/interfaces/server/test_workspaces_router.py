@@ -20,6 +20,24 @@ from agent_teams.workspace import (
 )
 
 
+class StorageScopedWorkspaceService(WorkspaceService):
+    def __init__(
+        self,
+        *,
+        repository: WorkspaceRepository,
+        storage_root: Path,
+        git_worktree_client: GitWorktreeClient | None = None,
+    ) -> None:
+        super().__init__(
+            repository=repository,
+            git_worktree_client=git_worktree_client,
+        )
+        self._storage_root = storage_root
+
+    def _workspace_storage_dir(self, workspace_id: str) -> Path:
+        return self._storage_root / workspace_id
+
+
 class FakeGitWorktreeClient(GitWorktreeClient):
     def __init__(self) -> None:
         self.remove_calls: list[tuple[Path, Path]] = []
@@ -176,13 +194,11 @@ def test_pick_workspace_creates_workspace_for_provided_root_path(
 def test_fork_workspace(tmp_path: Path) -> None:
     root_path = tmp_path / "workspace-root"
     root_path.mkdir()
-    service = WorkspaceService(
+    service = StorageScopedWorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        storage_root=tmp_path / "storage",
         git_worktree_client=FakeGitWorktreeClient(),
     )
-    service._workspace_storage_dir = lambda workspace_id: (
-        tmp_path / "storage" / workspace_id
-    )  # type: ignore[method-assign]
     _ = service.create_workspace(
         workspace_id="project-alpha",
         root_path=root_path,
@@ -208,13 +224,11 @@ def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None
     root_path = tmp_path / "storage" / "alpha-project-fork" / "worktree"
     root_path.mkdir(parents=True)
     git_client = FakeGitWorktreeClient()
-    service = WorkspaceService(
+    service = StorageScopedWorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        storage_root=tmp_path / "storage",
         git_worktree_client=git_client,
     )
-    service._workspace_storage_dir = lambda workspace_id: (
-        tmp_path / "storage" / workspace_id
-    )  # type: ignore[method-assign]
     _ = service.create_workspace(
         workspace_id="alpha-project-fork",
         root_path=root_path,
