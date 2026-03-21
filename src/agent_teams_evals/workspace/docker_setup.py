@@ -197,9 +197,6 @@ class DockerWorkspaceSetup(WorkspaceSetup):
     def prepare(self, item: EvalItem) -> PreparedWorkspace:
         return self._prepare_agent_workspace(item)
 
-    def prepare_score(self, item: EvalItem) -> PreparedWorkspace:
-        return self._prepare_score_workspace(item)
-
     def _prepare_agent_workspace(self, item: EvalItem) -> PreparedWorkspace:
         if item.base_commit is None:
             raise ValueError(f"Item {item.item_id} has no base_commit")
@@ -244,35 +241,6 @@ class DockerWorkspaceSetup(WorkspaceSetup):
             base_commit=item.base_commit,
             container_id=container_id,
             agent_base_url=agent_base_url,
-            container_repo_path=self._docker_cfg.container_repo_path,
-        )
-
-    def _prepare_score_workspace(self, item: EvalItem) -> PreparedWorkspace:
-        if item.base_commit is None:
-            raise ValueError(f"Item {item.item_id} has no base_commit")
-
-        image = f"{self._docker_cfg.image_prefix}.{item.item_id}:latest"
-
-        if self._docker_cfg.build_instance_images:
-            _ensure_instance_image(
-                item.item_id, image, self._docker_cfg.swebench_dataset
-            )
-
-        container_id = self._run_container(
-            item=item,
-            image=image,
-            port=None,
-            command=["tail", "-f", "/dev/null"],
-            with_runtime=False,
-            log_msg=f"starting scoring container {image} ...",
-        )
-        _log(item.item_id, f"score container: {container_id[:12]}")
-
-        return PreparedWorkspace(
-            item_id=item.item_id,
-            repo_path=Path("."),
-            base_commit=item.base_commit,
-            container_id=container_id,
             container_repo_path=self._docker_cfg.container_repo_path,
         )
 

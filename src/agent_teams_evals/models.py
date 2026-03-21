@@ -47,6 +47,7 @@ class EvalItem(BaseModel):
     repo_url: str | None = None
     base_commit: str | None = None
     extra_fields: dict[str, str] = Field(default_factory=dict)
+    swebench_instance: dict[str, str] | None = None
 
 
 class EvalResult(BaseModel):

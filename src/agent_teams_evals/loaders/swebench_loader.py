@@ -129,6 +129,8 @@ class SWEBenchLoader(DatasetLoader):
                 k: str(v) for k, v in raw.items() if k not in _SWEBENCH_FIELDS
             }
 
+            swebench_instance = {k: str(v) for k, v in raw.items()}
+
             item = EvalItem(
                 item_id=instance_id,
                 dataset="swebench",
@@ -143,6 +145,7 @@ class SWEBenchLoader(DatasetLoader):
                 fail_to_pass=fail_to_pass,
                 pass_to_pass=pass_to_pass,
                 extra_fields=extra_fields,
+                swebench_instance=swebench_instance,
             )
             items.append(item)
         return items

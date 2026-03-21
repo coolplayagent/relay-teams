@@ -49,16 +49,6 @@ class FakeWorkspaceSetup(WorkspaceSetup):
             container_repo_path="/testbed",
         )
 
-    def prepare_score(self, item: EvalItem) -> PreparedWorkspace:
-        self.calls.append(f"prepare_score:{item.item_id}")
-        return PreparedWorkspace(
-            item_id=item.item_id,
-            repo_path=Path("."),
-            base_commit="abc123",
-            container_id="score-container",
-            container_repo_path="/testbed",
-        )
-
     def cleanup(self, workspace: PreparedWorkspace) -> None:
         self.cleaned.append(workspace.container_id or "")
 
@@ -165,10 +155,10 @@ def test_runner_uses_separate_score_workspace_and_filters_benchmark_test_files()
     result = runner.run_item(item)
 
     assert result.passed is True
-    assert workspace_setup.calls == ["prepare:demo", "prepare_score:demo"]
-    assert workspace_setup.cleaned == ["score-container", "agent-container"]
+    assert workspace_setup.calls == ["prepare:demo"]
+    assert workspace_setup.cleaned == ["agent-container"]
     assert scorer.received_workspace is not None
-    assert scorer.received_workspace.container_id == "score-container"
+    assert scorer.received_workspace.container_id == "agent-container"
     assert "src/app.py" in scorer.received_patch
     assert "tests/test_fix.py" not in scorer.received_patch
     assert "tests/test_fix.py" in scorer.received_raw_patch

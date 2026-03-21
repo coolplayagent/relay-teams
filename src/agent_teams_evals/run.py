@@ -195,8 +195,11 @@ def run(
     # Scorer
     match cfg.scorer:
         case "swebench_docker":
+            import docker as docker_sdk  # type: ignore[import-untyped]
+
             scorer = SWEBenchDockerScorer(
-                patch_pass_threshold=cfg.swebench_pass_threshold
+                client=docker_sdk.from_env(),
+                patch_pass_threshold=cfg.swebench_pass_threshold,
             )
             if patch_extractor is None and workspace_setup is not None:
                 patch_extractor = PatchExtractor()

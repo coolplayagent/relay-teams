@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import json
-import subprocess
-from dataclasses import dataclass
+import logging
+import platform
+import sys
+import types
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agent_teams_evals.models import (
@@ -16,114 +18,76 @@ from agent_teams_evals.scorers.base import Scorer
 from agent_teams_evals.scorers.swebench_scorer import build_patch_jaccard_score
 
 if TYPE_CHECKING:
+    import docker as docker_sdk
+
     from agent_teams_evals.workspace.base import PreparedWorkspace
 
+# The swebench package imports ``resource`` (Unix-only) at package level via
+# ``prepare_images``.  Stub it on Windows so the import chain succeeds; the
+# stub is never actually called during scoring.
+if platform.system() == "Windows" and "resource" not in sys.modules:
+    _resource_stub = types.ModuleType("resource")
+    _resource_stub.RLIMIT_NOFILE = 0  # type: ignore[attr-defined]
+    _resource_stub.getrlimit = lambda _: (0, 0)  # type: ignore[attr-defined]
+    _resource_stub.setrlimit = lambda _a, _b: None  # type: ignore[attr-defined]
+    sys.modules["resource"] = _resource_stub
 
-_TESTBED_PYTHON = "/opt/miniconda3/envs/testbed/bin/python"
-_PYTEST_STDIN_RUNNER = (
-    "import json, sys, pytest; "
-    "tests = json.loads(sys.stdin.read()); "
-    "raise SystemExit(pytest.main([*tests, '-x', '--tb=short', '-q']))"
+from swebench.harness.constants import (  # type: ignore[import-untyped]
+    KEY_INSTANCE_ID,
+    KEY_MODEL,
+    KEY_PREDICTION,
+    LOG_TEST_OUTPUT,
+    RUN_EVALUATION_LOG_DIR,
+)
+from swebench.harness.run_evaluation import (  # type: ignore[import-untyped]
+    run_instance,
+)
+from swebench.harness.test_spec.test_spec import (  # type: ignore[import-untyped]
+    TestSpec,
+    make_test_spec,
 )
 
+_logger = logging.getLogger(__name__)
 
-@dataclass(frozen=True)
-class PytestOutcome:
-    passed: bool
-    output: str
+_MODEL_NAME = "agent-teams"
 
 
-def _apply_test_patch(
-    container_id: str,
-    patch: str,
-    repo_path: str = "/testbed",
-    timeout: float = 30.0,
-) -> tuple[bool, str]:
-    """Apply a unified diff inside the container via ``git apply``."""
-    patch_bytes = patch.encode("utf-8")
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            container_id,
-            "git",
-            "-C",
-            repo_path,
-            "apply",
-            "-",
-        ],
-        input=patch_bytes,
-        capture_output=True,
-        timeout=timeout,
+def _build_swebench_instance(item: EvalItem) -> dict[str, str]:
+    """Reconstruct the raw SWE-bench instance dict expected by ``make_test_spec``."""
+    if item.swebench_instance is not None:
+        return dict(item.swebench_instance)
+    raise ValueError(
+        f"Item {item.item_id} has no swebench_instance data; "
+        "cannot build TestSpec for official harness scoring"
     )
-    if result.returncode == 0:
-        return True, ""
-    return False, result.stderr.decode("utf-8", errors="replace").strip()
 
 
-def _run_pytest(
-    container_id: str,
-    tests: list[str],
-    repo_path: str = "/testbed",
-    timeout: float = 180.0,
-) -> PytestOutcome:
-    if not tests:
-        return PytestOutcome(passed=True, output="")
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-i",
-            "-w",
-            repo_path,
-            container_id,
-            _TESTBED_PYTHON,
-            "-c",
-            _PYTEST_STDIN_RUNNER,
-        ],
-        input=json.dumps(tests),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
+def _read_test_output(run_id: str, instance_id: str) -> str:
+    """Read the test output log written by ``run_instance``."""
+    log_path = (
+        Path(RUN_EVALUATION_LOG_DIR)
+        / run_id
+        / _MODEL_NAME
+        / instance_id
+        / LOG_TEST_OUTPUT
     )
-    output = result.stdout or ""
-    if result.stderr:
-        output += "\n--- stderr ---\n" + result.stderr
-    return PytestOutcome(passed=result.returncode == 0, output=output)
-
-
-def _sanitize_test_ids(tests: list[str]) -> list[str]:
-    """Fix truncated parametrized test IDs with unclosed brackets.
-
-    Some upstream SWE-bench entries contain IDs like ``test_foo[ceci`` where
-    the closing ``]`` was lost during dataset export (e.g. the parameter value
-    ``ceci n'est pas un meta`` was truncated at the single-quote).  These
-    cause pytest collection errors that abort the entire test run.
-
-    Replace such IDs with the base test name so that all parametrizations of
-    that test are collected instead.
-    """
-    result: list[str] = []
-    for tid in tests:
-        if "[" in tid and "]" not in tid:
-            tid = tid[: tid.index("[")]
-        result.append(tid)
-    return result
+    if log_path.exists():
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    return ""
 
 
 class SWEBenchDockerScorer(Scorer):
-    """Score by running fail_to_pass and pass_to_pass tests inside the container."""
+    """Score by delegating test execution to the official swebench harness."""
 
     def __init__(
         self,
-        pytest_timeout: float = 180.0,
+        client: docker_sdk.DockerClient,
         patch_pass_threshold: float = 0.8,
+        test_timeout: int = 300,
     ) -> None:
-        self._pytest_timeout = pytest_timeout
+        self._client = client
         self._patch_pass_threshold = patch_pass_threshold
+        self._test_timeout = test_timeout
 
     @property
     def name(self) -> str:
@@ -156,82 +120,49 @@ class SWEBenchDockerScorer(Scorer):
             aux_name, aux_score = patch_score
             auxiliary_scores[aux_name] = aux_score
 
-        if workspace is None or workspace.container_id is None:
-            return EvalResult(
-                item_id=item.item_id,
-                dataset=item.dataset,
-                run_id=run_id,
-                session_id=session_id,
-                outcome=outcome,
-                passed=False,
-                score=0.0,
-                scorer_name=self.name,
-                scorer_detail="no container available for docker scorer",
-                auxiliary_scores=auxiliary_scores,
-                agent_output=agent_output,
-                generated_patch=generated_patch,
-                raw_generated_patch=raw_generated_patch,
-                filtered_generated_files=filtered_generated_files,
-                token_usage=token_usage,
-                duration_seconds=duration_seconds,
-                error=error,
-            )
-
-        container_id = workspace.container_id
-        repo = workspace.container_repo_path or "/testbed"
-        f2p_tests = _sanitize_test_ids(list(item.fail_to_pass))
-        p2p_tests = _sanitize_test_ids(list(item.pass_to_pass))
         scorer_log = ""
-        candidate_patch_err = ""
+        resolved = False
+        detail = ""
 
         try:
-            candidate_patch_ok = True
-            if generated_patch:
-                candidate_patch_ok, candidate_patch_err = _apply_test_patch(
-                    container_id,
-                    generated_patch,
-                    repo,
-                )
+            instance_dict = _build_swebench_instance(item)
+            test_spec: TestSpec = make_test_spec(instance_dict)  # type: ignore[arg-type]
 
-            # Apply the SWE-bench test_patch (adds/modifies test cases) before
-            # running pytest so that fail_to_pass tests actually exist.
-            test_patch_ok = True
-            test_patch_err = ""
-            if candidate_patch_ok and item.test_patch:
-                test_patch_ok, test_patch_err = _apply_test_patch(
-                    container_id,
-                    item.test_patch,
-                    repo,
-                )
+            pred = {
+                KEY_INSTANCE_ID: item.item_id,
+                KEY_MODEL: _MODEL_NAME,
+                KEY_PREDICTION: generated_patch or None,
+            }
 
-            if not candidate_patch_ok:
-                f2p_result = PytestOutcome(
-                    passed=False,
-                    output=f"candidate patch apply failed: {candidate_patch_err}",
-                )
-                p2p_result = PytestOutcome(passed=True, output="")
-            elif not test_patch_ok:
-                f2p_result = PytestOutcome(
-                    passed=False,
-                    output=f"test_patch apply failed: {test_patch_err}",
-                )
-                p2p_result = PytestOutcome(passed=True, output="")
-            else:
-                f2p_result = _run_pytest(
-                    container_id,
-                    f2p_tests,
-                    repo,
-                    self._pytest_timeout,
-                )
-                p2p_result = _run_pytest(
-                    container_id,
-                    p2p_tests,
-                    repo,
-                    self._pytest_timeout,
-                )
+            # Use a scorer-specific run_id to avoid collisions with agent run_ids
+            scorer_run_id = f"score-{run_id}" if run_id else "score"
 
-            f2p_ok = f2p_result.passed
-            p2p_ok = p2p_result.passed
+            # Remove any cached report from a previous run so swebench does not
+            # short-circuit and return stale results.
+            cached_report = (
+                Path(RUN_EVALUATION_LOG_DIR)
+                / scorer_run_id
+                / _MODEL_NAME
+                / item.item_id
+                / "report.json"
+            )
+            if cached_report.exists():
+                cached_report.unlink()
+
+            result = run_instance(
+                test_spec=test_spec,
+                pred=pred,
+                rm_image=False,
+                force_rebuild=False,
+                client=self._client,
+                run_id=scorer_run_id,
+                timeout=self._test_timeout,
+            )
+
+            resolved = bool(result.get("resolved", False))
+            completed = bool(result.get("completed", False))
+
+            test_output = _read_test_output(scorer_run_id, item.item_id)
 
             log_parts: list[str] = []
             if filtered_generated_files:
@@ -239,48 +170,46 @@ class SWEBenchDockerScorer(Scorer):
                 log_parts.append(
                     f"=== filtered benchmark test file changes ===\n{filtered_listing}"
                 )
-            if candidate_patch_err:
+            if not completed:
                 log_parts.append(
-                    f"=== candidate_patch apply error ===\n{candidate_patch_err}"
+                    "=== swebench harness ===\nevaluation did not complete"
                 )
-            if test_patch_err:
-                log_parts.append(f"=== test_patch apply error ===\n{test_patch_err}")
-            if f2p_tests:
-                log_parts.append(
-                    f"=== fail_to_pass ({len(f2p_tests)} tests) ===\n"
-                    f"{f2p_result.output}"
+            if test_output:
+                log_parts.append(f"=== test output ===\n{test_output}")
+
+            # Also include the swebench report.json if available
+            report_path = (
+                Path(RUN_EVALUATION_LOG_DIR)
+                / scorer_run_id
+                / _MODEL_NAME
+                / item.item_id
+                / "report.json"
+            )
+            if report_path.exists():
+                report_content = report_path.read_text(
+                    encoding="utf-8", errors="replace"
                 )
-            if p2p_tests:
-                log_parts.append(
-                    f"=== pass_to_pass ({len(p2p_tests)} tests) ===\n"
-                    f"{p2p_result.output}"
-                )
+                log_parts.append(f"=== swebench report ===\n{report_content}")
+
             scorer_log = "\n\n".join(log_parts)
 
-        except subprocess.TimeoutExpired:
-            f2p_ok = False
-            p2p_ok = False
-            scorer_log = f"pytest timed out after {self._pytest_timeout}s"
+        except Exception as exc:
+            _logger.exception("swebench scoring failed for %s", item.item_id)
+            detail = f"scoring error: {exc}"
+            scorer_log = f"=== scoring error ===\n{exc}"
 
-        passed = f2p_ok and p2p_ok
-        if candidate_patch_err:
-            score_val = 0.0
-            detail = "candidate_patch apply failed"
-        elif passed:
-            score_val = 1.0
-            detail = f"f2p={len(f2p_tests)} passed, p2p={len(p2p_tests)} passed"
-        elif f2p_ok:
-            score_val = 0.5
-            detail = f"f2p={len(f2p_tests)} passed, p2p={len(p2p_tests)} FAILED (regressions)"
+        if not detail:
+            score_val = 1.0 if resolved else 0.0
+            detail = "resolved" if resolved else "not resolved"
+            if filtered_generated_files:
+                detail = (
+                    f"{detail}; filtered_test_files={len(filtered_generated_files)}"
+                )
+            patch_aux = auxiliary_scores.get("patch_jaccard")
+            if patch_aux is not None:
+                detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"
         else:
             score_val = 0.0
-            detail = f"f2p={len(f2p_tests)} FAILED"
-
-        if filtered_generated_files:
-            detail = f"{detail}; filtered_test_files={len(filtered_generated_files)}"
-        patch_aux = auxiliary_scores.get("patch_jaccard")
-        if patch_aux is not None:
-            detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"
 
         return EvalResult(
             item_id=item.item_id,
@@ -288,7 +217,7 @@ class SWEBenchDockerScorer(Scorer):
             run_id=run_id,
             session_id=session_id,
             outcome=outcome,
-            passed=passed,
+            passed=resolved,
             score=score_val,
             scorer_name=self.name,
             scorer_detail=detail,
