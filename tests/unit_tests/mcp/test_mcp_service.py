@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_ai.mcp import MCPServerStdio
 
 from agent_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSpec,
     McpToolInfo,
 )
-from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
 from agent_teams.mcp.mcp_service import McpService
 from agent_teams.trace import get_trace_context
 
@@ -99,3 +100,38 @@ async def test_list_server_tools_uses_registry_result(monkeypatch) -> None:
     assert summary.transport == "stdio"
     assert [tool.name for tool in summary.tools] == ["read_file", "write_file"]
     assert get_trace_context().trace_id is None
+
+
+def test_build_mcp_server_uses_longer_default_stdio_timeout() -> None:
+    server = build_mcp_server(
+        McpServerSpec(
+            name="context7",
+            config={"mcpServers": {"context7": {"command": "npx"}}},
+            server_config={"command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
+            source=McpConfigScope.SESSION,
+        )
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.timeout == 15.0
+    assert server.read_timeout == 300.0
+
+
+def test_build_mcp_server_allows_stdio_timeout_override() -> None:
+    server = build_mcp_server(
+        McpServerSpec(
+            name="context7",
+            config={"mcpServers": {"context7": {"command": "npx"}}},
+            server_config={
+                "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"],
+                "timeout": 42,
+                "read_timeout": 123,
+            },
+            source=McpConfigScope.SESSION,
+        )
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.timeout == 42.0
+    assert server.read_timeout == 123.0

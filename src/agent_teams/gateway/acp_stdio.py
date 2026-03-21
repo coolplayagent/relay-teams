@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from agent_teams.env import get_env_var
+from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.logger import get_logger, log_event
@@ -43,6 +44,7 @@ class AcpGatewayServer:
         session_service: SessionService,
         run_service: RunManager,
         notify: AcpNotifier,
+        mcp_relay: AcpMcpRelay | None = None,
     ) -> None:
         self._gateway_session_service = gateway_session_service
         self._session_service = session_service
@@ -50,12 +52,26 @@ class AcpGatewayServer:
         self._notify = notify
         self._active_runs: dict[str, str] = {}
         self._zed_compat_mode = False
+        self._mcp_relay = mcp_relay or AcpMcpRelay()
 
     def set_notify(self, notify: AcpNotifier) -> None:
         self._notify = notify
 
     def set_zed_compat_mode(self, enabled: bool) -> None:
         self._zed_compat_mode = enabled
+
+    def set_mcp_relay_outbound(
+        self,
+        *,
+        send_request: Callable[
+            [str, dict[str, JsonValue]], Awaitable[dict[str, JsonValue]]
+        ],
+        send_notification: AcpNotifier,
+    ) -> None:
+        self._mcp_relay.set_outbound(
+            send_request=send_request,
+            send_notification=send_notification,
+        )
 
     async def handle_jsonrpc_message(
         self,
@@ -112,14 +128,11 @@ class AcpGatewayServer:
         if method == "session/cancel":
             return self._cancel_session(params)
         if method == "mcp/connect":
-            return self._mcp_connect(params)
+            return await self._mcp_connect(params)
         if method == "mcp/message":
-            raise AcpProtocolError(
-                -32001,
-                "MCP-over-ACP relay is not wired into the runtime yet.",
-            )
+            return await self._mcp_message(params, message_id)
         if method == "mcp/disconnect":
-            return self._mcp_disconnect(params)
+            return await self._mcp_disconnect(params)
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
     async def _handle_notification(
@@ -131,6 +144,9 @@ class AcpGatewayServer:
             _ = self._cancel_session(params)
             return
         if method == "initialized":
+            return
+        if method == "mcp/message":
+            _ = await self._mcp_message(params, None)
             return
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
@@ -149,7 +165,7 @@ class AcpGatewayServer:
                     "image": False,
                 },
                 "mcpCapabilities": {
-                    "acp": False,
+                    "acp": True,
                     "http": False,
                     "sse": False,
                 },
@@ -170,6 +186,7 @@ class AcpGatewayServer:
             capabilities=capabilities,
             session_mcp_servers=mcp_servers,
         )
+        self._mcp_relay.bind_session_servers(record.gateway_session_id, mcp_servers)
         return {"sessionId": record.gateway_session_id}
 
     async def _load_session(
@@ -178,6 +195,16 @@ class AcpGatewayServer:
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         record = self._gateway_session_service.get_session(gateway_session_id)
+        if "mcpServers" in params:
+            mcp_servers = _parse_mcp_servers(params.get("mcpServers"))
+            record = self._gateway_session_service.set_session_mcp_servers(
+                gateway_session_id,
+                mcp_servers,
+            )
+        self._mcp_relay.bind_session_servers(
+            gateway_session_id,
+            record.session_mcp_servers,
+        )
         messages = self._session_service.get_session_messages(
             record.internal_session_id
         )
@@ -224,39 +251,42 @@ class AcpGatewayServer:
                 -32602, "prompt must contain at least one text block"
             )
         record = self._gateway_session_service.get_session(gateway_session_id)
-        run_id, _ = self._run_service.create_run(
-            IntentInput(
-                session_id=record.internal_session_id,
-                intent=prompt_text,
-                yolo=True,
+        with self._mcp_relay.session_scope(gateway_session_id):
+            run_id, _ = self._run_service.create_run(
+                IntentInput(
+                    session_id=record.internal_session_id,
+                    intent=prompt_text,
+                    yolo=True,
+                )
             )
-        )
-        self._active_runs[gateway_session_id] = run_id
-        _ = self._gateway_session_service.bind_active_run(gateway_session_id, run_id)
-        if not self._zed_compat_mode:
-            await self._publish_session_update(
-                gateway_session_id,
-                {
-                    "sessionUpdate": "user_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": prompt_text,
+            self._active_runs[gateway_session_id] = run_id
+            _ = self._gateway_session_service.bind_active_run(
+                gateway_session_id, run_id
+            )
+            if not self._zed_compat_mode:
+                await self._publish_session_update(
+                    gateway_session_id,
+                    {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {
+                            "type": "text",
+                            "text": prompt_text,
+                        },
                     },
-                },
-            )
+                )
 
-        stop_reason = "end_turn"
-        terminal_error: str | None = None
+            stop_reason = "end_turn"
+            terminal_error: str | None = None
 
-        async for event in self._run_service.stream_run_events(run_id):
-            maybe_stop_reason, maybe_error = await self._map_run_event(
-                gateway_session_id=gateway_session_id,
-                event=event,
-            )
-            if maybe_stop_reason is not None:
-                stop_reason = maybe_stop_reason
-            if maybe_error is not None:
-                terminal_error = maybe_error
+            async for event in self._run_service.stream_run_events(run_id):
+                maybe_stop_reason, maybe_error = await self._map_run_event(
+                    gateway_session_id=gateway_session_id,
+                    event=event,
+                )
+                if maybe_stop_reason is not None:
+                    stop_reason = maybe_stop_reason
+                if maybe_error is not None:
+                    terminal_error = maybe_error
 
         self._active_runs.pop(gateway_session_id, None)
         _ = self._gateway_session_service.bind_active_run(gateway_session_id, None)
@@ -356,12 +386,24 @@ class AcpGatewayServer:
             self._run_service.stop_run(run_id)
         return {"status": "ok"}
 
-    def _mcp_connect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    async def _mcp_connect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
-        server_id = _required_str(params, "serverId")
+        server_id = _required_str(params, "acpId", fallback_key="serverId")
+        try:
+            server_spec = self._mcp_relay.session_server_spec(
+                session_id=gateway_session_id,
+                server_id=server_id,
+            )
+        except KeyError as exc:
+            raise AcpProtocolError(-32602, str(exc)) from exc
         connection = self._gateway_session_service.open_mcp_connection(
             gateway_session_id=gateway_session_id,
             server_id=server_id,
+        )
+        await self._mcp_relay.open_connection(
+            session_id=gateway_session_id,
+            connection_id=connection.connection_id,
+            server_spec=server_spec,
         )
         return {
             "connectionId": connection.connection_id,
@@ -369,13 +411,34 @@ class AcpGatewayServer:
             "status": connection.status.value,
         }
 
-    def _mcp_disconnect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    async def _mcp_message(
+        self,
+        params: dict[str, JsonValue],
+        message_id: JsonRpcId | None,
+    ) -> dict[str, JsonValue]:
+        connection_id = _required_str(params, "connectionId")
+        method = _required_str(params, "method")
+        forwarded_params = _optional_object(params, "params")
+        try:
+            return await self._mcp_relay.relay_inbound_message(
+                connection_id=connection_id,
+                method=method,
+                params=forwarded_params,
+                message_id=message_id,
+            )
+        except KeyError as exc:
+            raise AcpProtocolError(-32602, str(exc)) from exc
+
+    async def _mcp_disconnect(
+        self, params: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         connection_id = _required_str(params, "connectionId")
         _ = self._gateway_session_service.close_mcp_connection(
             gateway_session_id=gateway_session_id,
             connection_id=connection_id,
         )
+        await self._mcp_relay.close_connection(connection_id=connection_id)
         return {"status": "closed", "connectionId": connection_id}
 
     def _usage_for_run(self, run_id: str) -> dict[str, JsonValue]:
@@ -429,7 +492,15 @@ class AcpStdioRuntime:
         self._output_stream = output_stream
         self._write_lock = asyncio.Lock()
         self._emit_framed_messages = True
+        self._next_request_id = 0
+        self._pending_requests: dict[
+            JsonRpcId, asyncio.Future[dict[str, JsonValue]]
+        ] = {}
         self._server.set_zed_compat_mode(False)
+        self._server.set_mcp_relay_outbound(
+            send_request=self.send_request,
+            send_notification=self.send_message,
+        )
 
     def set_transport_mode(self, *, framed_input: bool) -> None:
         self._emit_framed_messages = framed_input
@@ -481,10 +552,41 @@ class AcpStdioRuntime:
 
     async def _handle_message(self, parsed: dict[str, JsonValue]) -> None:
         _trace_acp_message("inbound", parsed)
+        message_id = _optional_id(parsed)
+        method = parsed.get("method")
+        if message_id is not None and not isinstance(method, str):
+            pending = self._pending_requests.get(message_id)
+            if pending is not None and not pending.done():
+                pending.set_result(parsed)
+                return
         response = await self._server.handle_jsonrpc_message(parsed)
         if response is None:
             return
         await self.send_message(response)
+
+    async def send_request(
+        self,
+        method: str,
+        params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        self._next_request_id += 1
+        request_id = self._next_request_id
+        future: asyncio.Future[dict[str, JsonValue]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending_requests[request_id] = future
+        try:
+            await self.send_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": method,
+                    "params": params,
+                }
+            )
+            return await future
+        finally:
+            self._pending_requests.pop(request_id, None)
 
     async def send_message(self, message: dict[str, JsonValue]) -> None:
         _trace_acp_message("outbound", message)
@@ -546,8 +648,15 @@ def _params_object(message: dict[str, JsonValue]) -> dict[str, JsonValue]:
     raise AcpProtocolError(-32602, "params must be an object")
 
 
-def _required_str(payload: dict[str, JsonValue], key: str) -> str:
+def _required_str(
+    payload: dict[str, JsonValue],
+    key: str,
+    *,
+    fallback_key: str | None = None,
+) -> str:
     value = payload.get(key)
+    if value is None and fallback_key is not None:
+        value = payload.get(fallback_key)
     if isinstance(value, str) and value.strip():
         return value.strip()
     raise AcpProtocolError(-32602, f"{key} must be a non-empty string")
@@ -593,26 +702,53 @@ def _parse_mcp_servers(raw_value: JsonValue | None) -> tuple[GatewayMcpServerSpe
     for index, item in enumerate(raw_value):
         if not isinstance(item, dict):
             raise AcpProtocolError(-32602, "mcpServers items must be objects")
-        raw_name = item.get("name")
-        raw_transport = item.get("transport")
         raw_id = item.get("id")
-        if not isinstance(raw_name, str) or not raw_name.strip():
-            raise AcpProtocolError(-32602, f"mcpServers[{index}].name must be a string")
-        if not isinstance(raw_transport, str) or not raw_transport.strip():
+        raw_transport = _detect_mcp_transport(item)
+        if raw_transport is None:
             raise AcpProtocolError(
                 -32602,
-                f"mcpServers[{index}].transport must be a string",
+                f"mcpServers[{index}] must declare a transport, command, or url",
             )
-        server_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else raw_name
+        raw_name = item.get("name")
+        normalized_name = (
+            raw_name.strip()
+            if isinstance(raw_name, str) and raw_name.strip()
+            else (
+                raw_id.strip() if isinstance(raw_id, str) and raw_id.strip() else None
+            )
+        )
+        if normalized_name is None:
+            raise AcpProtocolError(-32602, f"mcpServers[{index}].name must be a string")
+        server_id = (
+            raw_id.strip()
+            if isinstance(raw_id, str) and raw_id.strip()
+            else normalized_name
+        )
         result.append(
             GatewayMcpServerSpec(
                 server_id=server_id,
-                name=raw_name.strip(),
-                transport=raw_transport.strip(),
+                name=normalized_name,
+                transport=raw_transport,
                 config={str(key): value for key, value in item.items()},
             )
         )
     return tuple(result)
+
+
+def _detect_mcp_transport(item: dict[str, JsonValue]) -> str | None:
+    raw_transport = item.get("transport")
+    if isinstance(raw_transport, str) and raw_transport.strip():
+        return raw_transport.strip()
+    raw_type = item.get("type")
+    if isinstance(raw_type, str) and raw_type.strip():
+        return raw_type.strip()
+    raw_command = item.get("command")
+    if isinstance(raw_command, str) and raw_command.strip():
+        return "stdio"
+    raw_url = item.get("url")
+    if isinstance(raw_url, str) and raw_url.strip():
+        return "sse" if "/sse" in raw_url else "http"
+    return None
 
 
 def _prompt_blocks_to_text(prompt_blocks: list[JsonValue]) -> str:

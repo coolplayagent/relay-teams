@@ -9,6 +9,7 @@ import typer
 
 from agent_teams.builtin import ensure_app_config_bootstrap
 from agent_teams.env.runtime_env import sync_app_env_to_process_env
+from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay, GatewayAwareMcpRegistry
 from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
@@ -36,6 +37,14 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     sync_app_env_to_process_env(config_dir / ".env")
     configure_logging(config_dir=config_dir, console_enabled_override=False)
     container = ServerContainer(config_dir=config_dir)
+    mcp_relay = AcpMcpRelay()
+    gateway_mcp_registry = GatewayAwareMcpRegistry(
+        base_registry=container.mcp_registry,
+        relay=mcp_relay,
+    )
+    container.mcp_registry = gateway_mcp_registry
+    container.mcp_service.replace_registry(gateway_mcp_registry)
+    container._refresh_coordinator_runtime()
     gateway_session_repository = GatewaySessionRepository(
         container.runtime.paths.db_path
     )
@@ -48,6 +57,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
         session_service=container.session_service,
         run_service=container.run_service,
         notify=_noop_notify,
+        mcp_relay=mcp_relay,
     )
     runtime = AcpStdioRuntime(
         server=server,

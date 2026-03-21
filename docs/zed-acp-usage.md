@@ -164,7 +164,39 @@ After the configuration is saved:
 
 If the setup is correct, Zed starts the local `agent-teams gateway acp stdio` subprocess and communicates with it over ACP.
 
-## 6. What to expect in Zed
+## 6. Configure MCP servers in Zed
+
+If you want Zed to provide MCP tools to `agent-teams` over ACP, configure those servers in Zed itself under `context_servers`.
+
+Example:
+
+```json
+{
+  "context_servers": {
+    "demo-mcp": {
+      "command": "uvx",
+      "args": ["some-mcp-server"]
+    }
+  }
+}
+```
+
+Once the MCP server is active in Zed, `agent-teams` can receive it from ACP session setup, typically through `session/new` or `session/load`. Depending on how Zed provides that server, it may arrive as an ACP transport server or as a host-provided `stdio` server definition. No extra `agent-teams` bridge process or MCP config file is required for that Zed-provided server.
+
+For Context7 specifically, prefer a custom context server entry such as:
+
+```json
+{
+  "context_servers": {
+    "mcp-server-context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}
+```
+
+## 7. What to expect in Zed
 
 During a normal prompt turn, Zed should display:
 
@@ -172,14 +204,39 @@ During a normal prompt turn, Zed should display:
 - intermediate progress updates before the final answer text
 - tool call progress updates
 - raw tool input when the tool call includes arguments, including shell-style string arguments
+- MCP tools provided by Zed as normal tool calls when the model decides to use them
 
 Zed renders your own user message itself, so the gateway does not send a second user echo in Zed mode.
 
 Formatting of streamed assistant text is preserved. Multi-line answers, indentation, and blank lines should render correctly in a new thread after upgrading.
 
-## 7. Debugging
+## 8. Verifying MCP-over-ACP in Zed
 
-### 7.1 Open ACP logs
+The shortest manual verification flow is:
+
+1. Add or enable one MCP server in Zed under `context_servers`.
+2. Restart Zed and confirm the MCP server is active in the Agent Panel settings view.
+3. Open a new `agent-teams` thread.
+4. Send a prompt that explicitly asks for that MCP server by name and requests an action only that server can perform.
+
+Good validation prompts look like:
+
+- `Use the demo-mcp server and list its available tools before answering.`
+- `Call the <tool_name> tool from demo-mcp and show me the result.`
+
+When MCP-over-ACP is working, you should see:
+
+- the MCP tool name appear in the thread
+- the raw tool input rendered in Zed
+- the tool result streamed back into the reply
+
+For example, a Zed-provided Context7 server should surface tools such as `resolve-library-id` and `query-docs` inside an `agent-teams` thread.
+
+If the model does not pick the MCP tool reliably, create a dedicated Zed agent profile with conflicting built-in tools disabled and the target context server enabled.
+
+## 9. Debugging
+
+### 9.1 Open ACP logs
 
 Zed provides ACP debug logs.
 
@@ -191,17 +248,18 @@ dev: open acp logs
 
 This is the most direct place to inspect ACP requests, responses, and startup errors.
 
-### 7.2 Recommended troubleshooting order
+### 9.2 Recommended troubleshooting order
 
 If `agent-teams` does not show up in Zed, check in this order:
 
 1. Confirm `uv --directory <repo> run agent-teams gateway acp stdio` works in a terminal.
 2. Confirm Zed can resolve `uv` from `PATH`.
 3. Confirm `agent_servers` JSON is valid.
-4. Restart Zed after changing settings or upgrading the gateway implementation.
-5. Open `dev: open acp logs` and inspect the handshake or process startup failure.
+4. Confirm the target Zed MCP server is active under `context_servers`.
+5. Restart Zed after changing settings or upgrading the gateway implementation.
+6. Open `dev: open acp logs` and inspect the handshake or process startup failure.
 
-### 7.3 Optional ACP wire tracing
+### 9.3 Optional ACP wire tracing
 
 If you need the gateway to record raw ACP request and response payloads, enable tracing explicitly:
 
@@ -211,7 +269,7 @@ ACP_TRACE_STDIO=1 uv --directory /path/to/agent_teams run agent-teams gateway ac
 
 Tracing is off by default so prompt content and tool payloads are not written to logs during normal use.
 
-### 7.4 Common Windows issues
+### 9.4 Common Windows issues
 
 If Zed cannot find `uv`:
 
@@ -223,14 +281,14 @@ If the agent exits immediately:
 - check `model.json` and `.env`
 - then confirm `uv sync --extra dev` was completed in this repository
 
-## 8. Current implementation limits
+## 10. Current implementation limits
 
 The current ACP gateway is still a first implementation. Keep these limits in mind:
 
 - implemented: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`
-- implemented: `mcp/connect`, `mcp/disconnect`
-- not implemented yet: full `mcp/message` relay
-- MCP over ACP capability advertisement is not fully enabled yet
+- implemented: `mcp/connect`, `mcp/message`, `mcp/disconnect`
+- implemented: MCP over ACP capability advertisement via `mcpCapabilities.acp`
+- current MCP-over-ACP support is focused on session-scoped tool loading and tool invocation flows in Zed
 - the current milestone is prompt-turn and session-lifecycle interoperability, not full ACP feature parity
 
 In Zed, the best initial verification targets are:
@@ -240,15 +298,16 @@ In Zed, the best initial verification targets are:
 - a prompt starts an internal run
 - `session/update` messages stream back correctly
 - tool progress and raw tool input are visible in the thread UI
+- Zed-provided MCP tools can be invoked from an `agent-teams` thread
 
-## 9. Future improvements
+## 11. Future improvements
 
 To make the Zed integration closer to a production path later, two follow-up steps are likely:
 
 - publish Agent Teams to ACP Registry
-- complete MCP over ACP relay and capability advertisement
+- expand MCP-over-ACP coverage beyond the current tool-centric Zed flow
 
-## 10. References
+## 12. References
 
 - Zed external agents: https://zed.dev/docs/ai/external-agents
 - Zed agent servers and ACP Registry: https://zed.dev/docs/extensions/agent-servers

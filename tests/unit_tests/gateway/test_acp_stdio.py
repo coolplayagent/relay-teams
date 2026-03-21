@@ -102,7 +102,7 @@ async def test_initialize_returns_gateway_capabilities(tmp_path: Path) -> None:
                     "image": False,
                 },
                 "mcpCapabilities": {
-                    "acp": False,
+                    "acp": True,
                     "http": False,
                     "sse": False,
                 },
@@ -338,6 +338,52 @@ async def test_session_prompt_includes_string_tool_raw_input_for_zed(
 
 
 @pytest.mark.asyncio
+async def test_session_load_persists_host_provided_mcp_servers(
+    tmp_path: Path,
+) -> None:
+    server, _, _, _ = _build_server(tmp_path)
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    created_result = _require_result_object(created)
+    session_id = _require_str(created_result, "sessionId")
+
+    loaded = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "mcpServers": [
+                    {
+                        "name": "mcp-server-context7",
+                        "command": "npx",
+                        "args": ["-y", "@upstash/context7-mcp"],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert _require_result_object(loaded) == {"sessionId": session_id}
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    assert len(record.session_mcp_servers) == 1
+    server_spec = record.session_mcp_servers[0]
+    assert server_spec.server_id == "mcp-server-context7"
+    assert server_spec.transport == "stdio"
+    assert server_spec.config["command"] == "npx"
+    assert server_spec.config["args"] == ["-y", "@upstash/context7-mcp"]
+
+
+@pytest.mark.asyncio
 async def test_session_prompt_preserves_whitespace_for_zed_chunks(
     tmp_path: Path,
 ) -> None:
@@ -413,7 +459,7 @@ async def test_mcp_connection_lifecycle_updates_gateway_state(tmp_path: Path) ->
             "method": "mcp/connect",
             "params": {
                 "sessionId": session_id,
-                "serverId": "filesystem",
+                "acpId": "filesystem",
             },
         }
     )
@@ -551,12 +597,23 @@ def _build_server(
     async def notify(message: dict[str, JsonValue]) -> None:
         notifications.append(message)
 
+    async def send_request(
+        _method: str,
+        _params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {},
+        }
+
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
         run_service=cast(RunManager, run_manager),
         notify=notify,
     )
+    server.set_mcp_relay_outbound(send_request=send_request, send_notification=notify)
     return server, session_service, run_manager, notifications
 
 

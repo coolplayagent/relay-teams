@@ -91,7 +91,7 @@ def create_provider_factory(
                 mcp_registry=mcp_registry,
                 skill_registry=skill_registry,
                 allowed_tools=role.tools,
-                allowed_mcp_servers=role.mcp_servers,
+                allowed_mcp_servers=mcp_registry.resolve_server_names(role.mcp_servers),
                 allowed_skills=role.skills,
                 message_repo=message_repo,
                 role_registry=role_registry,

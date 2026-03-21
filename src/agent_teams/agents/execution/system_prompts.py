@@ -307,14 +307,15 @@ async def _list_role_mcp_tools(
     role: RoleDefinition,
     mcp_registry: McpRegistry,
 ) -> tuple[str, ...]:
-    if not role.mcp_servers:
+    resolved_server_names = mcp_registry.resolve_server_names(role.mcp_servers)
+    if not resolved_server_names:
         return ()
     summaries = await asyncio.gather(
-        *[mcp_registry.list_tools(server_name) for server_name in role.mcp_servers]
+        *[mcp_registry.list_tools(server_name) for server_name in resolved_server_names]
     )
     return tuple(
         f"{server_name}/{tool.name}"
-        for server_name, tools in zip(role.mcp_servers, summaries, strict=True)
+        for server_name, tools in zip(resolved_server_names, summaries, strict=True)
         for tool in tools
     )
 
