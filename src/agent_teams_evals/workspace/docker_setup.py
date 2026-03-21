@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
+from importlib import import_module
 import os
 import socket
 import subprocess
+import sys
 import time
+import types
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-import sys
-import types
+from typing import Protocol, cast
 
 import typer
 from pydantic import BaseModel, ConfigDict
@@ -28,6 +31,44 @@ _DEFAULT_FORWARD_ENV = (
     "https_proxy",
     "no_proxy",
 )
+
+type DatasetRow = Mapping[str, object]
+
+
+class _DockerClient(Protocol): ...
+
+
+class _DockerModule(Protocol):
+    def from_env(self) -> _DockerClient: ...
+
+
+class _DatasetsModule(Protocol):
+    def load_dataset(
+        self,
+        path: str,
+        *,
+        split: str,
+        streaming: bool = False,
+    ) -> Iterable[DatasetRow]: ...
+
+
+class _SWEConstantsModule(Protocol):
+    BASE_IMAGE_BUILD_DIR: Path
+    ENV_IMAGE_BUILD_DIR: Path
+    INSTANCE_IMAGE_BUILD_DIR: Path
+
+
+class _SWEDockerBuildModule(Protocol):
+    def build_instance_images(
+        self,
+        *,
+        client: _DockerClient,
+        dataset: Sequence[DatasetRow],
+        force_rebuild: bool,
+        max_workers: int,
+        tag: str,
+        env_image_tag: str,
+    ) -> None: ...
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -51,6 +92,31 @@ def _install_resource_stub() -> None:
     resource_stub = _ResourceModule("resource")
     resource_stub.RLIMIT_NOFILE = 0
     sys.modules["resource"] = resource_stub
+
+
+def _load_docker_module() -> _DockerModule:
+    return cast(_DockerModule, import_module("docker"))
+
+
+def _load_dataset(
+    path: str,
+    *,
+    split: str,
+    streaming: bool = False,
+) -> Iterable[DatasetRow]:
+    datasets_module = cast(_DatasetsModule, import_module("datasets"))
+    return datasets_module.load_dataset(path, split=split, streaming=streaming)
+
+
+def _load_swebench_constants_module() -> _SWEConstantsModule:
+    return cast(_SWEConstantsModule, import_module("swebench.harness.constants"))
+
+
+def _load_swebench_docker_build_module() -> _SWEDockerBuildModule:
+    return cast(
+        _SWEDockerBuildModule,
+        import_module("swebench.harness.docker_build"),
+    )
 
 
 def _find_free_port() -> int:
@@ -136,17 +202,14 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
         # `resource` module.  Stub it on Windows before the first import so that
         # the package loads; the stub is never actually called during image builds.
         _install_resource_stub()
-
-        import docker as docker_sdk
-        from datasets import load_dataset
-        import swebench.harness.constants as _swe_constants
-        from swebench.harness.docker_build import (
-            build_instance_images,
-        )
     except ImportError as exc:
         raise RuntimeError(
             f"swebench and docker packages are required to auto-build instance images: {exc}"
         ) from exc
+
+    docker_sdk = _load_docker_module()
+    swe_constants = _load_swebench_constants_module()
+    swe_docker_build = _load_swebench_docker_build_module()
 
     # swebench hardcodes relative Path("logs/build_images/...") constants, which
     # creates a logs/ directory in CWD (the project root).  Redirect them to the
@@ -154,11 +217,11 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
     from agent_teams.paths import get_project_log_dir
 
     _log_dir = get_project_log_dir() / "build_images"
-    _swe_constants.BASE_IMAGE_BUILD_DIR = _log_dir / "base"
-    _swe_constants.ENV_IMAGE_BUILD_DIR = _log_dir / "env"
-    _swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
+    swe_constants.BASE_IMAGE_BUILD_DIR = _log_dir / "base"
+    swe_constants.ENV_IMAGE_BUILD_DIR = _log_dir / "env"
+    swe_constants.INSTANCE_IMAGE_BUILD_DIR = _log_dir / "instances"
 
-    ds = load_dataset(dataset_name, split="test")
+    ds = _load_dataset(dataset_name, split="test")
     instances = [
         row for item in ds if (row := dict(item)).get("instance_id") == item_id
     ]
@@ -171,7 +234,7 @@ def _ensure_instance_image(item_id: str, image: str, dataset_name: str) -> None:
     # build_instance_images chains build_env_images -> build_base_images internally.
     # Tag parameters must be passed explicitly because swebench 4.x defaults them to
     # None which triggers an assertion inside make_test_spec.
-    build_instance_images(
+    swe_docker_build.build_instance_images(
         client=client,
         dataset=instances,
         force_rebuild=False,

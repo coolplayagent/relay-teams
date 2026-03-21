@@ -8,13 +8,37 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from importlib import import_module
 import json
 from pathlib import Path
+from typing import Protocol, cast
 
 import typer
-from datasets import load_dataset
 
 app = typer.Typer(add_completion=False)
+
+type DatasetRow = Mapping[str, object]
+
+
+class _DatasetsModule(Protocol):
+    def load_dataset(
+        self,
+        path: str,
+        *,
+        split: str,
+        streaming: bool = False,
+    ) -> Iterable[DatasetRow]: ...
+
+
+def _load_dataset(
+    path: str,
+    *,
+    split: str,
+    streaming: bool = False,
+) -> Iterable[DatasetRow]:
+    datasets_module = cast(_DatasetsModule, import_module("datasets"))
+    return datasets_module.load_dataset(path, split=split, streaming=streaming)
 
 
 @app.command()
@@ -46,7 +70,7 @@ def main(
     id_set = set(ids)
 
     typer.echo(f"Loading {dataset_name} (split={split}, streaming) ...")
-    ds = load_dataset(dataset_name, split=split, streaming=True)
+    ds = _load_dataset(dataset_name, split=split, streaming=True)
 
     items: list[dict[str, object]] = []
     for row in ds:

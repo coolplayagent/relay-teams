@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from importlib import import_module
 import logging
 import platform
 import sys
 import types
-from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 from unittest.mock import patch
 
 from agent_teams_evals.models import (
@@ -20,11 +21,36 @@ from agent_teams_evals.scorers.base import Scorer
 from agent_teams_evals.scorers.swebench_scorer import build_patch_jaccard_score
 
 if TYPE_CHECKING:
-    import docker as docker_sdk
-
-    from swebench.harness.test_spec.test_spec import TestSpec
-
     from agent_teams_evals.workspace.base import PreparedWorkspace
+
+
+class _DockerClient(Protocol): ...
+
+
+class _SWEBenchConstantsModule(Protocol):
+    KEY_INSTANCE_ID: str
+    KEY_MODEL: str
+    KEY_PREDICTION: str
+    LOG_TEST_OUTPUT: str
+    RUN_EVALUATION_LOG_DIR: str | Path
+
+
+class _SWEBenchRunEvaluationModule(Protocol):
+    def run_instance(
+        self,
+        *,
+        test_spec: object,
+        pred: Mapping[str, str | None],
+        rm_image: bool,
+        force_rebuild: bool,
+        client: _DockerClient,
+        run_id: str,
+        timeout: int | None = None,
+    ) -> dict[str, object]: ...
+
+
+class _SWEBenchTestSpecModule(Protocol):
+    def make_test_spec(self, instance: Mapping[str, str]) -> object: ...
 
 
 class _ResourceModule(types.ModuleType):
@@ -45,7 +71,7 @@ def _load_swebench_dependencies() -> tuple[
     str,
     str | Path,
     Callable[..., dict[str, object]],
-    Callable[[dict[str, str]], TestSpec],
+    Callable[[Mapping[str, str]], object],
 ]:
     # The swebench package imports ``resource`` (Unix-only) at package level via
     # ``prepare_images``. Stub it on Windows so the import chain succeeds; the
@@ -55,24 +81,27 @@ def _load_swebench_dependencies() -> tuple[
         resource_stub.RLIMIT_NOFILE = 0
         sys.modules["resource"] = resource_stub
 
-    from swebench.harness.constants import (
-        KEY_INSTANCE_ID,
-        KEY_MODEL,
-        KEY_PREDICTION,
-        LOG_TEST_OUTPUT,
-        RUN_EVALUATION_LOG_DIR,
+    constants_module = cast(
+        _SWEBenchConstantsModule,
+        import_module("swebench.harness.constants"),
     )
-    from swebench.harness.run_evaluation import run_instance as upstream_run_instance
-    from swebench.harness.test_spec.test_spec import make_test_spec
+    run_evaluation_module = cast(
+        _SWEBenchRunEvaluationModule,
+        import_module("swebench.harness.run_evaluation"),
+    )
+    test_spec_module = cast(
+        _SWEBenchTestSpecModule,
+        import_module("swebench.harness.test_spec.test_spec"),
+    )
 
     return (
-        KEY_INSTANCE_ID,
-        KEY_MODEL,
-        KEY_PREDICTION,
-        LOG_TEST_OUTPUT,
-        RUN_EVALUATION_LOG_DIR,
-        upstream_run_instance,
-        make_test_spec,
+        constants_module.KEY_INSTANCE_ID,
+        constants_module.KEY_MODEL,
+        constants_module.KEY_PREDICTION,
+        constants_module.LOG_TEST_OUTPUT,
+        constants_module.RUN_EVALUATION_LOG_DIR,
+        run_evaluation_module.run_instance,
+        test_spec_module.make_test_spec,
     )
 
 
@@ -108,11 +137,11 @@ def _write_text_unix_newlines(
 
 
 def _run_instance_crlf_safe(
-    test_spec: TestSpec,
+    test_spec: object,
     pred: dict[str, str | None],
     rm_image: bool,
     force_rebuild: bool,
-    client: docker_sdk.DockerClient,
+    client: _DockerClient,
     run_id: str,
     timeout: int | None = None,
 ) -> dict[str, object]:
@@ -175,7 +204,7 @@ class SWEBenchDockerScorer(Scorer):
 
     def __init__(
         self,
-        client: docker_sdk.DockerClient,
+        client: _DockerClient,
         patch_pass_threshold: float = 0.8,
         test_timeout: int = 300,
     ) -> None:

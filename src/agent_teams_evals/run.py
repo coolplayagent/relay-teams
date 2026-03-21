@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import typer
 
@@ -12,6 +13,17 @@ if TYPE_CHECKING:
     from agent_teams_evals.models import EvalItem, EvalReport, EvalResult
     from agent_teams_evals.reporter import EvalReporter
     from agent_teams_evals.run_config import RunConfig
+
+
+class _DockerClient(Protocol): ...
+
+
+class _DockerModule(Protocol):
+    def from_env(self) -> _DockerClient: ...
+
+
+def _load_docker_module() -> _DockerModule:
+    return cast(_DockerModule, import_module("docker"))
 
 
 def _validate_unique_item_ids(items: list[EvalItem]) -> None:
@@ -195,10 +207,8 @@ def run(
     # Scorer
     match cfg.scorer:
         case "swebench_docker":
-            import docker as docker_sdk
-
             scorer = SWEBenchDockerScorer(
-                client=docker_sdk.from_env(),
+                client=_load_docker_module().from_env(),
                 patch_pass_threshold=cfg.swebench_pass_threshold,
             )
             if patch_extractor is None and workspace_setup is not None:

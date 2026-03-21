@@ -47,7 +47,6 @@ Skills are composable capability modules. Agents load skills at runtime based on
 
 ## Coding Standards
 
-- Do not use `# type: ignore`. Fix typing issues with explicit models, `Protocol`, `cast`, or local `.pyi` stubs.
 - Do not use `typing.Any` or `hasattr` in production code paths.
 - Changed behavior must come with tests.
 
