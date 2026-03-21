@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from importlib import import_module
+import json
 import logging
 import platform
 import sys
@@ -15,6 +16,10 @@ from agent_teams_evals.models import (
     EvalItem,
     EvalResult,
     RunOutcome,
+    SWEBenchDiagnostics,
+    SWEBenchResolutionStatus,
+    SWEBenchTestBucket,
+    SWEBenchTestsStatus,
     TokenUsage,
 )
 from agent_teams_evals.scorers.base import Scorer
@@ -199,6 +204,152 @@ def _read_test_output(run_id: str, instance_id: str) -> str:
     return ""
 
 
+def _read_swebench_report(run_id: str, instance_id: str) -> tuple[str | None, Path]:
+    report_path = (
+        Path(RUN_EVALUATION_LOG_DIR)
+        / run_id
+        / _MODEL_NAME
+        / instance_id
+        / "report.json"
+    )
+    if not report_path.exists():
+        return None, report_path
+    return report_path.read_text(encoding="utf-8", errors="replace"), report_path
+
+
+def _coerce_bool(value: object, *, default: bool = False) -> bool:
+    return value if isinstance(value, bool) else default
+
+
+def _coerce_str_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def _parse_test_bucket(value: object) -> SWEBenchTestBucket:
+    if not isinstance(value, dict):
+        return SWEBenchTestBucket()
+    return SWEBenchTestBucket(
+        success=_coerce_str_tuple(value.get("success")),
+        failure=_coerce_str_tuple(value.get("failure")),
+    )
+
+
+def _build_tests_status(value: object) -> SWEBenchTestsStatus:
+    if not isinstance(value, dict):
+        return SWEBenchTestsStatus()
+    return SWEBenchTestsStatus(
+        fail_to_pass=_parse_test_bucket(value.get("FAIL_TO_PASS")),
+        pass_to_pass=_parse_test_bucket(value.get("PASS_TO_PASS")),
+        fail_to_fail=_parse_test_bucket(value.get("FAIL_TO_FAIL")),
+        pass_to_fail=_parse_test_bucket(value.get("PASS_TO_FAIL")),
+    )
+
+
+def _compute_resolution_status(
+    tests_status: SWEBenchTestsStatus,
+    *,
+    resolved: bool,
+) -> SWEBenchResolutionStatus:
+    if resolved:
+        return SWEBenchResolutionStatus.FULL
+
+    f2p_total = len(tests_status.fail_to_pass.success) + len(
+        tests_status.fail_to_pass.failure
+    )
+    p2p_total = len(tests_status.pass_to_pass.success) + len(
+        tests_status.pass_to_pass.failure
+    )
+    f2p_ratio = (
+        1.0 if f2p_total == 0 else len(tests_status.fail_to_pass.success) / f2p_total
+    )
+    p2p_ratio = (
+        1.0 if p2p_total == 0 else len(tests_status.pass_to_pass.success) / p2p_total
+    )
+    if 0.0 < f2p_ratio < 1.0 and p2p_ratio == 1.0:
+        return SWEBenchResolutionStatus.PARTIAL
+    return SWEBenchResolutionStatus.NO
+
+
+def _parse_swebench_diagnostics(
+    *,
+    report_content: str | None,
+    instance_id: str,
+    completed: bool,
+    resolved: bool,
+) -> tuple[SWEBenchDiagnostics, str | None]:
+    tests_status = SWEBenchTestsStatus()
+    patch_is_none = False
+    patch_exists = False
+    patch_successfully_applied = False
+    parse_error: str | None = None
+
+    if report_content is not None:
+        try:
+            parsed = json.loads(report_content)
+            if not isinstance(parsed, dict):
+                raise ValueError("report root is not an object")
+            instance_report = parsed.get(instance_id)
+            if not isinstance(instance_report, dict):
+                raise ValueError(f"report missing instance entry for {instance_id}")
+
+            tests_status = _build_tests_status(instance_report.get("tests_status"))
+            patch_is_none = _coerce_bool(instance_report.get("patch_is_None"))
+            patch_exists = _coerce_bool(instance_report.get("patch_exists"))
+            patch_successfully_applied = _coerce_bool(
+                instance_report.get("patch_successfully_applied")
+            )
+            resolved = _coerce_bool(instance_report.get("resolved"), default=resolved)
+        except (json.JSONDecodeError, ValueError) as exc:
+            parse_error = f"failed to parse swebench report: {exc}"
+
+    diagnostics = SWEBenchDiagnostics(
+        completed=completed,
+        resolved=resolved,
+        resolution_status=_compute_resolution_status(
+            tests_status,
+            resolved=resolved,
+        ),
+        patch_is_none=patch_is_none,
+        patch_exists=patch_exists,
+        patch_successfully_applied=patch_successfully_applied,
+        tests_status=tests_status,
+    )
+    return diagnostics, parse_error
+
+
+def _format_fraction(bucket: SWEBenchTestBucket) -> str:
+    total = len(bucket.success) + len(bucket.failure)
+    return f"{len(bucket.success)}/{total}"
+
+
+def _build_detail(
+    diagnostics: SWEBenchDiagnostics,
+    auxiliary_scores: Mapping[str, AuxiliaryScore],
+) -> str:
+    parts = [
+        "resolved" if diagnostics.resolved else "not resolved",
+        f"resolution={diagnostics.resolution_status.value}",
+        f"f2p={_format_fraction(diagnostics.tests_status.fail_to_pass)}",
+        f"p2p={_format_fraction(diagnostics.tests_status.pass_to_pass)}",
+    ]
+    if not diagnostics.completed:
+        parts.append("completed=false")
+    if diagnostics.patch_exists or diagnostics.patch_is_none:
+        parts.append(f"patch_exists={str(diagnostics.patch_exists).lower()}")
+    if diagnostics.patch_is_none:
+        parts.append("patch_is_none=true")
+    if diagnostics.patch_successfully_applied or diagnostics.patch_exists:
+        parts.append(
+            f"patch_applied={str(diagnostics.patch_successfully_applied).lower()}"
+        )
+    patch_aux = auxiliary_scores.get("patch_jaccard")
+    if patch_aux is not None:
+        parts.append(f"aux.patch_jaccard={patch_aux.score:.3f}")
+    return "; ".join(parts)
+
+
 class SWEBenchDockerScorer(Scorer):
     """Score by delegating test execution to the official swebench harness."""
 
@@ -244,7 +395,7 @@ class SWEBenchDockerScorer(Scorer):
             auxiliary_scores[aux_name] = aux_score
 
         scorer_log = ""
-        resolved = False
+        diagnostics = SWEBenchDiagnostics()
         detail = ""
 
         try:
@@ -282,10 +433,19 @@ class SWEBenchDockerScorer(Scorer):
                 timeout=self._test_timeout,
             )
 
-            resolved = bool(result.get("resolved", False))
             completed = bool(result.get("completed", False))
+            resolved = bool(result.get("resolved", False))
 
             test_output = _read_test_output(scorer_run_id, item.item_id)
+            report_content, report_path = _read_swebench_report(
+                scorer_run_id, item.item_id
+            )
+            diagnostics, report_parse_error = _parse_swebench_diagnostics(
+                report_content=report_content,
+                instance_id=item.item_id,
+                completed=completed,
+                resolved=resolved,
+            )
 
             log_parts: list[str] = []
             if not completed:
@@ -295,19 +455,16 @@ class SWEBenchDockerScorer(Scorer):
             if test_output:
                 log_parts.append(f"=== test output ===\n{test_output}")
 
-            # Also include the swebench report.json if available
-            report_path = (
-                Path(RUN_EVALUATION_LOG_DIR)
-                / scorer_run_id
-                / _MODEL_NAME
-                / item.item_id
-                / "report.json"
-            )
-            if report_path.exists():
-                report_content = report_path.read_text(
-                    encoding="utf-8", errors="replace"
+            if report_parse_error is not None:
+                log_parts.append(
+                    f"=== swebench report parse error ===\n{report_parse_error}"
                 )
+            if report_content is not None:
                 log_parts.append(f"=== swebench report ===\n{report_content}")
+            else:
+                log_parts.append(
+                    f"=== swebench report ===\nmissing report.json at {report_path}"
+                )
 
             scorer_log = "\n\n".join(log_parts)
 
@@ -317,11 +474,8 @@ class SWEBenchDockerScorer(Scorer):
             scorer_log = f"=== scoring error ===\n{exc}"
 
         if not detail:
-            score_val = 1.0 if resolved else 0.0
-            detail = "resolved" if resolved else "not resolved"
-            patch_aux = auxiliary_scores.get("patch_jaccard")
-            if patch_aux is not None:
-                detail = f"{detail}; aux.patch_jaccard={patch_aux.score:.3f}"
+            score_val = 1.0 if diagnostics.resolved else 0.0
+            detail = _build_detail(diagnostics, auxiliary_scores)
         else:
             score_val = 0.0
 
@@ -331,12 +485,13 @@ class SWEBenchDockerScorer(Scorer):
             run_id=run_id,
             session_id=session_id,
             outcome=outcome,
-            passed=resolved,
+            passed=diagnostics.resolved,
             score=score_val,
             scorer_name=self.name,
             scorer_detail=detail,
             scorer_log=scorer_log,
             auxiliary_scores=auxiliary_scores,
+            swebench_diagnostics=diagnostics,
             agent_output=agent_output,
             generated_patch=generated_patch,
             raw_generated_patch=raw_generated_patch,

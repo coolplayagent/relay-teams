@@ -32,6 +32,40 @@ class AuxiliaryScore(BaseModel):
     detail: str = ""
 
 
+class SWEBenchResolutionStatus(str, Enum):
+    NO = "no"
+    PARTIAL = "partial"
+    FULL = "full"
+
+
+class SWEBenchTestBucket(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    success: tuple[str, ...] = ()
+    failure: tuple[str, ...] = ()
+
+
+class SWEBenchTestsStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fail_to_pass: SWEBenchTestBucket = Field(default_factory=SWEBenchTestBucket)
+    pass_to_pass: SWEBenchTestBucket = Field(default_factory=SWEBenchTestBucket)
+    fail_to_fail: SWEBenchTestBucket = Field(default_factory=SWEBenchTestBucket)
+    pass_to_fail: SWEBenchTestBucket = Field(default_factory=SWEBenchTestBucket)
+
+
+class SWEBenchDiagnostics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    completed: bool = False
+    resolved: bool = False
+    resolution_status: SWEBenchResolutionStatus = SWEBenchResolutionStatus.NO
+    patch_is_none: bool = False
+    patch_exists: bool = False
+    patch_successfully_applied: bool = False
+    tests_status: SWEBenchTestsStatus = Field(default_factory=SWEBenchTestsStatus)
+
+
 class EvalItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -64,6 +98,7 @@ class EvalResult(BaseModel):
     scorer_detail: str = ""
     scorer_log: str = ""
     auxiliary_scores: dict[str, AuxiliaryScore] = Field(default_factory=dict)
+    swebench_diagnostics: SWEBenchDiagnostics | None = None
     agent_output: str = ""
     generated_patch: str = ""
     raw_generated_patch: str = ""

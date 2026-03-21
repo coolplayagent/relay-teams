@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 
-from agent_teams_evals.models import AuxiliaryScore, EvalResult, RunOutcome, TokenUsage
-from agent_teams_evals.reporter import _format_usage_cell, build_report
+from agent_teams_evals.models import (
+    AuxiliaryScore,
+    EvalResult,
+    RunOutcome,
+    SWEBenchDiagnostics,
+    SWEBenchResolutionStatus,
+    SWEBenchTestBucket,
+    SWEBenchTestsStatus,
+    TokenUsage,
+)
+from agent_teams_evals.reporter import EvalReporter, _format_usage_cell, build_report
+
+
+def _local_tmp_dir(name: str) -> Path:
+    path = Path(".tmp/agent_teams_evals_tests") / f"{name}-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def test_build_report_aggregates_auxiliary_scores() -> None:
@@ -104,3 +123,50 @@ def test_format_usage_cell_uses_readable_labels() -> None:
         "input=1209.7k cached=1076.2k output=13.9k "
         "reasoning=4.7k requests=95 tool_calls=113"
     )
+
+
+def test_write_json_includes_swebench_diagnostics() -> None:
+    report = build_report(
+        [
+            EvalResult(
+                item_id="demo",
+                dataset="swebench",
+                run_id="run-1",
+                session_id="session-1",
+                outcome=RunOutcome.COMPLETED,
+                passed=False,
+                score=0.0,
+                scorer_name="swebench_docker",
+                swebench_diagnostics=SWEBenchDiagnostics(
+                    completed=True,
+                    resolved=False,
+                    resolution_status=SWEBenchResolutionStatus.PARTIAL,
+                    patch_exists=True,
+                    patch_successfully_applied=True,
+                    tests_status=SWEBenchTestsStatus(
+                        fail_to_pass=SWEBenchTestBucket(
+                            success=("tests/test_fix.py::test_fix",),
+                            failure=("tests/test_fix.py::test_other",),
+                        ),
+                        pass_to_pass=SWEBenchTestBucket(
+                            success=("tests/test_keep.py::test_keep",),
+                        ),
+                    ),
+                ),
+                token_usage=TokenUsage(),
+            )
+        ],
+        dataset="swebench",
+        scorer_name="swebench_docker",
+    )
+    path = _local_tmp_dir("reporter-json") / "report.json"
+
+    EvalReporter().write_json(report, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    diagnostics = payload["results"][0]["swebench_diagnostics"]
+    assert diagnostics["resolution_status"] == "partial"
+    assert diagnostics["patch_exists"] is True
+    assert diagnostics["tests_status"]["fail_to_pass"]["success"] == [
+        "tests/test_fix.py::test_fix"
+    ]

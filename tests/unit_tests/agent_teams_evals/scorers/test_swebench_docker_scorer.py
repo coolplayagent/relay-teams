@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
-from agent_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+from agent_teams_evals.models import (
+    EvalItem,
+    EvalResult,
+    RunOutcome,
+    SWEBenchResolutionStatus,
+    TokenUsage,
+)
 from agent_teams_evals.scorers import swebench_docker_scorer
 from agent_teams_evals.scorers.swebench_docker_scorer import SWEBenchDockerScorer
 from agent_teams_evals.workspace.base import PreparedWorkspace
@@ -58,6 +67,41 @@ def _make_scorer() -> SWEBenchDockerScorer:
     return SWEBenchDockerScorer(client=MagicMock())
 
 
+def _local_tmp_dir(name: str) -> Path:
+    path = Path(".tmp/agent_teams_evals_tests") / f"{name}-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_report(
+    tmp_path: Path,
+    *,
+    report_content: dict[str, object] | str,
+    run_id: str = "run-1",
+) -> Path:
+    report_dir = tmp_path / f"score-{run_id}" / "agent-teams" / "demo"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "report.json"
+    if isinstance(report_content, str):
+        report_path.write_text(report_content, encoding="utf-8")
+    else:
+        report_path.write_text(json.dumps(report_content), encoding="utf-8")
+    return report_path
+
+
+def _mock_run_writes_report(
+    tmp_path: Path,
+    *,
+    report_content: dict[str, object] | str,
+    result: dict[str, object],
+) -> Callable[..., dict[str, object]]:
+    def _side_effect(**_kwargs) -> dict[str, object]:
+        _write_report(tmp_path, report_content=report_content)
+        return result
+
+    return _side_effect
+
+
 def _score(
     item: EvalItem,
     workspace: PreparedWorkspace,
@@ -97,6 +141,10 @@ def test_resolved_gives_score_one(
     assert result.passed is True
     assert result.score == 1.0
     assert "resolved" in result.scorer_detail
+    assert result.swebench_diagnostics is not None
+    assert (
+        result.swebench_diagnostics.resolution_status == SWEBenchResolutionStatus.FULL
+    )
 
 
 @patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
@@ -115,6 +163,8 @@ def test_not_resolved_gives_score_zero(
     assert result.passed is False
     assert result.score == 0.0
     assert "not resolved" in result.scorer_detail
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.resolution_status == SWEBenchResolutionStatus.NO
 
 
 @patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
@@ -133,6 +183,8 @@ def test_evaluation_not_completed(
     assert result.passed is False
     assert result.score == 0.0
     assert "evaluation did not complete" in result.scorer_log
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.completed is False
 
 
 @patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
@@ -204,6 +256,205 @@ def test_missing_swebench_instance_raises() -> None:
     assert result.passed is False
     assert result.score == 0.0
     assert "scoring error" in result.scorer_detail
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.resolved is False
+
+
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
+@patch.object(swebench_docker_scorer, "make_test_spec")
+@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
+def test_report_json_sets_full_resolution_diagnostics(
+    _mock_read: MagicMock,
+    mock_make_spec: MagicMock,
+    mock_run: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_make_spec.return_value = MagicMock()
+    tmp_path = _local_tmp_dir("resolved-full")
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
+    mock_run.side_effect = _mock_run_writes_report(
+        tmp_path,
+        report_content={
+            "demo": {
+                "patch_is_None": False,
+                "patch_exists": True,
+                "patch_successfully_applied": True,
+                "resolved": True,
+                "tests_status": {
+                    "FAIL_TO_PASS": {
+                        "success": ["tests/test_fix.py::test_fix"],
+                        "failure": [],
+                    },
+                    "PASS_TO_PASS": {
+                        "success": ["tests/test_keep.py::test_keep"],
+                        "failure": [],
+                    },
+                    "FAIL_TO_FAIL": {"success": [], "failure": []},
+                    "PASS_TO_FAIL": {"success": [], "failure": []},
+                },
+            }
+        },
+        result={"completed": True, "resolved": True},
+    )
+
+    result = _score(_make_item(), _make_workspace())
+
+    assert result.passed is True
+    assert result.swebench_diagnostics is not None
+    assert (
+        result.swebench_diagnostics.resolution_status == SWEBenchResolutionStatus.FULL
+    )
+    assert result.swebench_diagnostics.patch_successfully_applied is True
+    assert result.swebench_diagnostics.tests_status.fail_to_pass.success == (
+        "tests/test_fix.py::test_fix",
+    )
+    assert "resolution=full" in result.scorer_detail
+    assert "f2p=1/1" in result.scorer_detail
+    assert "p2p=1/1" in result.scorer_detail
+
+
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
+@patch.object(swebench_docker_scorer, "make_test_spec")
+@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
+def test_report_json_partial_resolution_still_scores_zero(
+    _mock_read: MagicMock,
+    mock_make_spec: MagicMock,
+    mock_run: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_make_spec.return_value = MagicMock()
+    tmp_path = _local_tmp_dir("resolved-partial")
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
+    mock_run.side_effect = _mock_run_writes_report(
+        tmp_path,
+        report_content={
+            "demo": {
+                "patch_is_None": False,
+                "patch_exists": True,
+                "patch_successfully_applied": True,
+                "resolved": False,
+                "tests_status": {
+                    "FAIL_TO_PASS": {
+                        "success": ["tests/test_fix.py::test_fix"],
+                        "failure": ["tests/test_fix.py::test_other"],
+                    },
+                    "PASS_TO_PASS": {
+                        "success": ["tests/test_keep.py::test_keep"],
+                        "failure": [],
+                    },
+                    "FAIL_TO_FAIL": {"success": [], "failure": []},
+                    "PASS_TO_FAIL": {"success": [], "failure": []},
+                },
+            }
+        },
+        result={"completed": True, "resolved": False},
+    )
+
+    result = _score(_make_item(), _make_workspace())
+
+    assert result.passed is False
+    assert result.score == 0.0
+    assert result.swebench_diagnostics is not None
+    assert (
+        result.swebench_diagnostics.resolution_status
+        == SWEBenchResolutionStatus.PARTIAL
+    )
+    assert "resolution=partial" in result.scorer_detail
+    assert "f2p=1/2" in result.scorer_detail
+    assert "p2p=1/1" in result.scorer_detail
+
+
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
+@patch.object(swebench_docker_scorer, "make_test_spec")
+@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
+def test_report_json_patch_apply_failure_is_structured(
+    _mock_read: MagicMock,
+    mock_make_spec: MagicMock,
+    mock_run: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_make_spec.return_value = MagicMock()
+    tmp_path = _local_tmp_dir("patch-apply-failure")
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
+    mock_run.side_effect = _mock_run_writes_report(
+        tmp_path,
+        report_content={
+            "demo": {
+                "patch_is_None": False,
+                "patch_exists": True,
+                "patch_successfully_applied": False,
+                "resolved": False,
+                "tests_status": {
+                    "FAIL_TO_PASS": {"success": [], "failure": []},
+                    "PASS_TO_PASS": {"success": [], "failure": []},
+                    "FAIL_TO_FAIL": {"success": [], "failure": []},
+                    "PASS_TO_FAIL": {"success": [], "failure": []},
+                },
+            }
+        },
+        result={"completed": False, "resolved": False},
+    )
+
+    result = _score(_make_item(), _make_workspace())
+
+    assert result.passed is False
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.patch_exists is True
+    assert result.swebench_diagnostics.patch_successfully_applied is False
+    assert "patch_applied=false" in result.scorer_detail
+    assert "completed=false" in result.scorer_detail
+
+
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
+@patch.object(swebench_docker_scorer, "make_test_spec")
+@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
+def test_missing_report_uses_top_level_bools(
+    _mock_read: MagicMock,
+    mock_make_spec: MagicMock,
+    mock_run: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_make_spec.return_value = MagicMock()
+    mock_run.return_value = {"completed": True, "resolved": True}
+    tmp_path = _local_tmp_dir("missing-report")
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
+
+    result = _score(_make_item(), _make_workspace())
+
+    assert result.passed is True
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.resolved is True
+    assert (
+        result.swebench_diagnostics.resolution_status == SWEBenchResolutionStatus.FULL
+    )
+    assert "missing report.json" in result.scorer_log
+
+
+@patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
+@patch.object(swebench_docker_scorer, "make_test_spec")
+@patch.object(swebench_docker_scorer, "_read_test_output", return_value="")
+def test_invalid_report_falls_back_to_run_instance_result(
+    _mock_read: MagicMock,
+    mock_make_spec: MagicMock,
+    mock_run: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_make_spec.return_value = MagicMock()
+    tmp_path = _local_tmp_dir("invalid-report")
+    monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
+    mock_run.side_effect = _mock_run_writes_report(
+        tmp_path,
+        report_content="{not json",
+        result={"completed": True, "resolved": True},
+    )
+
+    result = _score(_make_item(), _make_workspace())
+
+    assert result.passed is True
+    assert result.swebench_diagnostics is not None
+    assert result.swebench_diagnostics.resolved is True
+    assert "report parse error" in result.scorer_log
+    assert "resolution=full" in result.scorer_detail
 
 
 @patch.object(swebench_docker_scorer, "_run_instance_crlf_safe")
@@ -213,12 +464,12 @@ def test_cached_report_is_cleaned(
     _mock_read: MagicMock,
     mock_make_spec: MagicMock,
     mock_run: MagicMock,
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ensure stale report.json is removed before calling run_instance."""
     mock_make_spec.return_value = MagicMock()
     mock_run.return_value = {"completed": True, "resolved": True}
+    tmp_path = _local_tmp_dir("cached-report")
 
     # Point RUN_EVALUATION_LOG_DIR to tmp_path so we can create a fake cached report
     monkeypatch.setattr(swebench_docker_scorer, "RUN_EVALUATION_LOG_DIR", str(tmp_path))
@@ -227,6 +478,12 @@ def test_cached_report_is_cleaned(
     cached = report_dir / "report.json"
     cached.write_text("{}")
 
+    deleted_paths: list[Path] = []
+
+    def _fake_unlink(self: Path) -> None:
+        deleted_paths.append(self)
+
+    monkeypatch.setattr(Path, "unlink", _fake_unlink)
     _score(_make_item(), _make_workspace())
 
-    assert not cached.exists()
+    assert deleted_paths == [cached]
