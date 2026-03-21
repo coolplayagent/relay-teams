@@ -52,6 +52,24 @@ def _quote_cli_arg(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _normalize_item_ids(raw_item_ids: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_item_ids:
+        for part in raw_value.split(","):
+            item_id = part.strip()
+            if not item_id:
+                raise ValueError(
+                    "--item-ids contains an empty item id; "
+                    "use comma-separated values like 'a,b,c'"
+                )
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            normalized.append(item_id)
+    return normalized
+
+
 def _build_rerun_command(config_file: Path, item_id: str, base_url: str | None) -> str:
     command = (
         "uv run agent-teams-evals run "
@@ -161,7 +179,13 @@ def run(
         ..., "--config", "-c", help="Path to YAML run config"
     ),
     limit: int | None = typer.Option(None, help="Override: max items to evaluate"),
-    item_ids: list[str] = typer.Option([], help="Override: specific item IDs to run"),
+    item_ids: list[str] = typer.Option(
+        [],
+        help=(
+            "Override: specific item IDs to run "
+            "(repeat option or use comma-separated values)"
+        ),
+    ),
     concurrency: int | None = typer.Option(None, help="Override: parallel workers"),
     keep_workspaces: bool | None = typer.Option(None, help="Override: keep workspaces"),
     base_url: str | None = typer.Option(None, help="Override: backend base URL"),
@@ -197,13 +221,18 @@ def run(
     from agent_teams_evals.workspace.patch_extractor import PatchExtractor
 
     cfg = load_run_config(config_file)
+    try:
+        normalized_item_ids = _normalize_item_ids(item_ids)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
     # Apply CLI overrides
     overrides: dict[str, object] = {}
     if limit is not None:
         overrides["limit"] = limit
-    if item_ids:
-        overrides["item_ids"] = tuple(item_ids)
+    if normalized_item_ids:
+        overrides["item_ids"] = tuple(normalized_item_ids)
     if concurrency is not None:
         overrides["concurrency"] = concurrency
     if keep_workspaces is not None:
@@ -220,7 +249,7 @@ def run(
     if cfg.dataset_path is None:
         typer.echo("Error: dataset_path is required in the config file.", err=True)
         raise typer.Exit(1)
-    if rerun and not item_ids:
+    if rerun and not normalized_item_ids:
         typer.echo("Error: --rerun requires at least one --item-ids value.", err=True)
         raise typer.Exit(1)
 
@@ -318,7 +347,7 @@ def run(
             results_by_item_id = _load_checkpoint_results(
                 cfg=cfg,
                 signature=checkpoint_signature,
-                rerun_item_ids=tuple(item_ids) if rerun else (),
+                rerun_item_ids=tuple(normalized_item_ids) if rerun else (),
             )
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)

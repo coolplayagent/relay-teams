@@ -63,7 +63,10 @@ globalThis.localStorage = {
         this._values.set(key, String(value));
     },
 };
-globalThis.navigator = { language: 'en-US' };
+    Object.defineProperty(globalThis, 'navigator', {
+        value: { language: 'en-US' },
+        configurable: true,
+    });
 globalThis.CustomEvent = class CustomEvent {
     constructor(type, init = {}) {
         this.type = type;
@@ -132,6 +135,8 @@ console.log(JSON.stringify({ afterInit, afterToggle }));
         check=False,
         cwd=str(repo_root),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 

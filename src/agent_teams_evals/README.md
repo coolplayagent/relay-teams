@@ -35,6 +35,7 @@ CLI overrides are available for quick one-offs without editing the file:
 agent-teams-evals run --config eval.yaml --limit 5 --concurrency 2
 agent-teams-evals run --config eval.yaml --restart
 agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
+agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
 ```
 
 ## Workspace modes
@@ -257,12 +258,14 @@ set, scorer, backend execution settings, or workspace mode, resume is rejected
 and you should rerun with `--restart`.
 
 To rerun one or more items within an existing result set, pass explicit item ids
-with `--rerun`. This re-executes only the selected items, appends the new result
+with `--rerun`. `--item-ids` accepts either repeated flags or comma-separated
+values. This re-executes only the selected items, appends the new result
 to the checkpoint log, overwrites that item's artifact directory, and refreshes
 `report.json` / `report.html` so they show the latest result for the rerun item:
 
 ```bash
 agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
+agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
 ```
 
 Token usage is recorded in detail for each result and the final report:
