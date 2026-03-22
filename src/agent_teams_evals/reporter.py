@@ -20,13 +20,25 @@ _HEADERS = (
 )
 
 
+def _uncached_input_tokens(input_tokens: int, cached_input_tokens: int) -> int:
+    return max(0, input_tokens - cached_input_tokens)
+
+
 def _format_usage_cell(result: EvalResult) -> str:
     input_k = result.token_usage.input_tokens / 1000
     cached_k = result.token_usage.cached_input_tokens / 1000
+    uncached_k = (
+        _uncached_input_tokens(
+            result.token_usage.input_tokens,
+            result.token_usage.cached_input_tokens,
+        )
+        / 1000
+    )
     output_k = result.token_usage.output_tokens / 1000
     reasoning_k = result.token_usage.reasoning_output_tokens / 1000
     return (
         f"input={input_k:.1f}k "
+        f"uncached={uncached_k:.1f}k "
         f"cached={cached_k:.1f}k "
         f"output={output_k:.1f}k "
         f"reasoning={reasoning_k:.1f}k "
@@ -109,6 +121,7 @@ class EvalReporter:
         )
         typer.echo(
             f"Tokens  : in={report.total_input_tokens:,}"
+            f"  uncached={_uncached_input_tokens(report.total_input_tokens, report.total_cached_input_tokens):,}"
             f"  cache={report.total_cached_input_tokens:,}"
             f"  out={report.total_output_tokens:,}"
             f"  reason={report.total_reasoning_output_tokens:,}"
@@ -119,7 +132,7 @@ class EvalReporter:
             f"  tool_calls={report.total_tool_calls:,}"
         )
         typer.echo(
-            f"Cost    : in=${report.estimated_input_cost_usd:.4f}"
+            f"Cost    : uncached_in=${report.estimated_input_cost_usd:.4f}"
             f"  cache=${report.estimated_cached_input_cost_usd:.4f}"
             f"  out=${report.estimated_output_cost_usd:.4f}"
             f"  reason=${report.estimated_reasoning_output_cost_usd:.4f}"
@@ -199,9 +212,9 @@ tr.fail td {{ background: #ffe6e6; }}
 <p>Mean score: {report.mean_score:.3f}</p>
 <p>Auxiliary scores: {_format_auxiliary_scores({name: AuxiliaryScore(score=score) for name, score in sorted(report.auxiliary_score_means.items())}) or "none"}</p>
 <p>Duration: mean={report.mean_duration_seconds:.1f}s p50={report.p50_duration_seconds:.1f}s p95={report.p95_duration_seconds:.1f}s</p>
-<p>Tokens: in={report.total_input_tokens:,} cache={report.total_cached_input_tokens:,} out={report.total_output_tokens:,} reason={report.total_reasoning_output_tokens:,} total={report.total_input_tokens + report.total_output_tokens:,}</p>
+<p>Tokens: in={report.total_input_tokens:,} uncached={_uncached_input_tokens(report.total_input_tokens, report.total_cached_input_tokens):,} cache={report.total_cached_input_tokens:,} out={report.total_output_tokens:,} reason={report.total_reasoning_output_tokens:,} total={report.total_input_tokens + report.total_output_tokens:,}</p>
 <p>Usage counts: requests={report.total_requests:,} tool_calls={report.total_tool_calls:,}</p>
-<p>Costs: in=${report.estimated_input_cost_usd:.4f} cache=${report.estimated_cached_input_cost_usd:.4f} out=${report.estimated_output_cost_usd:.4f} reason=${report.estimated_reasoning_output_cost_usd:.4f} total=${report.estimated_cost_usd:.4f}</p>
+<p>Costs: uncached_in=${report.estimated_input_cost_usd:.4f} cache=${report.estimated_cached_input_cost_usd:.4f} out=${report.estimated_output_cost_usd:.4f} reason=${report.estimated_reasoning_output_cost_usd:.4f} total=${report.estimated_cost_usd:.4f}</p>
 <p>Generated: {report.generated_at.isoformat()}</p>
 </div>
 <table>
@@ -261,7 +274,13 @@ def build_report(
     total_reasoning_output = sum(r.token_usage.reasoning_output_tokens for r in results)
     total_requests = sum(r.token_usage.total_requests for r in results)
     total_tool_calls = sum(r.token_usage.total_tool_calls for r in results)
-    estimated_input_cost = total_input / 1_000_000 * cost_per_million_input
+    # Provider-reported input tokens already include cached prompt tokens.
+    # Charge the standard input rate only for the uncached portion.
+    estimated_input_cost = (
+        _uncached_input_tokens(total_input, total_cached_input)
+        / 1_000_000
+        * cost_per_million_input
+    )
     estimated_cached_input_cost = (
         total_cached_input / 1_000_000 * cost_per_million_cached_input
     )

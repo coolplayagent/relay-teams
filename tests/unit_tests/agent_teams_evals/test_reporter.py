@@ -91,11 +91,11 @@ def test_build_report_aggregates_auxiliary_scores() -> None:
     assert report.total_reasoning_output_tokens == 5
     assert report.total_requests == 5
     assert report.total_tool_calls == 3
-    assert report.estimated_input_cost_usd == pytest.approx(0.03)
+    assert report.estimated_input_cost_usd == pytest.approx(0.02)
     assert report.estimated_cached_input_cost_usd == pytest.approx(0.001)
     assert report.estimated_output_cost_usd == pytest.approx(0.03)
     assert report.estimated_reasoning_output_cost_usd == pytest.approx(0.015)
-    assert report.estimated_cost_usd == pytest.approx(0.076)
+    assert report.estimated_cost_usd == pytest.approx(0.066)
 
 
 def test_format_usage_cell_uses_readable_labels() -> None:
@@ -120,7 +120,7 @@ def test_format_usage_cell_uses_readable_labels() -> None:
     )
 
     assert _format_usage_cell(result) == (
-        "input=1209.7k cached=1076.2k output=13.9k "
+        "input=1209.7k uncached=133.5k cached=1076.2k output=13.9k "
         "reasoning=4.7k requests=95 tool_calls=113"
     )
 
@@ -206,3 +206,38 @@ def test_write_html_shows_log_path_instead_of_error_text() -> None:
     assert "<th>log</th>" in html
     assert "artifacts/demo/scorer_log.txt" in html
     assert "docker run failed" not in html
+
+
+def test_write_html_shows_uncached_input_cost_breakdown() -> None:
+    report = build_report(
+        [
+            EvalResult(
+                item_id="demo",
+                dataset="swebench",
+                run_id="run-1",
+                session_id="session-1",
+                outcome=RunOutcome.COMPLETED,
+                passed=True,
+                score=1.0,
+                scorer_name="swebench_docker",
+                token_usage=TokenUsage(
+                    input_tokens=100,
+                    cached_input_tokens=80,
+                    output_tokens=10,
+                ),
+            )
+        ],
+        dataset="swebench",
+        scorer_name="swebench_docker",
+        cost_per_million_input=1_000_000.0,
+        cost_per_million_cached_input=1_000_000.0,
+        cost_per_million_output=0.0,
+        cost_per_million_reasoning_output=0.0,
+    )
+    path = _local_tmp_dir("reporter-html-uncached") / "report.html"
+
+    EvalReporter().write_html(report, path)
+
+    html = path.read_text(encoding="utf-8")
+    assert "Tokens: in=100 uncached=20 cache=80 out=10 reason=0 total=110" in html
+    assert "Costs: uncached_in=$20.0000 cache=$80.0000 out=$0.0000" in html
