@@ -8,6 +8,8 @@ Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
 Recent SWE-bench snapshots are archived under [`docs/evaluations/swebench/`](docs/evaluations/swebench/README.md).
 Current snapshots cover only the first `100` items from `SWE-bench Verified`, not the full benchmark.
 
+Using glm-5,Temperature: 0.7,Top P:0.95.
+
 | Mode | Benchmark | Pass Rate | Passed | Failed | Mean Duration | Input Tokens | Cached Input | Output Tokens | Requests | Tool Calls | Report |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | Normal | SWE-bench Verified 100 | 72.0% | 72 | 28 | 369.2s | 60,265,198 | 58,214,976 | 451,537 | 2,432 | 2,484 | [HTML](docs/evaluations/swebench/normal-swebench-verified-100-report.html) |
