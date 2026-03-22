@@ -137,6 +137,7 @@ def test_write_json_includes_swebench_diagnostics() -> None:
                 passed=False,
                 score=0.0,
                 scorer_name="swebench_docker",
+                scorer_log="pytest output",
                 swebench_diagnostics=SWEBenchDiagnostics(
                     completed=True,
                     resolved=False,
@@ -170,9 +171,13 @@ def test_write_json_includes_swebench_diagnostics() -> None:
     assert diagnostics["tests_status"]["fail_to_pass"]["success"] == [
         "tests/test_fix.py::test_fix"
     ]
+    assert "rerun_command" not in payload["results"][0]
+    assert payload["results"][0]["error"] is None
+    assert "scorer_log" not in payload["results"][0]
+    assert "build_error_summary" not in payload["results"][0]
 
 
-def test_write_html_includes_rerun_command() -> None:
+def test_write_html_shows_log_path_instead_of_error_text() -> None:
     report = build_report(
         [
             EvalResult(
@@ -185,10 +190,7 @@ def test_write_html_includes_rerun_command() -> None:
                 score=0.0,
                 scorer_name="swebench_docker",
                 error="docker run failed",
-                rerun_command=(
-                    "uv run agent-teams-evals run --config 'eval.yaml' "
-                    "--item-ids 'demo' --rerun"
-                ),
+                scorer_log="full pytest output",
                 token_usage=TokenUsage(),
             )
         ],
@@ -200,5 +202,7 @@ def test_write_html_includes_rerun_command() -> None:
     EvalReporter().write_html(report, path)
 
     html = path.read_text(encoding="utf-8")
-    assert "<th>rerun</th>" in html
-    assert "--item-ids 'demo' --rerun" in html
+    assert "<th>rerun</th>" not in html
+    assert "<th>log</th>" in html
+    assert "artifacts/demo/scorer_log.txt" in html
+    assert "docker run failed" not in html

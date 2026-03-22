@@ -110,7 +110,6 @@ class EvalResult(BaseModel):
     error: str | None = None
     build_log_path: str | None = None
     build_error_summary: str | None = None
-    rerun_command: str | None = None
 
 
 class EvalReport(BaseModel):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -71,7 +70,6 @@ class EvalRunner:
         concurrency: int = 1,
         infra_retry_attempts: int = 2,
         infra_retry_backoff_seconds: float = 5.0,
-        rerun_command_factory: Callable[[EvalItem], str | None] | None = None,
     ) -> None:
         self._backend = backend
         self._scorer = scorer
@@ -82,7 +80,6 @@ class EvalRunner:
         self._concurrency = concurrency
         self._infra_retry_attempts = max(0, infra_retry_attempts)
         self._infra_retry_backoff_seconds = max(0.0, infra_retry_backoff_seconds)
-        self._rerun_command_factory = rerun_command_factory
 
     def _build_exception_result(
         self,
@@ -94,7 +91,6 @@ class EvalRunner:
         error: str,
         build_log_path: str | None,
         build_error_summary: str | None,
-        rerun_command: str | None,
     ) -> EvalResult:
         return EvalResult(
             item_id=item.item_id,
@@ -114,7 +110,6 @@ class EvalRunner:
             error=error,
             build_log_path=build_log_path,
             build_error_summary=build_error_summary,
-            rerun_command=rerun_command,
         )
 
     def _cleanup_workspace(self, prepared: PreparedWorkspace | None) -> None:
@@ -127,11 +122,6 @@ class EvalRunner:
                 self._workspace_setup.cleanup(prepared)
             except Exception:
                 pass
-
-    def _rerun_command(self, item: EvalItem) -> str | None:
-        if self._rerun_command_factory is None:
-            return None
-        return self._rerun_command_factory(item)
 
     def _is_retryable_infra_failure(self, error: _AttemptFailedError) -> bool:
         cause = error.cause
@@ -334,7 +324,6 @@ class EvalRunner:
                         error=str(exc.cause),
                         build_log_path=build_log_path,
                         build_error_summary=build_error_summary,
-                        rerun_command=self._rerun_command(item),
                     )
                     prepared = exc.prepared
                     break
@@ -346,11 +335,6 @@ class EvalRunner:
                 update={
                     "duration_seconds": time.monotonic() - t_start,
                     "started_at": started_at,
-                    "rerun_command": (
-                        result.rerun_command
-                        if result.passed
-                        else (result.rerun_command or self._rerun_command(item))
-                    ),
                 }
             )
 

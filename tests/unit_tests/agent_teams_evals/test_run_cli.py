@@ -550,7 +550,7 @@ def test_run_supports_csv_and_repeated_item_id_filters(
     assert "Filtered to 3 items by item_ids" in result.output
 
 
-def test_run_prints_rerun_command_for_failed_result(
+def test_run_does_not_print_rerun_command_for_failed_result(
     monkeypatch, tmp_path: Path
 ) -> None:
     dataset_path = tmp_path / "dataset.jsonl"
@@ -583,10 +583,6 @@ def test_run_prints_rerun_command_for_failed_result(
                 error="Instance image 'sweb.eval.x86_64.demo:latest' failed to build.",
                 build_log_path="logs/build_images/demo/build_image.log",
                 build_error_summary="ModuleNotFoundError: No module named 'pkg_resources'",
-                rerun_command=(
-                    "uv run agent-teams-evals run --config 'eval.yaml' "
-                    "--item-ids 'demo' --rerun"
-                ),
                 token_usage=TokenUsage(),
                 duration_seconds=0.1,
             )
@@ -612,4 +608,4 @@ def test_run_prints_rerun_command_for_failed_result(
 
     assert result.exit_code == 0
     assert "build_log: logs/build_images/demo/build_image.log" in result.output
-    assert "rerun: uv run agent-teams-evals run" in result.output
+    assert "rerun:" not in result.output

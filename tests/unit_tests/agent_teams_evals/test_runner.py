@@ -226,9 +226,7 @@ def test_runner_retries_retryable_prepare_failures_and_returns_success() -> None
     assert artifact_collector.calls[0][1].passed is True
 
 
-def test_runner_returns_failed_result_with_rerun_command_after_retry_exhausted() -> (
-    None
-):
+def test_runner_returns_failed_result_after_retry_exhausted() -> None:
     item = EvalItem(item_id="demo", dataset="swebench", intent="demo")
     artifact_collector = FakeArtifactCollector()
 
@@ -250,23 +248,15 @@ def test_runner_returns_failed_result_with_rerun_command_after_retry_exhausted()
         keep_workspaces=False,
         infra_retry_attempts=1,
         infra_retry_backoff_seconds=0.0,
-        rerun_command_factory=(
-            lambda item: (
-                "uv run agent-teams-evals run --config 'eval.yaml' "
-                f"--item-ids '{item.item_id}' --rerun"
-            )
-        ),
     )
 
     result = runner.run_item(item)
 
     assert result.passed is False
     assert result.scorer_detail == "exception during run"
-    assert result.rerun_command is not None
-    assert "--item-ids 'demo' --rerun" in result.rerun_command
     assert workspace_setup.prepare_attempts == 2
     assert len(artifact_collector.calls) == 1
-    assert artifact_collector.calls[0][1].rerun_command == result.rerun_command
+    assert artifact_collector.calls[0][1].build_log_path is None
 
 
 def test_runner_does_not_retry_non_retryable_workspace_build_failures() -> None:

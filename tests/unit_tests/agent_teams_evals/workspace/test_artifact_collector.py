@@ -40,7 +40,7 @@ def test_artifact_collector_writes_auxiliary_scores(tmp_path) -> None:
     assert metadata["token_usage"] == TokenUsage().model_dump()
     assert metadata["build_log_path"] is None
     assert metadata["build_error_summary"] is None
-    assert metadata["rerun_command"] is None
+    assert "rerun_command" not in metadata
 
 
 def test_artifact_collector_writes_detailed_token_usage_metadata(tmp_path) -> None:
@@ -193,7 +193,6 @@ def test_artifact_collector_overwrites_previous_artifacts_for_rerun(tmp_path) ->
         passed=False,
         score=0.0,
         scorer_name="swebench_docker",
-        rerun_command="uv run agent-teams-evals run --config 'eval.yaml' --item-ids 'demo-rerun' --rerun",
         token_usage=TokenUsage(),
     )
 
@@ -203,7 +202,7 @@ def test_artifact_collector_overwrites_previous_artifacts_for_rerun(tmp_path) ->
     artifact_dir = tmp_path / "artifacts" / "demo-rerun"
     metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["run_id"] == "run-2"
-    assert metadata["rerun_command"] == second.rerun_command
+    assert "rerun_command" not in metadata
     assert not (artifact_dir / "patch.diff").exists()
     assert not (artifact_dir / "raw_patch.diff").exists()
     assert not (artifact_dir / "scorer_log.txt").exists()

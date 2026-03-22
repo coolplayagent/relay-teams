@@ -70,17 +70,6 @@ def _normalize_item_ids(raw_item_ids: list[str]) -> list[str]:
     return normalized
 
 
-def _build_rerun_command(config_file: Path, item_id: str, base_url: str | None) -> str:
-    command = (
-        "uv run agent-teams-evals run "
-        f"--config {_quote_cli_arg(str(config_file))} "
-        f"--item-ids {_quote_cli_arg(item_id)} --rerun"
-    )
-    if base_url is not None:
-        command += f" --base-url {_quote_cli_arg(base_url)}"
-    return command
-
-
 def _ordered_results(
     item_ids: tuple[str, ...],
     results_by_item_id: dict[str, EvalResult],
@@ -385,9 +374,6 @@ def run(
         concurrency=cfg.concurrency,
         infra_retry_attempts=cfg.infra_retry_attempts,
         infra_retry_backoff_seconds=cfg.infra_retry_backoff_seconds,
-        rerun_command_factory=lambda item: _build_rerun_command(
-            config_file, item.item_id, base_url
-        ),
     )
 
     total = len(items_to_run)
@@ -431,8 +417,6 @@ def run(
             typer.echo(f"  error: {result.error}")
         if result.build_log_path:
             typer.echo(f"  build_log: {result.build_log_path}")
-        if result.rerun_command:
-            typer.echo(f"  rerun: {result.rerun_command}")
 
     try:
         if cfg.concurrency <= 1:

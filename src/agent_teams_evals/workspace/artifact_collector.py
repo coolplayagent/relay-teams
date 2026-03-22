@@ -82,7 +82,6 @@ class ArtifactCollector:
             "error": result.error,
             "build_log_path": result.build_log_path,
             "build_error_summary": result.build_error_summary,
-            "rerun_command": result.rerun_command,
             "collected_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         path = artifact_dir / "metadata.json"

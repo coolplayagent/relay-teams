@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import statistics
 from pathlib import Path
 
@@ -63,6 +64,34 @@ def _line(values: tuple[str, ...], widths: tuple[int, ...]) -> str:
     return f"| {cells} |"
 
 
+def _artifact_log_path(item_id: str, filename: str) -> str:
+    return (Path("artifacts") / item_id / filename).as_posix()
+
+
+def _report_log_path(result: EvalResult) -> str:
+    if result.outcome != RunOutcome.FAILED:
+        return ""
+    if result.build_log_path:
+        return result.build_log_path
+    if result.scorer_log:
+        return _artifact_log_path(result.item_id, "scorer_log.txt")
+    if result.error:
+        return _artifact_log_path(result.item_id, "container.log")
+    return ""
+
+
+def _report_payload(report: EvalReport) -> dict[str, object]:
+    payload = report.model_dump(mode="json")
+    raw_results = payload.get("results", [])
+    assert isinstance(raw_results, list)
+    for raw_result, result in zip(raw_results, report.results):
+        assert isinstance(raw_result, dict)
+        raw_result["error"] = _report_log_path(result) or None
+        raw_result.pop("scorer_log", None)
+        raw_result.pop("build_error_summary", None)
+    return payload
+
+
 class EvalReporter:
     def print_summary(self, report: EvalReport) -> None:
         hr = _hr(_COL_WIDTHS)
@@ -117,16 +146,18 @@ class EvalReporter:
 
     def write_json(self, report: EvalReport, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        payload = _report_payload(report)
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def write_html(self, report: EvalReport, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         rows_html = ""
         for r in report.results:
             status_class = "pass" if r.passed else "fail"
-            error_cell = r.error or ""
+            log_cell = _report_log_path(r)
             aux_cell = _format_auxiliary_scores(r.auxiliary_scores)
-            rerun_cell = r.rerun_command or ""
             rows_html += (
                 f"<tr class='{status_class}'>"
                 f"<td>{r.item_id}</td>"
@@ -138,8 +169,7 @@ class EvalReporter:
                 f"<td>{r.scorer_name}</td>"
                 f"<td>{r.scorer_detail}</td>"
                 f"<td>{aux_cell}</td>"
-                f"<td>{rerun_cell}</td>"
-                f"<td>{error_cell}</td>"
+                f"<td>{log_cell}</td>"
                 "</tr>\n"
             )
 
@@ -178,7 +208,7 @@ tr.fail td {{ background: #ffe6e6; }}
 <thead>
 <tr>
 <th>item_id</th><th>outcome</th><th>passed</th><th>score</th>
-<th>duration</th><th>usage</th><th>scorer</th><th>detail</th><th>aux</th><th>rerun</th><th>error</th>
+<th>duration</th><th>usage</th><th>scorer</th><th>detail</th><th>aux</th><th>log</th>
 </tr>
 </thead>
 <tbody>
