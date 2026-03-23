@@ -44,7 +44,8 @@ Create a trigger with:
     "trigger_rule": "mention_only"
   },
   "target_config": {
-    "workspace_id": "default"
+    "workspace_id": "default",
+    "yolo": true
   }
 }
 ```
@@ -55,6 +56,8 @@ The server opens the Feishu SDK long connection automatically when:
 - at least one enabled Feishu trigger exists
 
 If multiple Feishu triggers are enabled at the same time, Agent Teams uses the first enabled trigger deterministically and logs a warning.
+
+Feishu-triggered runs default to `yolo = true`, so tool approvals are skipped unless you explicitly set `"yolo": false` in `target_config`.
 
 ## Notifications
 

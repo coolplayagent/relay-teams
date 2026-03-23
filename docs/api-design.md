@@ -909,6 +909,8 @@ Recommended trigger contract:
 - `source_config.provider = "feishu"`
 - `source_config.trigger_rule = "mention_only"`
 - `target_config.workspace_id = "default"` (or another registered workspace)
+- `target_config.yolo = true` by default for Feishu-triggered runs
+- Set `target_config.yolo = false` only when you want Feishu-triggered runs to keep the normal tool approval flow
 
 Required app environment variables:
 - `FEISHU_APP_ID`

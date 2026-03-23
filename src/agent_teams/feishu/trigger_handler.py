@@ -201,6 +201,7 @@ class FeishuTriggerHandler:
                 session_id=session_id,
                 intent=normalized.trigger_text,
                 execution_mode=ExecutionMode.AI,
+                yolo=_yolo_enabled(trigger),
             )
         )
         self._run_service.ensure_run_started(run_id)
@@ -463,3 +464,12 @@ def _trigger_rule(trigger: TriggerDefinition) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip().lower()
     return "mention_only"
+
+
+def _yolo_enabled(trigger: TriggerDefinition) -> bool:
+    if trigger.target_config is None:
+        return True
+    value = trigger.target_config.get("yolo")
+    if isinstance(value, bool):
+        return value
+    return True

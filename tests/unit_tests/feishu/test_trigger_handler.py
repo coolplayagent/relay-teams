@@ -156,6 +156,7 @@ def test_handle_sdk_event_creates_session_binding_and_run(tmp_path) -> None:
     assert result.run_id == "run-1"
     assert len(run_service.created) == 1
     assert run_service.created[0].intent == "please summarize this repo"
+    assert run_service.created[0].yolo is True
     assert run_service.started == ["run-1"]
     binding = bindings.get_binding(
         platform="feishu",
@@ -314,3 +315,56 @@ def test_handle_sdk_event_strips_residual_leading_mention_tokens(tmp_path) -> No
     assert result.status == "accepted"
     assert len(run_service.created) == 1
     assert run_service.created[0].intent == "return ok！"
+
+
+def test_handle_sdk_event_allows_explicit_yolo_disable(tmp_path) -> None:
+    trigger_service = _FakeTriggerService()
+    trigger_service.trigger = trigger_service.trigger.model_copy(
+        update={"target_config": {"workspace_id": "default", "yolo": False}}
+    )
+    session_service = _FakeSessionService()
+    run_service = _FakeRunService()
+    handler = FeishuTriggerHandler(
+        trigger_service=trigger_service,
+        session_service=session_service,
+        run_service=run_service,
+        external_session_binding_repo=ExternalSessionBindingRepository(
+            tmp_path / "bindings.db"
+        ),
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt-5",
+        "token": "verify-token",
+        "event_type": "im.message.receive_v1",
+        "tenant_key": "tenant-1"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {"open_id": "ou_user"},
+          "sender_type": "user"
+        },
+        "message": {
+          "message_id": "om_5",
+          "chat_id": "oc_group_1",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"<at user_id=\\\\\\"ou_bot\\\\\\">bot</at> please confirm\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert len(run_service.created) == 1
+    assert run_service.created[0].yolo is False
