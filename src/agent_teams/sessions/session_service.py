@@ -15,6 +15,10 @@ from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.role_registry import (
+    LEGACY_COORDINATOR_IDENTIFIERS,
+    MAIN_AGENT_IDENTIFIERS,
+)
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
@@ -508,19 +512,39 @@ class SessionService:
         instance_id = runtime.active_subagent_instance_id or runtime.active_instance_id
         if not instance_id:
             return None
+        role_id = runtime.active_role_id or ""
+        if self._is_reserved_system_role(role_id):
+            return None
         try:
             agent = self._agent_repo.get_instance(instance_id)
         except KeyError:
             return {
                 "instance_id": instance_id,
-                "role_id": runtime.active_role_id or "",
+                "role_id": role_id,
                 "task_id": runtime.active_task_id,
             }
+        if self._is_reserved_system_role(agent.role_id):
+            return None
         return {
             "instance_id": agent.instance_id,
             "role_id": agent.role_id,
             "task_id": runtime.active_task_id,
         }
+
+    def _is_reserved_system_role(self, role_id: str) -> bool:
+        safe_role_id = str(role_id or "").strip()
+        if not safe_role_id:
+            return False
+        if self._role_registry is not None and (
+            self._role_registry.is_coordinator_role(safe_role_id)
+            or self._role_registry.is_main_agent_role(safe_role_id)
+        ):
+            return True
+        normalized = safe_role_id.casefold()
+        return (
+            normalized in LEGACY_COORDINATOR_IDENTIFIERS
+            or normalized in MAIN_AGENT_IDENTIFIERS
+        )
 
     def _require_session_agent(
         self,

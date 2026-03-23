@@ -51,6 +51,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
 
     assert "Connect Stream" not in recovery_script
     assert "The live stream reconnects automatically." in recovery_script
+    assert "isReservedSystemRoleId(roleId)" in recovery_script
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
     assert "const lastEventId = Number(activeRun.last_event_id || 0);" in recovery_script

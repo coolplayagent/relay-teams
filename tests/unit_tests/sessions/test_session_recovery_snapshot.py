@@ -407,6 +407,35 @@ def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(
     assert tasks[0]["role_id"] == "time"
 
 
+def test_get_recovery_snapshot_ignores_main_agent_paused_subagent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_main_agent_pause.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+        active_instance_id="inst-main",
+        active_task_id="task-root-1",
+        active_role_id="MainAgent",
+        active_subagent_instance_id="inst-main",
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    assert snapshot.get("paused_subagent") is None
+
+
 def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
     tmp_path: Path,
 ) -> None:

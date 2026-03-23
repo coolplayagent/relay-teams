@@ -11,7 +11,7 @@ import {
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import { fetchSessionRecovery, resolveToolApproval, resumeRun } from '../core/api.js';
-import { humanizeRoleId, state } from '../core/state.js';
+import { humanizeRoleId, isReservedSystemRoleId, state } from '../core/state.js';
 import { resumeRunStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
@@ -491,6 +491,7 @@ function normalizePausedSubagent(raw, runId = null) {
         : typeof raw.taskId === 'string'
             ? raw.taskId
             : null;
+    if (isReservedSystemRoleId(roleId)) return null;
     if (!instanceId && !roleId) return null;
     return {
         runId: runId || state.activeRunId,
