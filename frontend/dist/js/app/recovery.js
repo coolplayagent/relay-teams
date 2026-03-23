@@ -180,6 +180,12 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
         refreshVisibleContextIndicators({ immediate: true });
         return normalized;
     } catch (e) {
+        if (e?.status === 404 && state.currentSessionId === safeSessionId) {
+            clearSessionRecovery();
+            stopSessionContinuity(safeSessionId);
+            scheduleSessionsRefresh();
+            return null;
+        }
         if (!options.quiet) {
             sysLog(`Failed to load recovery state: ${e.message}`, 'log-error');
         }

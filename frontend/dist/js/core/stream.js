@@ -36,6 +36,8 @@ const backgroundStreams = new Map();
 let backgroundDiscoveryTimer = null;
 let backgroundDiscoveryPromise = null;
 let backgroundDiscoveryQueued = false;
+const unavailableSessionCooldownUntil = new Map();
+const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;
 const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
 
@@ -548,6 +550,9 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
         if (!sessionId || !runId) {
             continue;
         }
+        if (isSessionUnavailable(sessionId)) {
+            continue;
+        }
         if (isRunUnavailable(runId)) {
             continue;
         }
@@ -579,6 +584,9 @@ async function attachBackgroundStreamForSession(record) {
     if (!sessionId || !runId) {
         return false;
     }
+    if (isSessionUnavailable(sessionId)) {
+        return false;
+    }
     if (isRunUnavailable(runId)) {
         return false;
     }
@@ -596,6 +604,7 @@ async function attachBackgroundStreamForSession(record) {
             : snapshot?.activeRun && typeof snapshot.activeRun === 'object'
                 ? snapshot.activeRun
                 : null;
+        clearSessionUnavailableCooldown(sessionId);
         const recoveredRunId = String(activeRun?.run_id || '').trim();
         const recoveredStatus = String(activeRun?.status || '').trim();
         if (!recoveredRunId || recoveredRunId !== runId) {
@@ -625,6 +634,9 @@ async function attachBackgroundStreamForSession(record) {
         });
         return true;
     } catch (e) {
+        if (e?.status === 404) {
+            markSessionUnavailable(sessionId);
+        }
         logWarn('frontend.background.attach_failed', 'Failed to attach background stream', {
             session_id: sessionId,
             run_id: runId,
@@ -686,6 +698,38 @@ function isRunUnavailable(runId) {
         return true;
     }
     unavailableRunCooldownUntil.delete(safeRunId);
+    return false;
+}
+
+function markSessionUnavailable(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    unavailableSessionCooldownUntil.set(
+        safeSessionId,
+        Date.now() + SESSION_NOT_FOUND_COOLDOWN_MS,
+    );
+}
+
+function clearSessionUnavailableCooldown(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    unavailableSessionCooldownUntil.delete(safeSessionId);
+}
+
+function isSessionUnavailable(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return false;
+    }
+    const cooldownUntil = unavailableSessionCooldownUntil.get(safeSessionId) || 0;
+    if (cooldownUntil > Date.now()) {
+        return true;
+    }
+    unavailableSessionCooldownUntil.delete(safeSessionId);
     return false;
 }
 

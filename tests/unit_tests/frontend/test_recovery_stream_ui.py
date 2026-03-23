@@ -56,12 +56,16 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
     assert "const lastEventId = Number(activeRun.last_event_id || 0);" in recovery_script
     assert "const checkpointEventId = Number(activeRun.checkpoint_event_id || 0);" in recovery_script
+    assert "if (e?.status === 404 && state.currentSessionId === safeSessionId) {" in recovery_script
+    assert "stopSessionContinuity(safeSessionId);" in recovery_script
     assert "detachActiveStreamForSessionSwitch({ focusPrompt: false });" in session_script
     assert "clearAllStreamState({ preserveOverlay: true });" in session_script
     assert "clearAllStreamState({ preserveOverlay: true });" in prompt_script
     assert "clearAllStreamState({ preserveOverlay: true });" in timeline_script
     assert "export function attachRunStream(" in stream_script
     assert "const backgroundStreams = new Map();" in stream_script
+    assert "const unavailableSessionCooldownUntil = new Map();" in stream_script
+    assert "const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert "export function detachActiveStreamForSessionSwitch(options = {}) {" in stream_script
     assert "function promoteBackgroundStream(connection, options = {}) {" in stream_script
     assert "function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {" in stream_script
@@ -74,6 +78,9 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "const unavailableRunCooldownUntil = new Map();" in stream_script
     assert "const RUN_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert "if (isRunNotFoundError(data.error)) {" in stream_script
+    assert "if (e?.status === 404) {" in stream_script
+    assert "markSessionUnavailable(sessionId);" in stream_script
+    assert "if (isSessionUnavailable(sessionId)) {" in stream_script
     assert "if (!ignoreUnavailable && isRunUnavailable(safeRunId)) {" in stream_script
     assert "const streamCore = await import('../core/stream.js');" in sidebar_script
     assert "streamCore.syncBackgroundStreamsForSessions(sessions);" in sidebar_script
