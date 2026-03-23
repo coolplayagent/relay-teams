@@ -208,8 +208,8 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_acp_servers() -
 
     await relay.close_connection(connection_id="conn_123")
 
-    assert [tool.name for tool in tools] == ["echo"]
-    assert schemas[0].name == "echo"
+    assert [tool.name for tool in tools] == ["zed-tools_echo"]
+    assert schemas[0].name == "zed-tools_echo"
     assert cast(dict[str, JsonValue], schemas[0].input_schema)["type"] == "object"
 
 
@@ -227,8 +227,14 @@ class _FakeListedTool:
 
 
 class _FakeToolset:
-    def __init__(self, tools: tuple[_FakeListedTool, ...]) -> None:
+    def __init__(
+        self,
+        tools: tuple[_FakeListedTool, ...],
+        *,
+        tool_prefix: str | None = None,
+    ) -> None:
         self._tools = tools
+        self.tool_prefix = tool_prefix
 
     async def __aenter__(self) -> _FakeToolset:
         return self
@@ -266,7 +272,8 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_stdio_servers(
                         },
                     },
                 ),
-            )
+            ),
+            tool_prefix=spec.name,
         )
 
     monkeypatch.setattr(
@@ -300,7 +307,8 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_stdio_servers(
         tools = await registry.list_tools("mcp-server-context7")
 
     assert len(toolsets) == 1
+    assert toolsets[0].tool_prefix == "mcp-server-context7"
     assert len(built_specs) == 1
     assert built_specs[0].name == "mcp-server-context7"
     assert built_specs[0].server_config["command"] == "npx"
-    assert [tool.name for tool in tools] == ["resolve-library-id"]
+    assert [tool.name for tool in tools] == ["mcp-server-context7_resolve-library-id"]

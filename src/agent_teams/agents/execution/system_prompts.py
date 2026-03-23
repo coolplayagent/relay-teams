@@ -314,8 +314,8 @@ async def _list_role_mcp_tools(
         *[mcp_registry.list_tools(server_name) for server_name in resolved_server_names]
     )
     return tuple(
-        f"{server_name}/{tool.name}"
-        for server_name, tools in zip(resolved_server_names, summaries, strict=True)
+        tool.name
+        for _server_name, tools in zip(resolved_server_names, summaries, strict=True)
         for tool in tools
     )
 

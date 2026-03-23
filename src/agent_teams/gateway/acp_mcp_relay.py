@@ -19,7 +19,12 @@ from agent_teams.mcp.mcp_models import (
     McpToolInfo,
     McpToolSchema,
 )
-from agent_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
+from agent_teams.mcp.mcp_registry import (
+    McpRegistry,
+    build_mcp_server,
+    get_effective_mcp_tool_name,
+    get_mcp_tool_prefix,
+)
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage
 
@@ -106,7 +111,7 @@ class GatewayAwareMcpRegistry(McpRegistry):
             tools = await toolset.list_tools()
         return tuple(
             McpToolInfo(
-                name=str(tool.name),
+                name=get_effective_mcp_tool_name(name, str(tool.name)),
                 description=tool.description
                 if isinstance(tool.description, str)
                 else "",
@@ -122,7 +127,7 @@ class GatewayAwareMcpRegistry(McpRegistry):
             tools = await toolset.list_tools()
         return tuple(
             McpToolSchema(
-                name=str(tool.name),
+                name=get_effective_mcp_tool_name(name, str(tool.name)),
                 description=tool.description
                 if isinstance(tool.description, str)
                 else "",
@@ -241,6 +246,7 @@ class AcpMcpRelay:
             toolset=AcpMcpServer(
                 transport=transport,
                 id=server_spec.server_id,
+                tool_prefix=get_mcp_tool_prefix(server_spec.server_id),
             ),
         )
         self._connections[connection_id] = connection
@@ -474,8 +480,9 @@ class AcpMcpServer(MCPServer):
         *,
         transport: AcpMcpConnectionTransport,
         id: str,
+        tool_prefix: str | None = None,
     ) -> None:
-        super().__init__(id=id)
+        super().__init__(id=id, tool_prefix=tool_prefix)
         self._transport = transport
 
     @contextlib.asynccontextmanager

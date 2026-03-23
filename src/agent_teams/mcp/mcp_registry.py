@@ -26,6 +26,17 @@ class _ListedMcpTool(Protocol):
     inputSchema: object
 
 
+def get_mcp_tool_prefix(server_name: str) -> str:
+    return server_name.strip()
+
+
+def get_effective_mcp_tool_name(server_name: str, tool_name: str) -> str:
+    prefix = get_mcp_tool_prefix(server_name)
+    if not prefix:
+        return tool_name
+    return f"{prefix}_{tool_name}"
+
+
 class McpRegistry:
     def __init__(self, specs: tuple[McpServerSpec, ...] = ()) -> None:
         self._specs = {spec.name: spec for spec in specs}
@@ -75,7 +86,7 @@ class McpRegistry:
             mcp_tools = await self._list_tool_objects(name)
             return tuple(
                 McpToolInfo(
-                    name=str(tool.name),
+                    name=get_effective_mcp_tool_name(name, str(tool.name)),
                     description=tool.description
                     if isinstance(tool.description, str)
                     else "",
@@ -93,7 +104,7 @@ class McpRegistry:
             mcp_tools = await self._list_tool_objects(name)
             return tuple(
                 McpToolSchema(
-                    name=str(tool.name),
+                    name=get_effective_mcp_tool_name(name, str(tool.name)),
                     description=tool.description
                     if isinstance(tool.description, str)
                     else "",
@@ -139,6 +150,7 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
             args=_string_list(server_config.get("args")),
             env=_string_dict(server_config.get("env")),
             cwd=_optional_string(server_config.get("cwd")),
+            tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=(
                 _optional_positive_float(server_config.get("timeout"))
                 or _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS
@@ -154,6 +166,7 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
             url=url,
             headers=_string_dict(server_config.get("headers")),
             id=spec.name,
+            tool_prefix=get_mcp_tool_prefix(spec.name),
         )
     if transport == "http":
         url = _required_string(server_config, "url")
@@ -161,6 +174,7 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
             url=url,
             headers=_string_dict(server_config.get("headers")),
             id=spec.name,
+            tool_prefix=get_mcp_tool_prefix(spec.name),
         )
     raise ValueError(f"Unsupported MCP transport: {transport}")
 

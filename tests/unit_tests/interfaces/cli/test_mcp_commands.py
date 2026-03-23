@@ -39,8 +39,8 @@ class _FakeMcpService:
             source=McpConfigScope.APP,
             transport="stdio",
             tools=(
-                McpToolInfo(name="read_file", description="Read a file"),
-                McpToolInfo(name="write_file", description="Write a file"),
+                McpToolInfo(name="filesystem_read_file", description="Read a file"),
+                McpToolInfo(name="filesystem_write_file", description="Write a file"),
             ),
         )
 
@@ -78,8 +78,8 @@ def test_mcp_tools_renders_table_by_default(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.output.startswith("MCP Tools for filesystem (2 total)")
-    assert "read_file" in result.output
-    assert "write_file" in result.output
+    assert "filesystem_read_file" in result.output
+    assert "filesystem_write_file" in result.output
 
 
 def test_mcp_tools_surfaces_connection_error(monkeypatch) -> None:

@@ -73,7 +73,7 @@ class _FakeMcpRegistry(McpRegistry):
 
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
         assert name == "docs"
-        return (McpToolInfo(name="search", description="Search docs"),)
+        return (McpToolInfo(name="docs_search", description="Search docs"),)
 
 
 def _coordinator_registry() -> RoleRegistry:
@@ -150,7 +150,7 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "dispatch targets, not your own capabilities." in prompt
     assert "- Description: Drafts release notes." in prompt
     assert "- Tools: read, write" in prompt
-    assert "- MCP Tools: docs/search" in prompt
+    assert "- MCP Tools: docs_search" in prompt
     assert "- Skills: time" in prompt
     assert "Deliver weekly summary" not in prompt
 

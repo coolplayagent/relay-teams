@@ -837,7 +837,7 @@ Lists effective MCP servers from app scope.
 
 ### `GET /mcp/servers/{server_name}/tools`
 
-Lists tools exposed by one MCP server.
+Lists tools exposed by one MCP server. Returned tool names are the effective callable names registered at runtime in the form `<server_name>_<tool_name>` so tools from different MCP servers cannot collide.
 
 ## Trigger APIs
 

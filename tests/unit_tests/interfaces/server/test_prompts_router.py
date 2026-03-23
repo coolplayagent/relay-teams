@@ -142,8 +142,8 @@ class _FakeMcpRegistry(McpRegistry):
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
         assert name == "docs"
         return (
-            McpToolInfo(name="read_file", description="Read a file"),
-            McpToolInfo(name="search_docs", description="Search docs"),
+            McpToolInfo(name="docs_read_file", description="Read a file"),
+            McpToolInfo(name="docs_search_docs", description="Search docs"),
         )
 
 
@@ -198,7 +198,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     )
     assert "- Tools: dispatch_task" in payload["runtime_system_prompt"]
     assert (
-        "- MCP Tools: docs/read_file, docs/search_docs"
+        "- MCP Tools: docs_read_file, docs_search_docs"
         in payload["runtime_system_prompt"]
     )
     assert "- Skills: planner" in payload["runtime_system_prompt"]

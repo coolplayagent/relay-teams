@@ -31,7 +31,9 @@ class _FakeMcpService:
             server="filesystem",
             source=McpConfigScope.APP,
             transport="stdio",
-            tools=(McpToolInfo(name="read_file", description="Read a file"),),
+            tools=(
+                McpToolInfo(name="filesystem_read_file", description="Read a file"),
+            ),
         )
 
 
@@ -67,7 +69,7 @@ def test_list_mcp_server_tools() -> None:
         "server": "filesystem",
         "source": "app",
         "transport": "stdio",
-        "tools": [{"name": "read_file", "description": "Read a file"}],
+        "tools": [{"name": "filesystem_read_file", "description": "Read a file"}],
     }
 
 

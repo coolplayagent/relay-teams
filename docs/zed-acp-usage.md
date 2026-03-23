@@ -230,7 +230,7 @@ When MCP-over-ACP is working, you should see:
 - the raw tool input rendered in Zed
 - the tool result streamed back into the reply
 
-For example, a Zed-provided Context7 server should surface tools such as `resolve-library-id` and `query-docs` inside an `agent-teams` thread.
+For example, a Zed-provided Context7 server should surface runtime tool names such as `mcp-server-context7_resolve-library-id` and `mcp-server-context7_query-docs` inside an `agent-teams` thread.
 
 If the model does not pick the MCP tool reliably, create a dedicated Zed agent profile with conflicting built-in tools disabled and the target context server enabled.
 
