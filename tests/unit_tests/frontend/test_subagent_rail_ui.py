@@ -84,6 +84,30 @@ console.log(JSON.stringify({
     }
 
 
+def test_subagent_rail_rebuilds_labels_when_language_changes(tmp_path: Path) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initializeSubagentRail, rememberLiveSubagent } = await import("./subagentRail.mjs");
+
+initializeSubagentRail();
+rememberLiveSubagent("writer-2", "writer");
+globalThis.__language = "zh-CN";
+document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+
+console.log(JSON.stringify({
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+    toggleHtml: globalThis.__elements.toggleSubagentsBtn.innerHTML,
+    clearPanelCalls: globalThis.__clearAllPanelsCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["summaryText"] == "1 个运行中 / 1 个角色"
+    assert "子代理" in cast(str, payload["toggleHtml"])
+    assert payload["clearPanelCalls"] == 1
+
+
 def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -193,6 +217,10 @@ export function isReservedSystemRoleId(roleId) {
     )
     mock_agent_panel_path.write_text(
         """
+export function clearAllPanels() {
+    globalThis.__clearAllPanelsCalls += 1;
+}
+
 export function openAgentPanel(instanceId, roleId, options = {}) {
     globalThis.__openAgentPanelCalls.push({ instanceId, roleId, options });
 }
@@ -208,14 +236,23 @@ export const els = globalThis.__elements;
     mock_i18n_path.write_text(
         """
 const translations = {
-    "topbar.subagents": "Subagents",
-    "subagent.none": "No subagents",
-    "subagent.summary_idle": "idle / {roles} roles",
-    "subagent.summary_running": "{running} running / {roles} roles",
+    "en-US": {
+        "topbar.subagents": "Subagents",
+        "subagent.none": "No subagents",
+        "subagent.summary_idle": "idle / {roles} roles",
+        "subagent.summary_running": "{running} running / {roles} roles",
+    },
+    "zh-CN": {
+        "topbar.subagents": "子代理",
+        "subagent.none": "暂无子代理",
+        "subagent.summary_idle": "空闲 / {roles} 个角色",
+        "subagent.summary_running": "{running} 个运行中 / {roles} 个角色",
+    },
 };
 
 export function t(key) {
-    return translations[key] || key;
+    const language = globalThis.__language || "en-US";
+    return translations[language]?.[key] || translations["en-US"]?.[key] || key;
 }
 """.strip(),
         encoding="utf-8",
@@ -283,7 +320,38 @@ globalThis.__elements = {{
     rightRailResizer: createElement(),
 }};
 globalThis.__openAgentPanelCalls = [];
+globalThis.__clearAllPanelsCalls = 0;
+globalThis.__language = "en-US";
+globalThis.CustomEvent = class CustomEvent {{
+    constructor(type, init = {{}}) {{
+        this.type = type;
+        this.detail = init.detail || null;
+    }}
+}};
+const __listeners = new Map();
+globalThis.document = {{
+    addEventListener(type, listener) {{
+        if (!__listeners.has(type)) {{
+            __listeners.set(type, []);
+        }}
+        __listeners.get(type).push(listener);
+    }},
+    dispatchEvent(event) {{
+        const listeners = __listeners.get(event.type) || [];
+        listeners.forEach(listener => listener(event));
+        return true;
+    }},
+}};
 
+globalThis.localStorage = {{
+    _values: new Map(),
+    getItem(key) {{
+        return this._values.has(key) ? this._values.get(key) : null;
+    }},
+    setItem(key, value) {{
+        this._values.set(key, String(value));
+    }},
+}};
 {runner_source}
 """.strip(),
         encoding="utf-8",

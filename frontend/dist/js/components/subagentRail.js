@@ -4,12 +4,13 @@
  */
 import { fetchSessionAgents, fetchSessionTasks } from '../core/api.js';
 import { isReservedSystemRoleId, state } from '../core/state.js';
-import { openAgentPanel } from './agentPanel.js';
+import { clearAllPanels, openAgentPanel } from './agentPanel.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
 const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
+let languageRefreshBound = false;
 
 export function initializeSubagentRail() {
     const collapsed = localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) === '1';
@@ -26,6 +27,13 @@ export function initializeSubagentRail() {
             if (!nextRoleId) return;
             selectSubagentRole(nextRoleId, { reveal: false, forceRefresh: true });
         };
+    }
+    if (!languageRefreshBound && typeof document?.addEventListener === 'function') {
+        languageRefreshBound = true;
+        document.addEventListener('agent-teams-language-changed', () => {
+            clearAllPanels();
+            renderSubagentRail({ preserveSelection: true });
+        });
     }
 
     renderSubagentRail();
