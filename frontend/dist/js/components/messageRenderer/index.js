@@ -10,6 +10,7 @@ export {
     finalizeStream,
     clearStreamState,
     clearRunStreamState,
+    clearRenderedStreamState,
     clearAllStreamState,
     getCoordinatorStreamOverlay,
     getInstanceStreamOverlay,
@@ -22,4 +23,5 @@ export {
     markToolInputValidationFailed,
     attachToolApprovalControls,
     markToolApprovalResolved,
+    applyStreamOverlayEvent,
 } from './stream.js';

@@ -14,7 +14,7 @@ from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunResult
+from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -470,3 +470,79 @@ async def test_worker_terminal_status_matches_run_result(
 
     events = event_log.list_by_session_with_ids("session-1")
     assert events[-1]["event_type"] == terminal_event_type.value
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_replays_resume_path_after_last_seen_event(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stream_resume_replay.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._running_run_ids.add("run-existing")
+
+    events_to_publish = [
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"session_id":"session-1"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"before stop"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_STOPPED,
+            payload_json='{"reason":"stopped_by_user"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_RESUMED,
+            payload_json='{"session_id":"session-1","reason":"resume"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"after resume"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        ),
+    ]
+    for event in events_to_publish:
+        manager._run_event_hub.publish(event)
+
+    replayed = [
+        event
+        async for event in manager.stream_run_events("run-existing", after_event_id=3)
+    ]
+
+    assert [event.event_type for event in replayed] == [
+        RunEventType.RUN_RESUMED,
+        RunEventType.TEXT_DELTA,
+        RunEventType.RUN_COMPLETED,
+    ]
+    assert manager._run_event_hub.has_subscribers("run-existing") is False

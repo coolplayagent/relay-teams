@@ -598,6 +598,7 @@ export async function loadProjects() {
             fetchWorkspaces(),
             fetchSessions(),
         ]);
+        void maybeSyncBackgroundStreams(sessions);
 
         els.projectsList.innerHTML = '';
         els.projectsList.appendChild(renderProjectsToolbar());
@@ -813,5 +814,16 @@ export async function handleNewSessionClick(workspaceId, manualClick = true) {
         await selectSessionById(data.session_id);
     } catch (error) {
         sysLog(`Error creating session: ${error.message}`, 'log-error');
+    }
+}
+
+async function maybeSyncBackgroundStreams(sessions) {
+    try {
+        const streamCore = await import('../core/stream.js');
+        if (typeof streamCore.syncBackgroundStreamsForSessions === 'function') {
+            streamCore.syncBackgroundStreamsForSessions(sessions);
+        }
+    } catch (_error) {
+        return;
     }
 }

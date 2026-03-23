@@ -159,7 +159,7 @@ export async function handleSend() {
     }
     refreshSessionTopologyControls();
     refreshVisibleContextIndicators({ immediate: true });
-    clearAllStreamState();
+    clearAllStreamState({ preserveOverlay: true });
 
     sysLog('Sending prompt');
     startSessionContinuity(state.currentSessionId);

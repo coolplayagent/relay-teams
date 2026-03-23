@@ -54,6 +54,10 @@ export async function hydrateSessionView(
         if (state.currentSessionId !== safeSessionId) return null;
     }
     const snapshot = await refreshSessionRecovery(safeSessionId, { quiet });
+    await ensureAutomaticRecoveryStream(snapshot, {
+        sessionId: safeSessionId,
+        reason: 'hydrate-session',
+    });
     await refreshSubagentRail(safeSessionId, { preserveSelection: true });
     syncSessionContinuity();
     return snapshot;
@@ -198,9 +202,10 @@ export async function resumeRecoverableRun(
     if (!safeRunId) return false;
 
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const activeRun = getActiveRecoveryRun();
     const resolvedAfterEventId = typeof afterEventId === 'number' && afterEventId >= 0
         ? afterEventId
-        : Number(getActiveRecoveryRun()?.checkpoint_event_id) || 0;
+        : resolveRecoveryAfterEventId(activeRun);
     recoveryActionBusy = true;
     renderRecoveryBanner();
     try {
@@ -209,7 +214,6 @@ export async function resumeRecoverableRun(
         const complete = typeof onCompleted === 'function'
             ? onCompleted
             : async sid => hydrateSessionView(sid, { includeRounds: true, quiet: true });
-        markRunStreamConnected(safeRunId, { phase: 'running' });
         resumeRunStream(safeRunId, nextSessionId, complete, {
             reason,
             makeUiBusy: true,
@@ -641,7 +645,52 @@ async function runScheduledContinuityRefresh(request) {
         await loadSessionRounds(safeSessionId);
         if (state.currentSessionId !== safeSessionId) return null;
     }
-    return refreshSessionRecovery(safeSessionId, { quiet: request.quiet !== false });
+    const snapshot = await refreshSessionRecovery(safeSessionId, { quiet: request.quiet !== false });
+    await ensureAutomaticRecoveryStream(snapshot, {
+        sessionId: safeSessionId,
+        reason: request.reason || 'continuity-refresh',
+    });
+    return snapshot;
+}
+
+async function ensureAutomaticRecoveryStream(
+    snapshot,
+    {
+        sessionId = state.currentSessionId,
+        reason = 'auto-reconnect',
+    } = {},
+) {
+    const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!safeSessionId || state.currentSessionId !== safeSessionId) return false;
+    const activeRun = snapshot?.activeRun || null;
+    if (!shouldAutoAttachRecoveryStream(activeRun)) return false;
+
+    resumeRunStream(activeRun.run_id, safeSessionId, null, {
+        reason,
+        makeUiBusy: true,
+        afterEventId: resolveRecoveryAfterEventId(activeRun),
+    });
+    return true;
+}
+
+function shouldAutoAttachRecoveryStream(activeRun) {
+    if (!activeRun?.run_id) return false;
+    if (activeRun.is_recoverable === false) return false;
+    if (activeRun.status !== 'running' && activeRun.status !== 'queued') return false;
+    return !(
+        state.activeEventSource
+        && state.activeRunId === activeRun.run_id
+        && state.isGenerating
+    );
+}
+
+function resolveRecoveryAfterEventId(activeRun) {
+    if (!activeRun || typeof activeRun !== 'object') return 0;
+    const lastEventId = Number(activeRun.last_event_id || 0);
+    if (lastEventId > 0) return lastEventId;
+    const checkpointEventId = Number(activeRun.checkpoint_event_id || 0);
+    if (checkpointEventId > 0) return checkpointEventId;
+    return 0;
 }
 
 function reconcileApprovalActionState(approvals) {
@@ -866,13 +915,7 @@ function getFooterActions(activeRun, approvals, pausedSubagent) {
     const actions = [];
     if (!activeRun?.is_recoverable) return actions;
     if (isLocallyStreaming(activeRun.run_id)) return actions;
-    if (activeRun.status === 'running' || activeRun.status === 'queued') {
-        actions.push({
-            action: 'resume-run',
-            label: 'Connect Stream',
-            kind: 'primary',
-        });
-    } else if (activeRun.status === 'stopped' || activeRun.phase === 'stopped') {
+    if (activeRun.status === 'stopped' || activeRun.phase === 'stopped') {
         actions.push({
             action: 'resume-run',
             label: 'Resume Run',
@@ -1020,7 +1063,7 @@ function describeRecoveryState(activeRun, approvals, pausedSubagent) {
     if (activeRun.status === 'running' || activeRun.status === 'queued') {
         return isLocallyStreaming(activeRun.run_id)
             ? 'This tab is following the live stream.'
-            : 'A recoverable run is active for this session. Connect the stream to keep following progress.';
+            : 'A recoverable run is active for this session. The live stream reconnects automatically.';
     }
     if (activeRun.status === 'stopped') {
         return 'Execution stopped at a durable checkpoint. Resume from the latest persisted state.';

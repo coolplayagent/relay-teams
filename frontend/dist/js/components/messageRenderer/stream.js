@@ -18,6 +18,7 @@ import {
 
 const streamState = new Map();
 const overlayState = new Map();
+const overlayCleanupTimers = new Map();
 const PRIMARY_KEY = 'primary';
 
 export function getOrCreateStreamBlock(
@@ -30,22 +31,13 @@ export function getOrCreateStreamBlock(
     const streamKey = resolveStreamKey(instanceId, roleId);
     let st = streamState.get(streamKey);
     if (!st || st.container !== container) {
-        const { wrapper, contentEl } = renderMessageBlock(container, 'model', label, []);
-        st = {
+        st = createStreamState({
             container,
-            wrapper,
-            contentEl,
-            activeTextEl: null,
-            raw: '',
-            activeRaw: '',
-            thinkingParts: new Map(),
-            thinkingActiveByPart: new Map(),
-            thinkingSequence: 0,
+            instanceId,
             roleId,
             label,
-            runId: String(runId || ''),
-            instanceId: String(instanceId || ''),
-        };
+            runId,
+        });
         streamState.set(streamKey, st);
     } else {
         if (!st.thinkingParts) st.thinkingParts = new Map();
@@ -109,6 +101,7 @@ export function clearStreamState(instanceId, roleId = '') {
 export function clearRunStreamState(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    clearRunOverlayCleanupTimer(safeRunId);
     overlayState.delete(safeRunId);
     Array.from(streamState.entries()).forEach(([key, entry]) => {
         if (entry.runId === safeRunId) {
@@ -120,13 +113,24 @@ export function clearRunStreamState(runId) {
     });
 }
 
-export function clearAllStreamState() {
+export function clearRenderedStreamState() {
     streamState.forEach(entry => {
         if (entry?.activeTextEl) {
             syncStreamingCursor(entry.activeTextEl, false);
         }
     });
     streamState.clear();
+}
+
+export function clearAllStreamState(options = {}) {
+    clearRenderedStreamState();
+    if (options?.preserveOverlay === true) {
+        return;
+    }
+    overlayCleanupTimers.forEach(timerId => {
+        clearTimeout(timerId);
+    });
+    overlayCleanupTimers.clear();
     overlayState.clear();
 }
 
@@ -173,22 +177,13 @@ export function appendToolCallBlock(
     let st = streamState.get(streamKey);
     if (!st) {
         const actorLabel = label || (toolName ? 'Tool' : 'Agent');
-        const { wrapper, contentEl } = renderMessageBlock(container, 'model', actorLabel, []);
-        st = {
+        st = createStreamState({
             container,
-            wrapper,
-            contentEl,
-            activeTextEl: null,
-            raw: '',
-            activeRaw: '',
-            thinkingParts: new Map(),
-            thinkingActiveByPart: new Map(),
-            thinkingSequence: 0,
+            instanceId,
             roleId,
             label: actorLabel,
             runId,
-            instanceId: String(instanceId || ''),
-        };
+        });
         streamState.set(streamKey, st);
     } else {
         if (!st.thinkingParts) st.thinkingParts = new Map();
@@ -293,22 +288,13 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
     let st = streamState.get(streamKey);
     if (!st && container) {
         const actorLabel = label || 'Agent';
-        const { wrapper, contentEl } = renderMessageBlock(container, 'model', actorLabel, []);
-        st = {
+        st = createStreamState({
             container,
-            wrapper,
-            contentEl,
-            activeTextEl: null,
-            raw: '',
-            activeRaw: '',
-            thinkingParts: new Map(),
-            thinkingActiveByPart: new Map(),
-            thinkingSequence: 0,
+            instanceId,
             roleId,
             label: actorLabel,
             runId,
-            instanceId: String(instanceId || ''),
-        };
+        });
         streamState.set(streamKey, st);
     } else if (st) {
         if (!st.thinkingParts) st.thinkingParts = new Map();
@@ -332,7 +318,7 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
     const streamKey = resolveStreamKey(instanceId, roleId);
     const st = streamState.get(streamKey);
     if (!st) {
-        updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text);
+        updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text, { append: true });
         return false;
     }
     const entry = resolveThinkingEntry(st, partIndex);
@@ -434,6 +420,100 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
     return true;
 }
 
+export function applyStreamOverlayEvent(evType, payload, options = {}) {
+    const runId = String(options.runId || '').trim();
+    if (!runId) return;
+    const instanceId = String(options.instanceId || '').trim();
+    const roleId = String(options.roleId || '').trim();
+    const label = String(options.label || '').trim();
+    const streamKey = resolveStreamKey(instanceId, roleId);
+    const cleanupDelayMs = Number(options.cleanupDelayMs || 0);
+
+    if (evType === 'text_delta') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayText(runId, streamKey, roleId, label, payload?.text || '');
+        return;
+    }
+    if (evType === 'thinking_started') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        startOverlayThinking(runId, streamKey, roleId, label, payload?.part_index ?? 0);
+        return;
+    }
+    if (evType === 'thinking_delta') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayThinkingText(
+            runId,
+            streamKey,
+            roleId,
+            label,
+            payload?.part_index ?? 0,
+            payload?.text || '',
+            { append: true },
+        );
+        return;
+    }
+    if (evType === 'thinking_finished') {
+        finishOverlayThinking(runId, streamKey, roleId, payload?.part_index ?? 0);
+        return;
+    }
+    if (evType === 'tool_call') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayToolCall(runId, streamKey, roleId, label, {
+            tool_call_id: payload?.tool_call_id || '',
+            tool_name: payload?.tool_name || '',
+            args: payload?.args || {},
+            status: 'pending',
+        });
+        return;
+    }
+    if (evType === 'tool_result') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        const resultEnvelope = payload?.result || {};
+        const isError = typeof resultEnvelope === 'object'
+            ? resultEnvelope.ok === false
+            : !!payload?.error;
+        updateOverlayToolResult(
+            runId,
+            streamKey,
+            roleId,
+            payload?.tool_name || '',
+            payload?.tool_call_id || null,
+            resultEnvelope,
+            isError,
+        );
+        return;
+    }
+    if (evType === 'tool_input_validation_failed') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayToolValidation(runId, streamKey, roleId, payload);
+        return;
+    }
+    if (evType === 'tool_approval_requested') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayToolApproval(runId, streamKey, roleId, payload?.tool_name, payload, 'requested');
+        return;
+    }
+    if (evType === 'tool_approval_resolved') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        updateOverlayToolApproval(
+            runId,
+            streamKey,
+            roleId,
+            payload?.tool_name,
+            payload,
+            String(payload?.action || '').toLowerCase() || 'resolved',
+        );
+        return;
+    }
+    if (evType === 'model_step_finished') {
+        scheduleOverlayEntryCleanup(runId, streamKey, roleId, cleanupDelayMs);
+        return;
+    }
+    if (evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped') {
+        scheduleRunOverlayCleanup(runId, cleanupDelayMs);
+    }
+}
+
 function ensureApprovalState(toolBlock) {
     let approvalEl = toolBlock.querySelector('.tool-approval-inline');
     if (approvalEl) return approvalEl;
@@ -458,6 +538,232 @@ function resolveStreamKey(instanceId, roleId) {
     }
     if (safeInstanceId) return safeInstanceId;
     return `role:${String(roleId || '').trim()}`;
+}
+
+function createStreamState({
+    container,
+    instanceId,
+    roleId,
+    label,
+    runId,
+}) {
+    const reused = findReusableStreamState({
+        container,
+        instanceId,
+        roleId,
+        label,
+        runId,
+    });
+    if (reused) {
+        return reused;
+    }
+    const { wrapper, contentEl } = renderMessageBlock(container, 'model', label, []);
+    return {
+        container,
+        wrapper,
+        contentEl,
+        activeTextEl: null,
+        raw: '',
+        activeRaw: '',
+        thinkingParts: new Map(),
+        thinkingActiveByPart: new Map(),
+        thinkingSequence: 0,
+        roleId,
+        label,
+        runId: String(runId || ''),
+        instanceId: String(instanceId || ''),
+    };
+}
+
+function findReusableStreamState({
+    container,
+    instanceId,
+    roleId,
+    label,
+    runId,
+}) {
+    const overlayEntry = resolveOverlayEntry(runId, instanceId, roleId, label);
+    const wrapper = findReusableMessageWrapper({
+        container,
+        instanceId,
+        roleId,
+        label,
+        runId,
+    });
+    if (!wrapper) return null;
+    const contentEl = wrapper.querySelector('.msg-content');
+    if (!contentEl) return null;
+    const activeTextEl = findLastReusableTextElement(contentEl);
+    const activeRaw = resolveReusableRawText(overlayEntry);
+    const thinkingBinding = bindReusableThinkingState(contentEl, overlayEntry);
+    return {
+        container,
+        wrapper,
+        contentEl,
+        activeTextEl,
+        raw: activeRaw,
+        activeRaw,
+        thinkingParts: thinkingBinding.parts,
+        thinkingActiveByPart: thinkingBinding.activeByPart,
+        thinkingSequence: thinkingBinding.nextSequence,
+        roleId,
+        label,
+        runId: String(runId || ''),
+        instanceId: String(instanceId || ''),
+    };
+}
+
+function resolveOverlayEntry(runId, instanceId, roleId, label) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return null;
+    }
+    const runOverlay = overlayState.get(safeRunId);
+    if (!runOverlay) {
+        return null;
+    }
+    const key = resolveStreamKey(instanceId, roleId);
+    return runOverlay.entries.get(key)
+        || runOverlay.entries.get(resolveStreamKey(instanceId, ''))
+        || runOverlay.entries.get(resolveStreamKey('', roleId))
+        || runOverlay.entries.get(resolveStreamKey('', ''));
+}
+
+function findReusableMessageWrapper({
+    container,
+    instanceId,
+    roleId,
+    label,
+    runId,
+}) {
+    if (!container) return null;
+    const streamKey = resolveStreamKey(instanceId, roleId);
+    const safeLabel = String(label || '').trim().toUpperCase();
+    const safeRunId = String(runId || '').trim();
+    const wrappers = Array.from(container.querySelectorAll('.message'));
+    for (let index = wrappers.length - 1; index >= 0; index -= 1) {
+        const wrapper = wrappers[index];
+        const roleEl = wrapper.querySelector('.msg-role');
+        if (!roleEl) continue;
+        const renderedLabel = String(roleEl.textContent || '').trim();
+        if (!renderedLabel || renderedLabel !== safeLabel) continue;
+        if (!wrapperMatchesStreamKey(wrapper, streamKey, roleId)) continue;
+        if (safeRunId && !wrapperBelongsToRun(wrapper, safeRunId)) continue;
+        return wrapper;
+    }
+    return null;
+}
+
+function wrapperMatchesStreamKey(wrapper, streamKey, roleId) {
+    const safeStreamKey = String(streamKey || '').trim();
+    if (safeStreamKey === PRIMARY_KEY) {
+        return true;
+    }
+    const wrapperInstanceId = String(wrapper.dataset.instanceId || '').trim();
+    const wrapperRoleId = String(wrapper.dataset.roleId || '').trim();
+    const safeRoleId = String(roleId || '').trim();
+    return !!(
+        (wrapperInstanceId && wrapperInstanceId === safeStreamKey)
+        || (safeRoleId && wrapperRoleId === safeRoleId)
+    );
+}
+
+function wrapperBelongsToRun(wrapper, runId) {
+    const section = wrapper.closest('.session-round-section');
+    if (!section) return true;
+    return String(section.dataset.runId || '').trim() === runId;
+}
+
+function findLastReusableTextElement(contentEl) {
+    if (!contentEl) return null;
+    const textBlocks = Array.from(contentEl.querySelectorAll('.msg-text'));
+    for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
+        const textEl = textBlocks[index];
+        if (textEl.closest('.thinking-block')) continue;
+        return textEl;
+    }
+    return null;
+}
+
+function resolveReusableRawText(overlayEntry) {
+    if (!overlayEntry || !Array.isArray(overlayEntry.parts)) {
+        return '';
+    }
+    for (let index = overlayEntry.parts.length - 1; index >= 0; index -= 1) {
+        const part = overlayEntry.parts[index];
+        if (!part || part.kind !== 'text') {
+            continue;
+        }
+        return String(part.content || '');
+    }
+    return '';
+}
+
+function bindReusableThinkingState(contentEl, overlayEntry) {
+    const parts = new Map();
+    const activeByPart = new Map();
+    let nextSequence = 0;
+    if (!contentEl || !overlayEntry || !Array.isArray(overlayEntry.parts)) {
+        return { parts, activeByPart, nextSequence };
+    }
+
+    overlayEntry.parts.forEach(part => {
+        if (!part || part.kind !== 'thinking') {
+            return;
+        }
+        const safePartIndex = String(part.part_index ?? '');
+        const key = String(part._key || `${safePartIndex}:${nextSequence}`);
+        const textEl = findReusableThinkingTextElement(contentEl, key, safePartIndex);
+        if (!textEl) {
+            return;
+        }
+        parts.set(key, {
+            textEl,
+            raw: String(part.content || ''),
+            finished: part.finished === true,
+            partIndex: safePartIndex,
+            key,
+        });
+        if (part.finished !== true && safePartIndex) {
+            activeByPart.set(safePartIndex, key);
+        }
+        const sequenceValue = parseThinkingSequenceValue(key, safePartIndex);
+        nextSequence = Math.max(nextSequence, sequenceValue + 1);
+    });
+
+    return { parts, activeByPart, nextSequence };
+}
+
+function findReusableThinkingTextElement(contentEl, key, partIndex) {
+    if (!contentEl) {
+        return null;
+    }
+    const candidates = [
+        key ? `.thinking-block[data-part-index="${escapeSelectorValue(key)}"] .thinking-text` : '',
+        partIndex ? `.thinking-block[data-part-index="${escapeSelectorValue(partIndex)}"] .thinking-text` : '',
+    ].filter(Boolean);
+    for (const selector of candidates) {
+        const textEl = contentEl.querySelector(selector);
+        if (textEl) {
+            return textEl;
+        }
+    }
+    return null;
+}
+
+function parseThinkingSequenceValue(key, partIndex) {
+    const safeKey = String(key || '');
+    const safePartIndex = String(partIndex || '');
+    const prefix = safePartIndex ? `${safePartIndex}:` : '';
+    if (!prefix || !safeKey.startsWith(prefix)) {
+        return 0;
+    }
+    const parsed = Number.parseInt(safeKey.slice(prefix.length), 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function escapeSelectorValue(value) {
+    return String(value || '').replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 function endActiveText(st) {
@@ -486,6 +792,7 @@ function clearOverlayEntry(runId, instanceId, roleId) {
     const key = resolveStreamKey(instanceId, roleId);
     runOverlay.entries.delete(key);
     if (runOverlay.entries.size === 0) {
+        clearRunOverlayCleanupTimer(safeRunId);
         overlayState.delete(safeRunId);
     }
 }
@@ -518,6 +825,91 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
         if (typeof entry.thinkingSequence !== 'number') entry.thinkingSequence = 0;
     }
     return entry;
+}
+
+function scheduleOverlayEntryCleanup(runId, instanceId, roleId, delayMs = 0) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    const key = resolveStreamKey(instanceId, roleId);
+    if (delayMs <= 0) {
+        clearOverlayEntryCleanupTimer(safeRunId, key);
+        clearOverlayEntry(safeRunId, key, roleId);
+        return;
+    }
+    clearOverlayEntryCleanupTimer(safeRunId, key);
+    const timerKey = overlayEntryCleanupKey(safeRunId, key);
+    const timerId = setTimeout(() => {
+        overlayCleanupTimers.delete(timerKey);
+        clearOverlayEntry(safeRunId, key, roleId);
+    }, delayMs);
+    overlayCleanupTimers.set(timerKey, timerId);
+}
+
+function scheduleRunOverlayCleanup(runId, delayMs = 0) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    if (delayMs <= 0) {
+        clearRunOverlayCleanupTimer(safeRunId);
+        overlayState.delete(safeRunId);
+        return;
+    }
+    clearRunOverlayCleanupTimer(safeRunId);
+    const timerKey = overlayRunCleanupKey(safeRunId);
+    const timerId = setTimeout(() => {
+        overlayCleanupTimers.delete(timerKey);
+        overlayState.delete(safeRunId);
+    }, delayMs);
+    overlayCleanupTimers.set(timerKey, timerId);
+}
+
+function clearOverlayEntryCleanupTimer(runId, streamKey) {
+    const safeRunId = String(runId || '').trim();
+    const safeStreamKey = String(streamKey || '').trim();
+    if (!safeRunId || !safeStreamKey) {
+        return;
+    }
+    const timerKey = overlayEntryCleanupKey(safeRunId, safeStreamKey);
+    const timerId = overlayCleanupTimers.get(timerKey);
+    if (!timerId) {
+        return;
+    }
+    clearTimeout(timerId);
+    overlayCleanupTimers.delete(timerKey);
+}
+
+function clearRunOverlayCleanupTimer(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    const runTimerKey = overlayRunCleanupKey(safeRunId);
+    const runTimerId = overlayCleanupTimers.get(runTimerKey);
+    if (runTimerId) {
+        clearTimeout(runTimerId);
+        overlayCleanupTimers.delete(runTimerKey);
+    }
+    Array.from(overlayCleanupTimers.keys()).forEach(timerKey => {
+        if (!timerKey.startsWith(`${safeRunId}::entry::`)) {
+            return;
+        }
+        const timerId = overlayCleanupTimers.get(timerKey);
+        if (timerId) {
+            clearTimeout(timerId);
+            overlayCleanupTimers.delete(timerKey);
+        }
+    });
+}
+
+function overlayEntryCleanupKey(runId, streamKey) {
+    return `${runId}::entry::${streamKey}`;
+}
+
+function overlayRunCleanupKey(runId) {
+    return `${runId}::run`;
 }
 
 function updateOverlayText(runId, instanceId, roleId, label, text) {
@@ -554,7 +946,7 @@ function startOverlayThinking(runId, instanceId, roleId, label, partIndex) {
     });
 }
 
-function updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text) {
+function updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text, options = {}) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     const safePartIndex = Number(partIndex);
@@ -564,7 +956,12 @@ function updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, 
         part = resolveOverlayThinkingPart(entry, safePartIndex);
     }
     if (!part) return;
-    part.content = String(text || '');
+    const nextText = String(text || '');
+    if (options.append === true) {
+        part.content = String(part.content || '') + nextText;
+    } else {
+        part.content = nextText;
+    }
     part.finished = false;
 }
 

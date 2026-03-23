@@ -235,7 +235,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
     const oldScroll = container.scrollTop;
     container.innerHTML = '';
 
-    clearAllStreamState();
+    clearAllStreamState({ preserveOverlay: true });
     roundsState.activeRunId = null;
     roundsState.activeVisibility = 0;
 

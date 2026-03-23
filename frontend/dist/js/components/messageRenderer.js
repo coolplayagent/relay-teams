@@ -22,4 +22,5 @@ export {
     markToolInputValidationFailed,
     attachToolApprovalControls,
     markToolApprovalResolved,
+    applyStreamOverlayEvent,
 } from './messageRenderer/index.js';

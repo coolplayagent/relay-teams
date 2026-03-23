@@ -196,6 +196,7 @@ class ServerContainer:
         self._ensure_default_workspace()
 
         self.agent_repo.mark_running_instances_failed()
+        _ = self.run_runtime_repo.mark_transient_runs_interrupted()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
@@ -277,6 +278,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
+            run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
             active_run_registry=self.active_run_registry,
             event_log=self.event_log,

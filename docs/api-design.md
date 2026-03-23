@@ -330,6 +330,14 @@ Gets one round projection.
 
 Returns active run recovery state, pending tool approvals, paused subagent state, and round snapshot.
 
+`active_run` also includes:
+- `last_event_id`
+- `checkpoint_event_id`
+- `stream_connected`
+- `should_show_recover`
+
+For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
+
 ### `GET /sessions/{session_id}/agents`
 
 Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.

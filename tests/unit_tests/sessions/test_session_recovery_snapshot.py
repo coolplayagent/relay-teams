@@ -11,12 +11,15 @@ from pydantic_ai.messages import (
 
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
+from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.sessions.session_service import SessionService
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -42,6 +45,7 @@ def _build_service(
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
+        run_state_repo=RunStateRepository(db_path),
         run_event_hub=run_event_hub,
         active_run_registry=active_run_registry,
         event_log=EventLog(db_path),
@@ -170,6 +174,85 @@ def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
     assert active_run.get("should_show_recover") is False
     assert active_run.get("phase") == "running"
     assert active_run.get("pending_tool_approval_count") == 0
+
+
+def test_get_recovery_snapshot_does_not_auto_stream_interrupted_running_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_interrupted_running.db"
+    runtime_repo = RunRuntimeRepository(db_path)
+    _ = SessionRepository(db_path).create(
+        session_id="session-1",
+        workspace_id="default",
+    )
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = runtime_repo.mark_transient_runs_interrupted()
+
+    service = _build_service(db_path)
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == "run-active"
+    assert active_run.get("status") == "stopped"
+    assert active_run.get("phase") == "stopped"
+    assert active_run.get("stream_connected") is False
+    assert active_run.get("should_show_recover") is True
+
+
+def test_get_recovery_snapshot_includes_stream_event_offsets(tmp_path: Path) -> None:
+    db_path = tmp_path / "recovery_offsets.db"
+    hub = RunEventHub(
+        event_log=EventLog(db_path),
+        run_state_repo=RunStateRepository(db_path),
+    )
+    service = _build_service(db_path, run_event_hub=hub)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    hub.publish(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-active",
+            trace_id="run-active",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"session_id":"session-1"}',
+        )
+    )
+    hub.publish(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-active",
+            trace_id="run-active",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"hi"}',
+        )
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("checkpoint_event_id") == 1
+    assert active_run.get("last_event_id") == 2
 
 
 def test_get_recovery_snapshot_uses_runtime_active_run_when_events_not_written(

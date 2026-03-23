@@ -22,6 +22,14 @@ class RunEventHub:
         self._subscribers.setdefault(run_id, []).append(queue)
         return queue
 
+    def unsubscribe(self, run_id: str, queue: asyncio.Queue[RunEvent]) -> None:
+        listeners = self._subscribers.get(run_id)
+        if not listeners:
+            return
+        self._subscribers[run_id] = [item for item in listeners if item is not queue]
+        if not self._subscribers[run_id]:
+            self._subscribers.pop(run_id, None)
+
     def publish(self, event: RunEvent) -> None:
         event_id = 0
         if self._event_log:

@@ -29,6 +29,7 @@ from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -64,6 +65,7 @@ class SessionService:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
+        run_state_repo: RunStateRepository | None = None,
         run_event_hub: RunEventHub | None = None,
         active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
@@ -85,6 +87,7 @@ class SessionService:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
+        self._run_state_repo = run_state_repo
         self._run_event_hub = run_event_hub
         self._active_run_registry = active_run_registry
         self._event_log = event_log
@@ -428,11 +431,22 @@ class SessionService:
             }
             for record in self._approval_ticket_repo.list_open_by_run(run_id)
         ]
+        run_state = (
+            self._run_state_repo.get_run_state(run_id)
+            if self._run_state_repo is not None
+            else None
+        )
         active_run = {
             "run_id": run_id,
             "status": runtime.status.value,
             "phase": self._public_phase(runtime, len(approvals)),
             "is_recoverable": runtime.is_recoverable,
+            "last_event_id": (
+                int(run_state.last_event_id) if run_state is not None else 0
+            ),
+            "checkpoint_event_id": (
+                int(run_state.checkpoint_event_id) if run_state is not None else 0
+            ),
             "pending_tool_approval_count": len(approvals),
             "stream_connected": stream_connected,
             "should_show_recover": runtime.is_recoverable and not stream_connected,

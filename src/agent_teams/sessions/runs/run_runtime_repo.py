@@ -228,6 +228,47 @@ class RunRuntimeRepository:
             ).fetchall()
             return tuple(self._to_record(row) for row in rows)
 
+    def mark_transient_runs_interrupted(self) -> int:
+        affected = 0
+
+        def operation() -> None:
+            nonlocal affected
+            updated_at = datetime.now(tz=timezone.utc).isoformat()
+            cursor = self._conn.execute(
+                """
+                UPDATE run_runtime
+                SET
+                    status=?,
+                    phase=?,
+                    active_instance_id=NULL,
+                    active_task_id=NULL,
+                    active_role_id=NULL,
+                    active_subagent_instance_id=NULL,
+                    last_error=?,
+                    updated_at=?
+                WHERE status IN (?, ?)
+                """,
+                (
+                    RunRuntimeStatus.STOPPED.value,
+                    RunRuntimePhase.IDLE.value,
+                    "interrupted_by_process_restart",
+                    updated_at,
+                    RunRuntimeStatus.QUEUED.value,
+                    RunRuntimeStatus.RUNNING.value,
+                ),
+            )
+            affected = int(cursor.rowcount or 0)
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="RunRuntimeRepository",
+            operation_name="mark_transient_runs_interrupted",
+        )
+        return affected
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,

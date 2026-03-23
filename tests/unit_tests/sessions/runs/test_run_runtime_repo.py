@@ -69,3 +69,47 @@ def test_run_runtime_repo_handles_concurrent_reads_and_writes(
     assert record is not None
     assert record.session_id == "session-1"
     assert record.root_task_id == "task-1"
+
+
+def test_run_runtime_repo_marks_transient_runs_interrupted(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_interrupted.db"
+    repo = RunRuntimeRepository(db_path)
+    _ = repo.ensure(
+        run_id="run-running",
+        session_id="session-1",
+        root_task_id="task-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = repo.ensure(
+        run_id="run-queued",
+        session_id="session-1",
+        root_task_id="task-2",
+        status=RunRuntimeStatus.QUEUED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    _ = repo.ensure(
+        run_id="run-paused",
+        session_id="session-1",
+        root_task_id="task-3",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+    )
+
+    affected = repo.mark_transient_runs_interrupted()
+
+    assert affected == 2
+    running = repo.get("run-running")
+    queued = repo.get("run-queued")
+    paused = repo.get("run-paused")
+    assert running is not None
+    assert queued is not None
+    assert paused is not None
+    assert running.status == RunRuntimeStatus.STOPPED
+    assert running.phase == RunRuntimePhase.IDLE
+    assert running.last_error == "interrupted_by_process_restart"
+    assert queued.status == RunRuntimeStatus.STOPPED
+    assert queued.phase == RunRuntimePhase.IDLE
+    assert queued.last_error == "interrupted_by_process_restart"
+    assert paused.status == RunRuntimeStatus.PAUSED
+    assert paused.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL

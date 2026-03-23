@@ -30,6 +30,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         : null;
     const pendingToolBlocks = {};
     const historyMessages = Array.isArray(messages) ? messages.slice() : [];
+    let lastRenderedMessage = null;
 
     historyMessages.forEach(msgItem => {
         const role = msgItem.role;
@@ -61,10 +62,15 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             : labelFromRole(role, msgItem.role_id, msgItem.instance_id);
         const { contentEl } = renderMessageBlock(container, role, label, []);
         renderParts(contentEl, parts, pendingToolBlocks);
+        lastRenderedMessage = {
+            role,
+            label,
+            contentEl,
+        };
     });
 
     if (streamOverlayEntry && Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0) {
-        renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks);
+        renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage);
     }
 
     applyPendingApprovalsToHistory(container, pendingToolApprovals, runId);
@@ -102,10 +108,15 @@ function applyPendingApprovalsToHistory(container, approvals, runId) {
     });
 }
 
-function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks) {
+function renderStreamOverlayEntry(
+    container,
+    streamOverlayEntry,
+    pendingToolBlocks,
+    lastRenderedMessage = null,
+) {
     const label = streamOverlayEntry.label
         || labelFromRole('assistant', streamOverlayEntry.roleId, streamOverlayEntry.instanceId);
-    const { contentEl } = renderMessageBlock(container, 'assistant', label, []);
+    const contentEl = resolveOverlayContentTarget(container, label, lastRenderedMessage);
     let combinedText = '';
     const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
     const trailingTextPart = [...overlayParts].reverse().find(part => part && typeof part === 'object');
@@ -148,6 +159,39 @@ function renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBloc
     });
 
     flushText(trailingTextPart?.kind === 'text');
+}
+
+function resolveOverlayContentTarget(container, label, lastRenderedMessage) {
+    const safeLabel = String(label || '').trim();
+    const lastLabel = String(lastRenderedMessage?.label || '').trim();
+    if (
+        lastRenderedMessage?.contentEl
+        && lastRenderedMessage.role !== 'user'
+        && safeLabel
+        && safeLabel.localeCompare(lastLabel, undefined, { sensitivity: 'accent' }) === 0
+    ) {
+        return lastRenderedMessage.contentEl;
+    }
+    const lastMessageContentEl = findLastCompatibleMessageContent(container, safeLabel);
+    if (lastMessageContentEl) {
+        return lastMessageContentEl;
+    }
+    return renderMessageBlock(container, 'assistant', label, []).contentEl;
+}
+
+function findLastCompatibleMessageContent(container, label) {
+    if (!container || !label) return null;
+    const messages = Array.from(container.querySelectorAll('.message'));
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage) return null;
+
+    const roleEl = lastMessage.querySelector('.msg-role');
+    const contentEl = lastMessage.querySelector('.msg-content');
+    const renderedLabel = String(roleEl?.textContent || '').trim();
+    const expectedLabel = String(label || '').trim().toUpperCase();
+    if (!contentEl || !renderedLabel || !expectedLabel) return null;
+    if (renderedLabel !== expectedLabel) return null;
+    return contentEl;
 }
 
 function applyOverlayToolState(toolBlock, part) {
