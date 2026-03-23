@@ -6,6 +6,13 @@ import platform
 import shutil
 import subprocess
 
+try:
+    import tkinter as tkinter_module
+    from tkinter import filedialog as tkinter_filedialog
+except ImportError:
+    tkinter_module = None
+    tkinter_filedialog = None
+
 
 _PICKER_ERROR_MESSAGE = "Native directory picker is unavailable"
 _PICKER_TIMEOUT_SECONDS = 60.0
@@ -32,6 +39,44 @@ def pick_workspace_directory(initial_dir: Path | None = None) -> Path | None:
 
 
 def _pick_directory_windows(start_dir: Path) -> str | None:
+    tkinter_handled, tkinter_selected = _pick_directory_windows_tkinter(start_dir)
+    if tkinter_handled:
+        return tkinter_selected
+
+    return _pick_directory_windows_powershell(start_dir)
+
+
+def _pick_directory_windows_tkinter(start_dir: Path) -> tuple[bool, str | None]:
+    if tkinter_module is None or tkinter_filedialog is None:
+        return False, None
+
+    root = None
+    try:
+        root = tkinter_module.Tk()
+        root.withdraw()
+        try:
+            root.wm_attributes("-topmost", True)
+        except tkinter_module.TclError:
+            pass
+        selected = tkinter_filedialog.askdirectory(
+            initialdir=str(start_dir),
+            mustexist=True,
+            parent=root,
+            title=_PICKER_TITLE,
+        )
+        normalized_selected = str(selected).strip()
+        return True, normalized_selected or None
+    except Exception:
+        return False, None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+def _pick_directory_windows_powershell(start_dir: Path) -> str | None:
     shell = shutil.which("powershell")
     if shell is None:
         shell = shutil.which("pwsh")
