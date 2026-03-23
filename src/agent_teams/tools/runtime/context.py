@@ -4,24 +4,26 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, SkipValidation
 from pydantic_ai import RunContext
 
+from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
+from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.metrics import MetricRecorder
 from agent_teams.notifications import NotificationService
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
+from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.runtime.approval_state import ToolApprovalManager
+from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceHandle
 
@@ -53,11 +55,13 @@ class ToolDeps(BaseModel):
     instance_id: str
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
+    mcp_registry: SkipValidation[McpRegistry]
     task_service: SkipValidation[TaskOrchestrationService]
     task_execution_service: SkipValidation[TaskExecutionService]
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
     tool_approval_policy: SkipValidation[ToolApprovalPolicy]
+    metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
 
 

@@ -79,3 +79,9 @@ export {
     forkWorkspace,
     pickWorkspace,
 } from './workspaces.js';
+
+export {
+    fetchObservabilityBreakdowns,
+    fetchObservabilityOverview,
+} from './observability.js';
+

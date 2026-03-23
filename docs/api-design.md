@@ -898,3 +898,13 @@ Gets one persisted trigger event.
 - `workspace` now means execution workspace only.
 - Durable role memory is stored in the database and keyed by `role_id + workspace_id`.
 - Daily role memory is stored in the database and keyed by `role_id + workspace_id + memory_date + kind`.
+
+## Observability APIs
+
+### `GET /observability/overview`
+
+Returns observability KPIs and trend buckets for `scope=global|session|run`. Non-global scopes require `scope_id`.
+
+### `GET /observability/breakdowns`
+
+Returns tool-level breakdown rows for `scope=global|session|run`. Non-global scopes require `scope_id`.

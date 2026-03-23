@@ -1,4 +1,4 @@
-/**
+﻿/**
  * app/session.js
  * Session selection state and UI synchronization.
  */
@@ -11,10 +11,14 @@ import { fetchSessionHistory } from '../core/api.js';
 import {
     clearSessionRecovery,
     hydrateSessionView,
+    markRunStreamConnected,
     stopSessionContinuity,
 } from './recovery.js';
 import { applyCurrentSessionRecord, resetCurrentSessionTopology, state } from '../core/state.js';
-import { detachActiveStreamForSessionSwitch } from '../core/stream.js';
+import {
+    detachActiveStreamForSessionSwitch,
+    resumeRunStream,
+} from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { sysLog } from '../utils/logger.js';
 import { refreshSessionTopologyControls } from './prompt.js';
@@ -82,7 +86,41 @@ export async function selectSession(sessionId) {
     if (state.currentSessionId !== sessionId) {
         return;
     }
+    autoConnectRunningStream(sessionId);
     scheduleCoordinatorContextPreview({ immediate: true });
     scheduleSessionTokenUsageRefresh({ immediate: true });
+    document.dispatchEvent(
+        new CustomEvent('agent-teams-session-selected', {
+            detail: { sessionId },
+        }),
+    );
     sysLog(`${isSameSession ? 'Reloaded' : 'Switched to'} session: ${sessionId}`);
+}
+
+function autoConnectRunningStream(sessionId) {
+    if (state.activeEventSource || state.isGenerating) return;
+    const snapshot = state.currentRecoverySnapshot;
+    const activeRun = snapshot?.activeRun;
+    if (!activeRun?.run_id) return;
+    if (!activeRun.is_recoverable) return;
+    if (activeRun.status !== 'running' && activeRun.status !== 'queued') return;
+
+    const afterEventId = Number(activeRun.checkpoint_event_id) || 0;
+    const runId = activeRun.run_id;
+    markRunStreamConnected(runId, { phase: activeRun.phase || 'running' });
+    resumeRunStream(
+        runId,
+        sessionId,
+        async sid => {
+            if (sid) {
+                await hydrateSessionView(sid, { includeRounds: true, quiet: true });
+            }
+        },
+        {
+            reason: 'session-switch-auto-connect',
+            makeUiBusy: true,
+            afterEventId,
+        },
+    );
+    sysLog(`Auto-connected to running stream: run=${runId}`);
 }

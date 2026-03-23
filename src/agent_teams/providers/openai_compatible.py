@@ -8,6 +8,7 @@ from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
 from agent_teams.agents.execution.llm_session import AgentLlmSession
+from agent_teams.metrics import MetricRecorder
 from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
 
 if TYPE_CHECKING:
@@ -79,6 +80,7 @@ class OpenAICompatibleProvider(LLMProvider):
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
+        metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
     ) -> None:
         self._session = AgentLlmSession(
@@ -110,6 +112,7 @@ class OpenAICompatibleProvider(LLMProvider):
             tool_approval_policy=tool_approval_policy,
             notification_service=notification_service,
             token_usage_repo=token_usage_repo,
+            metric_recorder=metric_recorder,
             retry_config=retry_config,
         )
 

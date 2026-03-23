@@ -9,25 +9,26 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
+from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
-from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
+from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.mcp.mcp_service import McpService
+from agent_teams.metrics import MetricsService
 from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.roles import RoleMemoryService, RoleRegistry
 from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions import SessionService
+from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
@@ -129,3 +130,7 @@ def get_tool_registry(request: Request) -> ToolRegistry:
 
 def get_skill_registry(request: Request) -> SkillRegistry:
     return get_container(request).skill_registry
+
+
+def get_metrics_service(request: Request) -> MetricsService:
+    return get_container(request).metrics_service

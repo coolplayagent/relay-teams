@@ -59,6 +59,8 @@ export {
     validateRoleConfig,
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
+    fetchObservabilityBreakdowns,
+    fetchObservabilityOverview,
     deleteWorkspace,
     fetchWorkspaces,
     forkWorkspace,

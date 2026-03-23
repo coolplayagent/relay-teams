@@ -8,6 +8,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.metrics import MetricRecorder
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.provider_contracts import EchoProvider, LLMProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
@@ -63,6 +64,7 @@ def create_provider_factory(
     notification_service: NotificationService | None,
     get_task_execution_service: Callable[[], TaskExecutionService],
     token_usage_repo: TokenUsageRepository | None = None,
+    metric_recorder: MetricRecorder | None = None,
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
         config_to_use = resolve_model_profile_config(
@@ -102,6 +104,7 @@ def create_provider_factory(
                 tool_approval_policy=tool_approval_policy,
                 notification_service=notification_service,
                 token_usage_repo=token_usage_repo,
+                metric_recorder=metric_recorder,
                 retry_config=runtime.llm_retry,
             ),
         )

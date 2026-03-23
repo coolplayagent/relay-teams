@@ -446,3 +446,22 @@ Notes:
 
 - Session deletion removes that session subtree under the bound workspace.
 - Daily memory is no longer file-based.
+
+### 2.8 `metric_points`
+
+```sql
+CREATE TABLE IF NOT EXISTS metric_points (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope        TEXT NOT NULL,
+    scope_id     TEXT NOT NULL,
+    metric_name  TEXT NOT NULL,
+    bucket_start TEXT NOT NULL,
+    tags_json    TEXT NOT NULL,
+    value        REAL NOT NULL,
+    recorded_at  TEXT NOT NULL
+);
+```
+
+Indexes:
+- `idx_metric_points_scope(scope, scope_id, bucket_start)`
+- `idx_metric_points_metric(metric_name, bucket_start)`

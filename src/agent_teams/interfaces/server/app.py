@@ -21,6 +21,7 @@ from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
     logs,
     mcp,
+    observability,
     prompts,
     roles,
     runs,
@@ -87,6 +88,7 @@ app = FastAPI(
 
 app.include_router(system.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
+app.include_router(observability.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")

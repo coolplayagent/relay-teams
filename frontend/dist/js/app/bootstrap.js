@@ -1,4 +1,4 @@
-/**
+﻿/**
  * app/bootstrap.js
  * UI bindings and application startup sequence.
  */
@@ -6,6 +6,7 @@ import { initSettings, openSettings } from '../components/settings.js';
 import { initializeContextIndicators } from '../components/contextIndicators.js';
 import { initializeSessionTokenUsage } from '../components/sessionTokenUsage.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
+import { initializeObservability } from '../components/observability.js';
 import {
     handleNewProjectClick,
     loadProjects,
@@ -117,6 +118,7 @@ export async function initApp(selectSession, handleSend) {
     initializeSessionTokenUsage();
     await hydrateCoordinatorRoleId();
     initializeSubagentRail();
+    initializeObservability();
     setupEventBindings(handleSend);
     initSettings();
     setupSettingsButton();
@@ -130,3 +132,5 @@ export async function initApp(selectSession, handleSend) {
         }
     }
 }
+
+

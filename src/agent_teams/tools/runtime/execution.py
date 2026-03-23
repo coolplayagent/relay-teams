@@ -15,6 +15,7 @@ from typing import cast
 from uuid import uuid4
 
 from agent_teams.logger import get_logger, log_event, log_tool_error
+from agent_teams.metrics.adapters import record_tool_execution
 from agent_teams.notifications import NotificationContext, NotificationType
 from agent_teams.persistence import is_retryable_sqlite_error
 from agent_teams.sessions.runs.enums import RunEventType
@@ -101,6 +102,12 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.FAILED,
             )
+            _record_tool_metrics(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=False,
+            )
             return envelope
 
         ctx.deps.run_runtime_repo.ensure(
@@ -159,6 +166,12 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.COMPLETED,
             )
+            _record_tool_metrics(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=True,
+            )
             if approval_ticket_id:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
             return envelope
@@ -202,9 +215,40 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.FAILED,
             )
+            _record_tool_metrics(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=False,
+            )
             if approval_ticket_id:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
             return envelope
+
+
+def _record_tool_metrics(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    duration_ms: int,
+    success: bool,
+) -> None:
+    metric_recorder = getattr(ctx.deps, "metric_recorder", None)
+    mcp_registry = getattr(ctx.deps, "mcp_registry", None)
+    if metric_recorder is None or mcp_registry is None:
+        return
+    record_tool_execution(
+        metric_recorder,
+        mcp_registry=mcp_registry,
+        workspace_id=ctx.deps.workspace_id,
+        session_id=ctx.deps.session_id,
+        run_id=ctx.deps.run_id,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
+        tool_name=tool_name,
+        duration_ms=duration_ms,
+        success=success,
+    )
 
 
 def _error_payload(exc: Exception) -> ToolError:

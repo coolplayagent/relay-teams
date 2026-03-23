@@ -12,6 +12,7 @@ from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.metrics import SqliteMetricAggregateStore
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleRegistry
@@ -74,6 +75,7 @@ class SessionService:
         active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
         shared_store: SharedStateRepository | None = None,
+        metrics_store: SqliteMetricAggregateStore | None = None,
         workspace_manager: WorkspaceManager | None = None,
         workspace_service: WorkspaceService | None = None,
         role_memory_service: RoleMemoryService | None = None,
@@ -96,6 +98,7 @@ class SessionService:
         self._active_run_registry = active_run_registry
         self._event_log = event_log
         self._shared_store = shared_store
+        self._metrics_store = metrics_store
         self._workspace_manager = workspace_manager
         self._workspace_service = workspace_service
         self._role_memory_service = role_memory_service
@@ -222,6 +225,8 @@ class SessionService:
         self._agent_repo.delete_by_session(session_id)
         self._session_repo.delete(session_id)
         self._token_usage_repo.delete_by_session(session_id)
+        if self._metrics_store is not None:
+            self._metrics_store.delete_by_session(session_id)
         if self._workspace_manager is not None:
             session_dir = self._workspace_manager.session_artifact_dir(
                 workspace_id=session.workspace_id,

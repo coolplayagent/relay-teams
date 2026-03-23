@@ -4,6 +4,7 @@ from __future__ import annotations
 from agent_teams.interfaces.server.routers import (
     logs,
     mcp,
+    observability,
     prompts,
     roles,
     runs,
@@ -17,6 +18,7 @@ from agent_teams.interfaces.server.routers import (
 __all__ = [
     "logs",
     "mcp",
+    "observability",
     "prompts",
     "roles",
     "runs",

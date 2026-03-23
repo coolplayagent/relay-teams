@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="/css/components/orchestration.css">
     <link rel="stylesheet" href="/css/components/settings.css">
     <link rel="stylesheet" href="/css/components/tokens.css">
+    <link rel="stylesheet" href="/css/components.css">
 </head>
 
 <body>
@@ -33,6 +34,11 @@
             </div>
             <div class="topbar-section topbar-section-right">
                 <button id="language-toggle-btn" class="language-toggle-btn" type="button" title="Switch language" aria-label="Switch language">EN</button>
+                <button id="observability-btn" class="icon-btn" title="Observability" aria-label="Observability" data-i18n-title="topbar.observability_title" data-i18n-aria-label="topbar.observability_title">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                        <path d="M4 19h16M7 16V9m5 7V5m5 11v-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    </svg>
+                </button>
                 <button id="settings-btn" class="icon-btn" title="Settings" data-i18n-title="topbar.settings_title" data-i18n-aria-label="topbar.settings_title">
                     <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                         <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2" />
@@ -79,6 +85,30 @@
             <!-- Main Workspace -->
             <main class="workspace">
                 <!-- Chat Area -->
+                <section id="observability-view" class="observability-view" style="display:none;">
+                    <div class="observability-toolbar">
+                        <div class="observability-toolbar-copy">
+                            <h3 data-i18n="observability.title">Observability</h3>
+                            <p data-i18n="observability.subtitle">Metrics platform overview for the active runtime.</p>
+                        </div>
+                        <div class="observability-toolbar-actions">
+                            <div class="observability-scope-group" role="group" aria-label="Observability Scope">
+                                <button id="observability-global-btn" class="secondary-btn observability-scope-btn" type="button" data-i18n="observability.actions.global">Global</button>
+                                <button id="observability-session-btn" class="secondary-btn observability-scope-btn" type="button" data-i18n="observability.actions.session">Current Session</button>
+                            </div>
+                            <span id="observability-scope-indicator" class="observability-scope-indicator">Global scope</span>
+                            <button id="observability-session-label" class="observability-session-label" type="button">--</button>
+                            <button id="observability-back-btn" class="icon-btn observability-back-icon" type="button" title="Back to Chat" aria-label="Back to Chat" data-i18n-title="observability.actions.back" data-i18n-aria-label="observability.actions.back">
+                                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                                    <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="observability-overview"></div>
+                    <div id="observability-trends" class="observability-section"></div>
+                    <div id="observability-breakdowns" class="observability-section"></div>
+                </section>
                 <div class="chat-container">
                     <!-- Coordinator chat messages -->
                     <div class="chat-scroll" id="chat-messages"></div>
@@ -108,26 +138,26 @@
                     </form>
                     <div class="input-controls">
                         <div class="composer-topology" id="session-mode-lock" title="Select a session before changing the run mode." data-i18n-title="composer.session_mode_title">
-                            <span class="composer-topology-label" id="session-mode-label" data-i18n="composer.mode_normal">普通模式</span>
+                            <span class="composer-topology-label" id="session-mode-label" data-i18n="composer.mode_normal">Normal Mode</span>
                             <div class="composer-segmented" role="group" aria-label="Session mode" data-i18n-aria-label="composer.session_mode">
-                                <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn" data-i18n="composer.mode_normal">普通模式</button>
-                                <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn" data-i18n="composer.mode_orchestration">编排模式</button>
+                                <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn" data-i18n="composer.mode_normal">Normal Mode</button>
+                                <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn" data-i18n="composer.mode_orchestration">Orchestrated Mode</button>
                             </div>
                             <label class="composer-preset-field" id="orchestration-preset-field" hidden>
-                                <span class="composer-preset-label" data-i18n="composer.preset">预设</span>
+                                <span class="composer-preset-label" data-i18n="composer.preset">Preset</span>
                                 <select id="orchestration-preset-select" class="composer-preset-select">
                                     <option value="" data-i18n="composer.no_presets">No presets</option>
                                 </select>
                             </label>
                         </div>
-                        <label class="composer-mode-toggle" for="yolo-toggle" title="开启后所有工具调用都不需审核" data-i18n-title="composer.yolo_title">
+                        <label class="composer-mode-toggle" for="yolo-toggle" title="When enabled, all tool calls skip approval" data-i18n-title="composer.yolo_title">
                             <input type="checkbox" id="yolo-toggle" checked>
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
                                 <span class="composer-mode-title">YOLO</span>
                             </span>
                         </label>
-                        <label class="composer-mode-toggle has-inline-select" for="thinking-mode-toggle" title="关掉后是否仍思考由后端决定；Effort 生效取决于后端支持" data-i18n-title="composer.thinking_title">
+                        <label class="composer-mode-toggle has-inline-select" for="thinking-mode-toggle" title="When off, backend decides thinking mode; Effort depends on backend support" data-i18n-title="composer.thinking_title">
                             <input type="checkbox" id="thinking-mode-toggle">
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
@@ -186,7 +216,10 @@
         </div>
     </div>
 
+    <script src="/vendor/chart.js"></script>
     <script type="module" src="/js/app.js"></script>
 </body>
 
 </html>
+
+

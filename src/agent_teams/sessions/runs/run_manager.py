@@ -633,9 +633,7 @@ class RunManager:
             _ = self._pending_runs.pop(run_id, None)
             self._resume_requested_runs.discard(run_id)
 
-    async def stream_run_events(
-        self, run_id: str, after_event_id: int = 0
-    ):
+    async def stream_run_events(self, run_id: str, after_event_id: int = 0):
         queue = self._run_event_hub.subscribe(run_id)
         terminal_reached = False
         try:
@@ -658,9 +656,7 @@ class RunManager:
                         run_id=str(row["trace_id"]),
                         trace_id=str(row["trace_id"]),
                         task_id=(
-                            str(row["task_id"])
-                            if row["task_id"] is not None
-                            else None
+                            str(row["task_id"]) if row["task_id"] is not None else None
                         ),
                         instance_id=(
                             str(row["instance_id"])

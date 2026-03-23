@@ -1,4 +1,4 @@
-﻿/* components.css - Reusable UI chunks: Buttons, Tabs, Messages, Tools */
+/* components.css - Reusable UI chunks: Buttons, Tabs, Messages, Tools */
 
 .new-session-glow {
     position: relative;
@@ -5824,4 +5824,646 @@ body.light-theme .composer-mode-inline-select {
 
 .typing-dot:nth-child(2) {
     animation-delay: -0.16s;
+}
+
+.observability-view {
+    display: block;
+    padding: 1.35rem;
+    overflow: auto;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 26%),
+        radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.1), transparent 28%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+}
+
+.observability-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.observability-toolbar-copy h3 {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.observability-toolbar-copy p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+}
+
+.observability-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.observability-scope-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.28rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface) 92%, var(--primary) 8%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.observability-scope-btn {
+    min-width: 7rem;
+    border-radius: 999px;
+    background: transparent;
+    border-color: transparent;
+}
+
+.observability-scope-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--bg-hover) 88%, var(--primary) 12%);
+}
+
+.observability-scope-btn.active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 76%, white 6%), color-mix(in srgb, var(--primary) 58%, #0f766e 42%));
+    border-color: color-mix(in srgb, var(--primary) 72%, white 12%);
+    color: var(--text-on-primary);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.observability-scope-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.observability-scope-indicator {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.3rem;
+    padding: 0.3rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface) 88%);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.observability-scope-indicator[data-scope="global"]::before,
+.observability-scope-indicator[data-scope="session"]::before {
+    content: '';
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    margin-right: 0.5rem;
+    background: currentColor;
+    opacity: 0.78;
+}
+
+.observability-scope-indicator[data-scope="session"] {
+    background: color-mix(in srgb, #0f766e 16%, var(--bg-surface) 84%);
+    border-color: color-mix(in srgb, #0f766e 28%, var(--border-color) 72%);
+}
+
+.observability-session-label {
+    color: var(--text-muted, #9aa1a9);
+    font-size: 0.9rem;
+}
+
+.observability-summary-card,
+.observability-section-card,
+.observability-kpi-card,
+.observability-chart-card,
+.observability-breakdown-row {
+    border: 1px solid color-mix(in srgb, var(--settings-border-soft) 75%, transparent 25%);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--settings-surface-bg) 88%, rgba(255, 255, 255, 0.04) 12%), color-mix(in srgb, var(--settings-surface-bg) 98%, rgba(0, 0, 0, 0.04) 2%));
+    border-radius: 18px;
+    box-shadow: 0 22px 48px -36px rgba(15, 23, 42, 0.75);
+}
+
+.observability-summary-card {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+}
+
+.observability-summary-eyebrow {
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--primary);
+    margin-bottom: 0.35rem;
+}
+
+.observability-summary-title {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.observability-summary-copy {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+}
+
+.observability-summary-pill {
+    padding: 0.45rem 0.8rem;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.12);
+    color: var(--primary);
+    font-size: 0.82rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.observability-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.95rem;
+}
+
+.observability-kpi-card {
+    position: relative;
+    overflow: hidden;
+    padding: 0.95rem;
+}
+
+.observability-kpi-card::after {
+    content: '';
+    position: absolute;
+    inset: auto -12% -35% auto;
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    background: var(--tone-glow, rgba(37, 99, 235, 0.12));
+    filter: blur(4px);
+}
+
+.observability-kpi-card[data-tone='primary'] { --tone-glow: rgba(37, 99, 235, 0.16); }
+.observability-kpi-card[data-tone='teal'] { --tone-glow: rgba(13, 148, 136, 0.16); }
+.observability-kpi-card[data-tone='amber'] { --tone-glow: rgba(217, 119, 6, 0.16); }
+.observability-kpi-card[data-tone='violet'] { --tone-glow: rgba(124, 58, 237, 0.16); }
+.observability-kpi-card[data-tone='slate'] { --tone-glow: rgba(71, 85, 105, 0.16); }
+.observability-kpi-card[data-tone='green'] { --tone-glow: rgba(22, 163, 74, 0.16); }
+.observability-kpi-card[data-tone='rose'] { --tone-glow: rgba(225, 29, 72, 0.16); }
+.observability-kpi-card[data-tone='cyan'] { --tone-glow: rgba(8, 145, 178, 0.16); }
+.observability-kpi-card[data-tone='indigo'] { --tone-glow: rgba(79, 70, 229, 0.16); }
+
+.observability-kpi-label {
+    position: relative;
+    z-index: 1;
+    font-size: 0.8rem;
+    color: var(--text-muted, #9aa1a9);
+    margin-bottom: 0.45rem;
+}
+
+.observability-kpi-value {
+    position: relative;
+    z-index: 1;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.observability-kpi-meter {
+    position: relative;
+    z-index: 1;
+    margin-top: 0.7rem;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.18);
+    overflow: hidden;
+}
+
+.observability-kpi-meter span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(15, 118, 110, 0.95));
+}
+
+.observability-section {
+    margin-top: 1rem;
+}
+
+.observability-section-card {
+    padding: 1rem 1.1rem;
+}
+
+.observability-section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.9rem;
+}
+
+.observability-section-heading h4 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.observability-section-heading p {
+    margin: 0.3rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.observability-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 0.95rem;
+}
+
+.observability-chart-card {
+    padding: 0.85rem;
+}
+
+.observability-chart-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: baseline;
+    margin-bottom: 0.6rem;
+}
+
+.observability-chart-header h5 {
+    margin: 0;
+    font-size: 0.94rem;
+}
+
+.observability-chart-axis {
+    color: var(--text-muted, #9aa1a9);
+    font-size: 0.76rem;
+}
+
+.observability-chart-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.observability-chart-gridline {
+    stroke: rgba(148, 163, 184, 0.2);
+    stroke-width: 1;
+    stroke-dasharray: 4 6;
+}
+
+.observability-chart-label {
+    fill: var(--text-muted, #9aa1a9);
+    font-size: 10px;
+}
+
+.observability-chart-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 0.55rem;
+    margin-top: 0.6rem;
+}
+
+.observability-chart-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.observability-chart-legend-item strong {
+    margin-left: auto;
+    color: var(--text-primary);
+}
+
+.observability-chart-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--swatch);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--swatch) 16%, transparent 84%);
+}
+
+.observability-breakdown-list {
+    display: grid;
+    gap: 0.8rem;
+}
+
+.observability-breakdown-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(220px, 1fr);
+    gap: 1rem;
+    padding: 0.95rem;
+}
+
+.observability-breakdown-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.55rem;
+}
+
+.observability-breakdown-title {
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.observability-breakdown-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--primary);
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.observability-breakdown-bar {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.16);
+    overflow: hidden;
+}
+
+.observability-breakdown-bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(124, 58, 237, 0.95));
+}
+
+.observability-breakdown-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.observability-breakdown-metrics div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.observability-breakdown-metrics span {
+    color: var(--text-muted, #9aa1a9);
+    font-size: 0.75rem;
+}
+
+.observability-breakdown-metrics strong {
+    font-size: 1rem;
+}
+
+.observability-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+    border: 1px dashed rgba(148, 163, 184, 0.28);
+    border-radius: 16px;
+    color: var(--text-secondary);
+    background: rgba(148, 163, 184, 0.05);
+    text-align: center;
+    padding: 1rem;
+}
+
+@media (max-width: 900px) {
+    .observability-toolbar,
+    .observability-summary-card,
+    .observability-breakdown-row {
+        grid-template-columns: 1fr;
+        display: grid;
+    }
+
+    .observability-breakdown-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .observability-view {
+        padding: 1rem;
+    }
+
+    .observability-breakdown-metrics {
+        grid-template-columns: 1fr;
+    }
+
+    .observability-summary-pill {
+        white-space: normal;
+    }
+}
+
+
+.observability-chart-stage {
+    position: relative;
+    height: 220px;
+}
+
+.observability-chart-stage canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.observability-breakdown-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
+    gap: 1rem;
+}
+
+.observability-breakdown-chart-card {
+    min-height: 100%;
+}
+
+.observability-breakdown-stage {
+    height: 360px;
+}
+
+.observability-breakdown-list {
+    display: grid;
+    gap: 0.8rem;
+}
+
+.observability-breakdown-row {
+    padding: 0.95rem;
+}
+
+.observability-breakdown-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.observability-breakdown-stats div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.observability-breakdown-stats span {
+    color: var(--text-muted, #9aa1a9);
+    font-size: 0.75rem;
+}
+
+.observability-breakdown-stats strong {
+    font-size: 1rem;
+}
+
+.observability-chart-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    border: 1px dashed rgba(148, 163, 184, 0.24);
+    border-radius: 14px;
+    color: var(--text-secondary);
+    background: rgba(148, 163, 184, 0.05);
+    text-align: center;
+    padding: 1rem;
+}
+
+@media (max-width: 1024px) {
+    .observability-breakdown-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.observability-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.95rem;
+    margin-top: 1rem;
+}
+
+.observability-metric-chart-card {
+    min-height: 220px;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 36%),
+        linear-gradient(180deg, rgba(15, 23, 42, 0.04), rgba(15, 23, 42, 0));
+}
+
+.observability-metric-chart-header {
+    align-items: flex-start;
+}
+
+.observability-metric-chart-value {
+    margin-top: 0.3rem;
+    font-size: 1.55rem;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+}
+
+.observability-metric-chart-stage {
+    height: 140px;
+}
+
+.observability-breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0.95rem;
+}
+
+.observability-breakdown-stage {
+    height: 290px;
+}
+
+@media (max-width: 900px) {
+    .observability-metric-grid,
+    .observability-breakdown-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .observability-metric-chart-card {
+        min-height: 200px;
+    }
+}
+
+.observability-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.observability-back-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    flex: 0 0 auto;
+}
+
+.observability-back-icon .icon {
+    width: 1rem;
+    height: 1rem;
+}
+
+.observability-chart-grid,
+.observability-metric-grid,
+.observability-breakdown-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.observability-chart-header {
+    align-items: flex-start;
+}
+
+.observability-chart-axis {
+    max-width: 40%;
+    text-align: right;
+    line-height: 1.35;
+}
+
+.observability-metric-chart-card {
+    min-height: 250px;
+}
+
+.observability-metric-chart-stage,
+.observability-chart-stage {
+    height: 220px;
+}
+
+@media (max-width: 900px) {
+    .observability-chart-grid,
+    .observability-metric-grid,
+    .observability-breakdown-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .observability-chart-axis {
+        max-width: none;
+        text-align: left;
+    }
+}
+
+
+body.observability-mode .right-rail {
+    width: 0 !important;
+    min-width: 0 !important;
+    flex-basis: 0 !important;
+    border-left: none !important;
+}
+
+body.observability-mode .right-rail > * {
+    opacity: 0;
+    transform: translateX(6px);
+    pointer-events: none;
+}
+
+body.observability-mode .right-rail-resizer {
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+}
+
+body.observability-mode #rounds-list,
+body.observability-mode #back-btn {
+    display: none !important;
+}
+
+body.observability-mode #round-nav-float {
+    display: none !important;
+    pointer-events: none !important;
 }

@@ -29,6 +29,17 @@ from agent_teams.mcp.mcp_config_manager import McpConfigManager
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.mcp.mcp_service import McpService
+from agent_teams.metrics import (
+    AggregateStoreSink,
+    DEFAULT_DEFINITIONS,
+    GrafanaExporterSink,
+    MetricRecorder,
+    MetricRegistry,
+    MetricsQueryService,
+    MetricsService,
+    PrettyLogSink,
+    SqliteMetricAggregateStore,
+)
 from agent_teams.notifications import NotificationConfigManager, NotificationService
 from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
@@ -182,6 +193,24 @@ class ServerContainer:
         self.token_usage_repo: TokenUsageRepository = TokenUsageRepository(
             runtime.paths.db_path
         )
+        self.metric_registry: MetricRegistry = MetricRegistry(DEFAULT_DEFINITIONS)
+        self.metrics_store: SqliteMetricAggregateStore = SqliteMetricAggregateStore(
+            runtime.paths.db_path
+        )
+        self.metric_recorder: MetricRecorder = MetricRecorder(
+            registry=self.metric_registry,
+            sinks=(
+                AggregateStoreSink(self.metrics_store),
+                PrettyLogSink(),
+                GrafanaExporterSink(),
+            ),
+        )
+        self.metrics_query_service: MetricsQueryService = MetricsQueryService(
+            store=self.metrics_store
+        )
+        self.metrics_service: MetricsService = MetricsService(
+            query_service=self.metrics_query_service
+        )
         self.trigger_repo: TriggerRepository = TriggerRepository(runtime.paths.db_path)
         self.trigger_service: TriggerService = TriggerService(
             trigger_repo=self.trigger_repo
@@ -283,6 +312,7 @@ class ServerContainer:
             active_run_registry=self.active_run_registry,
             event_log=self.event_log,
             shared_store=self.shared_store,
+            metrics_store=self.metrics_store,
             workspace_manager=self.workspace_manager,
             workspace_service=self.workspace_service,
             role_memory_service=self.role_memory_service,
@@ -366,6 +396,7 @@ class ServerContainer:
             notification_service=self.notification_service,
             get_task_execution_service=get_task_execution_service,
             token_usage_repo=self.token_usage_repo,
+            metric_recorder=self.metric_recorder,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,

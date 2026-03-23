@@ -51,6 +51,8 @@ from agent_teams.logger import (
     log_model_output,
     log_model_stream_chunk,
 )
+from agent_teams.metrics import MetricRecorder
+from agent_teams.metrics.adapters import record_session_step, record_token_usage
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -140,6 +142,7 @@ class AgentLlmSession:
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
+        metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
     ) -> None:
         self._config = config
@@ -170,6 +173,7 @@ class AgentLlmSession:
         self._tool_approval_policy = tool_approval_policy
         self._notification_service = notification_service
         self._token_usage_repo = token_usage_repo
+        self._metric_recorder = metric_recorder
         self._retry_config = retry_config or LlmRetryConfig()
 
     async def run(self, request: LLMRequest) -> str:
@@ -228,6 +232,15 @@ class AgentLlmSession:
                 ),
             )
         )
+        if self._metric_recorder is not None:
+            record_session_step(
+                self._metric_recorder,
+                workspace_id=resolved_workspace_id,
+                session_id=request.session_id,
+                run_id=request.run_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+            )
         model_settings: OpenAIChatModelSettings = {
             # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
@@ -284,11 +297,13 @@ class AgentLlmSession:
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._role_registry,
+            mcp_registry=self._mcp_registry,
             task_service=self._task_service,
             task_execution_service=self._task_execution_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
             tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
+            metric_recorder=self._metric_recorder,
             notification_service=self._notification_service,
         )
         control_ctx = self._run_control_manager.context(
@@ -567,6 +582,18 @@ class AgentLlmSession:
                             ),
                         )
                     )
+                    if self._metric_recorder is not None:
+                        record_token_usage(
+                            self._metric_recorder,
+                            workspace_id=resolved_workspace_id,
+                            session_id=request.session_id,
+                            run_id=request.run_id,
+                            instance_id=request.instance_id,
+                            role_id=request.role_id,
+                            input_tokens=input_tokens,
+                            cached_input_tokens=cached_input_tokens,
+                            output_tokens=output_tokens,
+                        )
                     log_event(
                         LOGGER,
                         logging.INFO,
