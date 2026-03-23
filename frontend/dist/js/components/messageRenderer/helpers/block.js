@@ -4,6 +4,7 @@
  */
 import { getPrimaryRoleLabel, isCoordinatorRoleId, isMainAgentRoleId } from '../../../core/state.js';
 import { parseMarkdown } from '../../../utils/markdown.js';
+import { t } from '../../../utils/i18n.js';
 import {
     applyToolReturn,
     buildToolBlock,
@@ -101,7 +102,12 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
 }
 
 export function labelFromRole(role, roleId, instanceId) {
-    if (role === 'user') return 'System';
+    if (role === 'user') {
+        if (isCoordinatorRoleId(roleId) || isMainAgentRoleId(roleId) || !roleId) {
+            return 'System';
+        }
+        return t('subagent.task_prompt');
+    }
     if (isCoordinatorRoleId(roleId)) return 'Coordinator';
     if (isMainAgentRoleId(roleId)) return 'Main Agent';
     if (roleId) return roleId;

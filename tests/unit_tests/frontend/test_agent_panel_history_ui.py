@@ -165,7 +165,13 @@ function createNode() {
     assert payload["summaryStatus"] == "Completed"
 
 
-def _run_history_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def _run_history_script(
+    tmp_path: Path,
+    runner_source: str,
+    *,
+    mock_api_source: str | None = None,
+    mock_message_renderer_source: str | None = None,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root
@@ -193,7 +199,9 @@ def _run_history_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
     (tmp_path / "mockApi.mjs").write_text(
-        """
+        (
+            mock_api_source
+            or """
 export async function fetchAgentMessages() {
     return [];
 }
@@ -205,7 +213,8 @@ export async function fetchAgentReflection() {
 export async function fetchRunTokenUsage() {
     return null;
 }
-""".strip(),
+""".strip()
+        ),
         encoding="utf-8",
     )
     (tmp_path / "mockState.mjs").write_text(
@@ -231,7 +240,9 @@ export const state = {
         encoding="utf-8",
     )
     (tmp_path / "mockMessageRenderer.mjs").write_text(
-        """
+        (
+            mock_message_renderer_source
+            or """
 export function getInstanceStreamOverlay() {
     return null;
 }
@@ -239,7 +250,8 @@ export function getInstanceStreamOverlay() {
 export function renderHistoricalMessageList() {
     return undefined;
 }
-""".strip(),
+""".strip()
+        ),
         encoding="utf-8",
     )
     (tmp_path / "mockI18n.mjs").write_text(
@@ -255,6 +267,7 @@ const translations = {
     "subagent.no_reflection_memory": "No reflection memory yet.",
     "subagent.no_tasks": "No delegated tasks yet.",
     "subagent.task": "Task",
+    "subagent.task_prompt": "Task Prompt",
     "subagent.status_idle": "Idle",
 };
 
@@ -291,7 +304,14 @@ export function setPanel(instanceId, panel) {
         encoding="utf-8",
     )
 
-    runner_path.write_text(runner_source, encoding="utf-8")
+    runner_path.write_text(
+        f"""
+globalThis.__renderHistoricalMessageListCalls = [];
+
+{runner_source}
+""".strip(),
+        encoding="utf-8",
+    )
 
     completed = subprocess.run(
         ["node", str(runner_path)],

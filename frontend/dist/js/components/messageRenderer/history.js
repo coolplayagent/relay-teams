@@ -56,7 +56,9 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             return;
         }
 
-        const label = labelFromRole(role, msgItem.role_id, msgItem.instance_id);
+        const label = role === 'user' && String(options.userRoleLabel || '').trim()
+            ? String(options.userRoleLabel || '').trim()
+            : labelFromRole(role, msgItem.role_id, msgItem.instance_id);
         const { contentEl } = renderMessageBlock(container, role, label, []);
         renderParts(contentEl, parts, pendingToolBlocks);
     });

@@ -245,6 +245,7 @@ export async function loadAgentHistory(instanceId, roleId = null) {
                 pendingToolApprovals,
                 runId,
                 streamOverlayEntry,
+                userRoleLabel: t('subagent.task_prompt'),
             });
         }
         panel.loadedSessionId = state.currentSessionId || '';
