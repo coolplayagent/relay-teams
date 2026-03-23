@@ -467,7 +467,9 @@ class RunManager:
                 "Run Completed" if result.status == "completed" else "Run Failed"
             )
             notification_body = (
-                f"Run {run_id} completed successfully."
+                result.output.strip()
+                if result.status == "completed" and result.output.strip()
+                else f"Run {run_id} completed successfully."
                 if result.status == "completed"
                 else (
                     f"Run {run_id} failed: {result.output}"

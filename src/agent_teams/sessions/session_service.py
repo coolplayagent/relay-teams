@@ -41,6 +41,9 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from agent_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -78,6 +81,7 @@ class SessionService:
         metrics_store: SqliteMetricAggregateStore | None = None,
         workspace_manager: WorkspaceManager | None = None,
         workspace_service: WorkspaceService | None = None,
+        external_session_binding_repo: ExternalSessionBindingRepository | None = None,
         role_memory_service: RoleMemoryService | None = None,
         subagent_reflection_service: SubagentReflectionService | None = None,
         role_registry: RoleRegistry | None = None,
@@ -101,6 +105,7 @@ class SessionService:
         self._metrics_store = metrics_store
         self._workspace_manager = workspace_manager
         self._workspace_service = workspace_service
+        self._external_session_binding_repo = external_session_binding_repo
         self._role_memory_service = role_memory_service
         self._subagent_reflection_service = subagent_reflection_service
         self._role_registry = role_registry
@@ -223,6 +228,8 @@ class SessionService:
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
+        if self._external_session_binding_repo is not None:
+            self._external_session_binding_repo.delete_by_session(session_id)
         self._session_repo.delete(session_id)
         self._token_usage_repo.delete_by_session(session_id)
         if self._metrics_store is not None:

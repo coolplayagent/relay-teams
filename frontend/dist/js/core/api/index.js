@@ -69,6 +69,15 @@ export {
 } from './system.js';
 
 export {
+    createTrigger,
+    disableTrigger,
+    enableTrigger,
+    fetchTriggers,
+    rotateTriggerToken,
+    updateTrigger,
+} from './triggers.js';
+
+export {
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
 } from './token_usage.js';

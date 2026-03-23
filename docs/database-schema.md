@@ -52,6 +52,32 @@ Purpose: registered execution workspaces. `profile_json` stores the typed worksp
 
 ---
 
+### 2.1.2 `external_session_bindings`
+
+```sql
+CREATE TABLE IF NOT EXISTS external_session_bindings (
+    platform          TEXT NOT NULL,
+    tenant_key        TEXT NOT NULL,
+    external_chat_id  TEXT NOT NULL,
+    session_id        TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (platform, tenant_key, external_chat_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_session_bindings_session
+    ON external_session_bindings(session_id);
+```
+
+Purpose: persistent mapping between an external chat identity and the internal Agent Teams session.
+
+Notes:
+- `platform` starts with `feishu`.
+- `tenant_key + external_chat_id` is the durable lookup key used by inbound Feishu callbacks.
+- The owning session remains the source of truth for runtime state; this table only resolves the external conversation back to that session.
+
+---
+
 ### 2.2 `agent_instances`
 
 ```sql
@@ -375,6 +401,7 @@ Primary query keys used by repositories:
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: trigger-level retrieval across `triggers`, `trigger_events`.
 - `event_id`: trigger-event level retrieval for audit and replay preparation.
+- `platform + tenant_key + external_chat_id`: external-chat lookup for inbound IM triggers.
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
 
@@ -383,7 +410,7 @@ Primary query keys used by repositories:
 ## 3.1 Code Ownership
 
 - `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
-- `agent_teams.sessions`: `sessions`.
+- `agent_teams.sessions`: `sessions`, `external_session_bindings`.
 - `agent_teams.workspace`: `workspaces`.
 - `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
 - `agent_teams.agents`: `agent_instances`.

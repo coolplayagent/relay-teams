@@ -1,0 +1,107 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_teams.feishu.client import FeishuClient, load_feishu_environment
+    from agent_teams.feishu.models import (
+        FEISHU_METADATA_CHAT_ID_KEY,
+        FEISHU_METADATA_CHAT_TYPE_KEY,
+        FEISHU_METADATA_PLATFORM_KEY,
+        FEISHU_METADATA_TENANT_KEY,
+        FEISHU_METADATA_TRIGGER_ID_KEY,
+        FEISHU_PLATFORM,
+        FeishuEnvironment,
+        FeishuMessageFormat,
+        FeishuNormalizedMessage,
+        FeishuNotificationTarget,
+        TriggerProcessingResult,
+    )
+    from agent_teams.feishu.notification_delivery import FeishuNotificationDispatcher
+    from agent_teams.feishu.subscription_service import FeishuSubscriptionService
+    from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
+
+__all__ = [
+    "FEISHU_METADATA_CHAT_ID_KEY",
+    "FEISHU_METADATA_CHAT_TYPE_KEY",
+    "FEISHU_METADATA_PLATFORM_KEY",
+    "FEISHU_METADATA_TENANT_KEY",
+    "FEISHU_METADATA_TRIGGER_ID_KEY",
+    "FEISHU_PLATFORM",
+    "FeishuClient",
+    "FeishuEnvironment",
+    "FeishuMessageFormat",
+    "FeishuNormalizedMessage",
+    "FeishuNotificationDispatcher",
+    "FeishuNotificationTarget",
+    "FeishuSubscriptionService",
+    "FeishuTriggerHandler",
+    "TriggerProcessingResult",
+    "load_feishu_environment",
+]
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "FEISHU_METADATA_CHAT_ID_KEY": (
+        "agent_teams.feishu.models",
+        "FEISHU_METADATA_CHAT_ID_KEY",
+    ),
+    "FEISHU_METADATA_CHAT_TYPE_KEY": (
+        "agent_teams.feishu.models",
+        "FEISHU_METADATA_CHAT_TYPE_KEY",
+    ),
+    "FEISHU_METADATA_PLATFORM_KEY": (
+        "agent_teams.feishu.models",
+        "FEISHU_METADATA_PLATFORM_KEY",
+    ),
+    "FEISHU_METADATA_TENANT_KEY": (
+        "agent_teams.feishu.models",
+        "FEISHU_METADATA_TENANT_KEY",
+    ),
+    "FEISHU_METADATA_TRIGGER_ID_KEY": (
+        "agent_teams.feishu.models",
+        "FEISHU_METADATA_TRIGGER_ID_KEY",
+    ),
+    "FEISHU_PLATFORM": ("agent_teams.feishu.models", "FEISHU_PLATFORM"),
+    "FeishuClient": ("agent_teams.feishu.client", "FeishuClient"),
+    "FeishuEnvironment": ("agent_teams.feishu.models", "FeishuEnvironment"),
+    "FeishuMessageFormat": ("agent_teams.feishu.models", "FeishuMessageFormat"),
+    "FeishuNormalizedMessage": (
+        "agent_teams.feishu.models",
+        "FeishuNormalizedMessage",
+    ),
+    "FeishuNotificationDispatcher": (
+        "agent_teams.feishu.notification_delivery",
+        "FeishuNotificationDispatcher",
+    ),
+    "FeishuNotificationTarget": (
+        "agent_teams.feishu.models",
+        "FeishuNotificationTarget",
+    ),
+    "FeishuSubscriptionService": (
+        "agent_teams.feishu.subscription_service",
+        "FeishuSubscriptionService",
+    ),
+    "FeishuTriggerHandler": (
+        "agent_teams.feishu.trigger_handler",
+        "FeishuTriggerHandler",
+    ),
+    "TriggerProcessingResult": (
+        "agent_teams.feishu.models",
+        "TriggerProcessingResult",
+    ),
+    "load_feishu_environment": (
+        "agent_teams.feishu.client",
+        "load_feishu_environment",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    module_info = _LAZY_IMPORTS.get(name)
+    if module_info is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = module_info
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)

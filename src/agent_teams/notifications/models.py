@@ -5,6 +5,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_teams.feishu.models import FeishuMessageFormat
+
 
 class NotificationType(str, Enum):
     TOOL_APPROVAL_REQUESTED = "tool_approval_requested"
@@ -16,6 +18,7 @@ class NotificationType(str, Enum):
 class NotificationChannel(str, Enum):
     BROWSER = "browser"
     TOAST = "toast"
+    FEISHU = "feishu"
 
 
 class NotificationRule(BaseModel):
@@ -26,6 +29,7 @@ class NotificationRule(BaseModel):
         NotificationChannel.BROWSER,
         NotificationChannel.TOAST,
     )
+    feishu_format: FeishuMessageFormat = FeishuMessageFormat.TEXT
 
 
 class NotificationConfig(BaseModel):
@@ -39,14 +43,18 @@ class NotificationConfig(BaseModel):
     )
     run_completed: NotificationRule = Field(
         default_factory=lambda: NotificationRule(
-            enabled=False,
-            channels=(NotificationChannel.TOAST,),
+            enabled=True,
+            channels=(NotificationChannel.TOAST, NotificationChannel.FEISHU),
         )
     )
     run_failed: NotificationRule = Field(
         default_factory=lambda: NotificationRule(
             enabled=True,
-            channels=(NotificationChannel.BROWSER, NotificationChannel.TOAST),
+            channels=(
+                NotificationChannel.BROWSER,
+                NotificationChannel.TOAST,
+                NotificationChannel.FEISHU,
+            ),
         )
     )
     run_stopped: NotificationRule = Field(
@@ -86,6 +94,7 @@ class NotificationRequest(BaseModel):
     title: str = Field(min_length=1)
     body: str = Field(min_length=1)
     channels: tuple[NotificationChannel, ...] = ()
+    feishu_format: FeishuMessageFormat = FeishuMessageFormat.TEXT
     dedupe_key: str = Field(min_length=1)
     context: NotificationContext
 

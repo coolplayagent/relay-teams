@@ -5,6 +5,12 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.sessions.external_session_binding_models import (
+        ExternalSessionBinding,
+    )
+    from agent_teams.sessions.external_session_binding_repository import (
+        ExternalSessionBindingRepository,
+    )
     from agent_teams.sessions.session_rounds_projection import (
         approvals_to_projection,
         build_session_rounds,
@@ -18,6 +24,8 @@ if TYPE_CHECKING:
 __all__ = [
     "SessionRecord",
     "SessionMode",
+    "ExternalSessionBinding",
+    "ExternalSessionBindingRepository",
     "SessionRepository",
     "SessionService",
     "approvals_to_projection",
@@ -29,6 +37,14 @@ __all__ = [
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SessionRecord": ("agent_teams.sessions.session_models", "SessionRecord"),
     "SessionMode": ("agent_teams.sessions.session_models", "SessionMode"),
+    "ExternalSessionBinding": (
+        "agent_teams.sessions.external_session_binding_models",
+        "ExternalSessionBinding",
+    ),
+    "ExternalSessionBindingRepository": (
+        "agent_teams.sessions.external_session_binding_repository",
+        "ExternalSessionBindingRepository",
+    ),
     "SessionRepository": (
         "agent_teams.sessions.session_repository",
         "SessionRepository",

@@ -17,9 +17,11 @@ from agent_teams.env.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeResult,
 )
+from agent_teams.feishu import FeishuSubscriptionService
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
+    get_feishu_subscription_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -231,9 +233,15 @@ def save_environment_variable(
     key: str,
     req: EnvironmentVariableSaveRequest,
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
+    feishu_subscription_service: FeishuSubscriptionService = Depends(
+        get_feishu_subscription_service
+    ),
 ) -> EnvironmentVariableRecord:
     try:
-        return service.save_environment_variable(scope=scope, key=key, request=req)
+        record = service.save_environment_variable(scope=scope, key=key, request=req)
+        if scope == EnvironmentVariableScope.APP and _is_feishu_env_key(key):
+            feishu_subscription_service.reload()
+        return record
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -247,9 +255,14 @@ def delete_environment_variable(
     scope: EnvironmentVariableScope,
     key: str,
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
+    feishu_subscription_service: FeishuSubscriptionService = Depends(
+        get_feishu_subscription_service
+    ),
 ) -> dict[str, str]:
     try:
         service.delete_environment_variable(scope=scope, key=key)
+        if scope == EnvironmentVariableScope.APP and _is_feishu_env_key(key):
+            feishu_subscription_service.reload()
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -290,6 +303,10 @@ class OrchestrationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: dict[str, JsonValue]
+
+
+def _is_feishu_env_key(key: str) -> bool:
+    return str(key).strip().upper().startswith("FEISHU_")
 
 
 @router.put("/configs/notifications")

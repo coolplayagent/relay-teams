@@ -14,6 +14,7 @@ import {
 } from './orchestrationSettings.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from './triggerSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
@@ -41,6 +42,10 @@ const TAB_METADATA = {
     orchestration: {
         titleKey: 'settings.panel.orchestration.title',
         descriptionKey: 'settings.panel.orchestration.description',
+    },
+    triggers: {
+        titleKey: 'settings.panel.triggers.title',
+        descriptionKey: 'settings.panel.triggers.description',
     },
     notifications: {
         titleKey: 'settings.panel.notifications.title',
@@ -88,6 +93,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="orchestration">
                         <span class="settings-tab-label" data-i18n="settings.tab.orchestration">Orchestration</span>
+                    </button>
+                    <button class="settings-tab" data-tab="triggers">
+                        <span class="settings-tab-label" data-i18n="settings.tab.triggers">Triggers</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label" data-i18n="settings.tab.notifications">Notifications</span>
@@ -336,6 +344,19 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="triggers-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack orchestration-settings-stack">
+                                <section class="orchestration-settings-block trigger-settings-block">
+                                    <div class="orchestration-preset-list trigger-platform-list" id="trigger-platform-list"></div>
+                                    <div class="role-editor-panel orchestration-editor-panel trigger-provider-detail-panel" id="trigger-provider-detail-panel" style="display:none;">
+                                        <div class="role-editor-form orchestration-editor-form trigger-provider-detail" id="trigger-provider-detail"></div>
+                                    </div>
+                                </section>
+                                <div class="role-editor-status" id="trigger-editor-status" style="display:none;"></div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="notifications-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack notifications-panel-body">
@@ -513,11 +534,14 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;" data-i18n="settings.action.add_role">Add Role</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-orchestration-preset-btn" type="button" style="display:none;" data-i18n="settings.action.add_orchestration">Add Orchestration</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.add_trigger">Add Trigger</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;" data-i18n="settings.action.add_variable">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-orchestration-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-orchestration-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
@@ -556,6 +580,7 @@ function setupEventListeners() {
     bindModelProfileHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
+    bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindProxySettingsHandlers();
@@ -587,6 +612,7 @@ async function showPanel(tab) {
     bindModelProfileHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
+    bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
@@ -597,6 +623,8 @@ async function showPanel(tab) {
         await loadRoleSettingsPanel();
     } else if (tab === 'orchestration') {
         await loadOrchestrationSettingsPanel();
+    } else if (tab === 'triggers') {
+        await loadTriggerSettingsPanel();
     } else if (tab === 'environment') {
         await loadEnvironmentVariablesPanel();
     } else if (tab === 'notifications') {
@@ -636,6 +664,9 @@ function renderPanelActions(tab) {
     }
     if (tab === 'orchestration') {
         document.getElementById('add-orchestration-preset-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'triggers') {
         return;
     }
     if (tab === 'environment') {

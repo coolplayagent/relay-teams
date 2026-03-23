@@ -77,6 +77,7 @@ console.log(JSON.stringify({
         "model": 1,
         "roles": 0,
         "orchestration": 0,
+        "triggers": 0,
         "environment": 0,
         "notifications": 1,
         "proxy": 0,
@@ -148,6 +149,12 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert tabs_html.index('data-tab="skills"') < tabs_html.index('data-tab="mcp"')
     assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="roles"')
     assert tabs_html.index('data-tab="roles"') < tabs_html.index(
+        'data-tab="orchestration"'
+    )
+    assert tabs_html.index('data-tab="orchestration"') < tabs_html.index(
+        'data-tab="triggers"'
+    )
+    assert tabs_html.index('data-tab="triggers"') < tabs_html.index(
         'data-tab="notifications"'
     )
     assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
@@ -160,6 +167,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">Skills</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
+    assert ">Triggers</span>" in tabs_html
     assert ">Model Profiles</span>" not in tabs_html
     assert ">MCP Config</span>" not in tabs_html
 
@@ -337,6 +345,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_orchestration_settings_path = tmp_path / "mockOrchestrationSettings.mjs"
     mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
+    mock_trigger_settings_path = tmp_path / "mockTriggerSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "index.mjs"
@@ -402,6 +411,18 @@ export async function loadRoleSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_trigger_settings_path.write_text(
+        """
+export function bindTriggerSettingsHandlers() {
+    globalThis.__bindCalls.triggers += 1;
+}
+
+export async function loadTriggerSettingsPanel() {
+    globalThis.__loadCalls.triggers += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_proxy_settings_path.write_text(
         """
 export function bindProxySettingsHandlers() {
@@ -444,6 +465,8 @@ export function t(key) {
         'settings.panel.roles.description': 'Edit role metadata, allowed tools, memory profile, and prompt text.',
         'settings.panel.orchestration.title': 'Orchestration',
         'settings.panel.orchestration.description': 'Manage orchestrations for Orchestrated Mode. Main Agent and Coordinator base prompts are edited in Roles.',
+        'settings.panel.triggers.title': 'Triggers',
+        'settings.panel.triggers.description': 'Manage inbound trigger providers, shared credentials, and provider-specific trigger records.',
         'settings.panel.notifications.title': 'Notifications',
         'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
         'settings.panel.proxy.title': 'Proxy',
@@ -466,6 +489,7 @@ export function translateDocument() {
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
         .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
+        .replace("./triggerSettings.js", "./mockTriggerSettings.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
@@ -636,6 +660,7 @@ globalThis.__bindCalls = {{
     model: 0,
     roles: 0,
     orchestration: 0,
+    triggers: 0,
     environment: 0,
     notifications: 0,
     proxy: 0,
@@ -645,6 +670,7 @@ globalThis.__loadCalls = {{
     model: 0,
     roles: 0,
     orchestration: 0,
+    triggers: 0,
     environment: 0,
     notifications: 0,
     proxy: 0,

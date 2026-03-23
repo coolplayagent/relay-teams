@@ -37,8 +37,16 @@ def test_save_notification_config_round_trip(tmp_path: Path) -> None:
     manager = NotificationConfigManager(config_dir=tmp_path)
     config = NotificationConfig.model_validate(
         {
-            "tool_approval_requested": {"enabled": True, "channels": ["browser"]},
-            "run_completed": {"enabled": True, "channels": ["toast"]},
+            "tool_approval_requested": {
+                "enabled": True,
+                "channels": ["browser"],
+                "feishu_format": "text",
+            },
+            "run_completed": {
+                "enabled": True,
+                "channels": ["toast", "feishu"],
+                "feishu_format": "card",
+            },
             "run_failed": {"enabled": True, "channels": ["browser", "toast"]},
             "run_stopped": {"enabled": False, "channels": ["toast"]},
         }

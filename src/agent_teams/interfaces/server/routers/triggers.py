@@ -6,7 +6,11 @@ from typing import Annotated, ClassVar
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.interfaces.server.deps import get_trigger_service
+from agent_teams.interfaces.server.deps import (
+    get_feishu_subscription_service,
+    get_trigger_service,
+)
+from agent_teams.feishu import FeishuSubscriptionService
 from agent_teams.logger import get_logger, log_event
 from agent_teams.trace import bind_trace_context
 from agent_teams.triggers import (
@@ -18,6 +22,7 @@ from agent_teams.triggers import (
     TriggerIngestInput,
     TriggerIngestResult,
     TriggerNameConflictError,
+    TriggerSourceType,
     TriggerStatus,
     TriggerUpdateInput,
 )
@@ -37,9 +42,14 @@ class TriggerEventListResponse(BaseModel):
 def create_trigger(
     req: TriggerCreateInput,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_subscription_service: Annotated[
+        FeishuSubscriptionService, Depends(get_feishu_subscription_service)
+    ],
 ) -> TriggerDefinition:
     try:
         created = service.create_trigger(req)
+        if _is_feishu_im_trigger(created):
+            feishu_subscription_service.reload()
         with bind_trace_context(trigger_id=created.trigger_id):
             log_event(
                 logger,
@@ -79,9 +89,14 @@ def update_trigger(
     trigger_id: str,
     req: TriggerUpdateInput,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_subscription_service: Annotated[
+        FeishuSubscriptionService, Depends(get_feishu_subscription_service)
+    ],
 ) -> TriggerDefinition:
     try:
         updated = service.update_trigger(trigger_id, req)
+        if _is_feishu_im_trigger(updated):
+            feishu_subscription_service.reload()
         with bind_trace_context(trigger_id=updated.trigger_id):
             log_event(
                 logger,
@@ -101,9 +116,15 @@ def update_trigger(
 def enable_trigger(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_subscription_service: Annotated[
+        FeishuSubscriptionService, Depends(get_feishu_subscription_service)
+    ],
 ) -> TriggerDefinition:
     try:
-        return service.set_trigger_status(trigger_id, TriggerStatus.ENABLED)
+        updated = service.set_trigger_status(trigger_id, TriggerStatus.ENABLED)
+        if _is_feishu_im_trigger(updated):
+            feishu_subscription_service.reload()
+        return updated
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -112,9 +133,15 @@ def enable_trigger(
 def disable_trigger(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_subscription_service: Annotated[
+        FeishuSubscriptionService, Depends(get_feishu_subscription_service)
+    ],
 ) -> TriggerDefinition:
     try:
-        return service.set_trigger_status(trigger_id, TriggerStatus.DISABLED)
+        updated = service.set_trigger_status(trigger_id, TriggerStatus.DISABLED)
+        if _is_feishu_im_trigger(updated):
+            feishu_subscription_service.reload()
+        return updated
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -223,3 +250,8 @@ def get_trigger_event(
         return service.get_event(event_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _is_feishu_im_trigger(trigger: TriggerDefinition) -> bool:
+    provider = str(trigger.source_config.get("provider", "")).strip().lower()
+    return trigger.source_type == TriggerSourceType.IM and provider == "feishu"

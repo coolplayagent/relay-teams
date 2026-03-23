@@ -813,6 +813,97 @@
     font-size: 0.72rem;
 }
 
+.trigger-settings-block {
+    gap: 0.75rem;
+}
+
+.trigger-detail-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--settings-divider);
+}
+
+.trigger-detail-copy {
+    min-width: 0;
+}
+
+.trigger-detail-copy h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+}
+
+.trigger-detail-copy p {
+    margin: 0.25rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.trigger-detail-section {
+    padding-top: 1rem;
+}
+
+.trigger-section-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.trigger-section-header h5 {
+    margin: 0;
+}
+
+.trigger-section-header p {
+    margin: 0.25rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.trigger-credentials-grid {
+    align-items: start;
+}
+
+.trigger-section-note {
+    margin: 0.85rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.trigger-records {
+    border-top: 1px solid var(--settings-divider);
+}
+
+.trigger-readonly-value {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    padding: 0.65rem 0.8rem;
+    border: 1px solid var(--settings-border-strong);
+    border-radius: 6px;
+    background: var(--settings-input-bg);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    line-height: 1.45;
+}
+
+.trigger-readonly-value-mono {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.trigger-enabled-row {
+    margin-top: 0.85rem;
+}
+
 .status-list {
     display: flex;
     flex-direction: column;
@@ -2100,6 +2191,11 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
     .orchestration-layout {
         grid-template-columns: 1fr;
+    }
+
+    .trigger-detail-header {
+        flex-direction: column;
+        align-items: stretch;
     }
 
     .roles-subnav {

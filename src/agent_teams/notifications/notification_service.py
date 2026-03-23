@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from json import dumps
+import logging
+from typing import Protocol
 
+from agent_teams.logger import get_logger, log_event
 from agent_teams.notifications.models import (
     NotificationConfig,
     NotificationContext,
@@ -14,6 +17,12 @@ from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.run_models import RunEvent
 
+logger = get_logger(__name__)
+
+
+class NotificationDispatcher(Protocol):
+    def dispatch(self, request: NotificationRequest) -> None: ...
+
 
 class NotificationService:
     def __init__(
@@ -21,9 +30,11 @@ class NotificationService:
         *,
         run_event_hub: RunEventHub,
         get_config: Callable[[], NotificationConfig],
+        dispatchers: tuple[NotificationDispatcher, ...] = (),
     ) -> None:
         self._run_event_hub = run_event_hub
         self._get_config = get_config
+        self._dispatchers = dispatchers
 
     def emit(
         self,
@@ -44,6 +55,7 @@ class NotificationService:
             title=title,
             body=body,
             channels=rule.channels,
+            feishu_format=rule.feishu_format,
             dedupe_key=dedupe_key or self._build_dedupe_key(notification_type, context),
             context=context,
         )
@@ -59,6 +71,24 @@ class NotificationService:
                 payload_json=dumps(request.model_dump(mode="json"), ensure_ascii=False),
             )
         )
+        for dispatcher in self._dispatchers:
+            try:
+                dispatcher.dispatch(request)
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="notification.dispatch.failed",
+                    message="Notification dispatcher failed",
+                    payload={
+                        "dispatcher": type(dispatcher).__name__,
+                        "notification_type": request.notification_type.value,
+                        "run_id": request.context.run_id,
+                        "session_id": request.context.session_id,
+                    },
+                    exc_info=exc,
+                )
+                continue
         return True
 
     @staticmethod

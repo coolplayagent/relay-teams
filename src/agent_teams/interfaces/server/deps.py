@@ -15,6 +15,7 @@ from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
+from agent_teams.feishu import FeishuSubscriptionService, FeishuTriggerHandler
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.mcp.mcp_service import McpService
@@ -52,6 +53,14 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
 
 def get_trigger_service(request: Request) -> TriggerService:
     return get_container(request).trigger_service
+
+
+def get_feishu_trigger_handler(request: Request) -> FeishuTriggerHandler:
+    return get_container(request).feishu_trigger_handler
+
+
+def get_feishu_subscription_service(request: Request) -> FeishuSubscriptionService:
+    return get_container(request).feishu_subscription_service
 
 
 def get_config_status_service(request: Request) -> ConfigStatusService:

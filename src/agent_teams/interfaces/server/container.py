@@ -23,6 +23,12 @@ from agent_teams.agents.orchestration.task_execution_service import TaskExecutio
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
+from agent_teams.feishu import (
+    FeishuClient,
+    FeishuNotificationDispatcher,
+    FeishuSubscriptionService,
+    FeishuTriggerHandler,
+)
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
@@ -68,7 +74,10 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
-from agent_teams.sessions import SessionService
+from agent_teams.sessions import (
+    ExternalSessionBindingRepository,
+    SessionService,
+)
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -183,6 +192,9 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.session_repo: SessionRepository = SessionRepository(runtime.paths.db_path)
+        self.external_session_binding_repo: ExternalSessionBindingRepository = (
+            ExternalSessionBindingRepository(runtime.paths.db_path)
+        )
         self.orchestration_settings_service: OrchestrationSettingsService = (
             OrchestrationSettingsService(
                 config_manager=self.orchestration_settings_config_manager,
@@ -235,9 +247,16 @@ class ServerContainer:
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
         )
+        self.feishu_client = FeishuClient()
         self.notification_service: NotificationService = NotificationService(
             run_event_hub=self.run_event_hub,
             get_config=self.notification_config_manager.get_notification_config,
+            dispatchers=(
+                FeishuNotificationDispatcher(
+                    session_repo=self.session_repo,
+                    feishu_client=self.feishu_client,
+                ),
+            ),
         )
         self.gate_manager: GateManager = GateManager()
         self.tool_approval_manager: ToolApprovalManager = ToolApprovalManager()
@@ -315,6 +334,7 @@ class ServerContainer:
             metrics_store=self.metrics_store,
             workspace_manager=self.workspace_manager,
             workspace_service=self.workspace_service,
+            external_session_binding_repo=self.external_session_binding_repo,
             role_memory_service=self.role_memory_service,
             subagent_reflection_service=self.subagent_reflection_service,
             role_registry=self.role_registry,
@@ -322,6 +342,15 @@ class ServerContainer:
             mcp_registry=self.mcp_registry,
             orchestration_settings_service=self.orchestration_settings_service,
             get_runtime=lambda: self.runtime,
+        )
+        self.feishu_trigger_handler = FeishuTriggerHandler(
+            trigger_service=self.trigger_service,
+            session_service=self.session_service,
+            run_service=self.run_service,
+            external_session_binding_repo=self.external_session_binding_repo,
+        )
+        self.feishu_subscription_service = FeishuSubscriptionService(
+            event_handler=self.feishu_trigger_handler
         )
         self.config_status_service: ConfigStatusService = ConfigStatusService(
             get_runtime=lambda: self.runtime,
@@ -449,10 +478,10 @@ class ServerContainer:
         )
 
     async def start(self) -> None:
-        return None
+        self.feishu_subscription_service.start()
 
     async def stop(self) -> None:
-        return None
+        self.feishu_subscription_service.stop()
 
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
@@ -503,6 +532,7 @@ class ServerContainer:
         sync_proxy_env_to_process_env(proxy_config)
         clear_llm_http_client_cache()
         self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
+        self.feishu_subscription_service.reload()
 
     def _ensure_default_workspace(self) -> None:
         if self.workspace_repo.exists("default"):

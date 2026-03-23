@@ -26,6 +26,20 @@ class _FakeRunEventHub:
         self.events.append(event)
 
 
+class _FakeDispatcher:
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    def dispatch(self, request: object) -> None:
+        self.requests.append(request)
+
+
+class _FailingDispatcher:
+    def dispatch(self, request: object) -> None:
+        _ = request
+        raise RuntimeError("dispatcher boom")
+
+
 def test_emit_publishes_notification_requested_event() -> None:
     hub = _FakeRunEventHub()
     service = NotificationService(
@@ -79,3 +93,80 @@ def test_emit_returns_false_when_type_is_disabled() -> None:
 
     assert emitted is False
     assert hub.events == []
+
+
+def test_emit_dispatches_to_custom_dispatchers() -> None:
+    hub = _FakeRunEventHub()
+    dispatcher = _FakeDispatcher()
+    config = NotificationConfig(
+        run_failed=NotificationRule(
+            enabled=True,
+            channels=(NotificationChannel.FEISHU,),
+        ),
+    )
+    service = NotificationService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        get_config=lambda: config,
+        dispatchers=(dispatcher,),
+    )
+
+    emitted = service.emit(
+        notification_type=NotificationType.RUN_FAILED,
+        title="Run Failed",
+        body="Run run-1 failed.",
+        context=NotificationContext(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="trace-1",
+        ),
+    )
+
+    assert emitted is True
+    assert len(dispatcher.requests) == 1
+
+
+def test_emit_continues_after_dispatcher_failure() -> None:
+    hub = _FakeRunEventHub()
+    failing_dispatcher = _FailingDispatcher()
+    succeeding_dispatcher = _FakeDispatcher()
+    config = NotificationConfig(
+        run_completed=NotificationRule(
+            enabled=True,
+            channels=(NotificationChannel.FEISHU,),
+        ),
+    )
+    service = NotificationService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        get_config=lambda: config,
+        dispatchers=(failing_dispatcher, succeeding_dispatcher),
+    )
+
+    emitted = service.emit(
+        notification_type=NotificationType.RUN_COMPLETED,
+        title="Run Completed",
+        body="Run run-1 completed successfully.",
+        context=NotificationContext(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="trace-1",
+        ),
+    )
+
+    assert emitted is True
+    assert len(hub.events) == 1
+    assert len(succeeding_dispatcher.requests) == 1
+
+
+def test_default_notification_config_enables_feishu_run_delivery() -> None:
+    config = default_notification_config()
+
+    assert config.run_completed.enabled is True
+    assert config.run_completed.channels == (
+        NotificationChannel.TOAST,
+        NotificationChannel.FEISHU,
+    )
+    assert config.run_failed.channels == (
+        NotificationChannel.BROWSER,
+        NotificationChannel.TOAST,
+        NotificationChannel.FEISHU,
+    )

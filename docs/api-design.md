@@ -140,10 +140,17 @@ Reloads skills config into runtime.
 ### `GET /system/configs/notifications`
 
 Returns notification rules by event type.
+Each rule includes:
+- `enabled`
+- `channels[]`: `browser`, `toast`, `feishu`
+- `feishu_format`: `text` or `card`
 
 ### `PUT /system/configs/notifications`
 
 Replaces notification rules.
+Notes:
+- `feishu` delivery is best-effort and only applies when the session/run has Feishu chat context.
+- Feishu credentials are loaded from app environment variables, not from `notifications.json`.
 
 ### `GET /system/configs/orchestration`
 
@@ -884,6 +891,34 @@ Internal generic trigger ingest endpoint.
 ### `POST /triggers/webhooks/{public_token}`
 
 Public webhook ingest endpoint.
+
+### Feishu IM Triggers
+
+Feishu IM triggers no longer use an `/api/triggers/feishu/...` HTTP callback endpoint.
+
+Behavior:
+- Uses the Feishu Python SDK long connection mode for inbound `im.message.receive_v1` events.
+- Accepts group text messages.
+- For Feishu IM triggers configured with `trigger_rule = "mention_only"`, only `@bot` messages create runs.
+- Deduplicates delivery using the Feishu `event_id`.
+- Reuses one internal session per `tenant_key + chat_id`.
+- Requires no public callback URL.
+
+Recommended trigger contract:
+- `source_type = "im"`
+- `source_config.provider = "feishu"`
+- `source_config.trigger_rule = "mention_only"`
+- `target_config.workspace_id = "default"` (or another registered workspace)
+
+Required app environment variables:
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+
+Optional:
+- `FEISHU_ENCRYPT_KEY`
+  Configure this only if encrypted Feishu event delivery is enabled.
+- `FEISHU_VERIFICATION_TOKEN`
+  Not required for the SDK long-connection trigger flow.
 
 ### `GET /triggers/{trigger_id}/events`
 

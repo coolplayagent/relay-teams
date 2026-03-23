@@ -4,25 +4,31 @@
     "channels": [
       "browser",
       "toast"
-    ]
+    ],
+    "feishu_format": "text"
   },
   "run_completed": {
-    "enabled": false,
+    "enabled": true,
     "channels": [
-      "toast"
-    ]
+      "toast",
+      "feishu"
+    ],
+    "feishu_format": "text"
   },
   "run_failed": {
     "enabled": true,
     "channels": [
       "browser",
-      "toast"
-    ]
+      "toast",
+      "feishu"
+    ],
+    "feishu_format": "text"
   },
   "run_stopped": {
     "enabled": false,
     "channels": [
       "toast"
-    ]
+    ],
+    "feishu_format": "text"
   }
 }

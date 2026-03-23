@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.deps import get_trigger_service
+from agent_teams.interfaces.server.deps import (
+    get_feishu_subscription_service,
+    get_trigger_service,
+)
 from agent_teams.interfaces.server.routers import triggers
 from agent_teams.triggers import (
     TriggerAuthMode,
@@ -131,10 +134,27 @@ class _FakeRejectingTriggerService(_FakeTriggerService):
         )
 
 
-def _create_test_client(fake_service: object) -> TestClient:
+class _FakeFeishuSubscriptionService:
+    def __init__(self) -> None:
+        self.reload_calls = 0
+
+    def reload(self) -> None:
+        self.reload_calls += 1
+
+
+def _create_test_client(
+    fake_service: object,
+    *,
+    fake_feishu_subscription_service: object | None = None,
+) -> TestClient:
     app = FastAPI()
     app.include_router(triggers.router, prefix="/api")
     app.dependency_overrides[get_trigger_service] = lambda: fake_service
+    app.dependency_overrides[get_feishu_subscription_service] = (
+        (lambda: fake_feishu_subscription_service)
+        if fake_feishu_subscription_service is not None
+        else (lambda: _FakeFeishuSubscriptionService())
+    )
     return TestClient(app)
 
 
@@ -163,3 +183,37 @@ def test_trigger_router_maps_auth_rejection_to_403() -> None:
         json={"payload": {"action": "push"}},
     )
     assert response.status_code == 403
+
+
+def test_trigger_router_reloads_feishu_subscription_on_feishu_trigger_create() -> None:
+    now = datetime.now(tz=UTC)
+    trigger = TriggerDefinition(
+        trigger_id="trg_feishu",
+        name="feishu_group",
+        display_name="Feishu Group",
+        source_type=TriggerSourceType.IM,
+        status=TriggerStatus.ENABLED,
+        public_token="token-test",
+        source_config={"provider": "feishu"},
+        auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
+        target_config={"workspace_id": "default"},
+        created_at=now,
+        updated_at=now,
+    )
+
+    class _FakeFeishuTriggerService(_FakeTriggerService):
+        def create_trigger(self, _req: object) -> TriggerDefinition:
+            self.trigger = trigger
+            return trigger
+
+    subscription_service = _FakeFeishuSubscriptionService()
+    client = _create_test_client(
+        _FakeFeishuTriggerService(),
+        fake_feishu_subscription_service=subscription_service,
+    )
+    response = client.post(
+        "/api/triggers",
+        json={"name": "feishu_group", "source_type": "im", "source_config": {"provider": "feishu"}},
+    )
+    assert response.status_code == 200
+    assert subscription_service.reload_calls == 1
