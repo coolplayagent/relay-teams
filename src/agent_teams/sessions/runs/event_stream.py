@@ -29,6 +29,9 @@ class RunEventHub:
         if self._run_state_repo is not None and event_id > 0:
             self._run_state_repo.apply_event(event_id=event_id, event=event)
 
+        if event_id > 0:
+            event = event.model_copy(update={"event_id": event_id})
+
         listeners = self._subscribers.get(event.run_id, [])
         for queue in listeners:
             queue.put_nowait(event)

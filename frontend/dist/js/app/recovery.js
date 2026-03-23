@@ -191,12 +191,16 @@ export async function resumeRecoverableRun(
         reason = 'resume',
         onCompleted = null,
         quiet = false,
+        afterEventId = null,
     } = {},
 ) {
     const safeRunId = typeof runId === 'string' ? runId.trim() : '';
     if (!safeRunId) return false;
 
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const resolvedAfterEventId = typeof afterEventId === 'number' && afterEventId >= 0
+        ? afterEventId
+        : Number(getActiveRecoveryRun()?.checkpoint_event_id) || 0;
     recoveryActionBusy = true;
     renderRecoveryBanner();
     try {
@@ -209,6 +213,7 @@ export async function resumeRecoverableRun(
         resumeRunStream(safeRunId, nextSessionId, complete, {
             reason,
             makeUiBusy: true,
+            afterEventId: resolvedAfterEventId,
         });
         return true;
     } catch (e) {

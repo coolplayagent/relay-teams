@@ -77,3 +77,4 @@ class RunEvent(BaseModel):
     event_type: RunEventType
     payload_json: str = Field(default="{}")
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    event_id: int | None = None

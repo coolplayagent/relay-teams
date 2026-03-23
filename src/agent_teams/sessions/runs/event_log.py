@@ -120,6 +120,17 @@ class EventLog:
             ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
 
+    def list_by_trace_after_id(
+        self, trace_id: str, after_event_id: int
+    ) -> tuple[dict[str, JsonValue], ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                "FROM events WHERE trace_id=? AND id>? ORDER BY id ASC",
+                (trace_id, after_event_id),
+            ).fetchall()
+        return tuple(self._row_to_dict(row) for row in rows)
+
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self._lock:
             rows = self._conn.execute(

@@ -633,12 +633,60 @@ class RunManager:
             _ = self._pending_runs.pop(run_id, None)
             self._resume_requested_runs.discard(run_id)
 
-    async def stream_run_events(self, run_id: str):
+    async def stream_run_events(
+        self, run_id: str, after_event_id: int = 0
+    ):
         queue = self._run_event_hub.subscribe(run_id)
         self.ensure_run_started(run_id)
 
+        replay_high_watermark = 0
+        if after_event_id >= 0 and self._event_log is not None:
+            for row in self._event_log.list_by_trace_after_id(
+                run_id, after_event_id
+            ):
+                row_id = row.get("id")
+                if not isinstance(row_id, int):
+                    continue
+                try:
+                    event_type = RunEventType(str(row["event_type"]))
+                except ValueError:
+                    continue
+                replay_event = RunEvent(
+                    session_id=str(row["session_id"]),
+                    run_id=str(row["trace_id"]),
+                    trace_id=str(row["trace_id"]),
+                    task_id=(
+                        str(row["task_id"])
+                        if row["task_id"] is not None
+                        else None
+                    ),
+                    instance_id=(
+                        str(row["instance_id"])
+                        if row["instance_id"] is not None
+                        else None
+                    ),
+                    event_type=event_type,
+                    payload_json=str(row["payload_json"]),
+                    event_id=row_id,
+                )
+                replay_high_watermark = max(replay_high_watermark, row_id)
+                yield replay_event
+                if event_type in (
+                    RunEventType.RUN_COMPLETED,
+                    RunEventType.RUN_FAILED,
+                    RunEventType.RUN_STOPPED,
+                ):
+                    self._run_event_hub.unsubscribe_all(run_id)
+                    return
+
         while True:
             event = await queue.get()
+            if (
+                replay_high_watermark > 0
+                and event.event_id is not None
+                and event.event_id <= replay_high_watermark
+            ):
+                continue
             yield event
             if event.event_type in (
                 RunEventType.RUN_COMPLETED,

@@ -137,6 +137,9 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
         ? options.reason
         : 'resume';
     const makeUiBusy = options.makeUiBusy !== false;
+    const afterEventId = typeof options.afterEventId === 'number' && options.afterEventId >= 0
+        ? options.afterEventId
+        : null;
 
     state.activeRunId = safeRunId;
     if (makeUiBusy) {
@@ -160,7 +163,8 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
         clearRunStreamState(safeRunId);
     }
 
-    const url = `/api/runs/${safeRunId}/events`;
+    const urlParams = afterEventId !== null ? `?after_event_id=${afterEventId}` : '';
+    const url = `/api/runs/${safeRunId}/events${urlParams}`;
     logInfo('frontend.sse.opened', 'Run event stream opened', {
         run_id: safeRunId,
         reason,

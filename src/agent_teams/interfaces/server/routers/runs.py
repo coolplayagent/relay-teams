@@ -114,6 +114,7 @@ def create_run(
 async def stream_run_events(
     run_id: str,
     service: Annotated[RunManager, Depends(get_run_service)],
+    after_event_id: int = 0,
 ) -> StreamingResponse:
     async def event_generator():
         event_count = 0
@@ -124,9 +125,12 @@ async def stream_run_events(
                 logging.INFO,
                 event="stream.opened",
                 message="Run event stream opened",
+                payload={"after_event_id": after_event_id},
             )
             try:
-                async for event in service.stream_run_events(run_id):
+                async for event in service.stream_run_events(
+                    run_id, after_event_id=after_event_id
+                ):
                     event_count += 1
                     yield f"data: {event.model_dump_json()}\n\n"
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
