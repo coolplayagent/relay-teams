@@ -21,6 +21,7 @@ import {
 } from '../../app/retryStatus.js';
 import {
     markSubagentStatus,
+    refreshSubagentRail,
     rememberLiveSubagent,
 } from '../../components/subagentRail.js';
 import { els } from '../../utils/dom.js';
@@ -62,6 +63,9 @@ export function handleModelStepStarted(instanceId, roleId) {
         state.roleInstanceMap[roleId] = instanceId;
         if (!isPrimaryRoleId(roleId)) {
             rememberLiveSubagent(instanceId, roleId);
+            void refreshSubagentRail(state.currentSessionId, {
+                preserveSelection: true,
+            });
             getPanelScrollContainer(instanceId, roleId);
             if (!state.autoSwitchedSubagentInstances[instanceId]) {
                 state.autoSwitchedSubagentInstances[instanceId] = true;
