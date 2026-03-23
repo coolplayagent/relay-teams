@@ -4,23 +4,24 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.agents.tasks.models import TaskEnvelope
 from agent_teams.agents.execution.prompt_instructions import (
     LoadedPromptInstructions,
     PromptInstructionResolver,
 )
+from agent_teams.agents.tasks.models import TaskEnvelope
 from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import (
     RoleRegistry,
     is_coordinator_role_definition,
     is_main_agent_role_definition,
 )
+from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 
 COMMON_MODE_PROMPT = (
     "## Runtime Rules\n"
@@ -76,18 +77,22 @@ class PromptSkillInstruction(BaseModel):
     description: str = Field(min_length=1)
 
 
-class RuntimeSystemPromptResult(BaseModel):
+class RuntimePromptSections(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     prompt: str = Field(min_length=1)
+    base_instructions: str = Field(min_length=1)
+    capability_summary: str = ""
+    workspace_context: str = ""
     local_instruction_paths: tuple[Path, ...] = ()
 
 
-class SystemPromptBuildInput(BaseModel):
+class SystemPromptSectionsInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    system_prompt: str = Field(min_length=1)
-    allowed_tools: tuple[str, ...]
+    base_instructions: str = Field(min_length=1)
+    capability_summary: str = ""
+    workspace_context: str = ""
     skill_instructions: tuple[PromptSkillInstruction, ...] = ()
 
 
@@ -104,7 +109,6 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
         else os.getcwd()
     )
 
-    # Link with shell tool implementation (lazy import to avoid circular dependency)
     from agent_teams.tools.workspace_tools.shell_executor import resolve_bash_path
 
     bash_path = "Unknown"
@@ -113,7 +117,6 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     except Exception:
         pass
 
-    # Detect Shell/Bash type accurately
     shell_info = "Unknown"
     if system == "Windows":
         if "MSYSTEM" in os.environ:
@@ -151,13 +154,13 @@ async def build_runtime_system_prompt(
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
 ) -> str:
-    result = await build_runtime_system_prompt_result(
+    sections = await build_runtime_system_prompt_result(
         data,
         role_registry=role_registry,
         mcp_registry=mcp_registry,
         instruction_resolver=instruction_resolver,
     )
-    return result.prompt
+    return sections.prompt
 
 
 async def build_runtime_system_prompt_result(
@@ -166,28 +169,35 @@ async def build_runtime_system_prompt_result(
     role_registry: RoleRegistry | None = None,
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
-) -> RuntimeSystemPromptResult:
-    prompt_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
+) -> RuntimePromptSections:
+    base_instruction_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
+    capability_summary_sections: list[str] = []
+    workspace_context_sections: list[str] = []
     topology = data.topology
 
-    # Include environment information for all roles
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
-    prompt_sections.append(env_prompt)
+    workspace_context_sections.append(env_prompt)
     loaded_instructions = await _load_runtime_prompt_instructions(
         instruction_resolver=instruction_resolver,
         working_directory=data.working_directory,
         worktree_root=data.worktree_root,
     )
-    prompt_sections.extend(loaded_instructions.sections)
+    workspace_context_sections.extend(loaded_instructions.sections)
 
     if is_main_agent_role_definition(data.role):
-        return RuntimeSystemPromptResult(
-            prompt="\n\n".join(prompt_sections),
+        return _build_runtime_prompt_sections(
+            role_instructions=data.role.system_prompt,
+            base_instruction_sections=base_instruction_sections,
+            capability_summary_sections=capability_summary_sections,
+            workspace_context_sections=workspace_context_sections,
             local_instruction_paths=loaded_instructions.local_paths,
         )
     if not is_coordinator_role_definition(data.role):
-        return RuntimeSystemPromptResult(
-            prompt="\n\n".join(prompt_sections),
+        return _build_runtime_prompt_sections(
+            role_instructions=data.role.system_prompt,
+            base_instruction_sections=base_instruction_sections,
+            capability_summary_sections=capability_summary_sections,
+            workspace_context_sections=workspace_context_sections,
             local_instruction_paths=loaded_instructions.local_paths,
         )
     if role_registry is None or mcp_registry is None:
@@ -199,15 +209,18 @@ async def build_runtime_system_prompt_result(
         mcp_registry=mcp_registry,
         allowed_role_ids=topology.allowed_role_ids if topology is not None else (),
     )
-    prompt_sections.append(ORCHESTRATION_USAGE_PROMPT)
+    base_instruction_sections.append(ORCHESTRATION_USAGE_PROMPT)
     if topology is not None and topology.orchestration_prompt.strip():
-        prompt_sections.append(
+        workspace_context_sections.append(
             "## Orchestration Prompt\n" + topology.orchestration_prompt.strip()
         )
     if roles_prompt:
-        prompt_sections.append(roles_prompt)
-    return RuntimeSystemPromptResult(
-        prompt="\n\n".join(prompt_sections),
+        capability_summary_sections.append(roles_prompt)
+    return _build_runtime_prompt_sections(
+        role_instructions=data.role.system_prompt,
+        base_instruction_sections=base_instruction_sections,
+        capability_summary_sections=capability_summary_sections,
+        workspace_context_sections=workspace_context_sections,
         local_instruction_paths=loaded_instructions.local_paths,
     )
 
@@ -259,13 +272,42 @@ def build_skill_instructions_prompt(
     )
 
 
-def build_system_prompt(data: SystemPromptBuildInput) -> str:
-    _ = data.allowed_tools
-    sections: list[str] = [data.system_prompt]
+def compose_system_prompt(data: SystemPromptSectionsInput) -> str:
+    sections: list[str] = [data.base_instructions]
     skill_prompt = build_skill_instructions_prompt(data.skill_instructions)
     if skill_prompt:
         sections.append(skill_prompt)
-    return "\n\n".join(sections)
+    if data.capability_summary:
+        sections.append(data.capability_summary)
+    if data.workspace_context:
+        sections.append(data.workspace_context)
+    return _join_prompt_sections(sections)
+
+
+def compose_runtime_system_prompt(
+    runtime_prompt_sections: RuntimePromptSections,
+    *,
+    skill_instructions: tuple[PromptSkillInstruction, ...] = (),
+) -> str:
+    return compose_system_prompt(
+        SystemPromptSectionsInput(
+            base_instructions=runtime_prompt_sections.base_instructions,
+            capability_summary=runtime_prompt_sections.capability_summary,
+            workspace_context=runtime_prompt_sections.workspace_context,
+            skill_instructions=skill_instructions,
+        )
+    )
+
+
+def compose_provider_system_prompt(
+    runtime_prompt_sections: RuntimePromptSections,
+    *,
+    skill_instructions: tuple[PromptSkillInstruction, ...] = (),
+) -> str:
+    return compose_runtime_system_prompt(
+        runtime_prompt_sections,
+        skill_instructions=skill_instructions,
+    )
 
 
 async def _load_runtime_prompt_instructions(
@@ -326,6 +368,43 @@ def _format_names(names: tuple[str, ...]) -> str:
     return ", ".join(names)
 
 
+def _validate_base_instruction_prefix(
+    base_instructions: str,
+    role_instructions: str,
+) -> None:
+    if not base_instructions.startswith(role_instructions):
+        raise ValueError(
+            "base_instructions must start with role_instructions for layer stability"
+        )
+
+
+def _build_runtime_prompt_sections(
+    *,
+    role_instructions: str,
+    base_instruction_sections: Sequence[str],
+    capability_summary_sections: Sequence[str],
+    workspace_context_sections: Sequence[str],
+    local_instruction_paths: tuple[Path, ...],
+) -> RuntimePromptSections:
+    base_instructions = _join_prompt_sections(base_instruction_sections)
+    _validate_base_instruction_prefix(base_instructions, role_instructions)
+    capability_summary = _join_prompt_sections(capability_summary_sections)
+    workspace_context = _join_prompt_sections(workspace_context_sections)
+    return RuntimePromptSections(
+        prompt=_join_prompt_sections(
+            (base_instructions, capability_summary, workspace_context)
+        ),
+        base_instructions=base_instructions,
+        capability_summary=capability_summary,
+        workspace_context=workspace_context,
+        local_instruction_paths=local_instruction_paths,
+    )
+
+
+def _join_prompt_sections(sections: Sequence[str]) -> str:
+    return "\n\n".join(section for section in sections if section.strip())
+
+
 PromptBuildInput = RuntimePromptBuildInput
 
 
@@ -337,16 +416,22 @@ class RuntimePromptBuilder(BaseModel):
     instruction_resolver: PromptInstructionResolver | None = None
 
     async def build(self, data: PromptBuildInput) -> str:
-        result = await self.build_details(data)
-        return result.prompt
+        sections = await self.build_sections(data)
+        return sections.prompt
 
-    async def build_details(
+    async def build_sections(
         self,
         data: PromptBuildInput,
-    ) -> RuntimeSystemPromptResult:
+    ) -> RuntimePromptSections:
         return await build_runtime_system_prompt_result(
             data,
             role_registry=self.role_registry,
             mcp_registry=self.mcp_registry,
             instruction_resolver=self.instruction_resolver,
         )
+
+    async def build_details(
+        self,
+        data: PromptBuildInput,
+    ) -> RuntimePromptSections:
+        return await self.build_sections(data)

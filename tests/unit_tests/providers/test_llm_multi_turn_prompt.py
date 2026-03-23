@@ -849,7 +849,7 @@ async def test_generate_passes_reasoning_effort_when_thinking_enabled(
 
 
 @pytest.mark.asyncio
-async def test_generate_builds_augmented_system_prompt(
+async def test_generate_uses_prepared_system_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -892,7 +892,13 @@ async def test_generate_builds_augmented_system_prompt(
         workspace_id="default",
         instance_id="inst-augment",
         role_id="coordinator_agent",
-        system_prompt="## Role\nBase system prompt.",
+        system_prompt=(
+            "## Role\nBase system prompt.\n\n"
+            "## Available Skills\n"
+            "- time: Normalize all times to UTC.\n\n"
+            "## Runtime Environment Information\n"
+            "- Working Directory: /tmp/project"
+        ),
         user_prompt="current turn",
     )
 
@@ -900,10 +906,8 @@ async def test_generate_builds_augmented_system_prompt(
 
     system_prompt_obj = captured_kwargs.get("system_prompt")
     assert isinstance(system_prompt_obj, str)
-    assert system_prompt_obj.startswith("## Role\nBase system prompt.")
-    assert "## Available Skills" in system_prompt_obj
-    assert "- time: Normalize all times to UTC." in system_prompt_obj
-    assert fake_skill_registry.requested == [("time",)]
+    assert system_prompt_obj == request.system_prompt
+    assert fake_skill_registry.requested == []
     prepared_events = [
         event
         for event in captured_events

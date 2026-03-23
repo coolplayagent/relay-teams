@@ -8,22 +8,22 @@ from agent_teams.agents.execution.prompt_instructions import PromptInstructionRe
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
-    build_runtime_system_prompt_result,
-    SystemPromptBuildInput,
+    SystemPromptSectionsInput,
     build_runtime_system_prompt,
-    build_system_prompt,
+    build_runtime_system_prompt_result,
+    compose_system_prompt,
 )
 from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     build_user_prompt,
 )
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.sessions.runs.run_models import RunTopologySnapshot
-from agent_teams.sessions.session_models import SessionMode
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from agent_teams.sessions.runs.run_models import RunTopologySnapshot
+from agent_teams.sessions.session_models import SessionMode
 
 
 def _role(role_id: str) -> RoleDefinition:
@@ -174,11 +174,47 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert f"- Working Directory: {working_directory.resolve()}" in prompt
 
 
-def test_system_prompt_renders_tools_and_skills() -> None:
-    prompt = build_system_prompt(
-        SystemPromptBuildInput(
-            system_prompt="## Role\nYou are a planner.",
-            allowed_tools=("dispatch_task",),
+def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_context() -> (
+    None
+):
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("coordinator_agent"),
+                task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    coordinator_role_id="coordinator_agent",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
+                shared_state_snapshot=(),
+                working_directory=Path("/tmp/workspace-root"),
+            ),
+            role_registry=_coordinator_registry(),
+            mcp_registry=_FakeMcpRegistry(),
+        )
+    )
+
+    assert result.base_instructions.startswith("You are a focused agent.")
+    assert "## Orchestration Rules" in result.base_instructions
+    assert "## Available Roles" in result.capability_summary
+    assert "## Runtime Environment Information" in result.workspace_context
+    assert "## Orchestration Prompt" in result.workspace_context
+    assert result.prompt.index("## Orchestration Rules") < result.prompt.index(
+        "## Available Roles"
+    )
+    assert result.prompt.index("## Available Roles") < result.prompt.index(
+        "## Runtime Environment Information"
+    )
+
+
+def test_compose_system_prompt_renders_tools_and_skills() -> None:
+    prompt = compose_system_prompt(
+        SystemPromptSectionsInput(
+            base_instructions="## Role\nYou are a planner.",
             skill_instructions=(
                 PromptSkillInstruction(
                     name="time",
@@ -191,6 +227,28 @@ def test_system_prompt_renders_tools_and_skills() -> None:
     assert "## Tool Rules" not in prompt
     assert "## Available Skills" in prompt
     assert "- time: Normalize all times to UTC." in prompt
+
+
+def test_compose_system_prompt_places_skill_catalog_before_workspace_context() -> None:
+    prompt = compose_system_prompt(
+        SystemPromptSectionsInput(
+            base_instructions="## Role\nYou are a planner.",
+            capability_summary="## Available Roles\n### writer_agent",
+            workspace_context=(
+                "## Runtime Environment Information\n- Working Directory: /tmp/project"
+            ),
+            skill_instructions=(
+                PromptSkillInstruction(
+                    name="time",
+                    description="Normalize all times to UTC.",
+                ),
+            ),
+        )
+    )
+
+    assert prompt.index("## Available Skills") < prompt.index(
+        "## Runtime Environment Information"
+    )
 
 
 def test_user_prompt_builder_returns_raw_objective() -> None:

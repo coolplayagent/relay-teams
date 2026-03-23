@@ -203,8 +203,16 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     )
     assert "- Skills: planner" in payload["runtime_system_prompt"]
     assert "priority" not in payload["runtime_system_prompt"]
+    assert "## Available Skills" in payload["runtime_system_prompt"]
+    assert "- time: Normalize all times to UTC." in payload["runtime_system_prompt"]
+    assert payload["runtime_system_prompt"].index("## Available Skills") < payload[
+        "runtime_system_prompt"
+    ].index("## Runtime Environment Information")
     assert "## Available Skills" in payload["provider_system_prompt"]
     assert "- time: Normalize all times to UTC." in payload["provider_system_prompt"]
+    assert payload["provider_system_prompt"].index("## Available Skills") < payload[
+        "provider_system_prompt"
+    ].index("## Runtime Environment Information")
     assert payload["user_prompt"] == "Deliver summary"
     assert "## Available Roles" in payload["provider_system_prompt"]
 
@@ -307,6 +315,11 @@ def test_prompts_preview_skill_override_replaces_role_default() -> None:
     payload = response.json()
     assert payload["objective"] == ""
     assert payload["skills"] == ["planner"]
+    assert (
+        "- planner: Break objectives into executable plans."
+        in payload["runtime_system_prompt"]
+    )
+    assert "- time: Normalize all times to UTC." not in payload["runtime_system_prompt"]
     assert payload["user_prompt"] == ""
     assert (
         "- planner: Break objectives into executable plans."

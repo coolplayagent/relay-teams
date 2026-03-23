@@ -10,8 +10,8 @@ from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,
 )
-from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from agent_teams.roles.role_models import RoleDefinition
 
 
 class _CapturingProvider:

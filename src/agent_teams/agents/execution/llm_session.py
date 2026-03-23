@@ -69,11 +69,6 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
 )
-from agent_teams.agents.execution.system_prompts import (
-    PromptSkillInstruction,
-    SystemPromptBuildInput,
-    build_system_prompt,
-)
 from agent_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
@@ -193,26 +188,7 @@ class AgentLlmSession:
             request.role_id,
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
-        skill_instructions = (
-            tuple(
-                PromptSkillInstruction(
-                    name=entry.name,
-                    description=entry.description,
-                )
-                for entry in self._skill_registry.get_instruction_entries(
-                    self._allowed_skills
-                )
-            )
-            if self._allowed_skills
-            else ()
-        )
-        agent_system_prompt = build_system_prompt(
-            SystemPromptBuildInput(
-                system_prompt=request.system_prompt,
-                allowed_tools=self._allowed_tools,
-                skill_instructions=skill_instructions,
-            )
-        )
+        agent_system_prompt = request.system_prompt
         log_event(
             LOGGER,
             logging.DEBUG,

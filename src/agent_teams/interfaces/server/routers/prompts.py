@@ -20,8 +20,8 @@ from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
     RuntimePromptBuilder,
-    SystemPromptBuildInput,
-    build_system_prompt,
+    compose_provider_system_prompt,
+    compose_runtime_system_prompt,
 )
 from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
@@ -107,13 +107,13 @@ async def preview_prompts(
         working_directory = workspace.resolve_workdir()
         worktree_root = workspace.locations.worktree_root or workspace.root_path
 
-    runtime_system_prompt = await RuntimePromptBuilder(
+    runtime_prompt_sections = await RuntimePromptBuilder(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
         instruction_resolver=PromptInstructionResolver(
             app_config_dir=get_app_config_dir()
         ),
-    ).build(
+    ).build_details(
         RuntimePromptBuildInput(
             role=role,
             shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
@@ -125,12 +125,13 @@ async def preview_prompts(
         PromptSkillInstruction(name=entry.name, description=entry.description)
         for entry in skill_registry.get_instruction_entries(resolved_skills)
     )
-    provider_system_prompt = build_system_prompt(
-        SystemPromptBuildInput(
-            system_prompt=runtime_system_prompt,
-            allowed_tools=resolved_tools,
-            skill_instructions=skill_instructions,
-        )
+    runtime_system_prompt = compose_runtime_system_prompt(
+        runtime_prompt_sections,
+        skill_instructions=skill_instructions,
+    )
+    provider_system_prompt = compose_provider_system_prompt(
+        runtime_prompt_sections,
+        skill_instructions=skill_instructions,
     )
     user_prompt = (
         build_user_prompt(UserPromptBuildInput(objective=objective))

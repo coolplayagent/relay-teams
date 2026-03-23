@@ -16,7 +16,11 @@ from agent_teams.agents.execution.prompt_instruction_state import (
 )
 from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
+    PromptSkillInstruction,
     RuntimePromptBuilder,
+    RuntimePromptSections,
+    compose_provider_system_prompt,
+    compose_runtime_system_prompt,
 )
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import (
@@ -208,7 +212,7 @@ class TaskExecutionService(BaseModel):
                 user_prompt_override=user_prompt_override,
             )
             (
-                runtime_system_prompt,
+                runtime_prompt_sections,
                 runtime_tools_json,
             ) = await self._prepare_runtime_snapshot(
                 role=role_for_run,
@@ -217,10 +221,18 @@ class TaskExecutionService(BaseModel):
                 worktree_root=workspace.locations.worktree_root or workspace.root_path,
                 shared_state_snapshot=snapshot,
             )
+            runtime_system_prompt = self._compose_runtime_system_prompt(
+                role=role_for_run,
+                runtime_prompt_sections=runtime_prompt_sections,
+            )
             self.agent_repo.update_runtime_snapshot(
                 instance_id,
                 runtime_system_prompt=runtime_system_prompt,
                 runtime_tools_json=runtime_tools_json,
+            )
+            provider_system_prompt = self._compose_provider_system_prompt(
+                role=role_for_run,
+                runtime_prompt_sections=runtime_prompt_sections,
             )
             result = await runner.run(
                 task=task,
@@ -230,7 +242,7 @@ class TaskExecutionService(BaseModel):
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
                 thinking=self._thinking_for_run(task.trace_id),
-                system_prompt_override=runtime_system_prompt,
+                system_prompt_override=provider_system_prompt,
             )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
@@ -461,8 +473,8 @@ class TaskExecutionService(BaseModel):
         working_directory: Path | None,
         worktree_root: Path | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
-    ) -> tuple[str, str]:
-        prompt_result = await self.prompt_builder.build_details(
+    ) -> tuple[RuntimePromptSections, str]:
+        prompt_sections = await self.prompt_builder.build_sections(
             PromptBuildInput(
                 role=role,
                 task=task,
@@ -475,13 +487,49 @@ class TaskExecutionService(BaseModel):
         record_prompt_instruction_paths_loaded(
             shared_store=self.shared_store,
             task_id=task.task_id,
-            paths=prompt_result.local_instruction_paths,
+            paths=prompt_sections.local_instruction_paths,
         )
         runtime_tools = await self._build_runtime_tools_snapshot(role)
-        return prompt_result.prompt, json.dumps(
+        return prompt_sections, json.dumps(
             runtime_tools.model_dump(mode="json"),
             ensure_ascii=False,
             indent=2,
+        )
+
+    def _build_skill_instructions(
+        self,
+        *,
+        role: RoleDefinition,
+    ) -> tuple[PromptSkillInstruction, ...]:
+        skill_registry = cast("SkillRegistry", self.skill_registry)
+        return tuple(
+            PromptSkillInstruction(
+                name=entry.name,
+                description=entry.description,
+            )
+            for entry in skill_registry.get_instruction_entries(role.skills)
+        )
+
+    def _compose_runtime_system_prompt(
+        self,
+        *,
+        role: RoleDefinition,
+        runtime_prompt_sections: RuntimePromptSections,
+    ) -> str:
+        return compose_runtime_system_prompt(
+            runtime_prompt_sections,
+            skill_instructions=self._build_skill_instructions(role=role),
+        )
+
+    def _compose_provider_system_prompt(
+        self,
+        *,
+        role: RoleDefinition,
+        runtime_prompt_sections: RuntimePromptSections,
+    ) -> str:
+        return compose_provider_system_prompt(
+            runtime_prompt_sections,
+            skill_instructions=self._build_skill_instructions(role=role),
         )
 
     async def _build_runtime_tools_snapshot(
