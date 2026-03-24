@@ -42,7 +42,9 @@ class _FakeTriggerService:
 
 class _FakeSessionService:
     def create_session(self, **_kwargs):  # pragma: no cover - not used here
-        raise AssertionError("create_session should not be called in subscription tests")
+        raise AssertionError(
+            "create_session should not be called in subscription tests"
+        )
 
     def get_session(self, session_id: str):  # pragma: no cover - not used here
         raise KeyError(session_id)

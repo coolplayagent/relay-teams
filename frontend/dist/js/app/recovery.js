@@ -209,6 +209,15 @@ export async function resumeRecoverableRun(
 
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     const activeRun = getActiveRecoveryRun();
+    if (
+        activeRun?.run_id === safeRunId
+        && (activeRun.status === 'stopping' || activeRun.phase === 'stopping')
+    ) {
+        if (!quiet) {
+            sysLog('Run is still stopping. Wait for it to stop before resuming.', 'log-error');
+        }
+        return false;
+    }
     const resolvedAfterEventId = typeof afterEventId === 'number' && afterEventId >= 0
         ? afterEventId
         : resolveRecoveryAfterEventId(activeRun);
@@ -1063,6 +1072,9 @@ function describeRecoveryState(activeRun, approvals, pausedSubagent) {
     if (pausedSubagent) {
         return `Paused at ${pausedSubagent.roleId || pausedSubagent.instanceId}. Open that subagent and send a follow-up to continue this run.`;
     }
+    if (activeRun.status === 'stopping' || activeRun.phase === 'stopping') {
+        return 'Stop requested. Wait for the active worker to exit before attempting recovery.';
+    }
     if (approvals.length > 0) {
         const noun = approvals.length === 1 ? 'approval' : 'approvals';
         return `Waiting for ${approvals.length} tool ${noun}. Resolve them here, then the run will continue from the latest checkpoint.`;
@@ -1087,6 +1099,8 @@ function stateLabel(activeRun) {
             return 'Awaiting Follow-up';
         case 'running':
             return 'Running';
+        case 'stopping':
+            return 'Stopping';
         case 'stopped':
             return 'Stopped';
         case 'queued':
@@ -1097,6 +1111,8 @@ function stateLabel(activeRun) {
     switch (activeRun.status) {
         case 'running':
             return 'Running';
+        case 'stopping':
+            return 'Stopping';
         case 'paused':
             return 'Paused';
         case 'stopped':
@@ -1119,6 +1135,8 @@ function stateTone(activeRun) {
     switch (activeRun.status) {
         case 'running':
             return 'running';
+        case 'stopping':
+            return 'warning';
         case 'stopped':
             return 'stopped';
         case 'failed':

@@ -142,7 +142,10 @@ console.log(JSON.stringify({
     assert payload["addDisplay"] == "inline-flex"
     assert payload["saveDisplay"] == "none"
 
-def _run_trigger_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+
+def _run_trigger_settings_script(
+    tmp_path: Path, runner_source: str
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root

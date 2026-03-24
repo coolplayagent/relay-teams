@@ -266,7 +266,9 @@ def _to_skill_json(skill: Skill) -> dict[str, object]:
             {
                 "name": resource.name,
                 "description": resource.description,
-                "path": _to_path_text(resource.path) if resource.path is not None else None,
+                "path": _to_path_text(resource.path)
+                if resource.path is not None
+                else None,
                 "content": resource.content,
             }
             for resource in skill.metadata.resources.values()
@@ -289,9 +291,5 @@ def _to_path_text(path: Path) -> str:
 
 def _iter_skill_file_paths(skill_dir: Path) -> tuple[str, ...]:
     return tuple(
-        sorted(
-            _to_path_text(path)
-            for path in skill_dir.rglob("*")
-            if path.is_file()
-        )
+        sorted(_to_path_text(path) for path in skill_dir.rglob("*") if path.is_file())
     )

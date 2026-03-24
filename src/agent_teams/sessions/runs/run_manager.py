@@ -318,6 +318,17 @@ class RunManager:
             self._start_new_run_worker(run_id)
             return
         if run_id in self._resume_requested_runs:
+            runtime = self._runtime_for_run(run_id)
+            if runtime is None:
+                raise KeyError(f"Run {run_id} not found")
+            if runtime.status not in {
+                RunRuntimeStatus.QUEUED,
+                RunRuntimeStatus.PAUSED,
+                RunRuntimeStatus.STOPPED,
+            }:
+                raise RuntimeError(
+                    f"Run {run_id} cannot be resumed from status {runtime.status.value}"
+                )
             self._start_resume_worker(run_id)
             return
         raise KeyError(f"Run {run_id} not found")
@@ -639,8 +650,6 @@ class RunManager:
         queue = self._run_event_hub.subscribe(run_id)
         terminal_reached = False
         try:
-            self.ensure_run_started(run_id)
-
             replay_high_watermark = 0
             if after_event_id >= 0 and self._event_log is not None:
                 for row in self._event_log.list_by_trace_after_id(
@@ -702,6 +711,7 @@ class RunManager:
 
     async def run_intent_stream(self, intent: IntentInput):
         run_id, _ = self.create_run(intent)
+        self.ensure_run_started(run_id)
         async for event in self.stream_run_events(run_id):
             yield event
 
@@ -768,7 +778,7 @@ class RunManager:
             if runtime is not None:
                 self._run_runtime_repo.update(
                     run_id,
-                    status=RunRuntimeStatus.STOPPED,
+                    status=RunRuntimeStatus.STOPPING,
                     phase=runtime.phase,
                     last_error="stop_requested",
                 )
@@ -783,23 +793,13 @@ class RunManager:
 
     def resume_run(self, run_id: str) -> str:
         if run_id in self._running_run_ids:
-            runtime = self._runtime_for_run(run_id)
-            if runtime is None:
-                raise KeyError(f"Run {run_id} not found")
-            with bind_trace_context(
-                trace_id=run_id, run_id=run_id, session_id=runtime.session_id
-            ):
-                log_event(
-                    logger,
-                    logging.INFO,
-                    event="run.resume.skipped",
-                    message="Resume requested for already running run",
-                )
-            return runtime.session_id
+            raise RuntimeError(f"Run {run_id} is already running")
         if run_id in self._pending_runs:
             pending = self._pending_runs[run_id]
             if pending.session_id is None:
                 raise RuntimeError(f"Run {run_id} is missing session id")
+            if run_id in self._resume_requested_runs:
+                return pending.session_id
             self._resume_requested_runs.add(run_id)
             self._remember_active_run(pending.session_id, run_id)
             with bind_trace_context(
@@ -816,8 +816,16 @@ class RunManager:
         runtime = self._runtime_for_run(run_id)
         if runtime is None:
             raise KeyError(f"Run {run_id} not found")
+        if runtime.status == RunRuntimeStatus.RUNNING:
+            raise RuntimeError(f"Run {run_id} is already running")
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before resuming."
+            )
         if not runtime.is_recoverable:
             raise RuntimeError(f"Run {run_id} is not recoverable")
+        if run_id in self._resume_requested_runs:
+            return runtime.session_id
         self._resume_requested_runs.add(run_id)
         self._remember_active_run(runtime.session_id, run_id)
         with bind_trace_context(
@@ -868,6 +876,10 @@ class RunManager:
         ):
             raise RuntimeError(
                 f"Run {run_id} is stopped. Resume the run before resolving tool approval."
+            )
+        if runtime is not None and runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before resolving tool approval."
             )
         approval = self._tool_approval_manager.get_approval(
             run_id=run_id,
@@ -946,6 +958,10 @@ class RunManager:
         ):
             raise RuntimeError(
                 f"Run {run_id} is waiting for tool approval. Resolve the pending approval before continuing."
+            )
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before continuing."
             )
         if (
             runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP

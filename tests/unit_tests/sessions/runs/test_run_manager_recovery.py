@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Literal, cast
 
@@ -123,13 +124,18 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
     )
 
 
-def _create_root_task(task_repo: TaskRepository) -> None:
+def _create_root_task(
+    task_repo: TaskRepository,
+    *,
+    role_id: str = "coordinator_agent",
+) -> None:
     _ = task_repo.create(
         TaskEnvelope(
             task_id="task-root-1",
             session_id="session-1",
             parent_task_id=None,
             trace_id="run-existing",
+            role_id=role_id,
             objective="existing work",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -410,6 +416,41 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
     assert "run-existing" in manager._resume_requested_runs
 
 
+def test_resume_run_rejects_running_run(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_resume_running.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._running_run_ids.add("run-existing")
+
+    with pytest.raises(RuntimeError, match="already running"):
+        manager.resume_run("run-existing")
+
+
+def test_resume_run_rejects_stopping_run(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_resume_stopping.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.STOPPING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    with pytest.raises(RuntimeError, match="is stopping"):
+        manager.resume_run("run-existing")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result_status", "runtime_status", "terminal_event_type"),
@@ -546,3 +587,32 @@ async def test_stream_run_events_replays_resume_path_after_last_seen_event(
         RunEventType.RUN_COMPLETED,
     ]
     assert manager._run_event_hub.has_subscribers("run-existing") is False
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_does_not_start_pending_run_worker(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stream_no_autostart.db"
+    manager = _build_manager(db_path)
+    manager._pending_runs["run-existing"] = IntentInput(
+        session_id="session-1",
+        intent="hello",
+    )
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        status=RunRuntimeStatus.QUEUED,
+        phase=RunRuntimePhase.IDLE,
+    )
+
+    task = asyncio.create_task(
+        anext(manager.stream_run_events("run-existing", after_event_id=0))
+    )
+    await asyncio.sleep(0)
+
+    assert "run-existing" not in manager._running_run_ids
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

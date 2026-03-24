@@ -22,7 +22,9 @@ def load_feishu_environment(
     )
     app_id = str(resolved_env.get("FEISHU_APP_ID", "")).strip()
     app_secret = str(resolved_env.get("FEISHU_APP_SECRET", "")).strip()
-    verification_token_raw = str(resolved_env.get("FEISHU_VERIFICATION_TOKEN", "")).strip()
+    verification_token_raw = str(
+        resolved_env.get("FEISHU_VERIFICATION_TOKEN", "")
+    ).strip()
     verification_token = verification_token_raw or None
     encrypt_key_raw = str(resolved_env.get("FEISHU_ENCRYPT_KEY", "")).strip()
     encrypt_key = encrypt_key_raw or None

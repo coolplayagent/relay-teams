@@ -45,7 +45,9 @@ logger = get_logger(__name__)
 
 
 class TriggerServiceLike(Protocol):
-    def list_triggers(self) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
+    def list_triggers(
+        self,
+    ) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
 
     def ingest_event(
         self,
@@ -243,7 +245,9 @@ class FeishuTriggerHandler:
                 payload={
                     "active_trigger_id": active.trigger_id,
                     "active_trigger_name": active.name,
-                    "enabled_trigger_ids": [trigger.trigger_id for trigger in candidates],
+                    "enabled_trigger_ids": [
+                        trigger.trigger_id for trigger in candidates
+                    ],
                 },
             )
         return active

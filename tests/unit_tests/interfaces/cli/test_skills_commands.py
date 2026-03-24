@@ -29,25 +29,25 @@ def test_skills_list_prefers_app_skill_in_json_output(
         {
             "name": "app_only",
             "source": "app",
-            "directory": (
-                tmp_path / ".config" / "agent-teams" / "skills" / "app_only"
-            ).resolve().as_posix(),
+            "directory": (tmp_path / ".config" / "agent-teams" / "skills" / "app_only")
+            .resolve()
+            .as_posix(),
             "description": "app only skill",
         },
         {
             "name": "builtin_only",
             "source": "builtin",
-            "directory": (
-                tmp_path / "builtin" / "skills" / "builtin_only"
-            ).resolve().as_posix(),
+            "directory": (tmp_path / "builtin" / "skills" / "builtin_only")
+            .resolve()
+            .as_posix(),
             "description": "builtin only skill",
         },
         {
             "name": "shared",
             "source": "app",
-            "directory": (
-                tmp_path / ".config" / "agent-teams" / "skills" / "shared"
-            ).resolve().as_posix(),
+            "directory": (tmp_path / ".config" / "agent-teams" / "skills" / "shared")
+            .resolve()
+            .as_posix(),
             "description": "app shared skill",
         },
     ]
@@ -70,14 +70,17 @@ def test_skills_show_returns_effective_skill_details(
     assert payload["name"] == "shared"
     assert payload["source"] == "app"
     assert payload["description"] == "app shared skill"
-    assert payload["manifest_path"] == (
-        tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md"
-    ).resolve().as_posix()
+    assert (
+        payload["manifest_path"]
+        == (tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md")
+        .resolve()
+        .as_posix()
+    )
     assert payload["instructions"] == "App instructions."
     assert payload["files"] == [
-        (
-            tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md"
-        ).resolve().as_posix()
+        (tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md")
+        .resolve()
+        .as_posix()
     ]
 
 

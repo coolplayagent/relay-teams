@@ -52,7 +52,13 @@ def _build_service(
     )
 
 
-def _seed_root_task(db_path: Path, *, run_id: str, session_id: str) -> None:
+def _seed_root_task(
+    db_path: Path,
+    *,
+    run_id: str,
+    session_id: str,
+    role_id: str = "coordinator_agent",
+) -> None:
     task_repo = TaskRepository(db_path)
     _ = task_repo.create(
         TaskEnvelope(
@@ -60,6 +66,7 @@ def _seed_root_task(db_path: Path, *, run_id: str, session_id: str) -> None:
             session_id=session_id,
             parent_task_id=None,
             trace_id=run_id,
+            role_id=role_id,
             objective="do work",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -205,6 +212,36 @@ def test_get_recovery_snapshot_does_not_auto_stream_interrupted_running_run(
     assert active_run.get("phase") == "stopped"
     assert active_run.get("stream_connected") is False
     assert active_run.get("should_show_recover") is True
+
+
+def test_get_recovery_snapshot_exposes_stopping_run_without_recover_button(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_stopping.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.STOPPING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("status") == "stopping"
+    assert active_run.get("phase") == "stopping"
+    assert active_run.get("is_recoverable") is False
+    assert active_run.get("should_show_recover") is False
 
 
 def test_get_recovery_snapshot_includes_stream_event_offsets(tmp_path: Path) -> None:
@@ -373,6 +410,44 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
     assert active_run.get("status") == "stopped"
     assert active_run.get("phase") == "awaiting_tool_approval"
     assert active_run.get("pending_tool_approval_count") == 1
+
+
+def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_main_agent_stopped.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(
+        db_path,
+        run_id="run-active",
+        session_id="session-1",
+        role_id="MainAgent",
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("status") == "stopped"
+    assert active_run.get("is_recoverable") is True
+    assert active_run.get("should_show_recover") is True
+
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    assert round_snapshot.get("is_recoverable") is True
 
 
 def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(

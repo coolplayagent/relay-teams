@@ -809,14 +809,14 @@ async function applyLocalStoppedSnapshot(runId, sessionId) {
             recoveryModule.applyRecoverySnapshot({
                 active_run: {
                     run_id: safeRunId,
-                    status: 'stopped',
-                    phase: 'stopped',
-                    is_recoverable: true,
+                    status: 'stopping',
+                    phase: 'stopping',
+                    is_recoverable: false,
                     checkpoint_event_id: 0,
                     last_event_id: 0,
                     pending_tool_approval_count: 0,
                     stream_connected: false,
-                    should_show_recover: true,
+                    should_show_recover: false,
                 },
                 pending_tool_approvals: [],
                 paused_subagent: null,

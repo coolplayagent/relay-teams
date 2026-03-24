@@ -65,7 +65,7 @@ class InjectSubagentRequest(BaseModel):
 
 
 @router.post("", response_model=CreateRunResponse)
-def create_run(
+async def create_run(
     req: CreateRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> CreateRunResponse:
@@ -80,6 +80,7 @@ def create_run(
                 thinking=req.thinking,
             )
         )
+        service.ensure_run_started(run_id)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
@@ -286,6 +287,7 @@ async def resume_run(
 ) -> dict[str, str]:
     try:
         session_id = service.resume_run(run_id)
+        service.ensure_run_started(run_id)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
                 logger,

@@ -113,4 +113,7 @@ def test_core_api_facade_exports_trigger_helpers() -> None:
             f"STDERR:\n{completed.stderr}"
         )
 
-    assert completed.stdout.strip() == "function,function,function,function,function,function"
+    assert (
+        completed.stdout.strip()
+        == "function,function,function,function,function,function"
+    )

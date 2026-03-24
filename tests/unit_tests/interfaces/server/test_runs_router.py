@@ -12,7 +12,7 @@ from agent_teams.sessions.runs.run_models import IntentInput
 class _FakeRunService:
     def __init__(self) -> None:
         self.resumed_run_ids: list[str] = []
-        self.ensure_called = False
+        self.started_run_ids: list[str] = []
         self.raise_on_tool_approval = False
         self.created_run_inputs: list[IntentInput] = []
 
@@ -36,9 +36,8 @@ class _FakeRunService:
                 "Run run-1 is stopped. Resume the run before resolving tool approval."
             )
 
-    def ensure_run_started(self, run_id: str) -> None:  # pragma: no cover
-        self.ensure_called = True
-        raise AssertionError(f"resume route should not start worker for {run_id}")
+    def ensure_run_started(self, run_id: str) -> None:
+        self.started_run_ids.append(run_id)
 
 
 def _create_client(fake_service: _FakeRunService) -> TestClient:
@@ -48,7 +47,7 @@ def _create_client(fake_service: _FakeRunService) -> TestClient:
     return TestClient(app)
 
 
-def test_resume_route_marks_run_for_resume_without_starting_worker() -> None:
+def test_resume_route_marks_run_for_resume_and_starts_worker() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
 
@@ -61,7 +60,7 @@ def test_resume_route_marks_run_for_resume_without_starting_worker() -> None:
         "session_id": "session-1",
     }
     assert fake_service.resumed_run_ids == ["run-1"]
-    assert fake_service.ensure_called is False
+    assert fake_service.started_run_ids == ["run-1"]
 
 
 def test_create_run_route_accepts_yolo() -> None:
@@ -82,6 +81,7 @@ def test_create_run_route_accepts_yolo() -> None:
     assert response.json() == {"run_id": "run-1", "session_id": "session-1"}
     created = fake_service.created_run_inputs[0]
     assert created.yolo is True
+    assert fake_service.started_run_ids == ["run-1"]
 
 
 def test_create_run_route_accepts_thinking_config() -> None:
@@ -103,6 +103,7 @@ def test_create_run_route_accepts_thinking_config() -> None:
     created = fake_service.created_run_inputs[0]
     assert created.thinking.enabled is True
     assert created.thinking.effort == "high"
+    assert fake_service.started_run_ids == ["run-1"]
 
 
 def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:

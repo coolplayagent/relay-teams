@@ -193,11 +193,13 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert "Roles that use skills usually work better with the shell tool enabled." in cast(
-        str, payload["advisoryBefore"]
+    assert (
+        "Roles that use skills usually work better with the shell tool enabled."
+        in cast(str, payload["advisoryBefore"])
     )
-    assert "Roles that use skills usually work better with the shell tool enabled." not in cast(
-        str, payload["advisoryAfter"]
+    assert (
+        "Roles that use skills usually work better with the shell tool enabled."
+        not in cast(str, payload["advisoryAfter"])
     )
 
 

@@ -14,6 +14,7 @@ from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 class RunRuntimeStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    STOPPING = "stopping"
     PAUSED = "paused"
     STOPPED = "stopped"
     COMPLETED = "completed"

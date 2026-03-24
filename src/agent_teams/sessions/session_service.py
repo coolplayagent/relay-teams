@@ -400,7 +400,9 @@ class SessionService:
                 continue
             round_item["run_status"] = runtime.status.value
             round_item["run_phase"] = self._public_phase(runtime, approval_count)
-            round_item["is_recoverable"] = runtime.is_recoverable
+            round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
+                runtime
+            )
         return rounds
 
     def get_session_rounds(
@@ -456,7 +458,7 @@ class SessionService:
             "run_id": run_id,
             "status": runtime.status.value,
             "phase": self._public_phase(runtime, len(approvals)),
-            "is_recoverable": runtime.is_recoverable,
+            "is_recoverable": self._is_runtime_publicly_recoverable(runtime),
             "last_event_id": (
                 int(run_state.last_event_id) if run_state is not None else 0
             ),
@@ -465,7 +467,8 @@ class SessionService:
             ),
             "pending_tool_approval_count": len(approvals),
             "stream_connected": stream_connected,
-            "should_show_recover": runtime.is_recoverable and not stream_connected,
+            "should_show_recover": self._is_runtime_publicly_recoverable(runtime)
+            and not stream_connected,
         }
         paused_subagent = self._paused_subagent_snapshot(runtime)
         try:
@@ -505,6 +508,7 @@ class SessionService:
         for runtime in runtimes:
             if runtime.status in {
                 RunRuntimeStatus.RUNNING,
+                RunRuntimeStatus.STOPPING,
                 RunRuntimeStatus.PAUSED,
                 RunRuntimeStatus.STOPPED,
                 RunRuntimeStatus.QUEUED,
@@ -616,6 +620,8 @@ class SessionService:
         }
 
     def _public_phase(self, runtime: RunRuntimeRecord, approval_count: int) -> str:
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            return "stopping"
         if approval_count > 0:
             return "awaiting_tool_approval"
         if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP:
@@ -637,6 +643,9 @@ class SessionService:
         if runtime.status == RunRuntimeStatus.FAILED:
             return "failed"
         return runtime.phase.value
+
+    def _is_runtime_publicly_recoverable(self, runtime: RunRuntimeRecord) -> bool:
+        return runtime.is_recoverable and runtime.status != RunRuntimeStatus.STOPPING
 
     def _shared_state_snapshot(
         self,

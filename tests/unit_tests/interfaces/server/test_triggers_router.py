@@ -213,7 +213,11 @@ def test_trigger_router_reloads_feishu_subscription_on_feishu_trigger_create() -
     )
     response = client.post(
         "/api/triggers",
-        json={"name": "feishu_group", "source_type": "im", "source_config": {"provider": "feishu"}},
+        json={
+            "name": "feishu_group",
+            "source_type": "im",
+            "source_config": {"provider": "feishu"},
+        },
     )
     assert response.status_code == 200
     assert subscription_service.reload_calls == 1
