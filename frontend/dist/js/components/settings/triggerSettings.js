@@ -3,6 +3,7 @@
  */
 import {
     createTrigger,
+    deleteTrigger,
     disableTrigger,
     enableTrigger,
     fetchOrchestrationConfig,
@@ -11,7 +12,7 @@ import {
     fetchWorkspaces,
     updateTrigger,
 } from '../../core/api.js';
-import { showToast } from '../../utils/feedback.js';
+import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
@@ -212,6 +213,12 @@ function renderPlatformList() {
             await handleToggleTrigger(button.dataset.triggerId);
         };
     });
+    host.querySelectorAll('.trigger-record-delete-btn').forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await handleDeleteTrigger(button.dataset.triggerId);
+        };
+    });
 }
 
 function renderRecords() {
@@ -244,6 +251,7 @@ function renderTriggerRecord(trigger) {
             <div class="role-record-actions trigger-record-actions">
                 <button class="settings-inline-action settings-list-action trigger-record-toggle-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(enabled ? t('settings.triggers.disable_trigger') : t('settings.triggers.enable_trigger'))}</button>
                 <button class="settings-inline-action settings-list-action trigger-record-edit-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
+                <button class="settings-inline-action settings-list-action trigger-record-delete-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(t('settings.triggers.delete_trigger'))}</button>
             </div>
         </div>
     `;
@@ -498,6 +506,41 @@ async function handleSaveTriggerSettings() {
         renderStatus();
         showToast({
             title: t('settings.triggers.save_failed'),
+            message: state.statusMessage,
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleDeleteTrigger(triggerId) {
+    const trigger = state.feishuTriggers.find(item => item.trigger_id === String(triggerId || '').trim());
+    if (!trigger) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.triggers.delete_confirm_title'),
+        message: t('settings.triggers.delete_confirm_message').replace('{name}', trigger.name || t('settings.triggers.unnamed')),
+        tone: 'warning',
+        confirmLabel: t('settings.triggers.delete_trigger'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    try {
+        await deleteTrigger(trigger.trigger_id);
+        showToast({
+            title: t('settings.triggers.deleted'),
+            message: t('settings.triggers.deleted_message'),
+            tone: 'success',
+        });
+        await loadTriggerSettingsPanel({ openProvider: FEISHU_PLATFORM });
+    } catch (error) {
+        state.statusMessage = error?.message || t('settings.triggers.delete_failed');
+        state.statusTone = 'danger';
+        renderStatus();
+        showToast({
+            title: t('settings.triggers.delete_failed'),
             message: state.statusMessage,
             tone: 'danger',
         });

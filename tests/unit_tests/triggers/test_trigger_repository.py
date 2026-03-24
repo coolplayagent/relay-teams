@@ -79,3 +79,17 @@ def test_repository_raises_on_duplicate_event_key(tmp_path: Path) -> None:
         _ = repo.create_event(
             _build_event(event_key="evt-1").model_copy(update={"event_id": "tev_2"})
         )
+
+
+def test_repository_can_delete_trigger_after_deleting_trigger_events(
+    tmp_path: Path,
+) -> None:
+    repo = TriggerRepository(tmp_path / "triggers.db")
+    created = repo.create_trigger(_build_trigger())
+    _ = repo.create_event(_build_event(event_key="evt-delete"))
+
+    repo.delete_events_by_trigger(created.trigger_id)
+    repo.delete_trigger(created.trigger_id)
+
+    with pytest.raises(KeyError):
+        _ = repo.get_trigger(created.trigger_id)

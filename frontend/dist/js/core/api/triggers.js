@@ -32,6 +32,14 @@ export async function updateTrigger(triggerId, payload) {
     );
 }
 
+export async function deleteTrigger(triggerId) {
+    return requestJson(
+        `/api/triggers/${encodeURIComponent(triggerId)}`,
+        { method: 'DELETE' },
+        'Failed to delete trigger',
+    );
+}
+
 export async function enableTrigger(triggerId) {
     return requestJson(
         `/api/triggers/${encodeURIComponent(triggerId)}:enable`,

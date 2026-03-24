@@ -122,7 +122,13 @@ def update_trigger(
 ) -> TriggerDefinition:
     try:
         existing = service.get_trigger(trigger_id)
+        reload_required = False
         feishu_config_service.validate_update_request(existing=existing, request=req)
+        if _is_feishu_im_trigger(existing):
+            reload_required = feishu_config_service.subscription_runtime_changed_for_update(
+                existing=existing,
+                request=req,
+            )
         updated = service.update_trigger(trigger_id, req)
         if _is_feishu_im_trigger(updated):
             try:
@@ -145,7 +151,8 @@ def update_trigger(
                 raise
             if feishu_config_service.runtime_settings_changed(existing, updated):
                 feishu_config_service.clear_bindings(updated.trigger_id)
-            feishu_subscription_service.reload()
+            if reload_required:
+                feishu_subscription_service.reload()
         with bind_trace_context(trigger_id=updated.trigger_id):
             log_event(
                 logger,
@@ -161,6 +168,43 @@ def update_trigger(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/{trigger_id}")
+def delete_trigger(
+    trigger_id: str,
+    service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
+    feishu_subscription_service: Annotated[
+        FeishuSubscriptionService, Depends(get_feishu_subscription_service)
+    ],
+) -> dict[str, str]:
+    try:
+        existing = service.get_trigger(trigger_id)
+        if _is_feishu_im_trigger(existing):
+            feishu_config_service.clear_bindings(trigger_id)
+            feishu_config_service.delete_secret_config(trigger_id)
+        service.delete_trigger(trigger_id)
+        if _is_feishu_im_trigger(existing):
+            feishu_subscription_service.reload()
+        with bind_trace_context(trigger_id=trigger_id):
+            log_event(
+                logger,
+                logging.INFO,
+                event="trigger.deleted",
+                message="Trigger deleted",
+                payload={
+                    "name": existing.name,
+                    "source_type": existing.source_type.value,
+                },
+            )
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

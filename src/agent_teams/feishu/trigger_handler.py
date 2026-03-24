@@ -253,7 +253,7 @@ class FeishuTriggerHandler:
             TriggerIngestInput(
                 trigger_id=runtime_config.trigger_id,
                 source_type=TriggerSourceType.IM,
-                event_key=normalized.event_id,
+                event_key=_feishu_event_key(normalized),
                 payload=normalized.payload,
                 metadata=normalized.metadata,
             ),
@@ -716,3 +716,10 @@ def _short_chat_id(chat_id: str) -> str:
     if len(normalized_chat_id) <= 8:
         return normalized_chat_id
     return normalized_chat_id[-8:]
+
+
+def _feishu_event_key(message: FeishuNormalizedMessage) -> str:
+    normalized_message_id = str(message.message_id).strip()
+    if normalized_message_id:
+        return normalized_message_id
+    return message.event_id

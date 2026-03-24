@@ -270,6 +270,40 @@ console.log(JSON.stringify({
     assert payload["disableCalls"] == ["trigger-feishu-1"]
 
 
+def test_trigger_settings_deletes_trigger_from_record_list(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-record-delete-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    deleteCalls: globalThis.__deleteTriggerCalls,
+    notifications,
+}));
+""".strip(),
+    )
+
+    assert payload["deleteCalls"] == ["trigger-feishu-1"]
+    assert payload["notifications"] == [
+        {
+            "title": "Robot Deleted",
+            "message": "Feishu robot deleted.",
+            "tone": "success",
+        }
+    ]
+
+
 def _run_trigger_settings_script(
     tmp_path: Path,
     runner_source: str,
@@ -320,6 +354,11 @@ export async function updateTrigger(triggerId, payload) {
     return { trigger_id: triggerId, ...payload };
 }
 
+export async function deleteTrigger(triggerId) {
+    globalThis.__deleteTriggerCalls.push(triggerId);
+    return { status: "ok" };
+}
+
 export async function enableTrigger(triggerId) {
     globalThis.__enableTriggerCalls.push(triggerId);
     return { status: "enabled" };
@@ -334,6 +373,10 @@ export async function disableTrigger(triggerId) {
     )
     mock_feedback_path.write_text(
         """
+export async function showConfirmDialog() {
+    return true;
+}
+
 export function showToast(payload) {
     globalThis.__feedbackNotifications.push(payload);
 }
@@ -371,6 +414,12 @@ const translations = {
     "settings.triggers.saved": "Robot Settings Saved",
     "settings.triggers.saved_message": "Feishu robot settings saved.",
     "settings.triggers.save_failed": "Save Failed",
+    "settings.triggers.delete_trigger": "Delete robot",
+    "settings.triggers.delete_confirm_title": "Delete robot",
+    "settings.triggers.delete_confirm_message": "Delete robot {name}?",
+    "settings.triggers.deleted": "Robot Deleted",
+    "settings.triggers.deleted_message": "Feishu robot deleted.",
+    "settings.triggers.delete_failed": "Delete Failed",
     "settings.triggers.load_failed": "Load Failed",
     "settings.triggers.missing_name": "Robot name is required.",
     "settings.triggers.missing_workspace": "Workspace is required.",
@@ -395,7 +444,8 @@ const translations = {
     "composer.no_presets": "No presets",
     "settings.field.enabled": "Enabled",
     "settings.roles.disabled": "Disabled",
-    "settings.roles.edit": "Edit"
+    "settings.roles.edit": "Edit",
+    "settings.action.cancel": "Cancel"
 };
 
 export function t(key) {
@@ -481,6 +531,7 @@ function parseSelector(html, selector) {{
         ".trigger-record": /class="[^"]*trigger-record[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
         ".trigger-record-edit-btn": /class="[^"]*trigger-record-edit-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
         ".trigger-record-toggle-btn": /class="[^"]*trigger-record-toggle-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
+        ".trigger-record-delete-btn": /class="[^"]*trigger-record-delete-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
     }};
     const config = configs[selector];
     if (!config) {{
@@ -541,6 +592,7 @@ function createElements() {{
 function installGlobals(elements, notifications) {{
     globalThis.__feedbackNotifications = notifications;
     globalThis.__createTriggerCalls = [];
+    globalThis.__deleteTriggerCalls = [];
     globalThis.__updateTriggerCalls = [];
     globalThis.__enableTriggerCalls = [];
     globalThis.__disableTriggerCalls = [];

@@ -72,6 +72,7 @@ export {
 
 export {
     createTrigger,
+    deleteTrigger,
     disableTrigger,
     enableTrigger,
     fetchTriggers,

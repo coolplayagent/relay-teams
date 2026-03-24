@@ -929,6 +929,12 @@ Object.assign(TRANSLATIONS['en-US'], {
     'settings.triggers.option_enabled': 'Enabled',
     'settings.triggers.option_disabled': 'Disabled',
     'settings.triggers.disable_trigger': 'Disable robot',
+    'settings.triggers.delete_trigger': 'Delete robot',
+    'settings.triggers.delete_confirm_title': 'Delete robot',
+    'settings.triggers.delete_confirm_message': 'Delete robot {name}?',
+    'settings.triggers.deleted': 'Robot Deleted',
+    'settings.triggers.deleted_message': 'Feishu robot deleted.',
+    'settings.triggers.delete_failed': 'Delete Failed',
     'settings.triggers.collapse': 'Collapse',
 });
 
@@ -966,6 +972,12 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.triggers.option_enabled': '启用',
     'settings.triggers.option_disabled': '停用',
     'settings.triggers.disable_trigger': '停用机器人',
+    'settings.triggers.delete_trigger': '删除机器人',
+    'settings.triggers.delete_confirm_title': '删除机器人',
+    'settings.triggers.delete_confirm_message': '确定删除机器人 {name} 吗？',
+    'settings.triggers.deleted': '机器人已删除',
+    'settings.triggers.deleted_message': '飞书机器人已删除。',
+    'settings.triggers.delete_failed': '删除失败',
     'settings.triggers.collapse': '收起',
 });
 

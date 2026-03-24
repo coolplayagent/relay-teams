@@ -68,6 +68,7 @@ class _FakeTriggerService:
     def __init__(self) -> None:
         self.trigger = _build_trigger()
         self.event = _build_event()
+        self.deleted_trigger_ids: list[str] = []
 
     def create_trigger(self, _req: object) -> TriggerDefinition:
         return self.trigger
@@ -82,6 +83,10 @@ class _FakeTriggerService:
 
     def update_trigger(self, trigger_id: str, _req: object) -> TriggerDefinition:
         return self.get_trigger(trigger_id)
+
+    def delete_trigger(self, trigger_id: str) -> None:
+        _ = self.get_trigger(trigger_id)
+        self.deleted_trigger_ids.append(trigger_id)
 
     def set_trigger_status(
         self, trigger_id: str, status: TriggerStatus
@@ -147,6 +152,7 @@ class _FakeFeishuTriggerConfigService:
     def __init__(self) -> None:
         self.saved_secret_calls: list[tuple[str, dict[str, str] | None, bool]] = []
         self.cleared_trigger_ids: list[str] = []
+        self.deleted_secret_trigger_ids: list[str] = []
 
     def validate_create_request(self, _req: object) -> None:
         return None
@@ -184,8 +190,24 @@ class _FakeFeishuTriggerConfigService:
     ) -> bool:
         return before.target_config != after.target_config
 
+    def subscription_runtime_changed_for_update(
+        self,
+        *,
+        existing: TriggerDefinition,
+        request: object,
+    ) -> bool:
+        _ = existing
+        source_config = getattr(request, "source_config", None)
+        secret_config = getattr(request, "secret_config", None)
+        if source_config is not None and source_config.get("app_id") != "cli_demo":
+            return True
+        return secret_config is not None
+
     def clear_bindings(self, trigger_id: str) -> None:
         self.cleared_trigger_ids.append(trigger_id)
+
+    def delete_secret_config(self, trigger_id: str) -> None:
+        self.deleted_secret_trigger_ids.append(trigger_id)
 
 
 def _create_test_client(
@@ -353,5 +375,109 @@ def test_trigger_router_clears_bindings_when_feishu_runtime_settings_change() ->
     )
 
     assert response.status_code == 200
-    assert subscription_service.reload_calls == 1
+    assert subscription_service.reload_calls == 0
     assert feishu_config_service.cleared_trigger_ids == ["trg_feishu"]
+
+
+def test_trigger_router_reloads_feishu_subscription_when_runtime_credentials_change() -> None:
+    now = datetime.now(tz=UTC)
+    trigger = TriggerDefinition(
+        trigger_id="trg_feishu",
+        name="feishu_group",
+        display_name="Feishu Group",
+        source_type=TriggerSourceType.IM,
+        status=TriggerStatus.ENABLED,
+        public_token="token-test",
+        source_config={
+            "provider": "feishu",
+            "trigger_rule": "mention_only",
+            "app_id": "cli_demo",
+            "app_name": "bot",
+        },
+        auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
+        target_config={"workspace_id": "default"},
+        created_at=now,
+        updated_at=now,
+    )
+
+    class _FakeFeishuTriggerService(_FakeTriggerService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.trigger = trigger
+
+        def update_trigger(self, trigger_id: str, req: object) -> TriggerDefinition:
+            _ = self.get_trigger(trigger_id)
+            source_config = getattr(req, "source_config", None)
+            updated_source_config = (
+                self.trigger.source_config if source_config is None else source_config
+            )
+            self.trigger = self.trigger.model_copy(update={"source_config": updated_source_config})
+            return self.trigger
+
+    subscription_service = _FakeFeishuSubscriptionService()
+    feishu_config_service = _FakeFeishuTriggerConfigService()
+    client = _create_test_client(
+        _FakeFeishuTriggerService(),
+        fake_feishu_subscription_service=subscription_service,
+        fake_feishu_trigger_config_service=feishu_config_service,
+    )
+
+    response = client.patch(
+        "/api/triggers/trg_feishu",
+        json={
+            "source_config": {
+                "provider": "feishu",
+                "trigger_rule": "mention_only",
+                "app_id": "cli_changed",
+                "app_name": "bot",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert subscription_service.reload_calls == 1
+
+
+def test_trigger_router_deletes_feishu_trigger_and_reloads_subscription() -> None:
+    now = datetime.now(tz=UTC)
+    trigger = TriggerDefinition(
+        trigger_id="trg_feishu",
+        name="feishu_group",
+        display_name="Feishu Group",
+        source_type=TriggerSourceType.IM,
+        status=TriggerStatus.ENABLED,
+        public_token="token-test",
+        source_config={
+            "provider": "feishu",
+            "trigger_rule": "mention_only",
+            "app_id": "cli_demo",
+            "app_name": "bot",
+        },
+        auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
+        target_config={"workspace_id": "default"},
+        created_at=now,
+        updated_at=now,
+    )
+
+    class _FakeFeishuTriggerService(_FakeTriggerService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.trigger = trigger
+
+    service = _FakeFeishuTriggerService()
+    subscription_service = _FakeFeishuSubscriptionService()
+    feishu_config_service = _FakeFeishuTriggerConfigService()
+    client = _create_test_client(
+        service,
+        fake_feishu_subscription_service=subscription_service,
+        fake_feishu_trigger_config_service=feishu_config_service,
+    )
+
+    response = client.delete("/api/triggers/trg_feishu")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.deleted_trigger_ids == ["trg_feishu"]
+    assert feishu_config_service.cleared_trigger_ids == ["trg_feishu"]
+    assert feishu_config_service.deleted_secret_trigger_ids == ["trg_feishu"]
+    assert subscription_service.reload_calls == 1

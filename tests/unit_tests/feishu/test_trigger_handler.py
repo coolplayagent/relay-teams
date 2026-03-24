@@ -327,6 +327,7 @@ def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
     assert session_service.sessions["session-1"].workspace_id == "workspace-ops"
     assert session_service.sessions["session-1"].session_mode == SessionMode.ORCHESTRATION
     assert session_service.sessions["session-1"].orchestration_preset_id == "default"
+    assert getattr(_trigger_service.last_event, "event_key", None) == "om_1"
     assert len(run_service.created) == 1
     assert run_service.created[0].intent == "please summarize this repo"
     assert run_service.created[0].yolo is False

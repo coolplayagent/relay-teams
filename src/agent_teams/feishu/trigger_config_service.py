@@ -158,6 +158,9 @@ class FeishuTriggerConfigService:
             merged,
         )
 
+    def delete_secret_config(self, trigger_id: str) -> None:
+        self._secret_store.delete_secret_config(self._config_dir, trigger_id)
+
     def resolve_runtime_config(
         self,
         trigger: TriggerDefinition,
@@ -230,6 +233,37 @@ class FeishuTriggerConfigService:
         if not self.is_feishu_trigger(before) or not self.is_feishu_trigger(after):
             return False
         return self._normalized_target(before) != self._normalized_target(after)
+
+    def subscription_runtime_changed_for_update(
+        self,
+        *,
+        existing: TriggerDefinition,
+        request: TriggerUpdateInput,
+    ) -> bool:
+        if not self.is_feishu_trigger(existing):
+            return False
+        before_signature = self._subscription_runtime_signature(
+            source_config=existing.source_config,
+            secret_config=self._secret_store.get_secret_config(
+                self._config_dir,
+                existing.trigger_id,
+            ),
+        )
+        after_source_config = (
+            existing.source_config
+            if request.source_config is None
+            else request.source_config
+        )
+        after_secret_config = self._merge_secret_config(
+            trigger_id=existing.trigger_id,
+            secret_config_payload=request.secret_config,
+            require_app_secret=False,
+        )
+        after_signature = self._subscription_runtime_signature(
+            source_config=after_source_config,
+            secret_config=after_secret_config,
+        )
+        return before_signature != after_signature
 
     def clear_bindings(self, trigger_id: str) -> None:
         self._external_session_binding_repo.delete_by_trigger(trigger_id)
@@ -322,6 +356,20 @@ class FeishuTriggerConfigService:
     ) -> bool:
         provider = str(source_config.get("provider", "")).strip().lower()
         return source_type == TriggerSourceType.IM and provider == FEISHU_PLATFORM
+
+    def _subscription_runtime_signature(
+        self,
+        *,
+        source_config: Mapping[str, object],
+        secret_config: FeishuTriggerSecretConfig,
+    ) -> tuple[str, str | None, str | None, str | None]:
+        source = FeishuTriggerSourceConfig.model_validate(dict(source_config.items()))
+        return (
+            source.app_id,
+            secret_config.app_secret,
+            secret_config.verification_token,
+            secret_config.encrypt_key,
+        )
 
 
 def _normalize_secret_value(value: str | None) -> str | None:

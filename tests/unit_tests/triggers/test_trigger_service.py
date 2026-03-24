@@ -99,3 +99,30 @@ def test_ingest_event_returns_duplicate_for_same_event_key(tmp_path: Path) -> No
     assert first.duplicate is False
     assert second.duplicate is True
     assert second.event_id == first.event_id
+
+
+def test_delete_trigger_removes_events_before_definition(tmp_path: Path) -> None:
+    service = _new_service(tmp_path)
+    created = service.create_trigger(
+        TriggerCreateInput(
+            name="delete_with_events",
+            source_type=TriggerSourceType.WEBHOOK,
+        )
+    )
+    _ = service.ingest_event(
+        TriggerIngestInput(
+            trigger_id=created.trigger_id,
+            source_type=TriggerSourceType.WEBHOOK,
+            event_key="evt-delete-1",
+            occurred_at=datetime.now(tz=UTC),
+            payload={"hello": "world"},
+        ),
+        headers={"content-type": "application/json"},
+        remote_addr="127.0.0.1",
+        raw_body='{"hello":"world"}',
+    )
+
+    service.delete_trigger(created.trigger_id)
+
+    with pytest.raises(KeyError):
+        _ = service.get_trigger(created.trigger_id)
