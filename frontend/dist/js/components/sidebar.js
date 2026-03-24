@@ -144,7 +144,6 @@ function formatProjectLabel(group) {
     return formatWorkspaceProjectLabel(group.workspace);
 }
 
-
 function formatWorkspaceOptionLabel(workspace) {
     const workspaceId = String(workspace?.workspace_id || '').trim();
     const rootPath = String(workspace?.root_path || '').trim();

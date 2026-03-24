@@ -208,6 +208,10 @@ export async function fetchSessions() {
     return sessions;
 }
 
+export async function fetchAutomationProjects() {
+    return [];
+}
+
 export async function startNewSession() {
     throw new Error("not used");
 }
@@ -230,6 +234,26 @@ export async function deleteSession() {
 
 export async function deleteWorkspace() {
     return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
 }
 """.strip(),
     )
@@ -362,7 +386,7 @@ console.log(JSON.stringify({
 
     assert "is-active" in str(payload["className"])
     assert payload["ariaCurrent"] == "page"
-    assert payload["activeSessionCount"] == 0
+    assert payload["activeSessionCount"] == 1
 
 
 def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
@@ -441,6 +465,10 @@ export async function fetchSessions() {
     return sessions;
 }
 
+export async function fetchAutomationProjects() {
+    return [];
+}
+
 export async function startNewSession(workspaceId) {
     globalThis.__createdSessionWorkspaceIds.push(workspaceId);
     return {
@@ -469,6 +497,26 @@ export async function deleteSession() {
 
 export async function deleteWorkspace() {
     return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
 }
 """.strip(),
     )
@@ -514,8 +562,8 @@ function parseElements(source, selector) {
         ".project-title-btn": /class="([^"]*project-title-btn[^"]*)"[^>]*aria-current="([^"]+)"[^>]*>/g,
         ".project-options-btn": /class="([^"]*project-options-btn[^"]*)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
-        ".project-fork-btn": /class="project-fork-btn"[^>]*>/g,
-        ".project-remove-btn": /class="project-remove-btn"[^>]*>/g,
+            ".project-fork-btn": /class="[^"]*project-fork-btn[^"]*"[^>]*>/g,
+            ".project-remove-btn": /class="[^"]*project-remove-btn[^"]*"[^>]*>/g,
         ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
@@ -586,6 +634,14 @@ function createNode({ className = "", textContent = "", attributes = {} } = {}) 
         onclick: null,
         onkeydown: null,
         style: {},
+        addEventListener(name, handler) {
+            if (name === "click") {
+                this.onclick = handler;
+            }
+            if (name === "keydown") {
+                this.onkeydown = handler;
+            }
+        },
         setAttribute(name, value) {
             attributeStore.set(name, String(value));
         },
@@ -729,6 +785,10 @@ export async function showConfirmDialog(options = {}) {
     return true;
 }
 
+export async function showFormDialog() {
+    return null;
+}
+
 export async function showTextInputDialog(options = {}) {
     if (options.title === "Rename Session") {
         return "Renamed Session";
@@ -831,6 +891,10 @@ export async function fetchSessions() {
     return sessions;
 }
 
+export async function fetchAutomationProjects() {
+    return [];
+}
+
 export async function startNewSession(workspaceId) {
     globalThis.__createdSessionWorkspaceIds.push(workspaceId);
     const suffix = globalThis.__createdSessionWorkspaceIds.length;
@@ -898,6 +962,26 @@ export async function deleteWorkspace(workspaceId, options = {}) {
     globalThis.__deleteWorkspaceCalls.push({ workspaceId, options });
     return { status: "ok" };
 }
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
 """.strip()
     mock_api_path.write_text(
         (mock_api_source or default_mock_api_source),
@@ -925,6 +1009,11 @@ export async function openWorkspaceProjectView(workspace) {
     state.currentMainView = "project";
     state.currentProjectViewWorkspaceId = workspace.workspace_id;
     state.currentWorkspaceId = workspace.workspace_id;
+}
+
+export async function openAutomationProjectView(project) {
+    globalThis.__openedAutomationProjectIds.push(project.automation_project_id);
+    state.currentMainView = "project";
 }
 
 export function hideProjectView() {
@@ -961,6 +1050,7 @@ globalThis.__forkCalls = [];
 globalThis.__renameCalls = [];
 globalThis.__selectedSessionIds = [];
 globalThis.__openedWorkspaceIds = [];
+globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;
 installGlobals(createDomEnvironment());
 
