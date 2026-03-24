@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from bs4.element import NavigableString, Tag
+from markdownify import markdownify
 
 from agent_teams.env.web_config_models import WebConfig
 from agent_teams.env.web_config_service import WebConfigService
@@ -13,6 +13,7 @@ from agent_teams.paths import get_app_config_dir
 
 MAX_TEXT_OUTPUT_CHARS = 32_000
 WEBFETCH_SUBDIR = "webfetch"
+STRIP_HTML_TAGS = ("script", "style", "noscript", "iframe", "object", "embed")
 
 
 def load_runtime_web_config() -> WebConfig:
@@ -26,19 +27,20 @@ def resolve_webfetch_output_dir(workspace_dir: Path) -> Path:
 
 
 def extract_text_from_html(content: str) -> str:
-    soup = BeautifulSoup(content, "html.parser")
-    for tag in soup(["script", "style", "noscript", "iframe", "object", "embed"]):
-        tag.decompose()
+    soup = build_clean_html_soup(content)
     text = soup.get_text("\n", strip=True)
     return text.strip()
 
 
-def convert_html_to_markdown(content: str) -> str:
-    soup = BeautifulSoup(content, "html.parser")
-    for tag in soup(["script", "style", "noscript", "iframe", "object", "embed"]):
-        tag.decompose()
+def convert_html_to_markdown(content: str, *, base_url: str | None = None) -> str:
+    soup = build_clean_html_soup(content, base_url=base_url)
     body = soup.body if soup.body is not None else soup
-    rendered = _render_markdown_node(body).strip()
+    rendered = markdownify(
+        str(body),
+        heading_style="ATX",
+        bullets="-",
+        strong_em_symbol="*",
+    ).strip()
     lines = [line.rstrip() for line in rendered.splitlines()]
     deduped_lines: list[str] = []
     previous_blank = False
@@ -49,6 +51,30 @@ def convert_html_to_markdown(content: str) -> str:
         deduped_lines.append(line)
         previous_blank = is_blank
     return "\n".join(deduped_lines).strip()
+
+
+def build_clean_html_soup(
+    content: str,
+    *,
+    base_url: str | None = None,
+) -> BeautifulSoup:
+    soup = BeautifulSoup(content, "html.parser")
+    for tag in soup(STRIP_HTML_TAGS):
+        tag.decompose()
+    if base_url:
+        absolutize_html_urls(soup, base_url=base_url)
+    return soup
+
+
+def absolutize_html_urls(soup: BeautifulSoup, *, base_url: str) -> None:
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href")
+        if isinstance(href, str) and href.strip():
+            anchor["href"] = urljoin(base_url, href)
+    for image in soup.find_all("img", src=True):
+        src = image.get("src")
+        if isinstance(src, str) and src.strip():
+            image["src"] = urljoin(base_url, src)
 
 
 def sanitize_file_extension(url: str, content_type: str) -> str:
@@ -69,49 +95,3 @@ def sanitize_file_extension(url: str, content_type: str) -> str:
     if content_type.startswith("text/"):
         return ".txt"
     return ".bin"
-
-
-def _render_markdown_node(node: Tag | NavigableString) -> str:
-    if isinstance(node, NavigableString):
-        return str(node)
-
-    if node.name == "br":
-        return "\n"
-    if node.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-        level = int(node.name[1])
-        return f"{'#' * level} {node.get_text(' ', strip=True)}\n\n"
-    if node.name == "a":
-        text = node.get_text(" ", strip=True)
-        href_value = node.get("href")
-        href = href_value if isinstance(href_value, str) else None
-        if href:
-            return f"[{text or href}]({href})"
-        return text
-    if node.name == "img":
-        alt = _string_attr(node.get("alt")) or "image"
-        src = _string_attr(node.get("src")) or ""
-        return f"![{alt}]({src})" if src else alt
-    if node.name == "code" and node.parent is not None and node.parent.name == "pre":
-        return node.get_text("", strip=False)
-    if node.name == "pre":
-        code_text = node.get_text("", strip=False).strip("\n")
-        return f"```\n{code_text}\n```\n\n"
-    if node.name == "li":
-        return f"- {node.get_text(' ', strip=True)}\n"
-
-    rendered_children = "".join(
-        _render_markdown_node(child)
-        for child in node.children
-        if isinstance(child, (Tag, NavigableString))
-    )
-    if node.name in {"p", "div", "section", "article", "header", "footer"}:
-        return f"{rendered_children.strip()}\n\n"
-    if node.name in {"ul", "ol"}:
-        return f"{rendered_children}\n"
-    return rendered_children
-
-
-def _string_attr(value: object) -> str | None:
-    if isinstance(value, str):
-        return value
-    return None

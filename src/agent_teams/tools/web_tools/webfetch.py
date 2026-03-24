@@ -197,6 +197,7 @@ def build_webfetch_projection(
     rendered_output = render_text_output(
         response_format=response_format,
         content_type=content_type,
+        final_url=final_url,
         body=decoded_body,
     )
     return finalize_text_result(
@@ -228,6 +229,7 @@ def render_text_output(
     *,
     response_format: str,
     content_type: str,
+    final_url: str,
     body: str,
 ) -> str:
     if response_format == "html":
@@ -235,7 +237,7 @@ def render_text_output(
     if content_type == "text/html" or content_type == "application/xhtml+xml":
         if response_format == "text":
             return extract_text_from_html(body)
-        return convert_html_to_markdown(body)
+        return convert_html_to_markdown(body, base_url=final_url)
     return body
 
 
