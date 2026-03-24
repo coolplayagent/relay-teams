@@ -57,7 +57,11 @@ export async function loadTriggerSettingsPanel(options = {}) {
         };
         renderTriggerSettingsPanel();
     } catch (error) {
-        logError('frontend.trigger_settings.load_failed', 'Failed to load trigger settings', errorToPayload(error));
+        logError(
+            'frontend.trigger_settings.load_failed',
+            'Failed to load trigger settings',
+            errorToPayload(error),
+        );
         renderLoadError(error?.message || 'Unable to load trigger settings.');
     }
 }
@@ -134,7 +138,7 @@ function normalizeOrchestrationPresets(payload) {
 
 function renderTriggerSettingsPanel() {
     renderPlatformList();
-    renderDetail();
+    renderEditorPanel();
     renderStatus();
     renderActions();
 }
@@ -144,47 +148,53 @@ function renderPlatformList() {
     if (!host) {
         return;
     }
+    if (state.editingTriggerDraft) {
+        host.style.display = 'none';
+        host.innerHTML = '';
+        return;
+    }
     host.style.display = 'block';
     host.innerHTML = `
-        <div class="role-record trigger-platform-record${state.providerExpanded ? ' active' : ''}" data-trigger-platform="${FEISHU_PLATFORM}">
-            <div class="role-record-main">
-                <div class="role-record-title-row">
-                    <div class="role-record-title">${escapeHtml(t('settings.triggers.feishu'))}</div>
-                    <div class="profile-card-chips role-record-chips">
-                        <span class="profile-card-chip">${escapeHtml(credentialsReady() ? t('settings.triggers.ready') : t('settings.triggers.credentials_missing'))}</span>
+        <div class="trigger-platform-shell">
+            <div class="role-record trigger-platform-record${state.providerExpanded ? ' trigger-platform-record-expanded' : ''}" data-trigger-platform="${FEISHU_PLATFORM}">
+                <div class="role-record-main">
+                    <div class="role-record-title-row trigger-platform-title-row">
+                        <div class="trigger-platform-chevron" aria-hidden="true">${state.providerExpanded ? '&#9662;' : '&#9656;'}</div>
+                        <div class="trigger-platform-title-block">
+                            <div class="trigger-platform-title-line">
+                                <div class="role-record-title">${escapeHtml(t('settings.triggers.feishu'))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(credentialsReady() ? t('settings.triggers.ready') : t('settings.triggers.credentials_missing'))}</span>
+                                </div>
+                            </div>
+                            <div class="trigger-platform-summary">
+                                <span class="profile-card-chip">${escapeHtml(t('settings.triggers.trigger_count').replace('{count}', String(state.feishuTriggers.length)))}</span>
+                                <span class="profile-card-chip">${escapeHtml(t('settings.triggers.enabled_count').replace('{count}', String(state.feishuTriggers.filter(isEnabled).length)))}</span>
+                                <span class="profile-card-chip">${escapeHtml(formatCredentialSummary())}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="role-record-meta">
-                    <span>${escapeHtml(t('settings.triggers.trigger_count').replace('{count}', String(state.feishuTriggers.length)))}</span>
-                    <span>${escapeHtml(t('settings.triggers.enabled_count').replace('{count}', String(state.feishuTriggers.filter(isEnabled).length)))}</span>
-                    <span>${escapeHtml(formatCredentialSummary())}</span>
+                <div class="role-record-actions">
+                    <button class="settings-inline-action settings-list-action trigger-platform-open-btn" data-trigger-platform="${FEISHU_PLATFORM}" type="button">${escapeHtml(state.providerExpanded ? t('settings.triggers.collapse') : t('settings.triggers.configure'))}</button>
                 </div>
             </div>
-            <div class="role-record-actions">
-                <button class="settings-inline-action settings-list-action trigger-platform-open-btn" data-trigger-platform="${FEISHU_PLATFORM}" type="button">${escapeHtml(t('settings.triggers.configure'))}</button>
-            </div>
+            ${state.providerExpanded && !state.editingTriggerDraft ? `<div class="trigger-platform-body"><div class="trigger-platform-children">${renderRecords()}</div></div>` : ''}
         </div>
-        ${state.providerExpanded ? `
-            <div class="role-editor-sections">
-                <section class="role-editor-section trigger-detail-section">
-                    ${renderRecords()}
-                </section>
-                ${renderEditor()}
-            </div>
-        ` : ''}
     `;
     host.querySelectorAll('.trigger-platform-open-btn').forEach(button => {
         button.onclick = event => {
             event?.stopPropagation?.();
-            openProviderDetail();
+            toggleProviderExpanded();
         };
     });
-    host.querySelectorAll('.trigger-platform-record').forEach(button => {
-        button.onclick = () => {
+    host.querySelectorAll('.trigger-platform-record').forEach(record => {
+        record.onclick = event => {
             if (state.editingTriggerDraft) {
+                event?.stopPropagation?.();
                 return;
             }
-            openProviderDetail();
+            toggleProviderExpanded();
         };
     });
     host.querySelectorAll('.trigger-record').forEach(button => {
@@ -196,194 +206,205 @@ function renderPlatformList() {
             openTriggerEditor(button.dataset.triggerId);
         };
     });
-    bindDraftInputs();
-}
-
-function renderDetail() {
-    const panel = document.getElementById('trigger-provider-detail-panel');
-    const host = document.getElementById('trigger-provider-detail');
-    if (!panel || !host) {
-        return;
-    }
-    panel.style.display = 'none';
-    host.innerHTML = '';
+    host.querySelectorAll('.trigger-record-toggle-btn').forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await handleToggleTrigger(button.dataset.triggerId);
+        };
+    });
 }
 
 function renderRecords() {
     if (state.feishuTriggers.length === 0) {
         return `<div class="settings-empty-state"><h4>${escapeHtml(t('settings.triggers.none'))}</h4><p>${escapeHtml(t('settings.triggers.none_copy'))}</p></div>`;
     }
-    return state.feishuTriggers.map(trigger => `
-        <div class="role-record trigger-record" data-trigger-id="${escapeHtml(trigger.trigger_id)}">
+    return `
+        <div class="role-records trigger-records">
+            ${state.feishuTriggers.map(trigger => renderTriggerRecord(trigger)).join('')}
+        </div>
+    `;
+}
+
+function renderTriggerRecord(trigger) {
+    const enabled = isEnabled(trigger);
+    const appName = resolveAppName(trigger.source_config);
+    const triggerId = escapeHtml(trigger.trigger_id);
+    return `
+        <div class="role-record trigger-record" data-trigger-id="${triggerId}">
             <div class="role-record-main">
-                <div class="role-record-title-row">
-                    <div class="role-record-title">${escapeHtml(trigger.display_name || trigger.name || t('settings.triggers.unnamed'))}</div>
-                    <div class="role-record-id">${escapeHtml(trigger.name)}</div>
+                <div class="role-record-title-row trigger-record-title-row">
+                    <div class="role-record-title">${escapeHtml(trigger.name || t('settings.triggers.unnamed'))}</div>
                     <div class="profile-card-chips role-record-chips">
-                        <span class="profile-card-chip">${escapeHtml(isEnabled(trigger) ? t('settings.field.enabled') : t('settings.roles.disabled'))}</span>
+                        <span class="profile-card-chip">${escapeHtml(enabled ? t('settings.field.enabled') : t('settings.roles.disabled'))}</span>
                         <span class="profile-card-chip">${escapeHtml(trigger.secret_status?.app_secret_configured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
                     </div>
                 </div>
+                ${appName ? `<div class="role-record-meta trigger-record-meta"><span>${escapeHtml(appName)}</span></div>` : ''}
             </div>
-            <div class="role-record-actions">
-                <button class="settings-inline-action settings-list-action trigger-record-edit-btn" data-trigger-id="${escapeHtml(trigger.trigger_id)}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
+            <div class="role-record-actions trigger-record-actions">
+                <button class="settings-inline-action settings-list-action trigger-record-toggle-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(enabled ? t('settings.triggers.disable_trigger') : t('settings.triggers.enable_trigger'))}</button>
+                <button class="settings-inline-action settings-list-action trigger-record-edit-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
             </div>
         </div>
-    `).join('');
+    `;
+}
+
+function renderEditorPanel() {
+    const panel = document.getElementById('trigger-provider-detail-panel');
+    const host = document.getElementById('trigger-provider-detail');
+    if (!panel || !host) {
+        return;
+    }
+    if (!state.editingTriggerDraft) {
+        panel.style.display = 'none';
+        host.innerHTML = '';
+        return;
+    }
+    panel.style.display = 'block';
+    host.innerHTML = renderEditor();
+    bindDraftInputs();
 }
 
 function renderEditor() {
-    if (!state.editingTriggerDraft) {
+    const draft = state.editingTriggerDraft;
+    if (!draft) {
         return '';
     }
-    const draft = state.editingTriggerDraft;
     const secretStatus = draft.secret_status || {};
     const sessionMode = resolveSessionMode(draft.target_config);
     const thinkingEnabled = resolveThinkingEnabled(draft.target_config);
     return `
-        <section class="role-editor-section trigger-detail-section">
-            <div class="role-editor-header">
-                <div>
-                    <h4>${escapeHtml(t('settings.triggers.editor'))}</h4>
+        <div class="role-editor-panel">
+            <div class="role-editor-form">
+                <div class="role-editor-header">
+                    <div>
+                        <h4>${escapeHtml(t('settings.triggers.editor'))}</h4>
+                    </div>
+                </div>
+                <div class="role-editor-sections">
+                    <section class="role-editor-section">
+                        <h5>${escapeHtml(t('settings.triggers.bot_configuration'))}</h5>
+                        <div class="form-row">
+                            <div class="form-group form-group-span-2">
+                                <label for="feishu-trigger-name-input">${escapeHtml(t('settings.triggers.trigger_name'))}</label>
+                                <input id="feishu-trigger-name-input" value="${escapeHtml(draft.name)}">
+                            </div>
+                        </div>
+                        <div class="form-row trigger-bot-config-row">
+                            <div class="form-group">
+                                <label for="feishu-app-name-input">${escapeHtml(t('settings.triggers.feishu_app_name'))}</label>
+                                <input id="feishu-app-name-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_name_placeholder'))}" value="${escapeHtml(resolveAppName(draft.source_config))}">
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu-app-id-input">${escapeHtml(t('settings.triggers.feishu_app_id'))}</label>
+                                <input id="feishu-app-id-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_id_placeholder'))}" value="${escapeHtml(resolveAppId(draft.source_config))}">
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu-app-secret-input">${escapeHtml(t('settings.triggers.feishu_app_secret'))}</label>
+                                <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
+                            </div>
+                        </div>
+                    </section>
+                    <section class="role-editor-section">
+                        <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="feishu-trigger-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
+                                <select id="feishu-trigger-workspace-id-input">
+                                    ${renderWorkspaceOptions(resolveWorkspaceId(draft.target_config))}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu-trigger-rule-input">${escapeHtml(t('settings.triggers.rule'))}</label>
+                                <select id="feishu-trigger-rule-input">
+                                    <option value="mention_only"${resolveRule(draft.source_config) === 'mention_only' ? ' selected' : ''}>mention_only</option>
+                                    <option value="all_messages"${resolveRule(draft.source_config) === 'all_messages' ? ' selected' : ''}>all_messages</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row trigger-session-config-row">
+                            <div class="form-group">
+                                <label for="feishu-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
+                                <select id="feishu-session-mode-input">
+                                    <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
+                                    <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="feishu-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
+                                <label for="feishu-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
+                                <select id="feishu-normal-root-role-id-input">
+                                    ${renderNormalRoleOptions(resolveNormalRootRoleId(draft.target_config))}
+                                </select>
+                            </div>
+                            <div class="form-group" id="feishu-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
+                                <label for="feishu-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
+                                <select id="feishu-orchestration-preset-id-input">
+                                    ${renderOrchestrationPresetOptions(resolveOrchestrationPresetId(draft.target_config))}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu-trigger-yolo-input">${escapeHtml(t('settings.triggers.yolo'))}</label>
+                                <select id="feishu-trigger-yolo-input">
+                                    ${renderBooleanOptions(resolveYolo(draft.target_config))}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="feishu-trigger-thinking-enabled-input">${escapeHtml(t('settings.triggers.thinking_enabled'))}</label>
+                                <select id="feishu-trigger-thinking-enabled-input">
+                                    ${renderBooleanOptions(thinkingEnabled)}
+                                </select>
+                            </div>
+                            <div class="form-group" id="feishu-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
+                                <label for="feishu-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
+                                <select id="feishu-thinking-effort-input">
+                                    ${['minimal', 'low', 'medium', 'high'].map(effort => `<option value="${effort}"${resolveThinkingEffort(draft.target_config) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </div>
-            <div class="role-editor-sections">
-                <section class="role-editor-section">
-                    <h5>${escapeHtml(t('settings.triggers.bot_configuration'))}</h5>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="feishu-trigger-name-input">${escapeHtml(t('settings.triggers.trigger_name'))}</label>
-                            <input id="feishu-trigger-name-input" value="${escapeHtml(draft.name)}">
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-trigger-display-name-input">${escapeHtml(t('settings.triggers.display_name'))}</label>
-                            <input id="feishu-trigger-display-name-input" value="${escapeHtml(draft.display_name)}">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="feishu-app-name-input">${escapeHtml(t('settings.triggers.feishu_app_name'))}</label>
-                            <input id="feishu-app-name-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_name_placeholder'))}" value="${escapeHtml(resolveAppName(draft.source_config))}">
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-app-id-input">${escapeHtml(t('settings.triggers.feishu_app_id'))}</label>
-                            <input id="feishu-app-id-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_id_placeholder'))}" value="${escapeHtml(resolveAppId(draft.source_config))}">
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-app-secret-input">${escapeHtml(t('settings.triggers.feishu_app_secret'))}</label>
-                            <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
-                        </div>
-                    </div>
-                </section>
-                <section class="role-editor-section">
-                    <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="feishu-trigger-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
-                            <select id="feishu-trigger-workspace-id-input">
-                                ${renderWorkspaceOptions(resolveWorkspaceId(draft.target_config))}
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-trigger-rule-input">${escapeHtml(t('settings.triggers.rule'))}</label>
-                            <select id="feishu-trigger-rule-input">
-                                <option value="mention_only"${resolveRule(draft.source_config) === 'mention_only' ? ' selected' : ''}>mention_only</option>
-                                <option value="all_messages"${resolveRule(draft.source_config) === 'all_messages' ? ' selected' : ''}>all_messages</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-row trigger-settings-form-row">
-                        <div class="form-group">
-                            <label for="feishu-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
-                            <select id="feishu-session-mode-input">
-                                <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
-                                <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
-                            </select>
-                        </div>
-                        <div class="form-group" id="feishu-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
-                            <label for="feishu-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
-                            <select id="feishu-normal-root-role-id-input">
-                                ${renderNormalRoleOptions(resolveNormalRootRoleId(draft.target_config))}
-                            </select>
-                        </div>
-                        <div class="form-group" id="feishu-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
-                            <label for="feishu-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
-                            <select id="feishu-orchestration-preset-id-input">
-                                ${renderOrchestrationPresetOptions(resolveOrchestrationPresetId(draft.target_config))}
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-trigger-thinking-enabled-input">${escapeHtml(t('settings.triggers.thinking_enabled'))}</label>
-                            <select id="feishu-trigger-thinking-enabled-input">
-                                ${renderBooleanOptions(thinkingEnabled)}
-                            </select>
-                        </div>
-                        <div class="form-group" id="feishu-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
-                            <label for="feishu-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
-                            <select id="feishu-thinking-effort-input">
-                                ${['minimal', 'low', 'medium', 'high'].map(effort => `<option value="${effort}"${resolveThinkingEffort(draft.target_config) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-trigger-yolo-input">${escapeHtml(t('settings.triggers.yolo'))}</label>
-                            <select id="feishu-trigger-yolo-input">
-                                ${renderBooleanOptions(resolveYolo(draft.target_config))}
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="feishu-trigger-enabled-input">${escapeHtml(t('settings.triggers.enable_trigger'))}</label>
-                            <select id="feishu-trigger-enabled-input">
-                                ${renderBooleanOptions(isEnabled(draft))}
-                            </select>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </section>
+        </div>
     `;
 }
 
 function bindDraftInputs() {
     [
-        'feishu-app-id-input',
-        'feishu-app-name-input',
-        'feishu-app-secret-input',
         'feishu-trigger-name-input',
-        'feishu-trigger-display-name-input',
+        'feishu-app-name-input',
+        'feishu-app-id-input',
+        'feishu-app-secret-input',
         'feishu-trigger-workspace-id-input',
         'feishu-trigger-rule-input',
         'feishu-session-mode-input',
         'feishu-normal-root-role-id-input',
         'feishu-orchestration-preset-id-input',
-        'feishu-thinking-effort-input',
-        'feishu-trigger-enabled-input',
-        'feishu-trigger-yolo-input',
         'feishu-trigger-thinking-enabled-input',
+        'feishu-thinking-effort-input',
+        'feishu-trigger-yolo-input',
     ].forEach(id => {
         const input = document.getElementById(id);
         if (!input) {
             return;
         }
-        input.oninput = () => {
-            renderActions();
-            syncSessionModeVisibility();
-            syncThinkingVisibility();
-        };
-        input.onchange = () => {
-            renderActions();
-            syncSessionModeVisibility();
-            syncThinkingVisibility();
-        };
+        input.oninput = syncEditorVisibility;
+        input.onchange = syncEditorVisibility;
     });
 }
 
-function openProviderDetail() {
+function syncEditorVisibility() {
+    renderActions();
+    syncSessionModeVisibility();
+    syncThinkingVisibility();
+}
+
+function toggleProviderExpanded() {
     state.providerExpanded = !state.providerExpanded;
-    state.statusMessage = '';
-    state.statusTone = '';
     if (!state.providerExpanded) {
         state.editingTriggerId = '';
         state.editingTriggerDraft = null;
+        state.statusMessage = '';
+        state.statusTone = '';
     }
     renderTriggerSettingsPanel();
 }
@@ -392,21 +413,26 @@ function handleAddTrigger() {
     if (!state.providerExpanded) {
         return;
     }
-    const defaultWorkspaceId = resolveDefaultWorkspaceOption();
-    const defaultNormalRoleId = resolveDefaultNormalRoleOption();
+    state.statusMessage = '';
+    state.statusTone = '';
     state.editingTriggerId = '';
     state.editingTriggerDraft = {
         trigger_id: '',
         name: `feishu_trigger_${state.feishuTriggers.length + 1}`,
         display_name: '',
         status: 'enabled',
-        source_config: { provider: FEISHU_PLATFORM, trigger_rule: DEFAULT_TRIGGER_RULE, app_id: '', app_name: '' },
+        source_config: {
+            provider: FEISHU_PLATFORM,
+            trigger_rule: DEFAULT_TRIGGER_RULE,
+            app_id: '',
+            app_name: '',
+        },
         target_config: {
-            workspace_id: defaultWorkspaceId,
+            workspace_id: resolveDefaultWorkspaceOption(),
             session_mode: DEFAULT_SESSION_MODE,
-            normal_root_role_id: defaultNormalRoleId,
+            normal_root_role_id: resolveDefaultNormalRoleOption(),
             yolo: true,
-            thinking: { enabled: false, effort: DEFAULT_THINKING_EFFORT },
+            thinking: { enabled: false, effort: null },
         },
         secret_status: {},
     };
@@ -418,6 +444,8 @@ function openTriggerEditor(triggerId) {
     if (!trigger) {
         return;
     }
+    state.statusMessage = '';
+    state.statusTone = '';
     state.editingTriggerId = trigger.trigger_id;
     state.editingTriggerDraft = {
         trigger_id: trigger.trigger_id,
@@ -431,29 +459,48 @@ function openTriggerEditor(triggerId) {
     renderTriggerSettingsPanel();
 }
 
+async function handleToggleTrigger(triggerId) {
+    const trigger = state.feishuTriggers.find(item => item.trigger_id === String(triggerId || '').trim());
+    if (!trigger) {
+        return;
+    }
+    try {
+        if (isEnabled(trigger)) {
+            await disableTrigger(trigger.trigger_id);
+        } else {
+            await enableTrigger(trigger.trigger_id);
+        }
+        await loadTriggerSettingsPanel({ openProvider: FEISHU_PLATFORM });
+    } catch (error) {
+        state.statusMessage = error?.message || 'Failed to update trigger status.';
+        state.statusTone = 'danger';
+        renderStatus();
+    }
+}
+
 async function handleSaveTriggerSettings() {
     try {
         const draft = readDraftFromInputs();
         if (draft.trigger_id) {
             await updateTrigger(draft.trigger_id, draft.update_payload);
-            const source = state.feishuTriggers.find(trigger => trigger.trigger_id === draft.trigger_id);
-            const wasEnabled = source ? isEnabled(source) : true;
-            if (draft.enabled && !wasEnabled) {
-                await enableTrigger(draft.trigger_id);
-            }
-            if (!draft.enabled && wasEnabled) {
-                await disableTrigger(draft.trigger_id);
-            }
         } else {
             await createTrigger(draft.payload);
         }
-        showToast({ title: t('settings.triggers.saved'), message: t('settings.triggers.saved_message'), tone: 'success' });
+        showToast({
+            title: t('settings.triggers.saved'),
+            message: t('settings.triggers.saved_message'),
+            tone: 'success',
+        });
         await loadTriggerSettingsPanel({ openProvider: FEISHU_PLATFORM });
     } catch (error) {
         state.statusMessage = error?.message || 'Failed to save trigger settings.';
         state.statusTone = 'danger';
         renderStatus();
-        showToast({ title: t('settings.triggers.save_failed'), message: state.statusMessage, tone: 'danger' });
+        showToast({
+            title: t('settings.triggers.save_failed'),
+            message: state.statusMessage,
+            tone: 'danger',
+        });
     }
 }
 
@@ -473,11 +520,11 @@ function readDraftFromInputs() {
     const appName = readValue('feishu-app-name-input');
     const appSecret = readValue('feishu-app-secret-input');
     const name = readValue('feishu-trigger-name-input');
-    const displayName = readValue('feishu-trigger-display-name-input');
     const workspaceId = readValue('feishu-trigger-workspace-id-input');
     const sessionMode = readValue('feishu-session-mode-input') || DEFAULT_SESSION_MODE;
     const orchestrationPresetId = readValue('feishu-orchestration-preset-id-input');
     const thinkingEnabled = readBooleanSelect('feishu-trigger-thinking-enabled-input', false);
+
     if (!name) {
         throw new Error(t('settings.triggers.missing_name'));
     }
@@ -496,9 +543,10 @@ function readDraftFromInputs() {
     if (sessionMode === 'orchestration' && !orchestrationPresetId) {
         throw new Error(t('settings.triggers.missing_orchestration_preset_id'));
     }
+
     const payload = {
         name,
-        display_name: displayName || null,
+        display_name: null,
         source_type: FEISHU_SOURCE_TYPE,
         source_config: {
             provider: FEISHU_PLATFORM,
@@ -513,11 +561,14 @@ function readDraftFromInputs() {
             yolo: readBooleanSelect('feishu-trigger-yolo-input', true),
             thinking: {
                 enabled: thinkingEnabled,
-                effort: thinkingEnabled ? (readValue('feishu-thinking-effort-input') || DEFAULT_THINKING_EFFORT) : null,
+                effort: thinkingEnabled
+                    ? (readValue('feishu-thinking-effort-input') || DEFAULT_THINKING_EFFORT)
+                    : null,
             },
         },
-        enabled: readBooleanSelect('feishu-trigger-enabled-input', true),
+        enabled: true,
     };
+
     const normalRootRoleId = readValue('feishu-normal-root-role-id-input');
     if (sessionMode === 'normal' && normalRootRoleId) {
         payload.target_config.normal_root_role_id = normalRootRoleId;
@@ -525,6 +576,7 @@ function readDraftFromInputs() {
     if (sessionMode === 'orchestration' && orchestrationPresetId) {
         payload.target_config.orchestration_preset_id = orchestrationPresetId;
     }
+
     const secretConfig = {};
     if (appSecret) {
         secretConfig.app_secret = appSecret;
@@ -532,6 +584,7 @@ function readDraftFromInputs() {
     if (Object.keys(secretConfig).length > 0) {
         payload.secret_config = secretConfig;
     }
+
     const updatePayload = {
         name: payload.name,
         display_name: payload.display_name,
@@ -542,11 +595,11 @@ function readDraftFromInputs() {
     if (payload.secret_config) {
         updatePayload.secret_config = payload.secret_config;
     }
+
     return {
         trigger_id: state.editingTriggerId,
         payload,
         update_payload: updatePayload,
-        enabled: payload.enabled,
     };
 }
 
@@ -556,8 +609,8 @@ function renderActions() {
         bar.style.display = state.providerExpanded ? 'flex' : 'none';
     }
     setVisible('add-trigger-btn', state.providerExpanded && state.editingTriggerDraft === null);
-    setVisible('save-trigger-btn', state.providerExpanded && state.editingTriggerDraft !== null);
-    setVisible('cancel-trigger-btn', state.providerExpanded && state.editingTriggerDraft !== null);
+    setVisible('save-trigger-btn', state.editingTriggerDraft !== null);
+    setVisible('cancel-trigger-btn', state.editingTriggerDraft !== null);
 }
 
 function renderStatus() {
@@ -707,6 +760,13 @@ function renderOrchestrationPresetOptions(selectedPresetId) {
     }).join('');
 }
 
+function renderBooleanOptions(selected) {
+    return `
+        <option value="true"${selected ? ' selected' : ''}>${escapeHtml(t('settings.triggers.option_enabled'))}</option>
+        <option value="false"${selected ? '' : ' selected'}>${escapeHtml(t('settings.triggers.option_disabled'))}</option>
+    `;
+}
+
 function formatWorkspaceLabel(workspace) {
     const workspaceId = String(workspace?.workspace_id || '').trim();
     const rootPath = String(workspace?.root_path || '').trim();
@@ -714,8 +774,7 @@ function formatWorkspaceLabel(workspace) {
         return workspaceId;
     }
     const parts = rootPath.split(/[\\/]/).filter(Boolean);
-    const name = parts.at(-1) || workspaceId;
-    return `${name} (${rootPath})`;
+    return parts.at(-1) || workspaceId;
 }
 
 function syncSessionModeVisibility() {
@@ -736,13 +795,6 @@ function syncThinkingVisibility() {
     if (effortField) {
         effortField.style.display = enabled ? 'block' : 'none';
     }
-}
-
-function renderBooleanOptions(selected) {
-    return `
-        <option value="true"${selected ? ' selected' : ''}>${escapeHtml(t('settings.triggers.option_enabled'))}</option>
-        <option value="false"${selected ? '' : ' selected'}>${escapeHtml(t('settings.triggers.option_disabled'))}</option>
-    `;
 }
 
 function escapeHtml(value) {

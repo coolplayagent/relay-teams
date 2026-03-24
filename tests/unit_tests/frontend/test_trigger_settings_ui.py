@@ -9,7 +9,7 @@ from typing import cast
 from pydantic import JsonValue
 
 
-def test_trigger_settings_renders_feishu_platform_and_opens_detail(
+def test_trigger_settings_renders_feishu_provider_and_expands_records(
     tmp_path: Path,
 ) -> None:
     payload = _run_trigger_settings_script(
@@ -24,36 +24,74 @@ installGlobals(elements, notifications);
 bindTriggerSettingsHandlers();
 await loadTriggerSettingsPanel();
 
-const platformHtml = document.getElementById("trigger-platform-list").innerHTML;
+const collapsedHtml = document.getElementById("trigger-platform-list").innerHTML;
 await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
 
 console.log(JSON.stringify({
     notifications,
-    platformHtml,
-    expandedPlatformHtml: document.getElementById("trigger-platform-list").innerHTML,
-    detailHtml: document.getElementById("trigger-provider-detail").innerHTML,
+    collapsedHtml,
+    expandedHtml: document.getElementById("trigger-platform-list").innerHTML,
     platformDisplay: document.getElementById("trigger-platform-list").style.display,
     detailDisplay: document.getElementById("trigger-provider-detail-panel").style.display,
     addDisplay: document.getElementById("add-trigger-btn").style.display,
     saveDisplay: document.getElementById("save-trigger-btn").style.display,
-    actionsBarDisplay: document.getElementById("settings-actions-bar").style.display,
+    cancelDisplay: document.getElementById("cancel-trigger-btn").style.display,
 }));
 """.strip(),
     )
 
-    platform_html = cast(str, payload["platformHtml"])
-    expanded_platform_html = cast(str, payload["expandedPlatformHtml"])
     assert payload["notifications"] == []
-    assert "Feishu" in platform_html
-    assert "1 triggers" in platform_html
-    assert "Credentials Missing" in platform_html
-    assert "feishu_main" in expanded_platform_html
-    assert "http_bridge" not in expanded_platform_html
+    collapsed_html = cast(str, payload["collapsedHtml"])
+    expanded_html = cast(str, payload["expandedHtml"])
+    assert "Feishu" in collapsed_html
+    assert "1 robots" in collapsed_html
+    assert "Credentials Missing" in collapsed_html
+    assert "feishu_main" in expanded_html
+    assert "Disable robot" in expanded_html
+    assert "http_bridge" not in expanded_html
     assert payload["platformDisplay"] == "block"
     assert payload["detailDisplay"] == "none"
     assert payload["addDisplay"] == "inline-flex"
     assert payload["saveDisplay"] == "none"
-    assert payload["actionsBarDisplay"] == "flex"
+    assert payload["cancelDisplay"] == "none"
+
+
+def test_trigger_settings_opens_editor_as_separate_view(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-record-edit-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    platformDisplay: document.getElementById("trigger-platform-list").style.display,
+    detailDisplay: document.getElementById("trigger-provider-detail-panel").style.display,
+    detailHtml: document.getElementById("trigger-provider-detail").innerHTML,
+    addDisplay: document.getElementById("add-trigger-btn").style.display,
+    saveDisplay: document.getElementById("save-trigger-btn").style.display,
+    cancelDisplay: document.getElementById("cancel-trigger-btn").style.display,
+}));
+""".strip(),
+    )
+
+    detail_html = cast(str, payload["detailHtml"])
+    assert payload["platformDisplay"] == "none"
+    assert payload["detailDisplay"] == "block"
+    assert "Robot Editor" in detail_html
+    assert "Display Name" not in detail_html
+    assert payload["addDisplay"] == "none"
+    assert payload["saveDisplay"] == "inline-flex"
+    assert payload["cancelDisplay"] == "inline-flex"
 
 
 def test_trigger_settings_adds_feishu_trigger_with_embedded_bot_config(
@@ -74,32 +112,26 @@ await loadTriggerSettingsPanel();
 await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
 await document.getElementById("add-trigger-btn").onclick();
 
-document.getElementById("feishu-app-id-input").value = "cli_demo";
-document.getElementById("feishu-app-id-input").oninput();
-document.getElementById("feishu-app-name-input").value = "Agent Teams Bot";
-document.getElementById("feishu-app-name-input").oninput();
-document.getElementById("feishu-app-secret-input").value = "secret-demo";
-document.getElementById("feishu-app-secret-input").oninput();
 document.getElementById("feishu-trigger-name-input").value = "feishu_ops";
 document.getElementById("feishu-trigger-name-input").oninput();
-document.getElementById("feishu-trigger-display-name-input").value = "Feishu Ops";
-document.getElementById("feishu-trigger-display-name-input").oninput();
+document.getElementById("feishu-app-name-input").value = "Agent Teams Bot";
+document.getElementById("feishu-app-name-input").oninput();
+document.getElementById("feishu-app-id-input").value = "cli_demo";
+document.getElementById("feishu-app-id-input").oninput();
+document.getElementById("feishu-app-secret-input").value = "secret-demo";
+document.getElementById("feishu-app-secret-input").oninput();
 document.getElementById("feishu-trigger-workspace-id-input").value = "workspace-ops";
 document.getElementById("feishu-trigger-workspace-id-input").onchange();
 document.getElementById("feishu-session-mode-input").value = "orchestration";
 document.getElementById("feishu-session-mode-input").onchange();
 document.getElementById("feishu-orchestration-preset-id-input").value = "default";
 document.getElementById("feishu-orchestration-preset-id-input").onchange();
-document.getElementById("feishu-normal-root-role-id-input").value = "MainAgent";
-document.getElementById("feishu-normal-root-role-id-input").onchange();
-document.getElementById("feishu-trigger-yolo-input").value = "false";
-document.getElementById("feishu-trigger-yolo-input").onchange();
 document.getElementById("feishu-trigger-thinking-enabled-input").value = "true";
 document.getElementById("feishu-trigger-thinking-enabled-input").onchange();
 document.getElementById("feishu-thinking-effort-input").value = "high";
 document.getElementById("feishu-thinking-effort-input").onchange();
-document.getElementById("feishu-trigger-enabled-input").value = "false";
-document.getElementById("feishu-trigger-enabled-input").onchange();
+document.getElementById("feishu-trigger-yolo-input").value = "false";
+document.getElementById("feishu-trigger-yolo-input").onchange();
 
 await document.getElementById("save-trigger-btn").onclick();
 
@@ -109,7 +141,7 @@ console.log(JSON.stringify({
     updateCalls: globalThis.__updateTriggerCalls,
     enableCalls: globalThis.__enableTriggerCalls,
     disableCalls: globalThis.__disableTriggerCalls,
-    addDisplay: document.getElementById("add-trigger-btn").style.display,
+    platformDisplay: document.getElementById("trigger-platform-list").style.display,
     saveDisplay: document.getElementById("save-trigger-btn").style.display,
 }));
 """.strip(),
@@ -123,9 +155,9 @@ console.log(JSON.stringify({
     assert len(create_calls) == 1
     create_payload = cast(dict[str, JsonValue], create_calls[0]["payload"])
     assert create_payload["name"] == "feishu_ops"
-    assert create_payload["display_name"] == "Feishu Ops"
+    assert create_payload["display_name"] is None
     assert create_payload["source_type"] == "im"
-    assert create_payload["enabled"] is False
+    assert create_payload["enabled"] is True
     assert create_payload["source_config"] == {
         "provider": "feishu",
         "trigger_rule": "mention_only",
@@ -144,12 +176,12 @@ console.log(JSON.stringify({
     }
     assert notifications == [
         {
-            "title": "Trigger Settings Saved",
-            "message": "Feishu trigger settings saved.",
+            "title": "Robot Settings Saved",
+            "message": "Feishu robot settings saved.",
             "tone": "success",
         }
     ]
-    assert payload["addDisplay"] == "inline-flex"
+    assert payload["platformDisplay"] == "block"
     assert payload["saveDisplay"] == "none"
 
 
@@ -172,16 +204,16 @@ await document.getElementById("trigger-platform-list").querySelectorAll(".trigge
 
 document.getElementById("feishu-trigger-name-input").value = "feishu_main";
 document.getElementById("feishu-trigger-name-input").oninput();
-document.getElementById("feishu-trigger-display-name-input").value = "Feishu Main Updated";
-document.getElementById("feishu-trigger-display-name-input").oninput();
 document.getElementById("feishu-app-id-input").value = "cli_existing";
 document.getElementById("feishu-app-id-input").oninput();
 document.getElementById("feishu-app-name-input").value = "Agent Teams Bot";
 document.getElementById("feishu-app-name-input").oninput();
 document.getElementById("feishu-trigger-workspace-id-input").value = "default";
 document.getElementById("feishu-trigger-workspace-id-input").onchange();
-document.getElementById("feishu-trigger-enabled-input").value = "false";
-document.getElementById("feishu-trigger-enabled-input").onchange();
+document.getElementById("feishu-session-mode-input").value = "normal";
+document.getElementById("feishu-session-mode-input").onchange();
+document.getElementById("feishu-normal-root-role-id-input").value = "SpecCoder";
+document.getElementById("feishu-normal-root-role-id-input").onchange();
 
 await document.getElementById("save-trigger-btn").onclick();
 
@@ -198,7 +230,42 @@ console.log(JSON.stringify({
     update_payload = cast(dict[str, JsonValue], update_calls[0]["payload"])
     assert "source_type" not in update_payload
     assert "enabled" not in update_payload
-    assert update_payload["display_name"] == "Feishu Main Updated"
+    assert update_payload["display_name"] is None
+    assert update_payload["target_config"] == {
+        "workspace_id": "default",
+        "session_mode": "normal",
+        "normal_root_role_id": "SpecCoder",
+        "yolo": True,
+        "thinking": {"enabled": False, "effort": None},
+    }
+    assert payload["enableCalls"] == []
+    assert payload["disableCalls"] == []
+
+
+def test_trigger_settings_toggles_trigger_from_record_list(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-record-toggle-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    enableCalls: globalThis.__enableTriggerCalls,
+    disableCalls: globalThis.__disableTriggerCalls,
+}));
+""".strip(),
+    )
+
     assert payload["enableCalls"] == []
     assert payload["disableCalls"] == ["trigger-feishu-1"]
 
@@ -278,24 +345,20 @@ export function showToast(payload) {
 const translations = {
     "settings.triggers.feishu": "Feishu",
     "settings.triggers.configure": "Configure",
+    "settings.triggers.collapse": "Collapse",
     "settings.triggers.ready": "Ready",
     "settings.triggers.credentials_missing": "Credentials Missing",
-    "settings.triggers.trigger_count": "{count} triggers",
+    "settings.triggers.credentials_ready": "Credentials ready",
+    "settings.triggers.credentials_missing_count": "{count} credentials missing",
+    "settings.triggers.trigger_count": "{count} robots",
     "settings.triggers.enabled_count": "{count} enabled",
-    "settings.triggers.back": "Back",
-    "settings.triggers.feishu_detail_copy": "Manage Feishu bot triggers.",
-    "settings.triggers.records": "Triggers",
-    "settings.triggers.records_copy": "Provider-specific trigger records.",
-    "settings.triggers.none": "No Feishu triggers",
-    "settings.triggers.none_copy": "Add a Feishu trigger.",
-    "settings.triggers.editor": "Trigger Editor",
-    "settings.triggers.editing_existing": "Editing existing trigger",
-    "settings.triggers.editing_new": "New trigger",
+    "settings.triggers.none": "No Feishu robots",
+    "settings.triggers.none_copy": "Add a Feishu robot.",
+    "settings.triggers.editor": "Robot Editor",
     "settings.triggers.bot_configuration": "Bot Configuration",
     "settings.triggers.session_configuration": "Session Configuration",
-    "settings.triggers.trigger_name": "Trigger Name",
-    "settings.triggers.display_name": "Display Name",
-    "settings.triggers.workspace": "Workspace ID",
+    "settings.triggers.trigger_name": "Robot Name",
+    "settings.triggers.workspace": "Workspace",
     "settings.triggers.rule": "Trigger Rule",
     "settings.triggers.mode": "Session Mode",
     "settings.triggers.normal_root_role_id": "Normal Root Role",
@@ -303,21 +366,22 @@ const translations = {
     "settings.triggers.thinking_effort": "Thinking Effort",
     "settings.triggers.yolo": "YOLO",
     "settings.triggers.thinking_enabled": "Thinking Enabled",
-    "settings.triggers.enable_trigger": "Enable trigger",
-    "settings.triggers.saved": "Trigger Settings Saved",
-    "settings.triggers.saved_message": "Feishu trigger settings saved.",
+    "settings.triggers.enable_trigger": "Enable robot",
+    "settings.triggers.disable_trigger": "Disable robot",
+    "settings.triggers.saved": "Robot Settings Saved",
+    "settings.triggers.saved_message": "Feishu robot settings saved.",
     "settings.triggers.save_failed": "Save Failed",
     "settings.triggers.load_failed": "Load Failed",
-    "settings.triggers.missing_name": "Trigger name is required.",
-    "settings.triggers.missing_workspace": "Workspace ID is required.",
+    "settings.triggers.missing_name": "Robot name is required.",
+    "settings.triggers.missing_workspace": "Workspace is required.",
     "settings.triggers.missing_app_id": "App ID is required.",
     "settings.triggers.missing_app_name": "App name is required.",
     "settings.triggers.missing_app_secret": "App secret is required.",
     "settings.triggers.missing_orchestration_preset_id": "Preset is required in orchestration mode.",
-    "settings.triggers.unnamed": "Unnamed trigger",
+    "settings.triggers.unnamed": "Unnamed robot",
     "settings.triggers.feishu_app_id": "Feishu App ID",
     "settings.triggers.feishu_app_id_placeholder": "cli_xxx",
-    "settings.triggers.feishu_app_name": "Application Name",
+    "settings.triggers.feishu_app_name": "Feishu App Name",
     "settings.triggers.feishu_app_name_placeholder": "Agent Teams Bot",
     "settings.triggers.feishu_app_secret": "Feishu App Secret",
     "settings.triggers.feishu_app_secret_placeholder": "App secret",
@@ -325,8 +389,6 @@ const translations = {
     "settings.triggers.no_workspaces": "No workspaces",
     "settings.triggers.option_enabled": "Enabled",
     "settings.triggers.option_disabled": "Disabled",
-    "settings.triggers.credentials_ready": "Credentials ready",
-    "settings.triggers.credentials_missing_count": "{count} credentials missing",
     "composer.mode_normal": "Normal Mode",
     "composer.mode_orchestration": "Orchestrated Mode",
     "composer.no_roles": "No roles",
@@ -373,8 +435,8 @@ function createElement(initialDisplay = "block") {{
     const element = {{
         style: {{ display: initialDisplay }},
         value: "",
-        checked: true,
         textContent: "",
+        innerText: "",
         onclick: null,
         oninput: null,
         onchange: null,
@@ -418,6 +480,7 @@ function parseSelector(html, selector) {{
         ".trigger-platform-record": /class="[^"]*trigger-platform-record[^"]*"[^>]*data-trigger-platform="([^"]+)"/g,
         ".trigger-record": /class="[^"]*trigger-record[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
         ".trigger-record-edit-btn": /class="[^"]*trigger-record-edit-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
+        ".trigger-record-toggle-btn": /class="[^"]*trigger-record-toggle-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
     }};
     const config = configs[selector];
     if (!config) {{
@@ -437,7 +500,8 @@ function parseSelector(html, selector) {{
 }}
 
 function createElements() {{
-    const textIds = [
+    const elements = new Map();
+    [
         "settings-actions-bar",
         "add-trigger-btn",
         "save-trigger-btn",
@@ -446,23 +510,31 @@ function createElements() {{
         "trigger-provider-detail-panel",
         "trigger-provider-detail",
         "trigger-editor-status",
-        "trigger-provider-back-btn",
         "feishu-app-id-input",
         "feishu-app-name-input",
         "feishu-app-secret-input",
         "feishu-trigger-name-input",
-        "feishu-trigger-display-name-input",
         "feishu-normal-role-field",
         "feishu-preset-field",
-    ];
-    const elements = new Map();
-    textIds.forEach(id => elements.set(id, createElement(id === "settings-actions-bar" ? "flex" : "none")));
-    ["trigger-platform-list", "trigger-provider-detail", "feishu-trigger-rule-input", "feishu-session-mode-input", "feishu-thinking-effort-input", "feishu-trigger-workspace-id-input", "feishu-normal-root-role-id-input", "feishu-orchestration-preset-id-input", "feishu-trigger-enabled-input", "feishu-trigger-yolo-input", "feishu-trigger-thinking-enabled-input"].forEach(id => {{
-        const element = elements.get(id) || createElement();
+        "feishu-thinking-effort-field",
+    ].forEach(id => elements.set(id, createElement(id === "settings-actions-bar" ? "flex" : "none")));
+
+    [
+        "feishu-trigger-rule-input",
+        "feishu-session-mode-input",
+        "feishu-thinking-effort-input",
+        "feishu-trigger-workspace-id-input",
+        "feishu-normal-root-role-id-input",
+        "feishu-orchestration-preset-id-input",
+        "feishu-trigger-yolo-input",
+        "feishu-trigger-thinking-enabled-input",
+    ].forEach(id => {{
+        const element = elements.get(id) || createElement("none");
         element.tagName = "SELECT";
-        element.style.display = id === "trigger-platform-list" ? "block" : "none";
         elements.set(id, element);
     }});
+
+    elements.get("trigger-platform-list").style.display = "block";
     return elements;
 }}
 
@@ -511,6 +583,7 @@ function installGlobals(elements, notifications) {{
             target_config: {{
                 workspace_id: "default",
                 session_mode: "normal",
+                normal_root_role_id: "MainAgent",
                 yolo: true,
                 thinking: {{ enabled: false, effort: "medium" }}
             }},
