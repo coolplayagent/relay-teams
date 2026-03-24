@@ -4,17 +4,28 @@ from __future__ import annotations
 import asyncio
 import logging
 from threading import Event, Lock, Thread
-from typing import Callable, Protocol
+from typing import Protocol
 
 from lark_oapi.core.json import JSON
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 
-from agent_teams.feishu.client import load_feishu_environment
-from agent_teams.feishu.models import FeishuEnvironment, TriggerProcessingResult
+from agent_teams.feishu.models import FeishuTriggerRuntimeConfig, TriggerProcessingResult
 from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
 from agent_teams.logger import get_logger, log_event
+from agent_teams.triggers import TriggerDefinition
 
 logger = get_logger(__name__)
+
+
+class TriggerServiceLike(Protocol):
+    def list_triggers(self) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
+
+
+class FeishuConfigServiceLike(Protocol):
+    def list_enabled_runtime_configs(
+        self,
+        triggers: tuple[TriggerDefinition, ...] | list[TriggerDefinition],
+    ) -> tuple[FeishuTriggerRuntimeConfig, ...]: ...
 
 
 class EventRunnerLike(Protocol):
@@ -29,7 +40,7 @@ class EventRunnerFactory(Protocol):
     def __call__(
         self,
         *,
-        environment: FeishuEnvironment,
+        runtime_config: FeishuTriggerRuntimeConfig,
         event_handler: FeishuTriggerHandler,
     ) -> EventRunnerLike: ...
 
@@ -44,77 +55,81 @@ class FeishuSubscriptionService:
     def __init__(
         self,
         *,
+        trigger_service: TriggerServiceLike,
+        feishu_config_service: FeishuConfigServiceLike,
         event_handler: FeishuTriggerHandler,
-        environment_loader: Callable[
-            [], FeishuEnvironment | None
-        ] = load_feishu_environment,
         runner_factory: EventRunnerFactory | None = None,
     ) -> None:
+        self._trigger_service = trigger_service
+        self._feishu_config_service = feishu_config_service
         self._event_handler = event_handler
-        self._environment_loader = environment_loader
         self._runner_factory = (
             _create_ws_runner if runner_factory is None else runner_factory
         )
         self._lock = Lock()
-        self._runner: EventRunnerLike | None = None
-        self._signature: tuple[str, str, str | None] | None = None
+        self._runners: dict[str, tuple[FeishuTriggerRuntimeConfig, EventRunnerLike]] = {}
 
     def start(self) -> None:
         self.reload()
 
     def stop(self) -> None:
         with self._lock:
-            self._stop_locked(reason="shutdown")
+            trigger_ids = tuple(self._runners.keys())
+            for trigger_id in trigger_ids:
+                self._stop_runner_locked(trigger_id=trigger_id, reason="shutdown")
 
     def reload(self) -> None:
         with self._lock:
-            environment = self._environment_loader()
-            if environment is None:
-                self._stop_locked(reason="missing_credentials")
-                return
-            if not self._event_handler.has_enabled_feishu_trigger():
-                self._stop_locked(reason="no_enabled_trigger")
-                return
-            signature = (
-                environment.app_id,
-                environment.app_secret,
-                environment.encrypt_key,
+            trigger_records = tuple(self._trigger_service.list_triggers())
+            runtime_configs = self._feishu_config_service.list_enabled_runtime_configs(
+                trigger_records
             )
-            if (
-                self._runner is not None
-                and self._runner.is_alive()
-                and self._signature == signature
-            ):
-                return
-            self._stop_locked(reason="reload")
-            runner = self._runner_factory(
-                environment=environment,
-                event_handler=self._event_handler,
-            )
-            runner.start()
-            self._runner = runner
-            self._signature = signature
-            log_event(
-                logger,
-                logging.INFO,
-                event="feishu.subscription.started",
-                message="Feishu SDK subscription started",
-                payload={"app_id": environment.app_id},
-            )
+            desired = {config.trigger_id: config for config in runtime_configs}
+            current_ids = set(self._runners.keys())
+            desired_ids = set(desired.keys())
 
-    def _stop_locked(self, *, reason: str) -> None:
-        runner = self._runner
-        self._runner = None
-        self._signature = None
-        if runner is None:
+            for trigger_id in sorted(current_ids - desired_ids):
+                self._stop_runner_locked(
+                    trigger_id=trigger_id,
+                    reason="disabled_or_missing_credentials",
+                )
+
+            for trigger_id, runtime_config in desired.items():
+                existing = self._runners.get(trigger_id)
+                if existing is not None:
+                    current_config, runner = existing
+                    if runner.is_alive() and current_config.signature == runtime_config.signature:
+                        continue
+                    self._stop_runner_locked(trigger_id=trigger_id, reason="reload")
+                runner = self._runner_factory(
+                    runtime_config=runtime_config,
+                    event_handler=self._event_handler,
+                )
+                runner.start()
+                self._runners[trigger_id] = (runtime_config, runner)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="feishu.subscription.started",
+                    message="Feishu SDK subscription started",
+                    payload={
+                        "trigger_id": trigger_id,
+                        "app_id": runtime_config.environment.app_id,
+                    },
+                )
+
+    def _stop_runner_locked(self, *, trigger_id: str, reason: str) -> None:
+        existing = self._runners.pop(trigger_id, None)
+        if existing is None:
             return
+        _runtime_config, runner = existing
         runner.stop()
         log_event(
             logger,
             logging.INFO,
             event="feishu.subscription.stopped",
             message="Feishu SDK subscription stopped",
-            payload={"reason": reason},
+            payload={"trigger_id": trigger_id, "reason": reason},
         )
 
 
@@ -122,14 +137,14 @@ class _FeishuWsRunner:
     def __init__(
         self,
         *,
-        environment: FeishuEnvironment,
+        runtime_config: FeishuTriggerRuntimeConfig,
         event_handler: FeishuTriggerHandler,
     ) -> None:
-        self._environment = environment
+        self._runtime_config = runtime_config
         self._event_handler = event_handler
         self._thread = Thread(
             target=self._run,
-            name="feishu-sdk-subscription",
+            name=f"feishu-sdk-subscription-{runtime_config.trigger_id}",
             daemon=True,
         )
         self._stop_event = Event()
@@ -165,6 +180,7 @@ class _FeishuWsRunner:
         from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
         from lark_oapi.ws.client import Client as WsClient
 
+        environment = self._runtime_config.environment
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         ws_client_module.loop = loop
@@ -173,6 +189,7 @@ class _FeishuWsRunner:
         def _on_message(event: P2ImMessageReceiveV1) -> None:
             raw_body = JSON.marshal(event) or "{}"
             result = self._event_handler.handle_sdk_event(
+                trigger_id=self._runtime_config.trigger_id,
                 event=event,
                 raw_body=raw_body,
                 headers={},
@@ -182,15 +199,15 @@ class _FeishuWsRunner:
 
         dispatcher = (
             EventDispatcherHandler.builder(
-                self._environment.encrypt_key or "",
-                self._environment.verification_token or "",
+                environment.encrypt_key or "",
+                environment.verification_token or "",
             )
             .register_p2_im_message_receive_v1(_on_message)
             .build()
         )
         client = WsClient(
-            self._environment.app_id,
-            self._environment.app_secret,
+            environment.app_id,
+            environment.app_secret,
             log_level=lark.LogLevel.INFO,
             event_handler=dispatcher,
         )
@@ -205,7 +222,10 @@ class _FeishuWsRunner:
                 logging.ERROR,
                 event="feishu.subscription.runtime_error",
                 message="Feishu SDK subscription loop stopped unexpectedly",
-                payload={"error": str(exc)},
+                payload={
+                    "trigger_id": self._runtime_config.trigger_id,
+                    "error": str(exc),
+                },
             )
         except Exception as exc:
             log_event(
@@ -213,7 +233,10 @@ class _FeishuWsRunner:
                 logging.ERROR,
                 event="feishu.subscription.failed",
                 message="Feishu SDK subscription failed",
-                payload={"error": str(exc)},
+                payload={
+                    "trigger_id": self._runtime_config.trigger_id,
+                    "error": str(exc),
+                },
             )
         finally:
             try:
@@ -224,10 +247,13 @@ class _FeishuWsRunner:
 
 def _create_ws_runner(
     *,
-    environment: FeishuEnvironment,
+    runtime_config: FeishuTriggerRuntimeConfig,
     event_handler: FeishuTriggerHandler,
 ) -> EventRunnerLike:
-    return _FeishuWsRunner(environment=environment, event_handler=event_handler)
+    return _FeishuWsRunner(
+        runtime_config=runtime_config,
+        event_handler=event_handler,
+    )
 
 
 def _log_processing_result(result: TriggerProcessingResult) -> None:

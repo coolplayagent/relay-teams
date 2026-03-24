@@ -50,32 +50,48 @@ class FeishuClient:
     ) -> None:
         self._merged_env = None if merged_env is None else dict(merged_env.items())
         self._base_url = base_url.rstrip("/")
-        self._sdk_client: lark.Client | None = None
-        self._sdk_signature: tuple[str, str, str] | None = None
+        self._sdk_clients: dict[tuple[str, str, str], lark.Client] = {}
 
-    def is_configured(self) -> bool:
-        return self._load_environment() is not None
+    def is_configured(self, environment: FeishuEnvironment | None = None) -> bool:
+        return self._resolve_environment(environment) is not None
 
-    def require_environment(self) -> FeishuEnvironment:
-        environment = self._load_environment()
-        if environment is None:
+    def require_environment(
+        self,
+        environment: FeishuEnvironment | None = None,
+    ) -> FeishuEnvironment:
+        resolved_environment = self._resolve_environment(environment)
+        if resolved_environment is None:
             raise RuntimeError(
-                "Feishu integration requires FEISHU_APP_ID and FEISHU_APP_SECRET."
+                "Feishu integration requires trigger-level app_id and app_secret."
             )
-        return environment
+        return resolved_environment
 
-    def send_text_message(self, *, chat_id: str, text: str) -> None:
+    def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
         self._send_message(
             chat_id=chat_id,
             msg_type="text",
             content={"text": text},
+            environment=environment,
         )
 
-    def send_card_message(self, *, chat_id: str, card: dict[str, object]) -> None:
+    def send_card_message(
+        self,
+        *,
+        chat_id: str,
+        card: dict[str, object],
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
         self._send_message(
             chat_id=chat_id,
             msg_type="interactive",
             content={"card": card},
+            environment=environment,
         )
 
     def _send_message(
@@ -84,6 +100,7 @@ class FeishuClient:
         chat_id: str,
         msg_type: str,
         content: dict[str, object],
+        environment: FeishuEnvironment | None,
     ) -> None:
         request = (
             CreateMessageRequest.builder()
@@ -97,7 +114,7 @@ class FeishuClient:
             )
             .build()
         )
-        sdk_client = self._sdk()
+        sdk_client = self._sdk(environment)
         im_service = sdk_client.im
         if im_service is None:
             raise RuntimeError("Feishu SDK client did not initialize IM services.")
@@ -107,25 +124,34 @@ class FeishuClient:
         message = str(response.msg or "").strip() or "unknown_error"
         raise RuntimeError(f"Feishu API failed to send message: {message}")
 
-    def _sdk(self) -> lark.Client:
-        environment = self.require_environment()
+    def _sdk(self, environment: FeishuEnvironment | None = None) -> lark.Client:
+        resolved_environment = self.require_environment(environment)
         signature = (
-            environment.app_id,
-            environment.app_secret,
+            resolved_environment.app_id,
+            resolved_environment.app_secret,
             self._base_url,
         )
-        if self._sdk_client is not None and self._sdk_signature == signature:
-            return self._sdk_client
-        self._sdk_client = (
+        existing = self._sdk_clients.get(signature)
+        if existing is not None:
+            return existing
+        client = (
             lark.Client.builder()
-            .app_id(environment.app_id)
-            .app_secret(environment.app_secret)
+            .app_id(resolved_environment.app_id)
+            .app_secret(resolved_environment.app_secret)
             .domain(self._base_url)
             .log_level(lark.LogLevel.WARNING)
             .build()
         )
-        self._sdk_signature = signature
-        return self._sdk_client
+        self._sdk_clients[signature] = client
+        return client
 
     def _load_environment(self) -> FeishuEnvironment | None:
         return load_feishu_environment(self._merged_env)
+
+    def _resolve_environment(
+        self,
+        environment: FeishuEnvironment | None,
+    ) -> FeishuEnvironment | None:
+        if environment is not None:
+            return environment
+        return self._load_environment()

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     )
     from agent_teams.feishu.notification_delivery import FeishuNotificationDispatcher
     from agent_teams.feishu.subscription_service import FeishuSubscriptionService
+    from agent_teams.feishu.trigger_config_service import FeishuTriggerConfigService
     from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "FeishuNotificationDispatcher",
     "FeishuNotificationTarget",
     "FeishuSubscriptionService",
+    "FeishuTriggerConfigService",
     "FeishuTriggerHandler",
     "TriggerProcessingResult",
     "load_feishu_environment",
@@ -82,6 +84,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "FeishuSubscriptionService": (
         "agent_teams.feishu.subscription_service",
         "FeishuSubscriptionService",
+    ),
+    "FeishuTriggerConfigService": (
+        "agent_teams.feishu.trigger_config_service",
+        "FeishuTriggerConfigService",
     ),
     "FeishuTriggerHandler": (
         "agent_teams.feishu.trigger_handler",

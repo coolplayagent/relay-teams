@@ -141,6 +141,10 @@ class TriggerService:
     def list_triggers(self) -> tuple[TriggerDefinition, ...]:
         return self._trigger_repo.list_triggers()
 
+    def delete_trigger(self, trigger_id: str) -> None:
+        _ = self._trigger_repo.get_trigger(trigger_id)
+        self._trigger_repo.delete_trigger(trigger_id)
+
     def get_trigger_by_public_token(self, public_token: str) -> TriggerDefinition:
         return self._trigger_repo.get_trigger_by_public_token(public_token)
 

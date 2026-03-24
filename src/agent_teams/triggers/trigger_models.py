@@ -64,6 +64,7 @@ class TriggerCreateInput(BaseModel):
     source_config: dict[str, JsonValue] = Field(default_factory=dict)
     auth_policies: tuple[TriggerAuthPolicy, ...] = ()
     target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
     public_token: str | None = None
     enabled: bool = True
 
@@ -76,6 +77,7 @@ class TriggerUpdateInput(BaseModel):
     source_config: dict[str, JsonValue] | None = None
     auth_policies: tuple[TriggerAuthPolicy, ...] | None = None
     target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
 
 
 class TriggerDefinition(BaseModel):
@@ -90,6 +92,7 @@ class TriggerDefinition(BaseModel):
     source_config: dict[str, JsonValue] = Field(default_factory=dict)
     auth_policies: tuple[TriggerAuthPolicy, ...] = ()
     target_config: dict[str, JsonValue] | None = None
+    secret_status: dict[str, bool] | None = None
     created_at: datetime
     updated_at: datetime
 

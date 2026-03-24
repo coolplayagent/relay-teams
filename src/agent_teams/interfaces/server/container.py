@@ -29,6 +29,7 @@ from agent_teams.feishu import (
     FeishuClient,
     FeishuNotificationDispatcher,
     FeishuSubscriptionService,
+    FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -234,6 +235,14 @@ class ServerContainer:
         self.trigger_service: TriggerService = TriggerService(
             trigger_repo=self.trigger_repo
         )
+        self.feishu_trigger_config_service = FeishuTriggerConfigService(
+            config_dir=config_dir,
+            get_trigger=self.trigger_service.get_trigger,
+            role_registry=self.role_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
+            workspace_service=self.workspace_service,
+            external_session_binding_repo=self.external_session_binding_repo,
+        )
         self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
             runtime.paths.db_path
         )
@@ -261,6 +270,7 @@ class ServerContainer:
             dispatchers=(
                 FeishuNotificationDispatcher(
                     session_repo=self.session_repo,
+                    runtime_config_lookup=self.feishu_trigger_config_service,
                     feishu_client=self.feishu_client,
                 ),
             ),
@@ -352,12 +362,15 @@ class ServerContainer:
         )
         self.feishu_trigger_handler = FeishuTriggerHandler(
             trigger_service=self.trigger_service,
+            feishu_config_service=self.feishu_trigger_config_service,
             session_service=self.session_service,
             run_service=self.run_service,
             external_session_binding_repo=self.external_session_binding_repo,
         )
         self.feishu_subscription_service = FeishuSubscriptionService(
-            event_handler=self.feishu_trigger_handler
+            trigger_service=self.trigger_service,
+            feishu_config_service=self.feishu_trigger_config_service,
+            event_handler=self.feishu_trigger_handler,
         )
         self.config_status_service: ConfigStatusService = ConfigStatusService(
             get_runtime=lambda: self.runtime,

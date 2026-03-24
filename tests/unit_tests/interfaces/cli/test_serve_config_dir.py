@@ -17,10 +17,16 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
 
     fake_uvicorn = ModuleType("uvicorn")
 
-    def fake_run(app: object, host: str, port: int) -> None:
+    def fake_run(
+        app: object,
+        host: str,
+        port: int,
+        timeout_graceful_shutdown: int,
+    ) -> None:
         captured["app"] = app
         captured["host"] = host
         captured["port"] = port
+        captured["timeout_graceful_shutdown"] = timeout_graceful_shutdown
         captured["managed_process"] = (
             server_cli.ManagedServerProcess.model_validate_json(
                 process_file.read_text(encoding="utf-8")
@@ -52,6 +58,7 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "app": sentinel_app,
         "host": "127.0.0.1",
         "port": 8911,
+        "timeout_graceful_shutdown": 10,
         "managed_process": managed_process,
     }
     assert managed_process.model_dump() == {

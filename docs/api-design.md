@@ -166,7 +166,7 @@ Each rule includes:
 Replaces notification rules.
 Notes:
 - `feishu` delivery is best-effort and only applies when the session/run has Feishu chat context.
-- Feishu credentials are loaded from app environment variables, not from `notifications.json`.
+- Feishu credentials are resolved from the Feishu trigger bound to that session, not from `notifications.json`.
 
 ### `GET /system/configs/orchestration`
 
@@ -935,18 +935,22 @@ Lists tools exposed by one MCP server. Returned tool names are the effective cal
 ### `POST /triggers`
 
 Creates a trigger definition.
+For Feishu IM triggers, the request may also include top-level `secret_config`.
 
 ### `GET /triggers`
 
 Lists trigger definitions.
+For Feishu IM triggers, responses also include read-only `secret_status`.
 
 ### `GET /triggers/{trigger_id}`
 
 Gets one trigger definition.
+For Feishu IM triggers, the response also includes read-only `secret_status`.
 
 ### `PATCH /triggers/{trigger_id}`
 
 Updates trigger mutable fields.
+For Feishu IM triggers, the request may also include top-level `secret_config`.
 
 ### `POST /triggers/{trigger_id}:enable`
 
@@ -978,27 +982,65 @@ Behavior:
 - For `group` chats configured with `trigger_rule = "mention_only"`, only messages whose mention list includes the configured application name create runs.
 - For `p2p` chats, any text message creates a run and `mention_only` does not require an application mention.
 - Deduplicates delivery using the Feishu `event_id`.
-- Reuses one internal session per `tenant_key + chat_id`.
+- Reuses one internal session per `trigger_id + tenant_key + chat_id`.
 - Requires no public callback URL.
+- Runs one SDK long connection per enabled Feishu trigger whose credentials are ready.
+- Supports multiple Feishu bots at the same time.
 
 Recommended trigger contract:
 - `source_type = "im"`
 - `source_config.provider = "feishu"`
 - `source_config.trigger_rule = "mention_only"`
+- `source_config.app_id = "<feishu_app_id>"`
+- `source_config.app_name = "<feishu_app_name>"`
 - `target_config.workspace_id = "default"` (or another registered workspace)
+- `target_config.session_mode = "normal" | "orchestration"`
+- `target_config.normal_root_role_id` is optional for normal mode
+- `target_config.orchestration_preset_id` is required for orchestration mode
 - `target_config.yolo = true` by default for Feishu-triggered runs
+- `target_config.thinking.enabled` and `target_config.thinking.effort` control per-bot run thinking settings
 - Set `target_config.yolo = false` only when you want Feishu-triggered runs to keep the normal tool approval flow
+- `secret_config.app_secret` is required on create
+- `secret_config.verification_token` is optional
+- `secret_config.encrypt_key` is optional
 
-Required app environment variables:
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `FEISHU_APP_NAME`
+Feishu-specific request shape:
 
-Optional:
-- `FEISHU_ENCRYPT_KEY`
-  Configure this only if encrypted Feishu event delivery is enabled.
-- `FEISHU_VERIFICATION_TOKEN`
-  Not required for the SDK long-connection trigger flow.
+```json
+{
+  "name": "feishu_ops",
+  "source_type": "im",
+  "source_config": {
+    "provider": "feishu",
+    "trigger_rule": "mention_only",
+    "app_id": "cli_demo",
+    "app_name": "Agent Teams Bot"
+  },
+  "target_config": {
+    "workspace_id": "default",
+    "session_mode": "normal",
+    "normal_root_role_id": "MainAgent",
+    "yolo": true,
+    "thinking": {
+      "enabled": false,
+      "effort": "medium"
+    }
+  },
+  "secret_config": {
+    "app_secret": "..."
+  }
+}
+```
+
+Feishu-specific response additions:
+
+- `secret_status.app_secret_configured`
+- `secret_status.verification_token_configured`
+- `secret_status.encrypt_key_configured`
+
+Notes:
+- Feishu secrets are write-only through the API and are stored in keyring, not in the trigger table.
+- When a Feishu trigger's runtime preset changes, the backend clears that trigger's external chat bindings so the next message creates a session with the new preset.
 
 ### `GET /triggers/{trigger_id}/events`
 

@@ -3,19 +3,24 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from agent_teams.feishu.models import (
+    FEISHU_METADATA_CHAT_ID_KEY,
+    FEISHU_METADATA_CHAT_TYPE_KEY,
+    FEISHU_METADATA_PLATFORM_KEY,
+    FEISHU_METADATA_TENANT_KEY,
+    FEISHU_METADATA_TRIGGER_ID_KEY,
+    FeishuEnvironment,
+    FeishuMessageFormat,
+    FeishuTriggerRuntimeConfig,
+    FeishuTriggerSourceConfig,
+    FeishuTriggerTargetConfig,
+)
 from agent_teams.feishu.notification_delivery import FeishuNotificationDispatcher
 from agent_teams.notifications import (
     NotificationChannel,
     NotificationContext,
     NotificationRequest,
     NotificationType,
-)
-from agent_teams.feishu.models import (
-    FEISHU_METADATA_CHAT_ID_KEY,
-    FEISHU_METADATA_CHAT_TYPE_KEY,
-    FEISHU_METADATA_PLATFORM_KEY,
-    FEISHU_METADATA_TENANT_KEY,
-    FeishuMessageFormat,
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
@@ -32,6 +37,7 @@ class _FakeSessionRepo:
                 FEISHU_METADATA_TENANT_KEY: "tenant-1",
                 FEISHU_METADATA_CHAT_ID_KEY: "chat-1",
                 FEISHU_METADATA_CHAT_TYPE_KEY: "group",
+                FEISHU_METADATA_TRIGGER_ID_KEY: "trg_feishu",
             },
             session_mode=SessionMode.NORMAL,
             created_at=now,
@@ -39,43 +45,69 @@ class _FakeSessionRepo:
         )
 
 
-class _FakeP2PSessionRepo:
-    def get(self, session_id: str) -> SessionRecord:
-        _ = session_id
-        now = datetime.now(tz=timezone.utc)
-        return SessionRecord(
-            session_id="session-1",
-            workspace_id="default",
-            metadata={
-                FEISHU_METADATA_PLATFORM_KEY: "feishu",
-                FEISHU_METADATA_TENANT_KEY: "tenant-1",
-                FEISHU_METADATA_CHAT_ID_KEY: "chat-p2p-1",
-                FEISHU_METADATA_CHAT_TYPE_KEY: "p2p",
-            },
-            session_mode=SessionMode.NORMAL,
-            created_at=now,
-            updated_at=now,
-        )
+class _FakeRuntimeConfigLookup:
+    def __init__(self, runtime_config: FeishuTriggerRuntimeConfig | None) -> None:
+        self.runtime_config = runtime_config
+
+    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> FeishuTriggerRuntimeConfig | None:
+        if self.runtime_config is None:
+            return None
+        if self.runtime_config.trigger_id != trigger_id:
+            return None
+        return self.runtime_config
 
 
 class _FakeFeishuClient:
     def __init__(self) -> None:
-        self.sent: list[tuple[str, str, object]] = []
+        self.sent: list[tuple[str, str, object, FeishuEnvironment | None]] = []
 
-    def is_configured(self) -> bool:
-        return True
+    def is_configured(self, environment: FeishuEnvironment | None = None) -> bool:
+        return environment is not None
 
-    def send_text_message(self, *, chat_id: str, text: str) -> None:
-        self.sent.append(("text", chat_id, text))
+    def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self.sent.append(("text", chat_id, text, environment))
 
-    def send_card_message(self, *, chat_id: str, card: dict[str, object]) -> None:
-        self.sent.append(("card", chat_id, card))
+    def send_card_message(
+        self,
+        *,
+        chat_id: str,
+        card: dict[str, object],
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self.sent.append(("card", chat_id, card, environment))
 
 
-def test_dispatcher_sends_text_message() -> None:
+def _build_runtime() -> FeishuTriggerRuntimeConfig:
+    return FeishuTriggerRuntimeConfig(
+        trigger_id="trg_feishu",
+        trigger_name="feishu_main",
+        source=FeishuTriggerSourceConfig(
+            provider="feishu",
+            trigger_rule="mention_only",
+            app_id="cli_demo",
+            app_name="bot",
+        ),
+        target=FeishuTriggerTargetConfig(workspace_id="default"),
+        environment=FeishuEnvironment(
+            app_id="cli_demo",
+            app_secret="secret-demo",
+            app_name="bot",
+        ),
+    )
+
+
+def test_dispatcher_sends_text_message_with_trigger_environment() -> None:
     client = _FakeFeishuClient()
+    runtime = _build_runtime()
     dispatcher = FeishuNotificationDispatcher(
         session_repo=_FakeSessionRepo(),
+        runtime_config_lookup=_FakeRuntimeConfigLookup(runtime),
         feishu_client=client,
     )
 
@@ -83,7 +115,7 @@ def test_dispatcher_sends_text_message() -> None:
         NotificationRequest(
             notification_type=NotificationType.RUN_COMPLETED,
             title="Run Completed",
-            body="好",
+            body="ok",
             channels=(NotificationChannel.FEISHU,),
             dedupe_key="run_completed:run-1",
             context=NotificationContext(
@@ -94,19 +126,15 @@ def test_dispatcher_sends_text_message() -> None:
         )
     )
 
-    assert client.sent == [
-        (
-            "text",
-            "chat-1",
-            "好",
-        )
-    ]
+    assert client.sent == [("text", "chat-1", "ok", runtime.environment)]
 
 
 def test_dispatcher_sends_card_message_when_requested() -> None:
     client = _FakeFeishuClient()
+    runtime = _build_runtime()
     dispatcher = FeishuNotificationDispatcher(
         session_repo=_FakeSessionRepo(),
+        runtime_config_lookup=_FakeRuntimeConfigLookup(runtime),
         feishu_client=client,
     )
 
@@ -130,17 +158,19 @@ def test_dispatcher_sends_card_message_when_requested() -> None:
     )
 
     assert len(client.sent) == 1
-    kind, chat_id, payload = client.sent[0]
+    kind, chat_id, payload, environment = client.sent[0]
     assert kind == "card"
     assert chat_id == "chat-1"
     assert isinstance(payload, dict)
     assert payload["header"]["title"]["content"] == "Approval Required"
+    assert environment == runtime.environment
 
 
-def test_dispatcher_sends_text_message_to_p2p_session() -> None:
+def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
     client = _FakeFeishuClient()
     dispatcher = FeishuNotificationDispatcher(
-        session_repo=_FakeP2PSessionRepo(),
+        session_repo=_FakeSessionRepo(),
+        runtime_config_lookup=_FakeRuntimeConfigLookup(None),
         feishu_client=client,
     )
 
@@ -159,10 +189,4 @@ def test_dispatcher_sends_text_message_to_p2p_session() -> None:
         )
     )
 
-    assert client.sent == [
-        (
-            "text",
-            "chat-p2p-1",
-            "ok",
-        )
-    ]
+    assert client.sent == []

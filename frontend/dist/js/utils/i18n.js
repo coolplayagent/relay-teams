@@ -845,6 +845,52 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.web.save_failed': '保存失败',
 });
 
+Object.assign(TRANSLATIONS['en-US'], {
+    'settings.panel.triggers.description': 'Manage Feishu bots.',
+    'settings.triggers.feishu_detail_copy': '',
+    'settings.triggers.mode': 'Session Mode',
+    'settings.triggers.normal_root_role_id': 'Normal Root Role',
+    'settings.triggers.orchestration_preset_id': 'Orchestration Preset',
+    'settings.triggers.thinking_effort': 'Thinking Effort',
+    'settings.triggers.yolo': 'YOLO',
+    'settings.triggers.thinking_enabled': 'Thinking Enabled',
+    'settings.triggers.bot_configuration': 'Bot Configuration',
+    'settings.triggers.session_configuration': 'Session Configuration',
+    'settings.triggers.no_workspaces': 'No workspaces',
+    'settings.triggers.missing_app_id': 'App ID is required.',
+    'settings.triggers.missing_app_name': 'App name is required.',
+    'settings.triggers.missing_app_secret': 'App secret is required.',
+    'settings.triggers.missing_orchestration_preset_id': 'Preset is required in orchestration mode.',
+    'settings.triggers.feishu_encrypt_key': 'Encrypt Key',
+    'settings.triggers.feishu_encrypt_key_placeholder': 'Encrypt key',
+    'settings.triggers.secret_keep_placeholder': 'Configured. Leave blank to keep current value.',
+    'settings.triggers.option_enabled': 'Enabled',
+    'settings.triggers.option_disabled': 'Disabled',
+});
+
+Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.panel.triggers.description': '管理飞书机器人。',
+    'settings.triggers.feishu_detail_copy': '',
+    'settings.triggers.mode': '会话模式',
+    'settings.triggers.normal_root_role_id': '普通模式根角色',
+    'settings.triggers.orchestration_preset_id': '编排预设',
+    'settings.triggers.thinking_effort': '思考强度',
+    'settings.triggers.yolo': 'YOLO',
+    'settings.triggers.thinking_enabled': '启用思考',
+    'settings.triggers.bot_configuration': '机器人配置',
+    'settings.triggers.session_configuration': '会话配置',
+    'settings.triggers.no_workspaces': '暂无工作区',
+    'settings.triggers.missing_app_id': 'App ID 不能为空。',
+    'settings.triggers.missing_app_name': '应用名称不能为空。',
+    'settings.triggers.missing_app_secret': 'App Secret 不能为空。',
+    'settings.triggers.missing_orchestration_preset_id': '编排模式下必须填写编排预设。',
+    'settings.triggers.feishu_encrypt_key': 'Encrypt Key',
+    'settings.triggers.feishu_encrypt_key_placeholder': '加密密钥',
+    'settings.triggers.secret_keep_placeholder': '已配置，留空则保持当前值。',
+    'settings.triggers.option_enabled': '启用',
+    'settings.triggers.option_disabled': '停用',
+});
+
 export function getCurrentLanguage() {
     return currentLanguage;
 }

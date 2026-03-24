@@ -48,9 +48,6 @@ function escapeHtml(value) {
 function formatProjectLabel(workspace) {
     const fallbackProject = t('sidebar.project');
     const workspaceId = String(workspace?.workspace_id || fallbackProject).trim() || fallbackProject;
-    if (String(workspace?.profile?.file_scope?.backend || '').trim() === 'git_worktree') {
-        return workspaceId;
-    }
     const rootPath = String(workspace?.root_path || '').trim();
     if (!rootPath) {
         return workspaceId;

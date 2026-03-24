@@ -8,9 +8,10 @@ from pydantic import BaseModel, ConfigDict
 
 from agent_teams.interfaces.server.deps import (
     get_feishu_subscription_service,
+    get_feishu_trigger_config_service,
     get_trigger_service,
 )
-from agent_teams.feishu import FeishuSubscriptionService
+from agent_teams.feishu import FeishuSubscriptionService, FeishuTriggerConfigService
 from agent_teams.logger import get_logger, log_event
 from agent_teams.trace import bind_trace_context
 from agent_teams.triggers import (
@@ -42,14 +43,27 @@ class TriggerEventListResponse(BaseModel):
 def create_trigger(
     req: TriggerCreateInput,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
     feishu_subscription_service: Annotated[
         FeishuSubscriptionService, Depends(get_feishu_subscription_service)
     ],
 ) -> TriggerDefinition:
     try:
+        feishu_config_service.validate_create_request(req)
         created = service.create_trigger(req)
-        if _is_feishu_im_trigger(created):
-            feishu_subscription_service.reload()
+        try:
+            if _is_feishu_im_trigger(created):
+                feishu_config_service.save_secret_config(
+                    trigger_id=created.trigger_id,
+                    secret_config_payload=req.secret_config,
+                    require_app_secret=True,
+                )
+                feishu_subscription_service.reload()
+        except Exception:
+            service.delete_trigger(created.trigger_id)
+            raise
         with bind_trace_context(trigger_id=created.trigger_id):
             log_event(
                 logger,
@@ -61,25 +75,35 @@ def create_trigger(
                     "source_type": created.source_type.value,
                 },
             )
-        return created
+        return feishu_config_service.attach_secret_status(created)
     except TriggerNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("", response_model=list[TriggerDefinition])
 def list_triggers(
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
 ) -> list[TriggerDefinition]:
-    return list(service.list_triggers())
+    return list(feishu_config_service.attach_secret_statuses(service.list_triggers()))
 
 
 @router.get("/{trigger_id}", response_model=TriggerDefinition)
 def get_trigger(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
 ) -> TriggerDefinition:
     try:
-        return service.get_trigger(trigger_id)
+        return feishu_config_service.attach_secret_status(service.get_trigger(trigger_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -89,13 +113,38 @@ def update_trigger(
     trigger_id: str,
     req: TriggerUpdateInput,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
     feishu_subscription_service: Annotated[
         FeishuSubscriptionService, Depends(get_feishu_subscription_service)
     ],
 ) -> TriggerDefinition:
     try:
+        existing = service.get_trigger(trigger_id)
+        feishu_config_service.validate_update_request(existing=existing, request=req)
         updated = service.update_trigger(trigger_id, req)
         if _is_feishu_im_trigger(updated):
+            try:
+                feishu_config_service.save_secret_config(
+                    trigger_id=updated.trigger_id,
+                    secret_config_payload=req.secret_config,
+                    require_app_secret=False,
+                )
+            except Exception:
+                _ = service.update_trigger(
+                    trigger_id,
+                    TriggerUpdateInput(
+                        name=existing.name,
+                        display_name=existing.display_name,
+                        source_config=existing.source_config,
+                        auth_policies=existing.auth_policies,
+                        target_config=existing.target_config,
+                    ),
+                )
+                raise
+            if feishu_config_service.runtime_settings_changed(existing, updated):
+                feishu_config_service.clear_bindings(updated.trigger_id)
             feishu_subscription_service.reload()
         with bind_trace_context(trigger_id=updated.trigger_id):
             log_event(
@@ -105,17 +154,24 @@ def update_trigger(
                 message="Trigger updated",
                 payload={"name": updated.name},
             )
-        return updated
+        return feishu_config_service.attach_secret_status(updated)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TriggerNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{trigger_id}:enable", response_model=TriggerDefinition)
 def enable_trigger(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
     feishu_subscription_service: Annotated[
         FeishuSubscriptionService, Depends(get_feishu_subscription_service)
     ],
@@ -124,7 +180,7 @@ def enable_trigger(
         updated = service.set_trigger_status(trigger_id, TriggerStatus.ENABLED)
         if _is_feishu_im_trigger(updated):
             feishu_subscription_service.reload()
-        return updated
+        return feishu_config_service.attach_secret_status(updated)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -133,6 +189,9 @@ def enable_trigger(
 def disable_trigger(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
     feishu_subscription_service: Annotated[
         FeishuSubscriptionService, Depends(get_feishu_subscription_service)
     ],
@@ -141,7 +200,7 @@ def disable_trigger(
         updated = service.set_trigger_status(trigger_id, TriggerStatus.DISABLED)
         if _is_feishu_im_trigger(updated):
             feishu_subscription_service.reload()
-        return updated
+        return feishu_config_service.attach_secret_status(updated)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -150,9 +209,14 @@ def disable_trigger(
 def rotate_trigger_token(
     trigger_id: str,
     service: Annotated[TriggerService, Depends(get_trigger_service)],
+    feishu_config_service: Annotated[
+        FeishuTriggerConfigService, Depends(get_feishu_trigger_config_service)
+    ],
 ) -> TriggerDefinition:
     try:
-        return service.rotate_public_token(trigger_id)
+        return feishu_config_service.attach_secret_status(
+            service.rotate_public_token(trigger_id)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

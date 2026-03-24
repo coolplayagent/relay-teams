@@ -54,6 +54,7 @@ def build_triggers_app(
             '[{"mode":"none"}]', "--auth-policies-json"
         ),
         target_config_json: str | None = typer.Option(None, "--target-config-json"),
+        secret_config_json: str | None = typer.Option(None, "--secret-config-json"),
         public_token: str | None = typer.Option(None, "--public-token"),
         enabled: bool = typer.Option(True, "--enabled/--disabled"),
         base_url: str = typer.Option(default_base_url, "--base-url"),
@@ -73,6 +74,16 @@ def build_triggers_app(
             if target_config_json is not None
             else None
         )
+        secret_config = (
+            _object_to_string_map(
+                _parse_json_object_option(
+                    secret_config_json, option_name="--secret-config-json"
+                ),
+                "--secret-config-json",
+            )
+            if secret_config_json is not None
+            else None
+        )
 
         payload: dict[str, object] = {
             "name": name,
@@ -85,6 +96,8 @@ def build_triggers_app(
             payload["display_name"] = display_name
         if target_config is not None:
             payload["target_config"] = target_config
+        if secret_config is not None:
+            payload["secret_config"] = secret_config
         if public_token is not None:
             payload["public_token"] = public_token
 
@@ -100,6 +113,7 @@ def build_triggers_app(
         source_config_json: str | None = typer.Option(None, "--source-config-json"),
         auth_policies_json: str | None = typer.Option(None, "--auth-policies-json"),
         target_config_json: str | None = typer.Option(None, "--target-config-json"),
+        secret_config_json: str | None = typer.Option(None, "--secret-config-json"),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
     ) -> None:
@@ -119,6 +133,13 @@ def build_triggers_app(
         if target_config_json is not None:
             payload["target_config"] = _parse_json_object_option(
                 target_config_json, option_name="--target-config-json"
+            )
+        if secret_config_json is not None:
+            payload["secret_config"] = _object_to_string_map(
+                _parse_json_object_option(
+                    secret_config_json, option_name="--secret-config-json"
+                ),
+                "--secret-config-json",
             )
         if not payload:
             raise typer.BadParameter(

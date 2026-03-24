@@ -59,23 +59,27 @@ Purpose: registered execution workspaces. `profile_json` stores the typed worksp
 ```sql
 CREATE TABLE IF NOT EXISTS external_session_bindings (
     platform          TEXT NOT NULL,
+    trigger_id        TEXT NOT NULL,
     tenant_key        TEXT NOT NULL,
     external_chat_id  TEXT NOT NULL,
     session_id        TEXT NOT NULL,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    PRIMARY KEY (platform, tenant_key, external_chat_id)
+    PRIMARY KEY (platform, trigger_id, tenant_key, external_chat_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_external_session_bindings_session
     ON external_session_bindings(session_id);
+CREATE INDEX IF NOT EXISTS idx_external_session_bindings_trigger
+    ON external_session_bindings(trigger_id, updated_at DESC);
 ```
 
 Purpose: persistent mapping between an external chat identity and the internal Agent Teams session.
 
 Notes:
 - `platform` starts with `feishu`.
-- `tenant_key + external_chat_id` is the durable lookup key used by inbound Feishu callbacks.
+- `trigger_id + tenant_key + external_chat_id` is the durable lookup key used by inbound Feishu callbacks.
+- The same external chat under different Feishu bots resolves to different internal sessions.
 - The owning session remains the source of truth for runtime state; this table only resolves the external conversation back to that session.
 
 ---
@@ -303,6 +307,10 @@ CREATE INDEX IF NOT EXISTS idx_triggers_status
 
 Purpose: trigger definitions and webhook routing configuration.
 
+Notes:
+- Feishu bot secrets are not stored in this table.
+- Feishu `app_secret`, `verification_token`, and `encrypt_key` are stored in keyring and resolved by `trigger_id`.
+
 `source_type` values:
 - `schedule`
 - `webhook`
@@ -403,7 +411,7 @@ Primary query keys used by repositories:
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: trigger-level retrieval across `triggers`, `trigger_events`.
 - `event_id`: trigger-event level retrieval for audit and replay preparation.
-- `platform + tenant_key + external_chat_id`: external-chat lookup for inbound IM triggers.
+- `platform + trigger_id + tenant_key + external_chat_id`: external-chat lookup for inbound IM triggers.
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
 

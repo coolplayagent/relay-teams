@@ -23,6 +23,7 @@ DEFAULT_SERVER_PORT = 8000
 _SERVER_PROCESS_FILE_NAME = "server-process.json"
 _SERVER_HEALTH_PATH = "/api/system/health"
 _RESTART_TIMEOUT_SECONDS = 60.0
+_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10
 
 
 class ManagedServerProcess(BaseModel):
@@ -122,7 +123,12 @@ def start(
 
     try:
         typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
-        uvicorn_run(fastapi_app, host=host, port=port)
+        uvicorn_run(
+            fastapi_app,
+            host=host,
+            port=port,
+            timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+        )
     finally:
         _clear_managed_server(expected_pid=current_pid)
 

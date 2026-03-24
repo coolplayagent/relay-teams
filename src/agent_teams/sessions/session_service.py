@@ -120,28 +120,51 @@ class SessionService:
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         if not session_id:
             session_id = f"session-{uuid.uuid4().hex[:8]}"
         if self._workspace_service is not None:
             self._workspace_service.require_workspace(workspace_id)
-        session_mode = SessionMode.NORMAL
-        normal_root_role_id: str | None = None
-        orchestration_preset_id: str | None = None
-        if self._orchestration_settings_service is not None:
-            session_mode = self._orchestration_settings_service.default_session_mode()
-            orchestration_preset_id = (
-                self._orchestration_settings_service.default_orchestration_preset_id()
+        resolved_session_mode = session_mode
+        resolved_normal_root_role_id = normal_root_role_id
+        resolved_orchestration_preset_id = orchestration_preset_id
+        if resolved_session_mode is None:
+            resolved_session_mode = SessionMode.NORMAL
+            if self._orchestration_settings_service is not None:
+                resolved_session_mode = (
+                    self._orchestration_settings_service.default_session_mode()
+                )
+                resolved_orchestration_preset_id = (
+                    self._orchestration_settings_service.default_orchestration_preset_id()
+                )
+        if resolved_normal_root_role_id is None and self._role_registry is not None:
+            resolved_normal_root_role_id = self._role_registry.get_main_agent_role_id()
+        resolved_normal_root_role_id = self._resolve_normal_root_role_id(
+            resolved_normal_root_role_id
+        )
+        if (
+            resolved_session_mode == SessionMode.ORCHESTRATION
+            and self._orchestration_settings_service is not None
+        ):
+            probe = SessionRecord(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                metadata={} if metadata is None else dict(metadata),
+                session_mode=SessionMode.ORCHESTRATION,
+                normal_root_role_id=resolved_normal_root_role_id,
+                orchestration_preset_id=resolved_orchestration_preset_id,
             )
-        if self._role_registry is not None:
-            normal_root_role_id = self._role_registry.get_main_agent_role_id()
+            _ = self._orchestration_settings_service.resolve_run_topology(probe)
         return self._session_repo.create(
             session_id=session_id,
             workspace_id=workspace_id,
             metadata=metadata,
-            session_mode=session_mode,
-            normal_root_role_id=normal_root_role_id,
-            orchestration_preset_id=orchestration_preset_id,
+            session_mode=resolved_session_mode,
+            normal_root_role_id=resolved_normal_root_role_id,
+            orchestration_preset_id=resolved_orchestration_preset_id,
         )
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:

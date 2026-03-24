@@ -266,7 +266,122 @@ console.log(JSON.stringify({
     assert payload["activeSessionCount"] == 0
 
 
-def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    actions_start = components_css.index(".projects-list .project-actions {")
+    actions_end = components_css.index(
+        ".projects-list .project-row:hover .project-actions,",
+        actions_start,
+    )
+    actions_rule = components_css[actions_start:actions_end]
+
+    hint_start = components_css.index(".projects-list .project-path-hint {")
+    hint_end = components_css.index(
+        ".projects-list .project-row:hover + .project-path-hint,",
+        hint_start,
+    )
+    hint_rule = components_css[hint_start:hint_end]
+
+    assert "position: relative;" in actions_rule
+    assert "z-index: 8;" in actions_rule
+    assert "right: 3.15rem;" in hint_rule
+    assert "width: auto;" in hint_rule
+    assert "min-width: 0;" in hint_rule
+    assert "max-width: none;" in hint_rule
+    assert "overflow: hidden;" in hint_rule
+    assert "white-space: nowrap;" in hint_rule
+    assert "text-overflow: ellipsis;" in hint_rule
+    assert "z-index: 6;" in hint_rule
+
+
+def test_projects_sidebar_uses_root_path_basename_for_long_git_worktree_title(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+
+console.log(JSON.stringify({
+    projectTitle: firstProject.querySelector(".project-title").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "C:/Users/yex/Documents/workspace/agent-teams",
+        root_path: "C:/Users/yex/Documents/workspace/agent-teams",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "git_worktree",
+            },
+        },
+    },
+];
+
+const sessions = [];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function startNewSession(workspaceId) {
+    globalThis.__createdSessionWorkspaceIds.push(workspaceId);
+    return {
+        session_id: "session-new-1",
+        workspace_id: workspaceId,
+        updated_at: "2026-03-14T11:00:00Z",
+        pending_tool_approval_count: 0,
+    };
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["projectTitle"] == "agent-teams"
+
+
+def _run_sidebar_script(
+    tmp_path: Path,
+    runner_source: str,
+    mock_api_source: str | None = None,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
 
@@ -567,8 +682,7 @@ export function sysLog(message) {
         encoding="utf-8",
     )
 
-    mock_api_path.write_text(
-        """
+    default_mock_api_source = """
 const workspaces = [
     {
         workspace_id: "alpha-project",
@@ -682,7 +796,9 @@ export async function deleteWorkspace(workspaceId, options = {}) {
     globalThis.__deleteWorkspaceCalls.push({ workspaceId, options });
     return { status: "ok" };
 }
-""".strip(),
+""".strip()
+    mock_api_path.write_text(
+        (mock_api_source or default_mock_api_source),
         encoding="utf-8",
     )
 

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from agent_teams.interfaces.server.deps import (
     get_feishu_subscription_service,
+    get_feishu_trigger_config_service,
     get_trigger_service,
 )
 from agent_teams.interfaces.server.routers import triggers
@@ -142,10 +143,56 @@ class _FakeFeishuSubscriptionService:
         self.reload_calls += 1
 
 
+class _FakeFeishuTriggerConfigService:
+    def __init__(self) -> None:
+        self.saved_secret_calls: list[tuple[str, dict[str, str] | None, bool]] = []
+        self.cleared_trigger_ids: list[str] = []
+
+    def validate_create_request(self, _req: object) -> None:
+        return None
+
+    def validate_update_request(self, *, existing: object, request: object) -> None:
+        _ = (existing, request)
+        return None
+
+    def save_secret_config(
+        self,
+        *,
+        trigger_id: str,
+        secret_config_payload: dict[str, str] | None,
+        require_app_secret: bool,
+    ) -> None:
+        self.saved_secret_calls.append(
+            (trigger_id, secret_config_payload, require_app_secret)
+        )
+
+    def attach_secret_status(self, trigger: TriggerDefinition) -> TriggerDefinition:
+        return trigger.model_copy(
+            update={"secret_status": {"app_secret_configured": True}}
+        )
+
+    def attach_secret_statuses(
+        self,
+        triggers: tuple[TriggerDefinition, ...],
+    ) -> tuple[TriggerDefinition, ...]:
+        return tuple(self.attach_secret_status(trigger) for trigger in triggers)
+
+    def runtime_settings_changed(
+        self,
+        before: TriggerDefinition,
+        after: TriggerDefinition,
+    ) -> bool:
+        return before.target_config != after.target_config
+
+    def clear_bindings(self, trigger_id: str) -> None:
+        self.cleared_trigger_ids.append(trigger_id)
+
+
 def _create_test_client(
     fake_service: object,
     *,
     fake_feishu_subscription_service: object | None = None,
+    fake_feishu_trigger_config_service: object | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(triggers.router, prefix="/api")
@@ -154,6 +201,11 @@ def _create_test_client(
         (lambda: fake_feishu_subscription_service)
         if fake_feishu_subscription_service is not None
         else (lambda: _FakeFeishuSubscriptionService())
+    )
+    app.dependency_overrides[get_feishu_trigger_config_service] = (
+        (lambda: fake_feishu_trigger_config_service)
+        if fake_feishu_trigger_config_service is not None
+        else (lambda: _FakeFeishuTriggerConfigService())
     )
     return TestClient(app)
 
@@ -194,7 +246,12 @@ def test_trigger_router_reloads_feishu_subscription_on_feishu_trigger_create() -
         source_type=TriggerSourceType.IM,
         status=TriggerStatus.ENABLED,
         public_token="token-test",
-        source_config={"provider": "feishu"},
+        source_config={
+            "provider": "feishu",
+            "trigger_rule": "mention_only",
+            "app_id": "cli_demo",
+            "app_name": "bot",
+        },
         auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
         target_config={"workspace_id": "default"},
         created_at=now,
@@ -207,17 +264,94 @@ def test_trigger_router_reloads_feishu_subscription_on_feishu_trigger_create() -
             return trigger
 
     subscription_service = _FakeFeishuSubscriptionService()
+    feishu_config_service = _FakeFeishuTriggerConfigService()
     client = _create_test_client(
         _FakeFeishuTriggerService(),
         fake_feishu_subscription_service=subscription_service,
+        fake_feishu_trigger_config_service=feishu_config_service,
     )
     response = client.post(
         "/api/triggers",
         json={
             "name": "feishu_group",
             "source_type": "im",
-            "source_config": {"provider": "feishu"},
+            "source_config": {
+                "provider": "feishu",
+                "trigger_rule": "mention_only",
+                "app_id": "cli_demo",
+                "app_name": "bot",
+            },
+            "target_config": {"workspace_id": "default"},
+            "secret_config": {"app_secret": "secret-demo"},
         },
     )
     assert response.status_code == 200
     assert subscription_service.reload_calls == 1
+    assert feishu_config_service.saved_secret_calls == [
+        ("trg_feishu", {"app_secret": "secret-demo"}, True)
+    ]
+    assert response.json()["secret_status"]["app_secret_configured"] is True
+
+
+def test_trigger_router_clears_bindings_when_feishu_runtime_settings_change() -> None:
+    now = datetime.now(tz=UTC)
+    trigger = TriggerDefinition(
+        trigger_id="trg_feishu",
+        name="feishu_group",
+        display_name="Feishu Group",
+        source_type=TriggerSourceType.IM,
+        status=TriggerStatus.ENABLED,
+        public_token="token-test",
+        source_config={
+            "provider": "feishu",
+            "trigger_rule": "mention_only",
+            "app_id": "cli_demo",
+            "app_name": "bot",
+        },
+        auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
+        target_config={
+            "workspace_id": "default",
+            "session_mode": "normal",
+            "yolo": True,
+        },
+        created_at=now,
+        updated_at=now,
+    )
+
+    class _FakeFeishuTriggerService(_FakeTriggerService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.trigger = trigger
+
+        def update_trigger(self, trigger_id: str, req: object) -> TriggerDefinition:
+            _ = self.get_trigger(trigger_id)
+            target_config = getattr(req, "target_config", None)
+            if target_config is None:
+                return self.trigger
+            self.trigger = self.trigger.model_copy(update={"target_config": target_config})
+            return self.trigger
+
+    subscription_service = _FakeFeishuSubscriptionService()
+    feishu_config_service = _FakeFeishuTriggerConfigService()
+    client = _create_test_client(
+        _FakeFeishuTriggerService(),
+        fake_feishu_subscription_service=subscription_service,
+        fake_feishu_trigger_config_service=feishu_config_service,
+    )
+
+    response = client.patch(
+        "/api/triggers/trg_feishu",
+        json={
+            "target_config": {
+                "workspace_id": "workspace-ops",
+                "session_mode": "orchestration",
+                "orchestration_preset_id": "default",
+                "yolo": False,
+                "thinking": {"enabled": True, "effort": "high"},
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert subscription_service.reload_calls == 1
+    assert feishu_config_service.cleared_trigger_ids == ["trg_feishu"]

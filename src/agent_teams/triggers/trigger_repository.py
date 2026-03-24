@@ -225,6 +225,10 @@ class TriggerRepository:
         ).fetchall()
         return tuple(self._row_to_trigger(row) for row in rows)
 
+    def delete_trigger(self, trigger_id: str) -> None:
+        self._conn.execute("DELETE FROM triggers WHERE trigger_id=?", (trigger_id,))
+        self._conn.commit()
+
     def create_event(self, event: TriggerEventRecord) -> TriggerEventRecord:
         try:
             cursor = self._conn.execute(

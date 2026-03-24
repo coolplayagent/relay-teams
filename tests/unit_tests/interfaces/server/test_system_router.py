@@ -10,7 +10,6 @@ from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
-    get_feishu_subscription_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -760,27 +759,10 @@ class _FakeEnvironmentVariableService:
         self.deleted_key = (str(getattr(scope, "value", scope)), key)
 
 
-class _FakeFeishuSubscriptionService:
-    def __init__(self) -> None:
-        self.reload_calls = 0
-
-    def reload(self) -> None:
-        self.reload_calls += 1
-
-
-def _create_env_test_client(
-    fake_service: object,
-    *,
-    fake_feishu_subscription_service: object | None = None,
-) -> TestClient:
+def _create_env_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
     app.dependency_overrides[get_environment_variable_service] = lambda: fake_service
-    app.dependency_overrides[get_feishu_subscription_service] = (
-        (lambda: fake_feishu_subscription_service)
-        if fake_feishu_subscription_service is not None
-        else (lambda: _FakeFeishuSubscriptionService())
-    )
     return TestClient(app)
 
 
@@ -797,11 +779,7 @@ def test_get_environment_variables() -> None:
 
 def test_save_environment_variable() -> None:
     service = _FakeEnvironmentVariableService()
-    feishu_subscription_service = _FakeFeishuSubscriptionService()
-    client = _create_env_test_client(
-        service,
-        fake_feishu_subscription_service=feishu_subscription_service,
-    )
+    client = _create_env_test_client(service)
 
     response = client.put(
         "/api/system/configs/environment-variables/app/OPENAI_API_KEY",
@@ -824,27 +802,6 @@ def test_save_environment_variable() -> None:
         "source_key": "OPENAI_KEY",
         "value": "updated-secret",
     }
-    assert feishu_subscription_service.reload_calls == 0
-
-
-def test_save_feishu_environment_variable_reloads_subscription() -> None:
-    service = _FakeEnvironmentVariableService()
-    feishu_subscription_service = _FakeFeishuSubscriptionService()
-    client = _create_env_test_client(
-        service,
-        fake_feishu_subscription_service=feishu_subscription_service,
-    )
-
-    response = client.put(
-        "/api/system/configs/environment-variables/app/FEISHU_APP_ID",
-        json={
-            "source_key": "FEISHU_APP_ID",
-            "value": "cli_demo",
-        },
-    )
-
-    assert response.status_code == 200
-    assert feishu_subscription_service.reload_calls == 1
 
 
 def test_delete_environment_variable_returns_forbidden_on_permission_error() -> None:

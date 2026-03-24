@@ -9,7 +9,10 @@ from agent_teams.feishu.models import (
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
     FEISHU_METADATA_TENANT_KEY,
+    FEISHU_METADATA_TRIGGER_ID_KEY,
+    FeishuEnvironment,
     FeishuMessageFormat,
+    FeishuTriggerRuntimeConfig,
 )
 from agent_teams.notifications.models import (
     NotificationChannel,
@@ -23,12 +26,30 @@ class SessionLookup(Protocol):
     def get(self, session_id: str) -> SessionRecord: ...
 
 
+class FeishuRuntimeConfigLookup(Protocol):
+    def get_runtime_config_by_trigger_id(
+        self, trigger_id: str
+    ) -> FeishuTriggerRuntimeConfig | None: ...
+
+
 class FeishuMessageSender(Protocol):
-    def is_configured(self) -> bool: ...
+    def is_configured(self, environment: FeishuEnvironment | None = None) -> bool: ...
 
-    def send_text_message(self, *, chat_id: str, text: str) -> None: ...
+    def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
 
-    def send_card_message(self, *, chat_id: str, card: dict[str, object]) -> None: ...
+    def send_card_message(
+        self,
+        *,
+        chat_id: str,
+        card: dict[str, object],
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
 
 
 class FeishuNotificationDispatcher:
@@ -36,19 +57,30 @@ class FeishuNotificationDispatcher:
         self,
         *,
         session_repo: SessionLookup,
+        runtime_config_lookup: FeishuRuntimeConfigLookup,
         feishu_client: FeishuMessageSender,
     ) -> None:
         self._session_repo = session_repo
+        self._runtime_config_lookup = runtime_config_lookup
         self._feishu_client = feishu_client
 
     def dispatch(self, request: NotificationRequest) -> None:
         if NotificationChannel.FEISHU not in request.channels:
             return
-        if not self._feishu_client.is_configured():
-            return
         session = self._session_repo.get(request.context.session_id)
         metadata = session.metadata
         if str(metadata.get(FEISHU_METADATA_PLATFORM_KEY, "")).strip() != "feishu":
+            return
+        trigger_id = str(metadata.get(FEISHU_METADATA_TRIGGER_ID_KEY, "")).strip()
+        if not trigger_id:
+            return
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            trigger_id
+        )
+        if runtime_config is None:
+            return
+        environment = runtime_config.environment
+        if not self._feishu_client.is_configured(environment):
             return
         chat_id = str(metadata.get(FEISHU_METADATA_CHAT_ID_KEY, "")).strip()
         if not chat_id:
@@ -57,11 +89,13 @@ class FeishuNotificationDispatcher:
             self._feishu_client.send_card_message(
                 chat_id=chat_id,
                 card=_build_card_payload(request, metadata),
+                environment=environment,
             )
             return
         self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=_build_text_payload(request),
+            environment=environment,
         )
 
 

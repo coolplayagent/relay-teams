@@ -3491,6 +3491,10 @@
     gap: 1rem;
 }
 
+.trigger-settings-form-row {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .form-actions {
     display: flex;
     align-items: center;
@@ -5138,6 +5142,8 @@ body.light-theme .project-session-toggle-btn {
     gap: 0.1rem;
     opacity: 0;
     pointer-events: none;
+    position: relative;
+    z-index: 8;
     transition: opacity 0.14s ease;
 }
 
@@ -5168,27 +5174,28 @@ body.light-theme .project-session-toggle-btn {
 .projects-list .project-path-hint {
     position: absolute;
     left: 1.72rem;
+    right: 3.15rem;
     top: 0.16rem;
-    width: fit-content;
-    min-width: 12rem;
-    max-width: calc(100% - 1rem);
+    width: auto;
+    min-width: 0;
+    max-width: none;
     padding: 0.14rem 0.38rem;
-    overflow: visible;
+    display: block;
+    overflow: hidden;
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 0.66rem;
     line-height: 1.35;
     opacity: 0;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    word-break: break-word;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
     border-radius: 6px;
     background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
     box-shadow: 0 3px 10px rgba(17, 19, 18, 0.045);
     transform: translateY(calc(-100% - 4px));
-    z-index: 7;
+    z-index: 6;
     transition: opacity 0.14s ease, transform 0.14s ease;
 }
 
