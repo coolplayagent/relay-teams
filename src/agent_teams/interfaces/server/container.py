@@ -366,6 +366,7 @@ class ServerContainer:
             session_service=self.session_service,
             run_service=self.run_service,
             external_session_binding_repo=self.external_session_binding_repo,
+            feishu_client=self.feishu_client,
         )
         self.feishu_subscription_service = FeishuSubscriptionService(
             trigger_service=self.trigger_service,

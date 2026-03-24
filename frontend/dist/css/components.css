@@ -5327,10 +5327,29 @@ body.light-theme .project-session-toggle-btn {
     box-shadow: inset 1.5px 0 0 var(--primary);
 }
 
+.projects-list .session-item.session-item-im {
+    background: color-mix(in srgb, var(--success) 4%, transparent);
+    box-shadow: inset 1.5px 0 0 color-mix(in srgb, var(--success) 34%, transparent);
+}
+
+.projects-list .session-item.session-item-im:hover,
+.projects-list .session-item.session-item-im:focus-visible {
+    background: color-mix(in srgb, var(--success) 8%, var(--bg-hover));
+}
+
+.projects-list .session-item.session-item-im.active {
+    background: color-mix(in srgb, var(--primary) 5%, var(--success) 6%);
+    box-shadow:
+        inset 1.5px 0 0 var(--primary),
+        inset 3px 0 0 color-mix(in srgb, var(--success) 22%, transparent);
+}
+
 .projects-list .session-id {
     flex: 1 1 auto;
     min-width: 0;
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -5338,6 +5357,28 @@ body.light-theme .project-session-toggle-btn {
     font-weight: 400;
     line-height: 1.25;
     text-align: left;
+}
+
+.projects-list .session-source-icon {
+    flex: 0 0 auto;
+    width: 0.95rem;
+    height: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: color-mix(in srgb, var(--success) 68%, var(--text-secondary));
+}
+
+.projects-list .session-source-icon svg {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.projects-list .session-label-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .projects-list .session-meta {

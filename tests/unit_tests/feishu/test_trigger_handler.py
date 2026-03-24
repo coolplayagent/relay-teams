@@ -6,12 +6,22 @@ from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
+from pydantic import JsonValue
 
 from agent_teams.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
+    SESSION_METADATA_SOURCE_ICON_KEY,
+    SESSION_METADATA_SOURCE_KIND_KEY,
+    SESSION_METADATA_SOURCE_LABEL_KEY,
+    SESSION_METADATA_SOURCE_PROVIDER_KEY,
+    SESSION_METADATA_TITLE_SOURCE_KEY,
+    SESSION_SOURCE_ICON_IM,
+    SESSION_SOURCE_KIND_IM,
+    SESSION_TITLE_SOURCE_AUTO,
+    SESSION_TITLE_SOURCE_MANUAL,
 )
 from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
 from agent_teams.sessions import ExternalSessionBindingRepository
@@ -58,7 +68,10 @@ class _FakeTriggerService:
 
 
 class _FakeFeishuConfigService:
-    def __init__(self, runtime_configs: dict[str, FeishuTriggerRuntimeConfig | None]) -> None:
+    def __init__(
+        self,
+        runtime_configs: dict[str, FeishuTriggerRuntimeConfig | None],
+    ) -> None:
         self.runtime_configs = runtime_configs
 
     def resolve_runtime_config(
@@ -122,6 +135,36 @@ class _FakeRunService:
         self.started.append(run_id)
 
 
+class _FakeFeishuClient:
+    def __init__(self) -> None:
+        self.chat_names: dict[str, str] = {}
+        self.user_names: dict[str, str] = {}
+        self.chat_failures: set[str] = set()
+        self.user_failures: set[str] = set()
+
+    def get_chat_name(
+        self,
+        *,
+        chat_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        _ = environment
+        if chat_id in self.chat_failures:
+            raise RuntimeError("chat lookup failed")
+        return self.chat_names.get(chat_id)
+
+    def get_user_name(
+        self,
+        *,
+        open_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        _ = environment
+        if open_id in self.user_failures:
+            raise RuntimeError("user lookup failed")
+        return self.user_names.get(open_id)
+
+
 def _build_trigger(
     *,
     trigger_id: str,
@@ -136,7 +179,7 @@ def _build_trigger(
     thinking: RunThinkingConfig | None = None,
 ) -> TriggerDefinition:
     now = datetime.now(tz=UTC)
-    target_config: dict[str, object] = {
+    target_config: dict[str, JsonValue] = {
         "workspace_id": workspace_id,
         "session_mode": session_mode.value,
         "yolo": yolo,
@@ -193,24 +236,29 @@ def _build_handler(
     _FakeSessionService,
     _FakeRunService,
     ExternalSessionBindingRepository,
+    _FakeFeishuClient,
 ]:
     trigger_service = _FakeTriggerService(*triggers)
     session_service = _FakeSessionService()
     run_service = _FakeRunService()
     bindings = ExternalSessionBindingRepository(tmp_path / "bindings.db")
-    resolved_runtime_configs = (
-        {trigger.trigger_id: _build_runtime(trigger) for trigger in triggers}
-        if runtime_configs is None
-        else runtime_configs
-    )
+    feishu_client = _FakeFeishuClient()
+    resolved_runtime_configs: dict[str, FeishuTriggerRuntimeConfig | None]
+    if runtime_configs is None:
+        resolved_runtime_configs = {
+            trigger.trigger_id: _build_runtime(trigger) for trigger in triggers
+        }
+    else:
+        resolved_runtime_configs = dict(runtime_configs)
     handler = FeishuTriggerHandler(
         trigger_service=trigger_service,
         feishu_config_service=_FakeFeishuConfigService(resolved_runtime_configs),
         session_service=session_service,
         run_service=run_service,
         external_session_binding_repo=bindings,
+        feishu_client=feishu_client,
     )
-    return handler, trigger_service, session_service, run_service, bindings
+    return handler, trigger_service, session_service, run_service, bindings, feishu_client
 
 
 def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
@@ -228,10 +276,18 @@ def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
         yolo=False,
         thinking=RunThinkingConfig(enabled=True, effort="high"),
     )
-    handler, _trigger_service, session_service, run_service, bindings = _build_handler(
+    (
+        handler,
+        _trigger_service,
+        session_service,
+        run_service,
+        bindings,
+        feishu_client,
+    ) = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
     )
+    feishu_client.chat_names["oc_group_1"] = "Repo Ops"
 
     raw_body = """
     {
@@ -276,6 +332,12 @@ def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
     assert run_service.created[0].yolo is False
     assert run_service.created[0].thinking.enabled is True
     assert run_service.created[0].thinking.effort == "high"
+    assert session_service.sessions["session-1"].metadata["title"] == "feishu_ops · Repo Ops"
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_KIND_KEY] == SESSION_SOURCE_KIND_IM
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_PROVIDER_KEY] == "feishu"
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Repo Ops"
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_ICON_KEY] == SESSION_SOURCE_ICON_IM
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_TITLE_SOURCE_KEY] == SESSION_TITLE_SOURCE_AUTO
     binding = bindings.get_binding(
         platform="feishu",
         trigger_id=trigger.trigger_id,
@@ -293,7 +355,7 @@ def test_handle_sdk_event_ignores_group_non_mentions(tmp_path: Path) -> None:
         app_id="cli_group",
         app_name="bot",
     )
-    handler, _trigger_service, _session_service, run_service, _bindings = _build_handler(
+    handler, _trigger_service, _session_service, run_service, _bindings, _feishu_client = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
     )
@@ -348,10 +410,12 @@ def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path: Path) -> None:
         session_service,
         run_service,
         bindings,
+        feishu_client,
     ) = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
     )
+    feishu_client.user_names["ou_user"] = "Alice"
 
     raw_body = """
     {
@@ -389,6 +453,8 @@ def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path: Path) -> None:
     assert result.session_id == "session-1"
     assert run_service.created[0].intent == "hello from dm"
     assert session_service.sessions["session-1"].metadata["feishu_chat_type"] == "p2p"
+    assert session_service.sessions["session-1"].metadata["title"] == "feishu_dm · Alice"
+    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Alice"
     binding = bindings.get_binding(
         platform="feishu",
         trigger_id=trigger.trigger_id,
@@ -417,6 +483,7 @@ def test_handle_sdk_event_isolates_same_chat_by_trigger_id(tmp_path: Path) -> No
         _session_service,
         run_service,
         bindings,
+        _feishu_client,
     ) = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger_a, trigger_b),
@@ -494,7 +561,7 @@ def test_handle_sdk_event_ignores_trigger_without_credentials(tmp_path: Path) ->
         app_id="cli_missing",
         app_name="bot",
     )
-    handler, _trigger_service, _session_service, run_service, _bindings = _build_handler(
+    handler, _trigger_service, _session_service, run_service, _bindings, _feishu_client = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
         runtime_configs={trigger.trigger_id: None},
@@ -528,3 +595,134 @@ def test_handle_sdk_event_ignores_trigger_without_credentials(tmp_path: Path) ->
     assert result.ignored is True
     assert result.reason == "missing_credentials"
     assert run_service.created == []
+
+
+def test_handle_sdk_event_uses_fallback_title_when_feishu_name_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_fallback",
+        name="bot_fallback",
+        app_id="cli_fallback",
+        app_name="bot-fallback",
+    )
+    (
+        handler,
+        _trigger_service,
+        session_service,
+        run_service,
+        _bindings,
+        feishu_client,
+    ) = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    feishu_client.chat_failures.add("oc_group_987654321")
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {"event_id": "evt-fallback", "event_type": "im.message.receive_v1", "tenant_key": "tenant-1"},
+      "event": {
+        "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
+        "message": {
+          "message_id": "om_fallback",
+          "chat_id": "oc_group_987654321",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"<at user_id=\\\\\\"ou_bot\\\\\\">bot-fallback</at> hello\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert run_service.created[0].intent == "hello"
+    title = session_service.sessions["session-1"].metadata["title"]
+    source_label = session_service.sessions["session-1"].metadata[
+        SESSION_METADATA_SOURCE_LABEL_KEY
+    ]
+    assert title.startswith("bot_fallback")
+    assert title.endswith("Group 87654321")
+    assert source_label == "Group 87654321"
+
+
+def test_handle_sdk_event_preserves_manual_session_title_on_existing_binding(
+    tmp_path: Path,
+) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_manual_title",
+        name="bot_manual",
+        app_id="cli_manual",
+        app_name="bot-manual",
+    )
+    (
+        handler,
+        _trigger_service,
+        session_service,
+        _run_service,
+        bindings,
+        feishu_client,
+    ) = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    feishu_client.chat_names["oc_group_1"] = "Operations"
+    session = session_service.create_session(
+        session_id="session-existing",
+        workspace_id="default",
+        metadata={
+            "title": "Manual Name",
+            SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_MANUAL,
+        },
+    )
+    bindings.upsert_binding(
+        platform="feishu",
+        trigger_id=trigger.trigger_id,
+        tenant_key="tenant-1",
+        external_chat_id="oc_group_1",
+        session_id=session.session_id,
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {"event_id": "evt-manual", "event_type": "im.message.receive_v1", "tenant_key": "tenant-1"},
+      "event": {
+        "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
+        "message": {
+          "message_id": "om_manual",
+          "chat_id": "oc_group_1",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"<at user_id=\\\\\\"ou_bot\\\\\\">bot-manual</at> hello again\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert result.session_id == "session-existing"
+    updated_session = session_service.sessions["session-existing"]
+    assert updated_session.metadata["title"] == "Manual Name"
+    assert (
+        updated_session.metadata[SESSION_METADATA_TITLE_SOURCE_KEY]
+        == SESSION_TITLE_SOURCE_MANUAL
+    )
+    assert updated_session.metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Operations"

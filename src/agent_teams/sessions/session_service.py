@@ -20,6 +20,10 @@ from agent_teams.roles.role_registry import (
     LEGACY_COORDINATOR_IDENTIFIERS,
     MAIN_AGENT_IDENTIFIERS,
 )
+from agent_teams.feishu import (
+    SESSION_METADATA_TITLE_SOURCE_KEY,
+    SESSION_TITLE_SOURCE_MANUAL,
+)
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
@@ -168,7 +172,19 @@ class SessionService:
         )
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
-        self._session_repo.update_metadata(session_id, metadata)
+        current = self._session_repo.get(session_id)
+        normalized_metadata = dict(metadata)
+        title_value = str(normalized_metadata.get("title") or "").strip()
+        current_title = str(current.metadata.get("title") or "").strip()
+        if title_value:
+            normalized_metadata["title"] = title_value
+            if SESSION_METADATA_TITLE_SOURCE_KEY not in normalized_metadata:
+                normalized_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = (
+                    SESSION_TITLE_SOURCE_MANUAL
+                )
+        elif current_title:
+            normalized_metadata.pop(SESSION_METADATA_TITLE_SOURCE_KEY, None)
+        self._session_repo.update_metadata(session_id, normalized_metadata)
 
     def update_session_topology(
         self,

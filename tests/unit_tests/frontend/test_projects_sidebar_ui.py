@@ -141,6 +141,105 @@ console.log(JSON.stringify({
     assert payload["renamedLabel"] == "Renamed Session"
 
 
+def test_projects_sidebar_marks_im_sessions_with_icon_and_im_class(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const firstSession = firstProject.querySelectorAll(".session-item")[0];
+const firstSessionLabel = firstProject.querySelectorAll(".session-id")[0].textContent;
+const iconCount = firstProject.querySelectorAll(".session-source-icon").length;
+
+console.log(JSON.stringify({
+    firstSessionClassName: firstSession.className,
+    firstSessionLabel,
+    iconCount,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-im",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: {
+            title: "feishu_bot · Release Updates",
+            source_kind: "im",
+            source_icon: "im",
+        },
+    },
+    {
+        session_id: "session-plain",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:10:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert "session-item-im" in str(payload["firstSessionClassName"])
+    assert str(payload["firstSessionLabel"]).startswith("feishu_bot")
+    assert str(payload["firstSessionLabel"]).endswith("Release Updates")
+    assert payload["iconCount"] == 1
+
+
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
     tmp_path: Path,
 ) -> None:
@@ -421,8 +520,9 @@ function parseElements(source, selector) {
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
         ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
+        ".session-source-icon": /class="session-source-icon"[^>]*>/g,
         ".project-title": /class="project-title"[^>]*>([\s\S]*?)<\/span>/g,
-        ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>/g,
+        ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>\s*<span class="session-meta"/g,
     };
     const pattern = patterns[selector];
     if (!pattern) {
@@ -466,6 +566,8 @@ function parseElements(source, selector) {
                     "data-workspace-id": match[3],
                 },
             }));
+        } else if (selector === ".session-source-icon") {
+            results.push(createNode());
         } else if (selector === ".project-title") {
             results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
         } else if (selector === ".session-id") {

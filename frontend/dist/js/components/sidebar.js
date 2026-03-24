@@ -61,9 +61,7 @@ function isForkedWorkspace(workspace) {
 }
 
 function formatSessionLabel(session) {
-    const metadata = session?.metadata && typeof session.metadata === 'object'
-        ? session.metadata
-        : {};
+    const metadata = getSessionMetadata(session);
     const keys = ['title', 'name', 'label'];
     for (const key of keys) {
         const label = String(metadata[key] || '').trim();
@@ -72,6 +70,30 @@ function formatSessionLabel(session) {
         }
     }
     return String(session?.session_id || 'Session');
+}
+
+function getSessionMetadata(session) {
+    return session?.metadata && typeof session.metadata === 'object'
+        ? session.metadata
+        : {};
+}
+
+function isImSession(session) {
+    return String(getSessionMetadata(session).source_kind || '').trim() === 'im';
+}
+
+function renderSessionSourceIcon(session) {
+    if (!isImSession(session)) {
+        return '';
+    }
+    return `
+        <span class="session-source-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" class="icon-sm">
+                <path d="M3.25 4.5a2.25 2.25 0 0 1 2.25-2.25h5a2.25 2.25 0 0 1 2.25 2.25v3a2.25 2.25 0 0 1-2.25 2.25H7.4L4.8 11.9a.45.45 0 0 1-.75-.33V9.75h-.55A2.25 2.25 0 0 1 1.25 7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                <path d="M5.1 5.95h5.8M5.1 7.85h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+        </span>
+    `;
 }
 
 function timestampValue(value) {
@@ -544,18 +566,17 @@ function renderProjectCard(group) {
                 ${
                     visibleSessions.length > 0
                         ? visibleSessions.map(session => {
-                            const sessionMetadata = session?.metadata && typeof session.metadata === 'object'
-                                ? session.metadata
-                                : {};
+                            const sessionMetadata = getSessionMetadata(session);
+                            const isIm = isImSession(session);
                             return `
                                 <div
-                                    class="session-item${sessionSelectionEnabled && session.session_id === state.currentSessionId ? ' active' : ''}"
+                                    class="session-item${isIm ? ' session-item-im' : ''}${sessionSelectionEnabled && session.session_id === state.currentSessionId ? ' active' : ''}"
                                     tabindex="0"
                                     role="button"
                                     data-session-id="${escapeHtml(session.session_id)}"
                                     data-workspace-id="${escapeHtml(session.workspace_id)}"
                                 >
-                                    <span class="session-id">${escapeHtml(formatSessionLabel(session))}</span>
+                                    <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text">${escapeHtml(formatSessionLabel(session))}</span></span>
                                     <span class="session-meta">
                                         <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
                                         <span class="session-actions">

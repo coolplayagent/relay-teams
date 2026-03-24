@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from json import JSONDecodeError, loads
 import re
 from typing import Protocol, cast
@@ -20,14 +21,25 @@ from agent_teams.feishu.models import (
     FEISHU_METADATA_TENANT_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
     FEISHU_PLATFORM,
+    FeishuEnvironment,
     FeishuNormalizedMessage,
     FeishuTriggerRuntimeConfig,
+    SESSION_METADATA_SOURCE_ICON_KEY,
+    SESSION_METADATA_SOURCE_KIND_KEY,
+    SESSION_METADATA_SOURCE_LABEL_KEY,
+    SESSION_METADATA_SOURCE_PROVIDER_KEY,
+    SESSION_METADATA_TITLE_SOURCE_KEY,
+    SESSION_SOURCE_ICON_IM,
+    SESSION_SOURCE_KIND_IM,
+    SESSION_TITLE_SOURCE_AUTO,
+    SESSION_TITLE_SOURCE_MANUAL,
     TriggerProcessingResult,
 )
+from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import IntentInput
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.triggers import (
     TriggerDefinition,
     TriggerIngestInput,
@@ -38,6 +50,7 @@ from agent_teams.triggers import (
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
 _AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
 _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
+logger = get_logger(__name__)
 
 
 class TriggerServiceLike(Protocol):
@@ -67,7 +80,7 @@ class SessionServiceLike(Protocol):
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
-        session_mode: object | None = None,
+        session_mode: SessionMode | None = None,
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord: ...
@@ -83,6 +96,22 @@ class RunServiceLike(Protocol):
     def ensure_run_started(self, run_id: str) -> None: ...
 
 
+class FeishuClientLike(Protocol):
+    def get_chat_name(
+        self,
+        *,
+        chat_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None: ...
+
+    def get_user_name(
+        self,
+        *,
+        open_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None: ...
+
+
 class FeishuTriggerHandler:
     def __init__(
         self,
@@ -92,12 +121,14 @@ class FeishuTriggerHandler:
         session_service: SessionServiceLike,
         run_service: RunServiceLike,
         external_session_binding_repo: ExternalSessionBindingRepository,
+        feishu_client: FeishuClientLike | None = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._feishu_config_service = feishu_config_service
         self._session_service = session_service
         self._run_service = run_service
         self._external_session_binding_repo = external_session_binding_repo
+        self._feishu_client = feishu_client
 
     def handle_sdk_event(
         self,
@@ -275,18 +306,18 @@ class FeishuTriggerHandler:
             tenant_key=message.tenant_key,
             external_chat_id=message.chat_id,
         )
-        metadata = {
-            FEISHU_METADATA_PLATFORM_KEY: FEISHU_PLATFORM,
-            FEISHU_METADATA_TENANT_KEY: message.tenant_key,
-            FEISHU_METADATA_CHAT_ID_KEY: message.chat_id,
-            FEISHU_METADATA_CHAT_TYPE_KEY: message.chat_type,
-            FEISHU_METADATA_TRIGGER_ID_KEY: runtime_config.trigger_id,
-        }
+        metadata = self._build_session_metadata(
+            runtime_config=runtime_config,
+            message=message,
+        )
         if binding is not None:
             try:
                 session = self._session_service.get_session(binding.session_id)
             except KeyError:
-                session = self._create_session(runtime_config=runtime_config, metadata=metadata)
+                session = self._create_session(
+                    runtime_config=runtime_config,
+                    metadata=metadata,
+                )
                 self._external_session_binding_repo.upsert_binding(
                     platform=FEISHU_PLATFORM,
                     trigger_id=runtime_config.trigger_id,
@@ -295,8 +326,10 @@ class FeishuTriggerHandler:
                     session_id=session.session_id,
                 )
                 return session.session_id
-            merged_metadata = dict(session.metadata)
-            merged_metadata.update(metadata)
+            merged_metadata = self._merge_session_metadata(
+                current_metadata=session.metadata,
+                next_metadata=metadata,
+            )
             self._session_service.update_session(session.session_id, merged_metadata)
             return session.session_id
 
@@ -323,6 +356,140 @@ class FeishuTriggerHandler:
             normal_root_role_id=runtime_config.target.normal_root_role_id,
             orchestration_preset_id=runtime_config.target.orchestration_preset_id,
         )
+
+    def _build_session_metadata(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> dict[str, str]:
+        source_label = self._resolve_source_label(
+            runtime_config=runtime_config,
+            message=message,
+        )
+        metadata = {
+            FEISHU_METADATA_PLATFORM_KEY: FEISHU_PLATFORM,
+            FEISHU_METADATA_TENANT_KEY: message.tenant_key,
+            FEISHU_METADATA_CHAT_ID_KEY: message.chat_id,
+            FEISHU_METADATA_CHAT_TYPE_KEY: message.chat_type,
+            FEISHU_METADATA_TRIGGER_ID_KEY: runtime_config.trigger_id,
+            SESSION_METADATA_SOURCE_KIND_KEY: SESSION_SOURCE_KIND_IM,
+            SESSION_METADATA_SOURCE_PROVIDER_KEY: FEISHU_PLATFORM,
+            SESSION_METADATA_SOURCE_LABEL_KEY: source_label,
+            SESSION_METADATA_SOURCE_ICON_KEY: SESSION_SOURCE_ICON_IM,
+            "title": _build_session_title(runtime_config.trigger_name, source_label),
+            SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_AUTO,
+        }
+        return metadata
+
+    def _resolve_source_label(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> str:
+        chat_type = message.chat_type.strip().lower()
+        if chat_type == "group":
+            chat_name = self._lookup_chat_name(
+                runtime_config=runtime_config,
+                chat_id=message.chat_id,
+            )
+            if chat_name is not None:
+                return chat_name
+            return _build_fallback_source_label("group", message.chat_id)
+        if chat_type == "p2p":
+            user_name = self._lookup_user_name(
+                runtime_config=runtime_config,
+                open_id=message.sender_open_id,
+                chat_id=message.chat_id,
+            )
+            if user_name is not None:
+                return user_name
+            return _build_fallback_source_label("p2p", message.chat_id)
+        return _build_fallback_source_label(chat_type, message.chat_id)
+
+    def _lookup_chat_name(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        chat_id: str,
+    ) -> str | None:
+        if self._feishu_client is None:
+            return None
+        try:
+            resolved = self._feishu_client.get_chat_name(
+                chat_id=chat_id,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.session_name.chat_lookup_failed",
+                message="Failed to resolve Feishu chat name for IM session",
+                payload={
+                    "trigger_id": runtime_config.trigger_id,
+                    "chat_id": chat_id,
+                    "error": str(exc),
+                },
+            )
+            return None
+        normalized = str(resolved or "").strip()
+        return normalized or None
+
+    def _lookup_user_name(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        open_id: str | None,
+        chat_id: str,
+    ) -> str | None:
+        normalized_open_id = str(open_id or "").strip()
+        if self._feishu_client is None or not normalized_open_id:
+            return None
+        try:
+            resolved = self._feishu_client.get_user_name(
+                open_id=normalized_open_id,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.session_name.user_lookup_failed",
+                message="Failed to resolve Feishu user name for IM session",
+                payload={
+                    "trigger_id": runtime_config.trigger_id,
+                    "chat_id": chat_id,
+                    "sender_open_id": normalized_open_id,
+                    "error": str(exc),
+                },
+            )
+            return None
+        normalized = str(resolved or "").strip()
+        return normalized or None
+
+    def _merge_session_metadata(
+        self,
+        *,
+        current_metadata: dict[str, str],
+        next_metadata: dict[str, str],
+    ) -> dict[str, str]:
+        merged_metadata = dict(current_metadata)
+        merged_metadata.update(next_metadata)
+        if (
+            current_metadata.get(SESSION_METADATA_TITLE_SOURCE_KEY)
+            == SESSION_TITLE_SOURCE_MANUAL
+        ):
+            merged_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = (
+                SESSION_TITLE_SOURCE_MANUAL
+            )
+            current_title = str(current_metadata.get("title") or "").strip()
+            if current_title:
+                merged_metadata["title"] = current_title
+            else:
+                merged_metadata.pop("title", None)
+        return merged_metadata
 
 
 def _parse_json_object(raw_body: str) -> dict[str, JsonValue]:
@@ -523,3 +690,29 @@ def _is_sender_bot(sender_type: str | None) -> bool:
         return False
     lowered = sender_type.strip().lower()
     return lowered in {"app", "bot"}
+
+
+def _build_session_title(trigger_name: str, source_label: str) -> str:
+    normalized_trigger_name = str(trigger_name).strip()
+    normalized_source_label = str(source_label).strip()
+    if not normalized_source_label:
+        return normalized_trigger_name
+    return f"{normalized_trigger_name} · {normalized_source_label}"
+
+
+def _build_fallback_source_label(chat_type: str, chat_id: str) -> str:
+    normalized_chat_type = str(chat_type).strip().lower()
+    if normalized_chat_type == "group":
+        prefix = "Group"
+    elif normalized_chat_type == "p2p":
+        prefix = "DM"
+    else:
+        prefix = "Chat"
+    return f"{prefix} {_short_chat_id(chat_id)}"
+
+
+def _short_chat_id(chat_id: str) -> str:
+    normalized_chat_id = str(chat_id).strip()
+    if len(normalized_chat_id) <= 8:
+        return normalized_chat_id
+    return normalized_chat_id[-8:]

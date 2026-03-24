@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from json import dumps
 
 import lark_oapi as lark
+from lark_oapi.api.contact.v3.model.get_user_request import GetUserRequest
+from lark_oapi.api.im.v1.model.get_chat_request import GetChatRequest
 from lark_oapi.api.im.v1.model.create_message_request import CreateMessageRequest
 from lark_oapi.api.im.v1.model.create_message_request_body import (
     CreateMessageRequestBody,
@@ -51,6 +53,8 @@ class FeishuClient:
         self._merged_env = None if merged_env is None else dict(merged_env.items())
         self._base_url = base_url.rstrip("/")
         self._sdk_clients: dict[tuple[str, str, str], lark.Client] = {}
+        self._chat_name_cache: dict[tuple[str, str, str], str] = {}
+        self._user_name_cache: dict[tuple[str, str, str], str] = {}
 
     def is_configured(self, environment: FeishuEnvironment | None = None) -> bool:
         return self._resolve_environment(environment) is not None
@@ -93,6 +97,81 @@ class FeishuClient:
             content={"card": card},
             environment=environment,
         )
+
+    def get_chat_name(
+        self,
+        *,
+        chat_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        resolved_environment = self.require_environment(environment)
+        normalized_chat_id = str(chat_id).strip()
+        if not normalized_chat_id:
+            return None
+        cache_key = (
+            resolved_environment.app_id,
+            resolved_environment.app_secret,
+            normalized_chat_id,
+        )
+        existing = self._chat_name_cache.get(cache_key)
+        if existing is not None:
+            return existing
+        request = GetChatRequest.builder().chat_id(normalized_chat_id).build()
+        sdk_client = self._sdk(resolved_environment)
+        im_service = sdk_client.im
+        if im_service is None or im_service.v1 is None:
+            raise RuntimeError("Feishu SDK client did not initialize IM services.")
+        response = im_service.v1.chat.get(request)
+        if not response.success():
+            message = str(response.msg or "").strip() or "unknown_error"
+            raise RuntimeError(f"Feishu API failed to load chat: {message}")
+        chat_name = str(response.data.name or "").strip() if response.data is not None else ""
+        if not chat_name:
+            return None
+        self._chat_name_cache[cache_key] = chat_name
+        return chat_name
+
+    def get_user_name(
+        self,
+        *,
+        open_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        resolved_environment = self.require_environment(environment)
+        normalized_open_id = str(open_id).strip()
+        if not normalized_open_id:
+            return None
+        cache_key = (
+            resolved_environment.app_id,
+            resolved_environment.app_secret,
+            normalized_open_id,
+        )
+        existing = self._user_name_cache.get(cache_key)
+        if existing is not None:
+            return existing
+        request = (
+            GetUserRequest.builder()
+            .user_id_type("open_id")
+            .user_id(normalized_open_id)
+            .build()
+        )
+        sdk_client = self._sdk(resolved_environment)
+        contact_service = sdk_client.contact
+        if contact_service is None or contact_service.v3 is None:
+            raise RuntimeError("Feishu SDK client did not initialize Contact services.")
+        response = contact_service.v3.user.get(request)
+        if not response.success():
+            message = str(response.msg or "").strip() or "unknown_error"
+            raise RuntimeError(f"Feishu API failed to load user: {message}")
+        user_name = (
+            str(response.data.user.name or "").strip()
+            if response.data is not None and response.data.user is not None
+            else ""
+        )
+        if not user_name:
+            return None
+        self._user_name_cache[cache_key] = user_name
+        return user_name
 
     def _send_message(
         self,
