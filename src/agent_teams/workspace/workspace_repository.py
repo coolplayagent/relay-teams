@@ -5,8 +5,9 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.workspace.workspace_models import (
     WorkspaceProfile,
     WorkspaceRecord,
@@ -16,32 +17,45 @@ from agent_teams.workspace.workspace_models import (
 
 class WorkspaceRepository:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS workspaces (
-                workspace_id TEXT PRIMARY KEY,
-                root_path TEXT NOT NULL,
-                backend TEXT NOT NULL,
-                profile_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        columns = [
-            str(row["name"])
-            for row in self._conn.execute("PRAGMA table_info(workspaces)").fetchall()
-        ]
-        if "profile_json" not in columns:
+        def operation() -> None:
             self._conn.execute(
-                "ALTER TABLE workspaces ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}'"
+                """
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    workspace_id TEXT PRIMARY KEY,
+                    root_path TEXT NOT NULL,
+                    backend TEXT NOT NULL,
+                    profile_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-        self._conn.commit()
+            columns = [
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(workspaces)"
+                ).fetchall()
+            ]
+            if "profile_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE workspaces ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}'"
+                )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="WorkspaceRepository",
+            operation_name="init_tables",
+        )
 
     def create(
         self,
@@ -58,50 +72,67 @@ class WorkspaceRepository:
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
         )
-        self._conn.execute(
-            """
-            INSERT INTO workspaces(workspace_id, root_path, backend, profile_json, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record.workspace_id,
-                str(record.root_path),
-                record.profile.backend.value,
-                json.dumps(record.profile.model_dump(mode="json"), ensure_ascii=False),
-                now,
-                now,
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                """
+                INSERT INTO workspaces(workspace_id, root_path, backend, profile_json, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.workspace_id,
+                    str(record.root_path),
+                    record.profile.backend.value,
+                    json.dumps(
+                        record.profile.model_dump(mode="json"), ensure_ascii=False
+                    ),
+                    now,
+                    now,
+                ),
             ),
+            lock=self._lock,
+            repository_name="WorkspaceRepository",
+            operation_name="create",
         )
-        self._conn.commit()
         return record
 
     def get(self, workspace_id: str) -> WorkspaceRecord:
-        row = self._conn.execute(
-            "SELECT * FROM workspaces WHERE workspace_id=?",
-            (workspace_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM workspaces WHERE workspace_id=?",
+                (workspace_id,),
+            ).fetchone()
         if row is None:
             raise KeyError(f"Unknown workspace_id: {workspace_id}")
         return self._to_record(row)
 
     def list_all(self) -> tuple[WorkspaceRecord, ...]:
-        rows = self._conn.execute(
-            "SELECT * FROM workspaces ORDER BY created_at DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM workspaces ORDER BY created_at DESC"
+            ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
     def delete(self, workspace_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM workspaces WHERE workspace_id=?",
-            (workspace_id,),
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM workspaces WHERE workspace_id=?",
+                (workspace_id,),
+            ),
+            lock=self._lock,
+            repository_name="WorkspaceRepository",
+            operation_name="delete",
         )
-        self._conn.commit()
 
     def exists(self, workspace_id: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM workspaces WHERE workspace_id=?",
-            (workspace_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM workspaces WHERE workspace_id=?",
+                (workspace_id,),
+            ).fetchone()
         return row is not None
 
     def _to_record(self, row: sqlite3.Row) -> WorkspaceRecord:
