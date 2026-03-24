@@ -5,7 +5,7 @@
 Agent Teams supports a Feishu app bot integration that covers:
 
 - inbound IM trigger delivery through the Feishu SDK long connection
-- outbound notifications back to the originating Feishu group
+- outbound notifications back to the originating Feishu chat
 
 Inbound and outbound Feishu handling now use Feishu's official Python SDK (`lark-oapi`).
 
@@ -15,11 +15,12 @@ Inbound event handling uses the SDK long connection mode, so:
 - no public IP or reverse proxy is required just for Feishu event delivery
 - encrypted event delivery is supported when `FEISHU_ENCRYPT_KEY` is configured
 
-This version is designed for group-chat workflows:
+This version is designed for Feishu chat workflows:
 
-- only group messages are supported
-- one Feishu group maps to one internal session
-- only `@bot` text messages create runs
+- group chats and single chats are supported
+- one Feishu chat maps to one internal session
+- group chats require `@bot` when `trigger_rule = "mention_only"`
+- single chats accept any text message and do not require `@bot`
 - tool approvals are still resolved through the existing UI/API, not inside Feishu
 
 ## Required Environment Variables

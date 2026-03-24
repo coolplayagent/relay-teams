@@ -215,6 +215,65 @@ def test_handle_sdk_event_ignores_non_mentions(tmp_path) -> None:
     assert run_service.created == []
 
 
+def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path) -> None:
+    trigger_service = _FakeTriggerService()
+    session_service = _FakeSessionService()
+    run_service = _FakeRunService()
+    bindings = ExternalSessionBindingRepository(tmp_path / "bindings.db")
+    handler = FeishuTriggerHandler(
+        trigger_service=trigger_service,
+        session_service=session_service,
+        run_service=run_service,
+        external_session_binding_repo=bindings,
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt-p2p-1",
+        "token": "verify-token",
+        "event_type": "im.message.receive_v1",
+        "tenant_key": "tenant-1"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {"open_id": "ou_user"},
+          "sender_type": "user"
+        },
+        "message": {
+          "message_id": "om_p2p_1",
+          "chat_id": "oc_p2p_1",
+          "chat_type": "p2p",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"hello from dm\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert result.session_id == "session-1"
+    assert len(run_service.created) == 1
+    assert run_service.created[0].intent == "hello from dm"
+    assert run_service.created[0].yolo is True
+    assert session_service.sessions["session-1"].metadata["feishu_chat_type"] == "p2p"
+    binding = bindings.get_binding(
+        platform="feishu",
+        tenant_key="tenant-1",
+        external_chat_id="oc_p2p_1",
+    )
+    assert binding is not None
+    assert binding.session_id == "session-1"
+
+
 def test_handle_sdk_event_ignores_when_no_enabled_trigger(tmp_path) -> None:
     handler = FeishuTriggerHandler(
         trigger_service=_FakeTriggerService(enabled=False),

@@ -39,6 +39,25 @@ class _FakeSessionRepo:
         )
 
 
+class _FakeP2PSessionRepo:
+    def get(self, session_id: str) -> SessionRecord:
+        _ = session_id
+        now = datetime.now(tz=timezone.utc)
+        return SessionRecord(
+            session_id="session-1",
+            workspace_id="default",
+            metadata={
+                FEISHU_METADATA_PLATFORM_KEY: "feishu",
+                FEISHU_METADATA_TENANT_KEY: "tenant-1",
+                FEISHU_METADATA_CHAT_ID_KEY: "chat-p2p-1",
+                FEISHU_METADATA_CHAT_TYPE_KEY: "p2p",
+            },
+            session_mode=SessionMode.NORMAL,
+            created_at=now,
+            updated_at=now,
+        )
+
+
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, object]] = []
@@ -116,3 +135,34 @@ def test_dispatcher_sends_card_message_when_requested() -> None:
     assert chat_id == "chat-1"
     assert isinstance(payload, dict)
     assert payload["header"]["title"]["content"] == "Approval Required"
+
+
+def test_dispatcher_sends_text_message_to_p2p_session() -> None:
+    client = _FakeFeishuClient()
+    dispatcher = FeishuNotificationDispatcher(
+        session_repo=_FakeP2PSessionRepo(),
+        feishu_client=client,
+    )
+
+    dispatcher.dispatch(
+        NotificationRequest(
+            notification_type=NotificationType.RUN_COMPLETED,
+            title="Run Completed",
+            body="ok",
+            channels=(NotificationChannel.FEISHU,),
+            dedupe_key="run_completed:run-1",
+            context=NotificationContext(
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="trace-1",
+            ),
+        )
+    )
+
+    assert client.sent == [
+        (
+            "text",
+            "chat-p2p-1",
+            "ok",
+        )
+    ]

@@ -135,7 +135,8 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="unsupported_event_type",
             )
-        if normalized.chat_type.lower() != "group":
+        chat_type = normalized.chat_type.lower()
+        if chat_type not in {"group", "p2p"}:
             return TriggerProcessingResult(
                 status="ignored",
                 trigger_id=trigger.trigger_id,
@@ -155,7 +156,11 @@ class FeishuTriggerHandler:
             )
 
         trigger_rule = _trigger_rule(trigger)
-        if trigger_rule == "mention_only" and not normalized.mentioned:
+        if (
+            trigger_rule == "mention_only"
+            and chat_type == "group"
+            and not normalized.mentioned
+        ):
             return TriggerProcessingResult(
                 status="ignored",
                 trigger_id=trigger.trigger_id,
