@@ -55,6 +55,7 @@ where = ["src"]
   "skills/*/scripts/*.py",
 ]
 "agent_teams.tools.task_tools" = ["*.txt"]
+"agent_teams.tools.web_tools" = ["*.txt"]
 "agent_teams.tools.workspace_tools" = ["*.txt"]
 
 [dependency-groups]

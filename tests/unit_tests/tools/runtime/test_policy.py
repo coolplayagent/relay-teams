@@ -10,6 +10,8 @@ def test_default_policy_requires_high_risk_tools() -> None:
     assert policy.requires_approval("edit")
     assert policy.requires_approval("write")
     assert policy.requires_approval("write_tmp")
+    assert policy.requires_approval("webfetch")
+    assert policy.requires_approval("websearch")
     assert not policy.requires_approval("read")
 
 

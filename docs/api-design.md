@@ -124,6 +124,22 @@ If no usable keyring backend is available, saving a proxy password fails with a 
 Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
 `no_proxy` accepts both comma-separated and semicolon-separated entries. Wildcard host patterns such as `127.*`, `192.168.*`, and the special token `<local>` are supported.
 
+### `GET /system/configs/web`
+
+Returns the saved web tool configuration.
+Fields:
+- `provider`: currently only `exa`
+- `api_key`: optional value rehydrated from the system keyring when available
+
+The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint, fetch size limit, and temp file location under `~/.config/agent-teams/.../tmp`.
+
+### `PUT /system/configs/web`
+
+Saves the web tool configuration.
+`provider` is currently fixed to `exa`.
+`api_key` is optional because Exa hosted MCP can be used without a key; providing one only raises the rate-limit ceiling.
+The backend persists the API key only through a usable system keyring backend and does not write it back to `.env`.
+
 ### `POST /system/configs/proxy:reload`
 
 Reloads effective proxy env into runtime.

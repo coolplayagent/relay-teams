@@ -33,6 +33,8 @@ from agent_teams.env.runtime_env import (
     load_merged_env_vars,
     sync_app_env_to_process_env,
 )
+from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.env.web_connectivity import (
     WebConnectivityProbeDiagnostics,
     WebConnectivityProbeRequest,
@@ -71,4 +73,7 @@ __all__ = [
     "WebConnectivityProbeRequest",
     "WebConnectivityProbeResult",
     "WebConnectivityProbeService",
+    "WebConfig",
+    "WebConfigService",
+    "WebProvider",
 ]

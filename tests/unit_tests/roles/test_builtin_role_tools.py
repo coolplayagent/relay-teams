@@ -12,9 +12,14 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     designer = registry.get("Designer")
     explorer = registry.get("Explorer")
     gater = registry.get("Gater")
+    main_agent = registry.get("MainAgent")
 
     assert "write" in crafter.tools
     assert "edit" in crafter.tools
+    assert "webfetch" in crafter.tools
+    assert "websearch" in crafter.tools
+    assert "webfetch" in main_agent.tools
+    assert "websearch" in main_agent.tools
     assert "write_tmp" in designer.tools
     assert "write" not in designer.tools
     assert "write_tmp" in explorer.tools

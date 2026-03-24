@@ -1,0 +1,3 @@
+Search the web with the configured provider and return a text summary for the query.
+
+Use this when you need fresh external information that is not available in the workspace.

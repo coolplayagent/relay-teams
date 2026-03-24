@@ -45,7 +45,10 @@ def test_workspace_manager_uses_worktree_root_for_git_worktree_workspace(
     )
 
     assert handle.locations.execution_root == worktree_root.resolve()
-    assert handle.locations.readable_roots == (worktree_root.resolve(),)
+    assert handle.locations.readable_roots == (
+        worktree_root.resolve(),
+        (manager.locations_for("alpha-project-fork").workspace_dir / "tmp").resolve(),
+    )
     assert handle.locations.writable_roots == (worktree_root.resolve(),)
     assert handle.locations.worktree_root == worktree_root.resolve()
     assert (
@@ -89,6 +92,7 @@ def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
 
     assert handle.locations.readable_roots == (
         project_root.resolve(),
+        (manager.locations_for("default").workspace_dir / "tmp").resolve(),
         builtin_skills_dir.resolve(),
         app_skills_dir.resolve(),
     )

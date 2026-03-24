@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.env.web_config_models import WebConfig, WebProvider
 from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
@@ -17,6 +18,7 @@ from agent_teams.interfaces.server.deps import (
     get_proxy_config_service,
     get_skills_config_reload_service,
     get_ui_language_settings_service,
+    get_web_config_service,
 )
 from agent_teams.interfaces.server.ui_language_models import (
     UiLanguage,
@@ -38,6 +40,7 @@ class _FakeSystemService:
             None
         )
         self.saved_proxy_config: dict[str, object] | None = None
+        self.saved_web_config: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
 
@@ -106,6 +109,12 @@ class _FakeSystemService:
         if self.proxy_save_error is not None:
             raise self.proxy_save_error
         self.saved_proxy_config = config.model_dump(mode="json")
+
+    def get_web_config(self) -> WebConfig:
+        return WebConfig(provider=WebProvider.EXA, api_key=None)
+
+    def save_web_config(self, config: WebConfig) -> None:
+        self.saved_web_config = config.model_dump(mode="json")
 
     def reload_mcp_config(self) -> None:
         return None
@@ -260,6 +269,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
+    app.dependency_overrides[get_web_config_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -500,6 +510,18 @@ def test_get_proxy_config() -> None:
     }
 
 
+def test_get_web_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/web")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "exa",
+        "api_key": None,
+    }
+
+
 def test_save_proxy_config() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)
@@ -527,6 +549,26 @@ def test_save_proxy_config() -> None:
         "proxy_username": "alice",
         "proxy_password": "secret",
         "ssl_verify": None,
+    }
+
+
+def test_save_web_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/web",
+        json={
+            "provider": "exa",
+            "api_key": "secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_web_config == {
+        "provider": "exa",
+        "api_key": "secret",
     }
 
 

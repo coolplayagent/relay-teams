@@ -102,7 +102,8 @@ class WorkspaceManager(BaseModel):
             file_scope.working_directory,
         )
         readable_roots = self._extend_readable_roots(
-            self._resolve_roots(filesystem_root, file_scope, write=False)
+            base_locations.workspace_dir,
+            self._resolve_roots(filesystem_root, file_scope, write=False),
         )
         writable_roots = self._resolve_roots(filesystem_root, file_scope, write=True)
         return base_locations.model_copy(
@@ -132,11 +133,16 @@ class WorkspaceManager(BaseModel):
 
     def _extend_readable_roots(
         self,
+        workspace_dir: Path,
         readable_roots: tuple[Path, ...],
     ) -> tuple[Path, ...]:
         deduped: list[Path] = []
         seen: set[Path] = set()
-        for candidate in (*readable_roots, *self._skill_roots()):
+        for candidate in (
+            *readable_roots,
+            workspace_dir / "tmp",
+            *self._skill_roots(),
+        ):
             resolved = candidate.resolve()
             if resolved in seen:
                 continue

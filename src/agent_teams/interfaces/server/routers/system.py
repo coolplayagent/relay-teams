@@ -13,6 +13,8 @@ from agent_teams.env.environment_variable_models import (
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.env.web_config_models import WebConfig
+from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.env.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeResult,
@@ -29,6 +31,7 @@ from agent_teams.interfaces.server.deps import (
     get_proxy_config_service,
     get_skills_config_reload_service,
     get_ui_language_settings_service,
+    get_web_config_service,
 )
 from agent_teams.interfaces.server.ui_language_models import UiLanguageSettings
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
@@ -286,6 +289,27 @@ def save_proxy_config(
 ) -> dict[str, str]:
     try:
         service.save_proxy_config(req)
+        return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/web")
+def get_web_config(
+    service: WebConfigService = Depends(get_web_config_service),
+) -> WebConfig:
+    return service.get_web_config()
+
+
+@router.put("/configs/web")
+def save_web_config(
+    req: WebConfig,
+    service: WebConfigService = Depends(get_web_config_service),
+) -> dict[str, str]:
+    try:
+        service.save_web_config(req)
         return {"status": "ok"}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

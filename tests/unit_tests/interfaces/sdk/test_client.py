@@ -85,6 +85,32 @@ def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"provider": "exa", "api_key": None}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.get_web_config()
+
+    assert response == {"provider": "exa", "api_key": None}
+    assert captured == {
+        "method": "GET",
+        "path": "/api/system/configs/web",
+        "payload": None,
+    }
+
+
 def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
@@ -121,6 +147,35 @@ def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
             "proxy_username": "alice",
             "proxy_password": "secret",
             "ssl_verify": None,
+        },
+    }
+
+
+def test_save_web_config_passes_web_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.save_web_config(provider="exa", api_key="secret")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "PUT",
+        "path": "/api/system/configs/web",
+        "payload": {
+            "provider": "exa",
+            "api_key": "secret",
         },
     }
 

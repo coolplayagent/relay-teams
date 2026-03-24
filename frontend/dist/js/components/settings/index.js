@@ -15,6 +15,7 @@ import {
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from './triggerSettings.js';
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
@@ -50,6 +51,10 @@ const TAB_METADATA = {
     notifications: {
         titleKey: 'settings.panel.notifications.title',
         descriptionKey: 'settings.panel.notifications.description',
+    },
+    web: {
+        titleKey: 'settings.panel.web.title',
+        descriptionKey: 'settings.panel.web.description',
     },
     proxy: {
         titleKey: 'settings.panel.proxy.title',
@@ -99,6 +104,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label" data-i18n="settings.tab.notifications">Notifications</span>
+                    </button>
+                    <button class="settings-tab" data-tab="web">
+                        <span class="settings-tab-label" data-i18n="settings.tab.web">Web</span>
                     </button>
                     <button class="settings-tab" data-tab="proxy">
                         <span class="settings-tab-label" data-i18n="settings.tab.proxy">Proxy</span>
@@ -516,6 +524,35 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="web-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack proxy-panel-body">
+                                <div class="proxy-editor-form">
+                                    <section class="proxy-form-section">
+                                        <div class="proxy-form-section-header">
+                                            <h5 data-i18n="settings.web.section">Web Search</h5>
+                                        </div>
+                                        <div class="proxy-form-grid">
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="web-provider" data-i18n="settings.web.provider">Provider</label>
+                                                <select id="web-provider">
+                                                    <option value="exa">Exa</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="web-api-key" data-i18n="settings.web.api_key">API Key</label>
+                                                <input type="password" id="web-api-key" placeholder="Optional for higher rate limits" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                            </div>
+                                        </div>
+                                        <p class="notifications-help">
+                                            <span data-i18n="settings.web.provider_site">Provider website:</span>
+                                            <a href="https://exa.ai" target="_blank" rel="noreferrer">https://exa.ai</a>
+                                        </p>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="skills-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="skills-status"></div>
@@ -545,6 +582,7 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-web-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
@@ -583,6 +621,7 @@ function setupEventListeners() {
     bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
+    bindWebSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
     if (typeof document.addEventListener === 'function') {
@@ -614,6 +653,7 @@ async function showPanel(tab) {
     bindRoleSettingsHandlers();
     bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
+    bindWebSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
 
@@ -629,6 +669,8 @@ async function showPanel(tab) {
         await loadEnvironmentVariablesPanel();
     } else if (tab === 'notifications') {
         await loadNotificationSettingsPanel();
+    } else if (tab === 'web') {
+        await loadWebSettingsPanel();
     } else if (tab === 'proxy') {
         await loadProxyStatusPanel();
     } else if (tab === 'mcp') {
@@ -675,6 +717,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'notifications') {
         document.getElementById('save-notifications-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'web') {
+        document.getElementById('save-web-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'proxy') {

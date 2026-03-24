@@ -11,6 +11,8 @@ tools:
   - edit
   - write
   - shell
+  - webfetch
+  - websearch
 ---
 
 

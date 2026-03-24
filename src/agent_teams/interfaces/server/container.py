@@ -24,6 +24,7 @@ from agent_teams.agents.orchestration.task_execution_service import TaskExecutio
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
+from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.feishu import (
     FeishuClient,
     FeishuNotificationDispatcher,
@@ -135,6 +136,9 @@ class ServerContainer:
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
+        )
+        self.web_config_service: WebConfigService = WebConfigService(
+            config_dir=config_dir
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=config_dir

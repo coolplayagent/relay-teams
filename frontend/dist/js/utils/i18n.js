@@ -110,6 +110,7 @@ const TRANSLATIONS = {
         'settings.tab.orchestration': 'Orchestration',
         'settings.tab.triggers': 'Triggers',
         'settings.tab.notifications': 'Notifications',
+        'settings.tab.web': 'Web',
         'settings.tab.proxy': 'Proxy',
         'settings.tab.environment': 'Environment',
         'settings.panel.model.title': 'Model',
@@ -129,6 +130,8 @@ const TRANSLATIONS = {
         'settings.orchestration.delete': 'Delete Orchestration',
         'settings.panel.notifications.title': 'Notifications',
         'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
+        'settings.panel.web.title': 'Web',
+        'settings.panel.web.description': 'Choose the web search provider and optionally store an API key for higher limits.',
         'settings.panel.proxy.title': 'Proxy',
         'settings.panel.proxy.description': 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
         'settings.panel.environment.title': 'Environment',
@@ -164,6 +167,15 @@ const TRANSLATIONS = {
         'settings.field.enabled': 'Enabled',
         'settings.field.browser': 'Browser',
         'settings.field.toast': 'Toast',
+        'settings.web.section': 'Web Search',
+        'settings.web.provider': 'Provider',
+        'settings.web.api_key': 'API Key',
+        'settings.web.api_key_placeholder': 'Optional for higher rate limits',
+        'settings.web.provider_site': 'Provider website:',
+        'settings.web.load_failed': 'Load Failed',
+        'settings.web.saved': 'Web Settings Saved',
+        'settings.web.saved_message': 'Web settings saved.',
+        'settings.web.save_failed': 'Save Failed',
         'settings.proxy.section': 'Proxy Settings',
         'settings.proxy.connectivity': 'Connectivity Test',
         'settings.proxy.test_url': 'Test URL',
@@ -763,6 +775,21 @@ const TRANSLATIONS = {
         'markdown.copied': '已复制',
     },
 };
+
+Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.tab.web': 'Web',
+    'settings.panel.web.title': 'Web',
+    'settings.panel.web.description': '选择网页搜索提供商，并可选保存 API Key 以获得更高限额。',
+    'settings.web.section': '网页搜索',
+    'settings.web.provider': '提供商',
+    'settings.web.api_key': 'API Key',
+    'settings.web.api_key_placeholder': '可选，仅在需要更高限流额度时填写',
+    'settings.web.provider_site': '提供商官网：',
+    'settings.web.load_failed': '加载失败',
+    'settings.web.saved': 'Web 设置已保存',
+    'settings.web.saved_message': 'Web 设置已保存。',
+    'settings.web.save_failed': '保存失败',
+});
 
 export function getCurrentLanguage() {
     return currentLanguage;

@@ -40,6 +40,9 @@ class AgentTeamsClient:
     def get_proxy_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/proxy")
 
+    def get_web_config(self) -> dict[str, JsonValue]:
+        return self._request_json("GET", "/api/system/configs/web")
+
     def save_proxy_config(
         self,
         *,
@@ -61,6 +64,18 @@ class AgentTeamsClient:
             "ssl_verify": ssl_verify,
         }
         return self._request_json("PUT", "/api/system/configs/proxy", payload)
+
+    def save_web_config(
+        self,
+        *,
+        provider: str = "exa",
+        api_key: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "provider": provider,
+            "api_key": api_key,
+        }
+        return self._request_json("PUT", "/api/system/configs/web", payload)
 
     def probe_web_connectivity(
         self,

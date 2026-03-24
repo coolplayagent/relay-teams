@@ -51,6 +51,7 @@ export {
     fetchNotificationConfig,
     fetchOrchestrationConfig,
     fetchProxyConfig,
+    fetchWebConfig,
     fetchSystemHealth,
     discoverModelCatalog,
     probeModelConnection,
@@ -65,6 +66,7 @@ export {
     saveNotificationConfig,
     saveOrchestrationConfig,
     saveProxyConfig,
+    saveWebConfig,
     saveUiLanguageSettings,
 } from './system.js';
 

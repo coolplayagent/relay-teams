@@ -56,6 +56,10 @@ export async function fetchProxyConfig() {
     return requestJson('/api/system/configs/proxy', undefined, 'Failed to fetch proxy config');
 }
 
+export async function fetchWebConfig() {
+    return requestJson('/api/system/configs/web', undefined, 'Failed to fetch web config');
+}
+
 export async function fetchSystemHealth() {
     return requestJson('/api/system/health', undefined, 'Failed to fetch system health');
 }
@@ -155,6 +159,18 @@ export async function saveProxyConfig(config) {
             body: JSON.stringify(config),
         },
         'Failed to save proxy config',
+    );
+}
+
+export async function saveWebConfig(config) {
+    return requestJson(
+        '/api/system/configs/web',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        },
+        'Failed to save web config',
     );
 }
 

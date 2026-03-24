@@ -24,6 +24,8 @@ def test_registry_contains_only_role_mounted_tools() -> None:
         "read",
         "shell",
         "update_task",
+        "webfetch",
+        "websearch",
         "write",
         "write_tmp",
     )
