@@ -109,7 +109,24 @@
                     <div id="observability-trends" class="observability-section"></div>
                     <div id="observability-breakdowns" class="observability-section"></div>
                 </section>
-                <div class="chat-container">
+                <section id="project-view" class="project-view" style="display:none;">
+                    <div class="project-view-toolbar">
+                        <div class="project-view-toolbar-copy">
+                            <h3 id="project-view-title" data-i18n="workspace_view.title">Project</h3>
+                            <p id="project-view-summary"></p>
+                        </div>
+                        <div class="project-view-toolbar-actions">
+                            <button id="project-view-reload" class="secondary-btn" type="button" data-i18n="workspace_view.reload">Reload</button>
+                            <button id="project-view-close" class="icon-btn" type="button" title="Back" aria-label="Back" data-i18n-title="workspace_view.back" data-i18n-aria-label="workspace_view.back">
+                                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                                    <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="project-view-content" class="project-view-content"></div>
+                </section>
+                <div id="chat-container" class="chat-container">
                     <!-- Coordinator chat messages -->
                     <div class="chat-scroll" id="chat-messages"></div>
 
@@ -133,7 +150,7 @@
                                 </svg>
                                 <span data-i18n="composer.stop">Stop</span>
                             </button>
-                            <div id="prompt-input-hint" class="input-footer-hint" data-i18n="composer.hint">Enter to send · Shift+Enter for new line</div>
+                            <div id="prompt-input-hint" class="input-footer-hint" data-i18n="composer.hint">Enter to send 路 Shift+Enter for new line</div>
                         </div>
                     </form>
                     <div class="input-controls">

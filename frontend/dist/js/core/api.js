@@ -1,4 +1,4 @@
-﻿/**
+/**
  * core/api.js
  * Backward-compatible facade. New implementation lives under ./api/.
  */
@@ -70,6 +70,10 @@ export {
     fetchObservabilityBreakdowns,
     fetchObservabilityOverview,
     deleteWorkspace,
+    fetchWorkspaceDiffFile,
+    fetchWorkspaceDiffs,
+    fetchWorkspaceSnapshot,
+    fetchWorkspaceTree,
     fetchWorkspaces,
     forkWorkspace,
     pickWorkspace,

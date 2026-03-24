@@ -17,6 +17,13 @@ from agent_teams.workspace import (
     WorkspaceProfile,
     WorkspaceRepository,
     WorkspaceService,
+    WorkspaceDiffChangeType,
+    WorkspaceDiffFile,
+    WorkspaceDiffListing,
+    WorkspaceSnapshot,
+    WorkspaceTreeListing,
+    WorkspaceTreeNode,
+    WorkspaceTreeNodeKind,
 )
 
 
@@ -131,6 +138,118 @@ def test_create_workspace_rejects_missing_root(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "does not exist" in response.json()["detail"]
+
+
+def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
+    class SnapshotWorkspaceService(WorkspaceService):
+        def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
+            record = self.get_workspace(workspace_id)
+            return WorkspaceSnapshot(
+                workspace_id=record.workspace_id,
+                root_path=record.root_path,
+                tree=WorkspaceTreeNode(
+                    name=record.root_path.name,
+                    path=".",
+                    kind=WorkspaceTreeNodeKind.DIRECTORY,
+                    has_children=True,
+                    children=(
+                        WorkspaceTreeNode(
+                            name="src",
+                            path="src",
+                            kind=WorkspaceTreeNodeKind.DIRECTORY,
+                            has_children=True,
+                            children=(),
+                        ),
+                    ),
+                ),
+            )
+
+        def get_workspace_tree_listing(
+            self,
+            workspace_id: str,
+            *,
+            directory_path: str,
+        ) -> WorkspaceTreeListing:
+            _ = workspace_id
+            return WorkspaceTreeListing(
+                workspace_id="project-alpha",
+                directory_path=directory_path,
+                children=(
+                    WorkspaceTreeNode(
+                        name="app.py",
+                        path="src/app.py",
+                        kind=WorkspaceTreeNodeKind.FILE,
+                        has_children=False,
+                        children=(),
+                    ),
+                ),
+            )
+
+        def get_workspace_diffs(self, workspace_id: str) -> WorkspaceDiffListing:
+            record = self.get_workspace(workspace_id)
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                root_path=record.root_path,
+                diff_files=(),
+                is_git_repository=True,
+                git_root_path=record.root_path,
+                diff_message=None,
+            )
+
+        def get_workspace_diff_file(
+            self,
+            workspace_id: str,
+            *,
+            path: str,
+        ) -> WorkspaceDiffFile:
+            _ = self.get_workspace(workspace_id)
+            return WorkspaceDiffFile(
+                path=path,
+                change_type=WorkspaceDiffChangeType.MODIFIED,
+                diff="patched content",
+                is_binary=False,
+            )
+
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = SnapshotWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    snapshot_response = client.get("/api/workspaces/project-alpha/snapshot")
+    tree_response = client.get("/api/workspaces/project-alpha/tree?path=src")
+    diffs_response = client.get("/api/workspaces/project-alpha/diffs")
+    diff_file_response = client.get(
+        "/api/workspaces/project-alpha/diff?path=src%2Fapp.py"
+    )
+
+    assert snapshot_response.status_code == 200
+    snapshot_payload = snapshot_response.json()
+    assert snapshot_payload["workspace_id"] == "project-alpha"
+    assert snapshot_payload["root_path"] == str(root_path.resolve())
+    assert snapshot_payload["tree"]["path"] == "."
+    assert snapshot_payload["tree"]["children"][0]["has_children"] is True
+
+    assert tree_response.status_code == 200
+    tree_payload = tree_response.json()
+    assert tree_payload["directory_path"] == "src"
+    assert tree_payload["children"][0]["path"] == "src/app.py"
+
+    assert diffs_response.status_code == 200
+    diffs_payload = diffs_response.json()
+    assert diffs_payload["workspace_id"] == "project-alpha"
+    assert diffs_payload["is_git_repository"] is True
+    assert diffs_payload["git_root_path"] == str(root_path.resolve())
+
+    assert diff_file_response.status_code == 200
+    diff_file_payload = diff_file_response.json()
+    assert diff_file_payload["path"] == "src/app.py"
+    assert diff_file_payload["diff"] == "patched content"
 
 
 def test_pick_workspace_creates_workspace_for_selected_directory(

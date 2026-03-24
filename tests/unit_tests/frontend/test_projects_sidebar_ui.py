@@ -202,6 +202,70 @@ console.log(JSON.stringify({
     ]
 
 
+def test_projects_sidebar_opens_project_workspace_view_from_title_click(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-title-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+
+console.log(JSON.stringify({
+    openedWorkspaceIds: globalThis.__openedWorkspaceIds,
+}));
+""".strip(),
+    )
+
+    assert payload["openedWorkspaceIds"] == ["alpha-project"]
+
+
+def test_projects_sidebar_marks_selected_project_after_title_click(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+let projectsList = document.getElementById("projects-list");
+let firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-title-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await loadProjects();
+
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const firstProjectTitleButton = firstProject.querySelector(".project-title-btn");
+const activeSessionCount = firstProject.querySelectorAll(".session-item").filter(item => item.className.includes("active")).length;
+
+console.log(JSON.stringify({
+    className: firstProjectTitleButton.className,
+    ariaCurrent: firstProjectTitleButton.getAttribute("aria-current"),
+    activeSessionCount,
+}));
+""".strip(),
+    )
+
+    assert "is-active" in str(payload["className"])
+    assert payload["ariaCurrent"] == "page"
+    assert payload["activeSessionCount"] == 0
+
+
 def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
@@ -213,6 +277,7 @@ def _run_sidebar_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
+    mock_project_view_path = tmp_path / "mockProjectView.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -232,6 +297,7 @@ function parseElements(source, selector) {
     const results = [];
     const patterns = {
         ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+        ".project-title-btn": /class="([^"]*project-title-btn[^"]*)"[^>]*aria-current="([^"]+)"[^>]*>/g,
         ".project-options-btn": /class="([^"]*project-options-btn[^"]*)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
         ".project-fork-btn": /class="project-fork-btn"[^>]*>/g,
@@ -251,6 +317,13 @@ function parseElements(source, selector) {
     while (match) {
         if (selector === ".project-toggle") {
             results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
+        } else if (selector === ".project-title-btn") {
+            results.push(createNode({
+                className: match[1],
+                attributes: {
+                    "aria-current": match[2],
+                },
+            }));
         } else if (selector === ".project-options-btn") {
             results.push(createNode({ className: match[1] }));
         } else if (selector === ".project-new-session-btn") {
@@ -618,7 +691,29 @@ export async function deleteWorkspace(workspaceId, options = {}) {
 export const state = {
     currentSessionId: "session-7",
     currentWorkspaceId: "alpha-project",
+    currentMainView: "session",
+    currentProjectViewWorkspaceId: null,
 };
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_project_view_path.write_text(
+        """
+import { state } from "./mockState.mjs";
+
+export async function openWorkspaceProjectView(workspace) {
+    globalThis.__openedWorkspaceIds.push(workspace.workspace_id);
+    state.currentMainView = "project";
+    state.currentProjectViewWorkspaceId = workspace.workspace_id;
+    state.currentWorkspaceId = workspace.workspace_id;
+}
+
+export function hideProjectView() {
+    globalThis.__hideProjectViewCalls += 1;
+    state.currentMainView = "session";
+    state.currentProjectViewWorkspaceId = null;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -631,6 +726,7 @@ export const state = {
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("../core/state.js", "./mockState.mjs")
+        .replace("./projectView.js", "./mockProjectView.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -646,6 +742,8 @@ globalThis.__deleteWorkspaceCalls = [];
 globalThis.__forkCalls = [];
 globalThis.__renameCalls = [];
 globalThis.__selectedSessionIds = [];
+globalThis.__openedWorkspaceIds = [];
+globalThis.__hideProjectViewCalls = 0;
 installGlobals(createDomEnvironment());
 
 {runner_source}

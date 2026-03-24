@@ -5,12 +5,17 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_workspace_service
 from agent_teams.workspace import (
+    WorkspaceDiffFile,
+    WorkspaceDiffListing,
     WorkspaceRecord,
     WorkspaceService,
+    WorkspaceSnapshot,
+    WorkspaceTreeListing,
     pick_workspace_directory,
 )
 
@@ -95,6 +100,66 @@ def get_workspace(
         return service.get_workspace(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
+
+
+@router.get("/{workspace_id}/snapshot", response_model=WorkspaceSnapshot)
+def get_workspace_snapshot(
+    workspace_id: str,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceSnapshot:
+    try:
+        return service.get_workspace_snapshot(workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{workspace_id}/tree", response_model=WorkspaceTreeListing)
+def get_workspace_tree_listing(
+    workspace_id: str,
+    path: Annotated[str, Query()] = ".",
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceTreeListing:
+    try:
+        return service.get_workspace_tree_listing(
+            workspace_id,
+            directory_path=path,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{workspace_id}/diffs", response_model=WorkspaceDiffListing)
+def get_workspace_diffs(
+    workspace_id: str,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceDiffListing:
+    try:
+        return service.get_workspace_diffs(workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{workspace_id}/diff", response_model=WorkspaceDiffFile)
+def get_workspace_diff_file(
+    workspace_id: str,
+    path: Annotated[str, Query(min_length=1)],
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceDiffFile:
+    try:
+        return service.get_workspace_diff_file(
+            workspace_id,
+            path=unquote(path),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/{workspace_id}")

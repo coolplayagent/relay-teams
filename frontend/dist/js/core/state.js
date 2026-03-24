@@ -1,4 +1,4 @@
-// js/state.js
+﻿// js/state.js
 
 export const state = {
     currentSessionId: null,
@@ -6,6 +6,8 @@ export const state = {
     currentSessionMode: 'normal',
     currentOrchestrationPresetId: null,
     currentSessionCanSwitchMode: false,
+    currentMainView: 'session',
+    currentProjectViewWorkspaceId: null,
     isGenerating: false,
     activeEventSource: null,
     agentViews: {},
@@ -91,6 +93,8 @@ export function applyCurrentSessionRecord(record) {
     state.currentSessionMode = normalizeSessionMode(record?.session_mode);
     state.currentOrchestrationPresetId = normalizeRoleId(record?.orchestration_preset_id) || null;
     state.currentSessionCanSwitchMode = record?.can_switch_mode === true;
+    state.currentMainView = 'session';
+    state.currentProjectViewWorkspaceId = null;
 }
 
 export function resetCurrentSessionTopology() {

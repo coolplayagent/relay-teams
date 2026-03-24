@@ -81,3 +81,74 @@ class WorkspaceRecord(BaseModel):
     profile: WorkspaceProfile = Field(default_factory=default_workspace_profile)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+class WorkspaceTreeNodeKind(str, Enum):
+    DIRECTORY = "directory"
+    FILE = "file"
+
+
+class WorkspaceDiffChangeType(str, Enum):
+    ADDED = "added"
+    MODIFIED = "modified"
+    DELETED = "deleted"
+    RENAMED = "renamed"
+    COPIED = "copied"
+    UNTRACKED = "untracked"
+    CONFLICTED = "conflicted"
+    TYPE_CHANGED = "type_changed"
+
+
+class WorkspaceTreeNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    path: str
+    kind: WorkspaceTreeNodeKind
+    has_children: bool = False
+    children: tuple[WorkspaceTreeNode, ...] = ()
+
+
+class WorkspaceTreeListing(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    directory_path: str
+    children: tuple[WorkspaceTreeNode, ...] = ()
+
+
+class WorkspaceDiffFileSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    change_type: WorkspaceDiffChangeType
+    previous_path: str | None = None
+
+
+class WorkspaceDiffFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    change_type: WorkspaceDiffChangeType
+    previous_path: str | None = None
+    diff: str = ""
+    is_binary: bool = False
+
+
+class WorkspaceDiffListing(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    root_path: Path
+    diff_files: tuple[WorkspaceDiffFileSummary, ...] = ()
+    is_git_repository: bool = False
+    git_root_path: Path | None = None
+    diff_message: str | None = None
+
+
+class WorkspaceSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    root_path: Path
+    tree: WorkspaceTreeNode

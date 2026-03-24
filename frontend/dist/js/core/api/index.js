@@ -1,4 +1,4 @@
-﻿/**
+/**
  * core/api/index.js
  * Public API facade composed from domain-specific modules.
  */
@@ -86,6 +86,10 @@ export {
 
 export {
     deleteWorkspace,
+    fetchWorkspaceDiffFile,
+    fetchWorkspaceDiffs,
+    fetchWorkspaceSnapshot,
+    fetchWorkspaceTree,
     fetchWorkspaces,
     forkWorkspace,
     pickWorkspace,

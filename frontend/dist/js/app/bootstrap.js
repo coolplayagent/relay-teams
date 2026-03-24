@@ -1,8 +1,9 @@
-﻿/**
+/**
  * app/bootstrap.js
  * UI bindings and application startup sequence.
  */
 import { initSettings, openSettings } from '../components/settings.js';
+import { initializeProjectView } from '../components/projectView.js';
 import { initializeContextIndicators } from '../components/contextIndicators.js';
 import { initializeSessionTokenUsage } from '../components/sessionTokenUsage.js';
 import { initializeSubagentRail } from '../components/subagentRail.js';
@@ -119,6 +120,7 @@ export async function initApp(selectSession, handleSend) {
     await hydrateCoordinatorRoleId();
     initializeSubagentRail();
     initializeObservability();
+    initializeProjectView();
     setupEventBindings(handleSend);
     initSettings();
     setupSettingsButton();

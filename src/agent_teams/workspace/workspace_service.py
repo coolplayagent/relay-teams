@@ -1,23 +1,52 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import difflib
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
+from agent_teams.logger import get_logger, log_event
 from agent_teams.paths import get_project_config_dir
+from agent_teams.workspace.git_worktree import GitWorktreeClient
 from agent_teams.workspace.workspace_models import (
     BranchBinding,
     FileScopeBackend,
+    WorkspaceDiffChangeType,
+    WorkspaceDiffFile,
+    WorkspaceDiffFileSummary,
+    WorkspaceDiffListing,
     WorkspaceFileScope,
     WorkspaceProfile,
     WorkspaceRecord,
+    WorkspaceSnapshot,
+    WorkspaceTreeListing,
+    WorkspaceTreeNode,
+    WorkspaceTreeNodeKind,
 )
-from agent_teams.workspace.git_worktree import GitWorktreeClient
 from agent_teams.workspace.workspace_repository import WorkspaceRepository
 
 
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")
+_GIT_TIMEOUT_SECONDS = 30.0
+_BINARY_DIFF_MESSAGE = "Binary file changed"
+_logger = get_logger(__name__)
+
+
+class _WorkspaceDiffCandidate:
+    __slots__ = ("path", "change_type", "previous_path")
+
+    def __init__(
+        self,
+        *,
+        path: str,
+        change_type: WorkspaceDiffChangeType,
+        previous_path: str | None = None,
+    ) -> None:
+        self.path = path
+        self.change_type = change_type
+        self.previous_path = previous_path
 
 
 class WorkspaceService:
@@ -66,6 +95,133 @@ class WorkspaceService:
 
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
+
+    def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        tree = self._build_tree_node(
+            root_path=root_path,
+            current_path=root_path,
+            include_children=True,
+        )
+        return WorkspaceSnapshot(
+            workspace_id=record.workspace_id,
+            root_path=root_path,
+            tree=tree,
+        )
+
+    def get_workspace_tree_listing(
+        self,
+        workspace_id: str,
+        *,
+        directory_path: str,
+    ) -> WorkspaceTreeListing:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        target_path = self._resolve_tree_path(
+            root_path=root_path, directory_path=directory_path
+        )
+        if not target_path.is_dir() or target_path.is_symlink():
+            raise ValueError(f"Workspace path is not a directory: {directory_path}")
+        children = tuple(
+            self._build_tree_node(
+                root_path=root_path,
+                current_path=child_path,
+                include_children=False,
+            )
+            for child_path in self._iter_tree_entries(target_path)
+        )
+        normalized_directory_path = "."
+        if target_path != root_path:
+            normalized_directory_path = target_path.relative_to(root_path).as_posix()
+        return WorkspaceTreeListing(
+            workspace_id=record.workspace_id,
+            directory_path=normalized_directory_path,
+            children=children,
+        )
+
+    def get_workspace_diffs(self, workspace_id: str) -> WorkspaceDiffListing:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        try:
+            git_root_path = self._resolve_git_root(root_path)
+        except ValueError as exc:
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                root_path=root_path,
+                diff_files=(),
+                is_git_repository=False,
+                git_root_path=None,
+                diff_message=str(exc),
+            )
+
+        has_head = self._git_head_exists(root_path)
+        try:
+            candidates = self._list_diff_candidates(
+                workspace_root=root_path,
+                has_head=has_head,
+            )
+            diff_files = tuple(
+                WorkspaceDiffFileSummary(
+                    path=candidate.path,
+                    change_type=candidate.change_type,
+                    previous_path=candidate.previous_path,
+                )
+                for candidate in candidates
+            )
+        except ValueError as exc:
+            log_event(
+                _logger,
+                30,
+                event="workspace.snapshot.diff_failed",
+                message="Failed to collect workspace diff summary",
+                payload={
+                    "workspace_root": str(root_path),
+                    "detail": str(exc),
+                },
+            )
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                root_path=root_path,
+                diff_files=(),
+                is_git_repository=True,
+                git_root_path=git_root_path,
+                diff_message=str(exc),
+            )
+
+        return WorkspaceDiffListing(
+            workspace_id=record.workspace_id,
+            root_path=root_path,
+            diff_files=diff_files,
+            is_git_repository=True,
+            git_root_path=git_root_path,
+            diff_message=None,
+        )
+
+    def get_workspace_diff_file(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+    ) -> WorkspaceDiffFile:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        normalized_path = self._normalize_workspace_relative_path(path)
+
+        _ = self._resolve_git_root(root_path)
+        has_head = self._git_head_exists(root_path)
+        candidates = self._list_diff_candidates(
+            workspace_root=root_path,
+            has_head=has_head,
+        )
+        for candidate in candidates:
+            if candidate.path == normalized_path:
+                return self._build_diff_file(
+                    workspace_root=root_path,
+                    candidate=candidate,
+                    has_head=has_head,
+                )
+        raise ValueError(f"Workspace diff file not found: {path}")
 
     def list_workspaces(self) -> tuple[WorkspaceRecord, ...]:
         return self._repository.list_all()
@@ -200,3 +356,412 @@ class WorkspaceService:
                 f"Workspace {record.workspace_id} is missing worktree source_root_path"
             )
         return Path(source_root_path).expanduser().resolve()
+
+    def _build_tree_node(
+        self,
+        *,
+        root_path: Path,
+        current_path: Path,
+        include_children: bool,
+    ) -> WorkspaceTreeNode:
+        path_text = "."
+        if current_path != root_path:
+            path_text = current_path.relative_to(root_path).as_posix()
+        is_directory = current_path.is_dir() and not current_path.is_symlink()
+        has_children = False
+        children: tuple[WorkspaceTreeNode, ...] = ()
+        if is_directory:
+            entries = self._iter_tree_entries(current_path)
+            has_children = len(entries) > 0
+            if include_children:
+                children = tuple(
+                    self._build_tree_node(
+                        root_path=root_path,
+                        current_path=child_path,
+                        include_children=False,
+                    )
+                    for child_path in entries
+                )
+        return WorkspaceTreeNode(
+            name=current_path.name or root_path.anchor or ".",
+            path=path_text,
+            kind=(
+                WorkspaceTreeNodeKind.DIRECTORY
+                if is_directory
+                else WorkspaceTreeNodeKind.FILE
+            ),
+            has_children=has_children,
+            children=children,
+        )
+
+    def _resolve_tree_path(self, *, root_path: Path, directory_path: str) -> Path:
+        normalized_path = directory_path.strip() or "."
+        candidate = Path(normalized_path)
+        if candidate.is_absolute():
+            raise ValueError(f"Workspace path must be relative: {directory_path}")
+        resolved_path = (root_path / candidate).resolve()
+        if resolved_path != root_path and root_path not in resolved_path.parents:
+            raise ValueError(f"Workspace path escapes root: {directory_path}")
+        return resolved_path
+
+    def _normalize_workspace_relative_path(self, path: str) -> str:
+        normalized_path = str(path).strip().replace("\\", "/")
+        if not normalized_path or normalized_path == ".":
+            raise ValueError("Workspace path must not be empty")
+        candidate = Path(normalized_path)
+        if candidate.is_absolute():
+            raise ValueError(f"Workspace path must be relative: {path}")
+        normalized_parts = tuple(
+            part for part in candidate.parts if part not in {"", "."}
+        )
+        if not normalized_parts or any(part == ".." for part in normalized_parts):
+            raise ValueError(f"Workspace path escapes root: {path}")
+        return Path(*normalized_parts).as_posix()
+
+    def _iter_tree_entries(self, current_path: Path) -> tuple[Path, ...]:
+        try:
+            entries = tuple(
+                child for child in current_path.iterdir() if child.name not in {".git"}
+            )
+        except OSError as exc:
+            log_event(
+                _logger,
+                30,
+                event="workspace.snapshot.tree_read_failed",
+                message="Failed to inspect workspace directory entry",
+                payload={
+                    "path": str(current_path),
+                    "detail": str(exc),
+                },
+            )
+            return ()
+        return tuple(
+            sorted(
+                entries,
+                key=lambda child: (
+                    0 if child.is_dir() and not child.is_symlink() else 1,
+                    child.name.casefold(),
+                ),
+            )
+        )
+
+    def _collect_workspace_diffs(
+        self,
+        workspace_root: Path,
+    ) -> tuple[bool, Path | None, tuple[WorkspaceDiffFile, ...], str | None]:
+        try:
+            git_root_path = self._resolve_git_root(workspace_root)
+        except ValueError as exc:
+            return False, None, (), str(exc)
+
+        has_head = self._git_head_exists(workspace_root)
+        try:
+            candidates = self._list_diff_candidates(
+                workspace_root=workspace_root,
+                has_head=has_head,
+            )
+            diff_files = tuple(
+                self._build_diff_file(
+                    workspace_root=workspace_root,
+                    candidate=candidate,
+                    has_head=has_head,
+                )
+                for candidate in candidates
+            )
+        except ValueError as exc:
+            log_event(
+                _logger,
+                30,
+                event="workspace.snapshot.diff_failed",
+                message="Failed to collect workspace diff",
+                payload={
+                    "workspace_root": str(workspace_root),
+                    "detail": str(exc),
+                },
+            )
+            return True, git_root_path, (), str(exc)
+        return True, git_root_path, diff_files, None
+
+    def _resolve_git_root(self, workspace_root: Path) -> Path:
+        completed = self._run_git(
+            ("rev-parse", "--show-toplevel"),
+            cwd=workspace_root,
+        )
+        stdout = completed.stdout
+        if not isinstance(stdout, str):
+            raise ValueError("Git returned non-text output for git root")
+        return Path(stdout.strip()).expanduser().resolve()
+
+    def _git_head_exists(self, workspace_root: Path) -> bool:
+        try:
+            _ = self._run_git(("rev-parse", "--verify", "HEAD"), cwd=workspace_root)
+        except ValueError:
+            return False
+        return True
+
+    def _list_diff_candidates(
+        self,
+        *,
+        workspace_root: Path,
+        has_head: bool,
+    ) -> tuple[_WorkspaceDiffCandidate, ...]:
+        candidates_by_path: dict[str, _WorkspaceDiffCandidate] = {}
+        tracked_candidates = self._parse_name_status_output(
+            self._tracked_diff_output(
+                workspace_root=workspace_root,
+                has_head=has_head,
+            )
+        )
+        for candidate in tracked_candidates:
+            candidates_by_path[candidate.path] = candidate
+
+        for rel_path in self._untracked_paths(workspace_root):
+            if rel_path in candidates_by_path:
+                continue
+            candidates_by_path[rel_path] = _WorkspaceDiffCandidate(
+                path=rel_path,
+                change_type=WorkspaceDiffChangeType.UNTRACKED,
+            )
+
+        return tuple(
+            sorted(candidates_by_path.values(), key=lambda candidate: candidate.path)
+        )
+
+    def _tracked_diff_output(self, *, workspace_root: Path, has_head: bool) -> str:
+        if has_head:
+            completed = self._run_git(
+                ("diff", "--name-status", "--find-renames", "HEAD", "--"),
+                cwd=workspace_root,
+            )
+            stdout = completed.stdout
+            if not isinstance(stdout, str):
+                raise ValueError("Git returned non-text diff status output")
+            return stdout
+        completed = self._run_git(
+            ("diff", "--cached", "--name-status", "--find-renames", "--"),
+            cwd=workspace_root,
+        )
+        stdout = completed.stdout
+        if not isinstance(stdout, str):
+            raise ValueError("Git returned non-text diff status output")
+        return stdout
+
+    def _untracked_paths(self, workspace_root: Path) -> tuple[str, ...]:
+        completed = self._run_git(
+            ("ls-files", "--others", "--exclude-standard"),
+            cwd=workspace_root,
+        )
+        stdout = completed.stdout
+        if not isinstance(stdout, str):
+            raise ValueError("Git returned non-text untracked path output")
+        return tuple(line.strip() for line in stdout.splitlines() if line.strip())
+
+    def _parse_name_status_output(
+        self,
+        output: str,
+    ) -> tuple[_WorkspaceDiffCandidate, ...]:
+        candidates: list[_WorkspaceDiffCandidate] = []
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split("	")
+            status = parts[0]
+            if status.startswith("R") and len(parts) >= 3:
+                candidates.append(
+                    _WorkspaceDiffCandidate(
+                        path=parts[2],
+                        change_type=WorkspaceDiffChangeType.RENAMED,
+                        previous_path=parts[1],
+                    )
+                )
+                continue
+            if status.startswith("C") and len(parts) >= 3:
+                candidates.append(
+                    _WorkspaceDiffCandidate(
+                        path=parts[2],
+                        change_type=WorkspaceDiffChangeType.COPIED,
+                        previous_path=parts[1],
+                    )
+                )
+                continue
+            if len(parts) < 2:
+                continue
+            change_type = self._map_git_change_type(status)
+            if change_type is None:
+                continue
+            candidates.append(
+                _WorkspaceDiffCandidate(
+                    path=parts[1],
+                    change_type=change_type,
+                )
+            )
+        return tuple(candidates)
+
+    def _map_git_change_type(
+        self,
+        status: str,
+    ) -> WorkspaceDiffChangeType | None:
+        code = status[:1]
+        if code == "A":
+            return WorkspaceDiffChangeType.ADDED
+        if code == "M":
+            return WorkspaceDiffChangeType.MODIFIED
+        if code == "D":
+            return WorkspaceDiffChangeType.DELETED
+        if code == "U":
+            return WorkspaceDiffChangeType.CONFLICTED
+        if code == "T":
+            return WorkspaceDiffChangeType.TYPE_CHANGED
+        return None
+
+    def _build_diff_file(
+        self,
+        *,
+        workspace_root: Path,
+        candidate: _WorkspaceDiffCandidate,
+        has_head: bool,
+    ) -> WorkspaceDiffFile:
+        current_path = workspace_root / Path(candidate.path)
+        base_path = candidate.previous_path or candidate.path
+        base_bytes = None
+        if has_head and candidate.change_type != WorkspaceDiffChangeType.UNTRACKED:
+            base_bytes = self._read_git_blob_bytes(workspace_root, base_path)
+        current_bytes = self._read_workspace_bytes(current_path)
+
+        if candidate.change_type == WorkspaceDiffChangeType.DELETED:
+            current_bytes = b""
+        if current_bytes is None:
+            current_bytes = b""
+
+        is_binary = self._is_binary_bytes(base_bytes) or self._is_binary_bytes(
+            current_bytes
+        )
+        diff_text = (
+            _BINARY_DIFF_MESSAGE
+            if is_binary
+            else self._build_unified_diff(
+                before_path=base_path,
+                after_path=candidate.path,
+                before_text=self._decode_bytes(base_bytes),
+                after_text=self._decode_bytes(current_bytes),
+            )
+        )
+        return WorkspaceDiffFile(
+            path=candidate.path,
+            previous_path=candidate.previous_path,
+            change_type=candidate.change_type,
+            diff=diff_text,
+            is_binary=is_binary,
+        )
+
+    def _read_git_blob_bytes(
+        self,
+        workspace_root: Path,
+        relative_path: str,
+    ) -> bytes | None:
+        try:
+            completed = self._run_git(
+                ("show", f"HEAD:{relative_path.replace(chr(92), '/')}"),
+                cwd=workspace_root,
+                text=False,
+            )
+        except ValueError:
+            return None
+        return completed.stdout if isinstance(completed.stdout, bytes) else None
+
+    def _read_workspace_bytes(self, path: Path) -> bytes | None:
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            log_event(
+                _logger,
+                30,
+                event="workspace.snapshot.file_read_failed",
+                message="Failed to read workspace file while building diff",
+                payload={
+                    "path": str(path),
+                    "detail": str(exc),
+                },
+            )
+            return None
+
+    def _is_binary_bytes(self, content: bytes | None) -> bool:
+        if content is None:
+            return False
+        if b"\0" in content:
+            return True
+        try:
+            _ = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
+
+    def _decode_bytes(self, content: bytes | None) -> str:
+        if content is None:
+            return ""
+        return content.decode("utf-8")
+
+    def _build_unified_diff(
+        self,
+        *,
+        before_path: str,
+        after_path: str,
+        before_text: str,
+        after_text: str,
+    ) -> str:
+        diff_lines = list(
+            difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=f"a/{before_path}",
+                tofile=f"b/{after_path}",
+                lineterm="",
+            )
+        )
+        if not diff_lines:
+            return f"--- a/{before_path}\n+++ b/{after_path}"
+        return "\n".join(diff_lines)
+
+    def _run_git(
+        self,
+        args: tuple[str, ...],
+        *,
+        cwd: Path,
+        text: bool = True,
+    ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+        git_binary = shutil.which("git")
+        if git_binary is None:
+            raise ValueError("Git executable is not available")
+
+        command = [git_binary, *args]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(cwd),
+                check=False,
+                capture_output=True,
+                text=text,
+                timeout=_GIT_TIMEOUT_SECONDS,
+            )
+        except OSError as exc:
+            raise ValueError(f"Failed to execute git: {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("Git command timed out") from exc
+
+        if completed.returncode != 0:
+            stderr = (
+                completed.stderr.strip()
+                if isinstance(completed.stderr, str)
+                else completed.stderr.decode("utf-8", errors="ignore").strip()
+            )
+            stdout = (
+                completed.stdout.strip()
+                if isinstance(completed.stdout, str)
+                else completed.stdout.decode("utf-8", errors="ignore").strip()
+            )
+            detail = stderr or stdout or "unknown git error"
+            raise ValueError(f"Git command failed: {detail}")
+        return completed
