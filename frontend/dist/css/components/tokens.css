@@ -892,7 +892,7 @@ body.light-theme .project-session-toggle-btn {
     top: 0.16rem;
     width: auto;
     min-width: 0;
-    max-width: none;
+    max-width: calc(100% - 1.72rem - 3.15rem);
     padding: 0.14rem 0.38rem;
     display: block;
     overflow: hidden;

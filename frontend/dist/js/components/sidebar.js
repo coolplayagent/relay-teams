@@ -52,7 +52,7 @@ function formatProjectLabel(workspace) {
     if (!rootPath) {
         return workspaceId;
     }
-    const parts = rootPath.split(/[\/]/).filter(Boolean);
+    const parts = rootPath.split(/[\/\\]/).filter(Boolean);
     return parts.at(-1) || workspaceId;
 }
 
