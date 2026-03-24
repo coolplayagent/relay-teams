@@ -159,19 +159,6 @@ function formatWorkspaceOptionDescription(workspace) {
     return rootPath || 'Use this workspace directory for automation runs.';
 }
 
-function formatSessionLabel(session) {
-    const metadata = session?.metadata && typeof session.metadata === 'object' ? session.metadata : {};
-    for (const key of ['title', 'name', 'label']) {
-        const label = String(metadata[key] || '').trim();
-        if (label) return label;
-    }
-    return String(session?.session_id || 'Session');
-}
-
-function isForkedWorkspace(workspace) {
-    return String(workspace?.profile?.file_scope?.backend || '').trim() === 'git_worktree';
-}
-
 function groupKey(kind, id) {
     return `${kind}:${id}`;
 }
