@@ -222,9 +222,7 @@ function applyRoleRecord(record) {
     setInputValue('role-description-input', record.description || '');
     setInputValue('role-version-input', record.version || '');
     renderModelProfileSelect(record.model_profile || 'default');
-    renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
-    renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
-    renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, t('settings.roles.no_skills'));
+    renderRoleOptionPickers();
     renderMemoryProfileSelects(currentMemoryProfile);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
     setPromptPreviewMode('edit');
@@ -298,6 +296,26 @@ function renderOptionPicker(containerId, availableValues, selectedValues, emptyM
     });
 }
 
+function renderRoleOptionPickers() {
+    renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+    renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
+    renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, t('settings.roles.no_skills'));
+    renderSkillsShellAdvisory();
+}
+
+function renderSkillsShellAdvisory() {
+    const container = document.getElementById('role-skills-picker');
+    if (!container) return;
+    const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
+    const hasShell = Array.isArray(currentSelections.tools) && currentSelections.tools.includes('shell');
+    if (!hasSkills || hasShell) {
+        return;
+    }
+    container.innerHTML += `
+        <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
+    `;
+}
+
 function syncOptionSelection(containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -313,6 +331,9 @@ function syncOptionSelection(containerId) {
         currentSelections.mcp_servers = nextValues;
     } else if (containerId === 'role-skills-picker') {
         currentSelections.skills = nextValues;
+    }
+    if (containerId === 'role-tools-picker' || containerId === 'role-skills-picker') {
+        renderRoleOptionPickers();
     }
 }
 

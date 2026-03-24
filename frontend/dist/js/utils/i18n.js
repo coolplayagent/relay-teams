@@ -243,6 +243,7 @@ const TRANSLATIONS = {
         'settings.roles.no_tools': 'No tools loaded.',
         'settings.roles.no_mcp': 'No MCP servers loaded.',
         'settings.roles.no_skills': 'No skills loaded.',
+        'settings.roles.skills_shell_advisory': 'Roles that use skills usually work better with the shell tool enabled.',
         'settings.system.no_mcp': 'No MCP servers loaded',
         'settings.system.no_mcp_copy': 'Add or enable a server, then reload to refresh the runtime view.',
         'settings.system.no_skills': 'No skills loaded',

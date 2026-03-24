@@ -167,6 +167,40 @@ console.log(JSON.stringify({
     ]
 
 
+def test_role_settings_shows_shell_advisory_when_skills_are_selected(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const advisoryBefore = document.getElementById("role-skills-picker").innerHTML;
+const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
+toolOptions[2].checked = true;
+toolOptions[2].onchange();
+const advisoryAfter = document.getElementById("role-skills-picker").innerHTML;
+
+console.log(JSON.stringify({
+    advisoryBefore,
+    advisoryAfter,
+}));
+""".strip(),
+    )
+
+    assert "Roles that use skills usually work better with the shell tool enabled." in cast(
+        str, payload["advisoryBefore"]
+    )
+    assert "Roles that use skills usually work better with the shell tool enabled." not in cast(
+        str, payload["advisoryAfter"]
+    )
+
+
 def test_role_settings_render_default_alias_with_current_profile_name(
     tmp_path: Path,
 ) -> None:
@@ -334,7 +368,7 @@ export async function fetchRoleConfigOptions() {
         return {
             coordinator_role_id: "Coordinator",
             main_agent_role_id: "MainAgent",
-            tools: ["read_file", "write_file"],
+            tools: ["read_file", "write_file", "shell"],
             mcp_servers: ["docs"],
             skills: ["diff", "time"],
         };
@@ -420,6 +454,7 @@ const translations = {
     "settings.roles.no_tools": "No tools loaded.",
     "settings.roles.no_mcp": "No MCP servers loaded.",
     "settings.roles.no_skills": "No skills loaded.",
+    "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the shell tool enabled.",
 };
 
 export function t(key) {

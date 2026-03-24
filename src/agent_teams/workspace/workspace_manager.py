@@ -28,6 +28,8 @@ class WorkspaceManager(BaseModel):
     project_root: Path
     workspace_repo: WorkspaceRepository | None = None
     shared_store: object | None = None
+    builtin_skills_dir: Path | None = None
+    app_skills_dir: Path | None = None
 
     def resolve(
         self,
@@ -99,7 +101,9 @@ class WorkspaceManager(BaseModel):
             filesystem_root,
             file_scope.working_directory,
         )
-        readable_roots = self._resolve_roots(filesystem_root, file_scope, write=False)
+        readable_roots = self._extend_readable_roots(
+            self._resolve_roots(filesystem_root, file_scope, write=False)
+        )
         writable_roots = self._resolve_roots(filesystem_root, file_scope, write=True)
         return base_locations.model_copy(
             update={
@@ -125,6 +129,28 @@ class WorkspaceManager(BaseModel):
             self._resolve_relative_root(filesystem_root, raw_path)
             for raw_path in raw_paths
         )
+
+    def _extend_readable_roots(
+        self,
+        readable_roots: tuple[Path, ...],
+    ) -> tuple[Path, ...]:
+        deduped: list[Path] = []
+        seen: set[Path] = set()
+        for candidate in (*readable_roots, *self._skill_roots()):
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            deduped.append(resolved)
+            seen.add(resolved)
+        return tuple(deduped)
+
+    def _skill_roots(self) -> tuple[Path, ...]:
+        roots: list[Path] = []
+        for candidate in (self.builtin_skills_dir, self.app_skills_dir):
+            if candidate is None:
+                continue
+            roots.append(candidate.expanduser().resolve())
+        return tuple(roots)
 
     def _resolve_relative_root(self, filesystem_root: Path, relative_path: str) -> Path:
         candidate = (filesystem_root / relative_path).resolve()

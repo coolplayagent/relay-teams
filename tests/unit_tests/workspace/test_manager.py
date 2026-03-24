@@ -55,3 +55,44 @@ def test_workspace_manager_uses_worktree_root_for_git_worktree_workspace(
         )
         == worktree_root.resolve() / ".agent_teams" / "sessions" / "session-1"
     )
+
+
+def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace.db"
+    project_root = tmp_path / "project"
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
+    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
+    project_root.mkdir(parents=True)
+    builtin_skills_dir.mkdir(parents=True)
+    app_skills_dir.mkdir(parents=True)
+
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = service.create_workspace(
+        workspace_id="default",
+        root_path=project_root,
+    )
+    manager = WorkspaceManager(
+        project_root=project_root,
+        workspace_repo=WorkspaceRepository(db_path),
+        builtin_skills_dir=builtin_skills_dir,
+        app_skills_dir=app_skills_dir,
+    )
+
+    handle = manager.resolve(
+        session_id="session-1",
+        role_id="designer",
+        instance_id=None,
+        workspace_id="default",
+    )
+
+    assert handle.locations.readable_roots == (
+        project_root.resolve(),
+        builtin_skills_dir.resolve(),
+        app_skills_dir.resolve(),
+    )
+    assert (
+        handle.resolve_workdir(app_skills_dir.resolve().as_posix())
+        == app_skills_dir.resolve()
+    )

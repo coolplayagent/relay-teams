@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 import json
+from pathlib import Path
 from typing import TypedDict
 
 import typer
@@ -165,7 +166,8 @@ def render_skill_detail_table(skill: Skill) -> None:
     summary_rows = [
         ("Name", skill.metadata.name),
         ("Source", skill.scope.value),
-        ("Directory", str(skill.directory)),
+        ("Directory", _to_path_text(skill.directory)),
+        ("Manifest", _to_path_text(skill.directory / "SKILL.md")),
         ("Description", skill.metadata.description),
     ]
     _render_key_value_table(title="Skill", rows=summary_rows)
@@ -178,6 +180,10 @@ def render_skill_detail_table(skill: Skill) -> None:
         title="Scripts",
         rows=tuple(skill.metadata.scripts.values()),
         empty_message="No scripts.",
+    )
+    typer.echo("Files")
+    typer.echo(
+        "\n".join(_iter_skill_file_paths(skill.directory)) or "No files discovered."
     )
     typer.echo("Instructions")
     typer.echo(skill.metadata.instructions or "<empty>")
@@ -242,7 +248,7 @@ def _to_skill_list_entry(skill: Skill) -> SkillListEntry:
     return SkillListEntry(
         name=skill.metadata.name,
         source=skill.scope.value,
-        directory=str(skill.directory),
+        directory=_to_path_text(skill.directory),
         description=skill.metadata.description,
     )
 
@@ -251,14 +257,16 @@ def _to_skill_json(skill: Skill) -> dict[str, object]:
     return {
         "name": skill.metadata.name,
         "description": skill.metadata.description,
+        "manifest_path": _to_path_text(skill.directory / "SKILL.md"),
+        "manifest_content": (skill.directory / "SKILL.md").read_text(encoding="utf-8"),
         "instructions": skill.metadata.instructions,
         "source": skill.scope.value,
-        "directory": str(skill.directory),
+        "directory": _to_path_text(skill.directory),
         "resources": [
             {
                 "name": resource.name,
                 "description": resource.description,
-                "path": str(resource.path) if resource.path is not None else None,
+                "path": _to_path_text(resource.path) if resource.path is not None else None,
                 "content": resource.content,
             }
             for resource in skill.metadata.resources.values()
@@ -267,8 +275,23 @@ def _to_skill_json(skill: Skill) -> dict[str, object]:
             {
                 "name": script.name,
                 "description": script.description,
-                "path": str(script.path),
+                "path": _to_path_text(script.path),
             }
             for script in skill.metadata.scripts.values()
         ],
+        "files": list(_iter_skill_file_paths(skill.directory)),
     }
+
+
+def _to_path_text(path: Path) -> str:
+    return path.resolve().as_posix()
+
+
+def _iter_skill_file_paths(skill_dir: Path) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            _to_path_text(path)
+            for path in skill_dir.rglob("*")
+            if path.is_file()
+        )
+    )

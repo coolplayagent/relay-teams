@@ -8,6 +8,7 @@ from agent_teams.agents.execution.prompt_instructions import PromptInstructionRe
 from agent_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
+    get_builtin_skills_dir,
 )
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.orchestration import (
@@ -173,6 +174,8 @@ class ServerContainer:
         self.workspace_manager: WorkspaceManager = WorkspaceManager(
             project_root=Path.cwd(),
             workspace_repo=self.workspace_repo,
+            builtin_skills_dir=get_builtin_skills_dir(),
+            app_skills_dir=config_dir / "skills",
         )
         self.event_log: EventLog = EventLog(runtime.paths.db_path)
         self.agent_repo: AgentInstanceRepository = AgentInstanceRepository(

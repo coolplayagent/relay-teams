@@ -378,6 +378,11 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     runtime_record = agent_repo.get_instance(instance_id)
     assert "## Available Skills" in runtime_record.runtime_system_prompt
     assert "- time:" in runtime_record.runtime_system_prompt
+    tools_snapshot = json.loads(runtime_record.runtime_tools_json)
+    assert len(tools_snapshot["skill_tools"]) == 1
+    assert tools_snapshot["skill_tools"][0]["name"] == "load_skill"
+    assert tools_snapshot["skill_tools"][0]["source"] == "skill"
+    assert "absolute file paths" in tools_snapshot["skill_tools"][0]["description"]
 
 
 @pytest.mark.asyncio

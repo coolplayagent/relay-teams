@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 import asyncio
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
+
+from pydantic import JsonValue
 
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.skills.discovery import SkillsDirectory
@@ -16,7 +16,6 @@ from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.skills.skill_registry import SkillRegistry
 
 from agent_teams.tools.runtime import ToolContext
-from agent_teams.trace import get_trace_context
 
 
 def test_get_toolset_tools_builds_skill_tools_without_annotation_errors() -> None:
@@ -27,11 +26,7 @@ def test_get_toolset_tools_builds_skill_tools_without_annotation_errors() -> Non
     tools = registry.get_toolset_tools(("time",))
 
     names = {tool.name for tool in tools}
-    assert names == {
-        "load_skill",
-        "read_skill_resource",
-        "run_skill_script",
-    }
+    assert names == {"load_skill"}
 
 
 def test_get_instruction_entries_returns_structured_data(tmp_path: Path) -> None:
@@ -188,60 +183,62 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
     assert registry.list_skill_definitions() == ()
 
 
-def test_run_skill_script_binds_nested_trace_context(tmp_path: Path) -> None:
+def test_load_skill_returns_manifest_and_absolute_file_paths(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "time"
+    resources_dir = skill_dir / "resources"
     scripts_dir = skill_dir / "scripts"
+    resources_dir.mkdir(parents=True)
     scripts_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
+    manifest_path = skill_dir / "SKILL.md"
+    manifest_content = (
         "---\n"
         "name: time\n"
         "description: timezone helper\n"
+        "resources:\n"
+        "  usage.txt:\n"
+        "    description: Usage notes.\n"
+        "    path: resources/usage.txt\n"
         "---\n"
-        "- trace_context: Returns active trace context.\n",
-        encoding="utf-8",
+        "Use UTC for all timestamps.\n"
     )
-    (scripts_dir / "trace_context.py").write_text(
-        "# -*- coding: utf-8 -*-\n"
-        "from __future__ import annotations\n\n"
-        "from agent_teams.trace import get_trace_context\n\n"
-        "def run(ctx):\n"
-        "    current = get_trace_context()\n"
-        "    return {\n"
-        "        'trace_id': current.trace_id,\n"
-        "        'run_id': current.run_id,\n"
-        "        'task_id': current.task_id,\n"
-        "        'session_id': current.session_id,\n"
-        "        'instance_id': current.instance_id,\n"
-        "        'role_id': current.role_id,\n"
-        "        'tool_call_id': current.tool_call_id,\n"
-        "        'span_id': current.span_id,\n"
-        "        'parent_span_id': current.parent_span_id,\n"
-        "    }\n",
-        encoding="utf-8",
-    )
+    manifest_path.write_text(manifest_content, encoding="utf-8")
+    usage_path = resources_dir / "usage.txt"
+    usage_path.write_text("Use UTC.\n", encoding="utf-8")
+    script_path = scripts_dir / "trace_context.py"
+    script_path.write_text("print('trace')\n", encoding="utf-8")
     registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
 
     result = asyncio.run(
-        registry.run_skill_script(
+        registry.load_skill(
             cast(ToolContext, cast(object, _FakeCtx())),
-            skill_name="time",
-            script_name="trace_context",
+            name="time",
         )
     )
 
     assert result["ok"] is True
     data = cast(dict[str, JsonValue], result["data"])
-    assert data["trace_id"] == "trace-1"
-    assert data["run_id"] == "run-1"
-    assert data["task_id"] == "task-1"
-    assert data["session_id"] == "session-1"
-    assert data["instance_id"] == "inst-1"
-    assert data["role_id"] == "spec_coder"
-    assert data["tool_call_id"] == "toolcall-1"
-    assert isinstance(data["span_id"], str)
-    assert isinstance(data["parent_span_id"], str)
-    assert data["span_id"] != data["parent_span_id"]
-    assert get_trace_context().trace_id is None
+    assert data["manifest_path"] == manifest_path.resolve().as_posix()
+    assert data["manifest_content"] == manifest_content
+    assert data["instructions"] == "Use UTC for all timestamps."
+    assert data["directory"] == skill_dir.resolve().as_posix()
+    assert cast(dict[str, JsonValue], data["resources"])["usage.txt"] == {
+        "name": "usage.txt",
+        "description": "Usage notes.",
+        "path": usage_path.resolve().as_posix(),
+        "content": None,
+    }
+    assert cast(dict[str, JsonValue], data["scripts"])["trace_context"] == {
+        "name": "trace_context",
+        "description": "Execute trace_context script.",
+        "path": script_path.resolve().as_posix(),
+    }
+    assert sorted(cast(list[str], data["files"])) == sorted(
+        [
+            manifest_path.resolve().as_posix(),
+            script_path.resolve().as_posix(),
+            usage_path.resolve().as_posix(),
+        ]
+    )
 
 
 def _write_skill(

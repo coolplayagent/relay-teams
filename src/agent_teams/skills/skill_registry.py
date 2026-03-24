@@ -1,13 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
-import importlib.util
-import inspect
-import io
-from contextlib import redirect_stdout
+from collections.abc import Iterable
 from pathlib import Path
-from types import ModuleType
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Tool
@@ -18,8 +13,6 @@ from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.skill_models import Skill, SkillInstructionEntry
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
-
-type SkillEntrypoint = Callable[..., object]
 
 LOGGER = get_logger(__name__)
 
@@ -97,17 +90,10 @@ class SkillRegistry(BaseModel):
             Tool(
                 self.load_skill,
                 name="load_skill",
-                description="Load a specific skill by name.",
-            ),
-            Tool(
-                self.read_skill_resource,
-                name="read_skill_resource",
-                description="Read a resource file from a skill.",
-            ),
-            Tool(
-                self.run_skill_script,
-                name="run_skill_script",
-                description="Run a script associated with a skill.",
+                description=(
+                    "Load a specific skill by name, including its instructions and "
+                    "absolute file paths."
+                ),
             ),
         ]
         return tools
@@ -194,115 +180,6 @@ class SkillRegistry(BaseModel):
             action=_action,
         )
 
-    async def read_skill_resource(
-        self, ctx: ToolContext, skill_name: str, resource_path: str
-    ) -> dict[str, JsonValue]:
-        async def _action() -> JsonValue:
-            with trace_span(
-                LOGGER,
-                component="skills.registry",
-                operation="read_skill_resource",
-                attributes={
-                    "skill_name": skill_name,
-                    "resource_path": resource_path,
-                },
-                trace_id=ctx.deps.trace_id,
-                run_id=ctx.deps.run_id,
-                task_id=ctx.deps.task_id,
-                session_id=ctx.deps.session_id,
-                instance_id=ctx.deps.instance_id,
-                role_id=ctx.deps.role_id,
-                tool_call_id=ctx.tool_call_id,
-            ):
-                skill = self.get_skill_definition(skill_name)
-                if skill is None:
-                    raise KeyError(f"Skill not found: {skill_name}")
-                resource = skill.metadata.resources.get(resource_path)
-                if resource is None or resource.path is None:
-                    raise FileNotFoundError(
-                        f"Resource {resource_path} not found in skill {skill_name}"
-                    )
-                return resource.path.read_text("utf-8")
-
-        return await execute_tool(
-            ctx,
-            tool_name="read_skill_resource",
-            args_summary={"skill_name": skill_name, "resource_path": resource_path},
-            action=_action,
-        )
-
-    async def run_skill_script(
-        self,
-        ctx: ToolContext,
-        skill_name: str,
-        script_name: str,
-        args: dict[str, JsonValue] | None = None,
-    ) -> dict[str, JsonValue]:
-        async def _action() -> JsonValue:
-            with trace_span(
-                LOGGER,
-                component="skills.registry",
-                operation="run_skill_script",
-                attributes={
-                    "skill_name": skill_name,
-                    "script_name": script_name,
-                    "has_args": bool(args),
-                },
-                trace_id=ctx.deps.trace_id,
-                run_id=ctx.deps.run_id,
-                task_id=ctx.deps.task_id,
-                session_id=ctx.deps.session_id,
-                instance_id=ctx.deps.instance_id,
-                role_id=ctx.deps.role_id,
-                tool_call_id=ctx.tool_call_id,
-            ):
-                skill = self.get_skill_definition(skill_name)
-                if skill is None:
-                    raise KeyError(f"Skill not found: {skill_name}")
-
-                script = skill.metadata.scripts.get(script_name)
-                if script is None:
-                    raise KeyError(
-                        f"Script {script_name} not found in skill {skill_name}"
-                    )
-
-                spec = importlib.util.spec_from_file_location(
-                    f"skill_script_{skill_name}_{script_name}", script.path
-                )
-                if spec is None or spec.loader is None:
-                    raise ImportError(
-                        f"Could not load script {script_name} from {script.path}"
-                    )
-
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                run_fn = _resolve_script_entrypoint(module, skill_name, script_name)
-
-                stdout_buffer = io.StringIO()
-                with redirect_stdout(stdout_buffer):
-                    if inspect.iscoroutinefunction(run_fn):
-                        try:
-                            ret = await run_fn(ctx, **(args or {}))
-                        except TypeError:
-                            ret = await run_fn()
-                    else:
-                        try:
-                            ret = run_fn(ctx, **(args or {}))
-                        except TypeError:
-                            ret = run_fn()
-
-                output = stdout_buffer.getvalue().strip()
-                if output:
-                    return output
-                return _normalize_script_result(ret)
-
-        return await execute_tool(
-            ctx,
-            tool_name=f"skill:{skill_name}:{script_name}",
-            args_summary=args or {},
-            action=_action,
-        )
-
     def _get_effective_skill_map(self) -> dict[str, Skill]:
         with trace_span(
             LOGGER,
@@ -315,35 +192,26 @@ class SkillRegistry(BaseModel):
             }
 
 
-def _resolve_script_entrypoint(
-    module: ModuleType, skill_name: str, script_name: str
-) -> SkillEntrypoint:
-    run_fn = getattr(module, "run", None)
-    if callable(run_fn):
-        return run_fn
-
-    main_fn = getattr(module, "main", None)
-    if callable(main_fn):
-        return main_fn
-
-    raise AttributeError(
-        f"Script {script_name} in skill {skill_name} has no 'run' or 'main' function"
-    )
-
-
 def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
     metadata = skill.metadata
+    manifest_path = (skill.directory / "SKILL.md").resolve()
     return {
         "name": metadata.name,
         "description": metadata.description,
+        "manifest_path": _normalize_skill_path(manifest_path),
+        "manifest_content": manifest_path.read_text(encoding="utf-8"),
         "instructions": metadata.instructions,
         "scope": skill.scope.value,
-        "directory": str(skill.directory),
+        "directory": _normalize_skill_path(skill.directory),
         "resources": {
             name: {
                 "name": resource.name,
                 "description": resource.description,
-                "path": str(resource.path) if resource.path is not None else None,
+                "path": (
+                    _normalize_skill_path(resource.path)
+                    if resource.path is not None
+                    else None
+                ),
                 "content": resource.content,
             }
             for name, resource in metadata.resources.items()
@@ -352,21 +220,20 @@ def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
             name: {
                 "name": script.name,
                 "description": script.description,
-                "path": str(script.path),
+                "path": _normalize_skill_path(script.path),
             }
             for name, script in metadata.scripts.items()
         },
+        "files": [
+            _normalize_skill_path(path)
+            for path in _iter_skill_files(skill.directory.rglob("*"))
+        ],
     }
 
 
-def _normalize_script_result(value: object) -> JsonValue:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, list):
-        return [_normalize_script_result(item) for item in value]
-    if isinstance(value, dict):
-        normalized: dict[str, JsonValue] = {}
-        for key, item in value.items():
-            normalized[str(key)] = _normalize_script_result(item)
-        return normalized
-    return str(value)
+def _normalize_skill_path(path: Path) -> str:
+    return path.resolve().as_posix()
+
+
+def _iter_skill_files(paths: Iterable[Path]) -> tuple[Path, ...]:
+    return tuple(sorted((path.resolve() for path in paths if path.is_file())))

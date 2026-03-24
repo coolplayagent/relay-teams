@@ -44,8 +44,8 @@ SKILL_USAGE_PROMPT = (
     "## Skill Usage\n"
     "The list below is a catalog of available skills in the form `skill_name: description`. "
     "Use `load_skill` when a listed skill is relevant and you need its full instructions before acting. "
-    "Use `read_skill_resource` to open a file that belongs to a loaded skill when the skill instructions reference extra resources. "
-    "Use `run_skill_script` only when the loaded skill explicitly points you to a script-based workflow."
+    "It returns the complete skill manifest, instructions, and absolute file paths for the skill directory. "
+    "After loading a skill, use the normal `read` tool for skill files when you need more detail."
 )
 AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
