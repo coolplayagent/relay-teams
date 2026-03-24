@@ -975,8 +975,8 @@ Feishu IM triggers no longer use an `/api/triggers/feishu/...` HTTP callback end
 Behavior:
 - Uses the Feishu Python SDK long connection mode for inbound `im.message.receive_v1` events.
 - Accepts `group` and `p2p` text messages.
-- For `group` chats configured with `trigger_rule = "mention_only"`, only `@bot` messages create runs.
-- For `p2p` chats, any text message creates a run and `mention_only` does not require `@bot`.
+- For `group` chats configured with `trigger_rule = "mention_only"`, only messages whose mention list includes the configured application name create runs.
+- For `p2p` chats, any text message creates a run and `mention_only` does not require an application mention.
 - Deduplicates delivery using the Feishu `event_id`.
 - Reuses one internal session per `tenant_key + chat_id`.
 - Requires no public callback URL.
@@ -992,6 +992,7 @@ Recommended trigger contract:
 Required app environment variables:
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
+- `FEISHU_APP_NAME`
 
 Optional:
 - `FEISHU_ENCRYPT_KEY`

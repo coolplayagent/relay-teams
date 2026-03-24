@@ -4,6 +4,7 @@ from __future__ import annotations
 from json import JSONDecodeError, loads
 import logging
 import re
+from collections.abc import Callable
 from typing import Protocol, cast
 
 from lark_oapi.core.json import JSON
@@ -14,6 +15,7 @@ from lark_oapi.api.im.v1.model.event_sender import EventSender
 from lark_oapi.api.im.v1.model.user_id import UserId
 from pydantic import JsonValue
 
+from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
@@ -40,6 +42,7 @@ from agent_teams.triggers import (
 )
 
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
+_AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
 _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
 logger = get_logger(__name__)
 
@@ -87,11 +90,15 @@ class FeishuTriggerHandler:
         session_service: SessionServiceLike,
         run_service: RunServiceLike,
         external_session_binding_repo: ExternalSessionBindingRepository,
+        app_name_loader: Callable[[], str | None] | None = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._session_service = session_service
         self._run_service = run_service
         self._external_session_binding_repo = external_session_binding_repo
+        self._app_name_loader = (
+            _load_feishu_app_name if app_name_loader is None else app_name_loader
+        )
 
     def handle_sdk_event(
         self,
@@ -171,6 +178,29 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="mention_required",
             )
+        if trigger_rule == "mention_only" and chat_type == "group":
+            app_name = self._app_name_loader()
+            if app_name is None:
+                return TriggerProcessingResult(
+                    status="ignored",
+                    trigger_id=trigger.trigger_id,
+                    trigger_name=trigger.name,
+                    event_id=normalized.event_id,
+                    ignored=True,
+                    reason="app_name_missing",
+                )
+            if not _mention_targets_app(
+                mention_names=normalized.mention_names,
+                app_name=app_name,
+            ):
+                return TriggerProcessingResult(
+                    status="ignored",
+                    trigger_id=trigger.trigger_id,
+                    trigger_name=trigger.name,
+                    event_id=normalized.event_id,
+                    ignored=True,
+                    reason="mention_not_for_app",
+                )
         if not normalized.trigger_text.strip():
             return TriggerProcessingResult(
                 status="ignored",
@@ -329,6 +359,7 @@ def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessa
 
     message_type = str(message.message_type or "").strip()
     payload = _sdk_event_payload(event)
+    mention_names = _extract_mention_names(payload)
     if message_type != "text":
         return FeishuNormalizedMessage(
             event_id=_sdk_event_id(header, message),
@@ -339,12 +370,13 @@ def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessa
             message_type=message_type or "unknown",
             sender_type=_sdk_sender_type(sender),
             sender_open_id=_sdk_sender_open_id(sender.sender_id),
+            mention_names=mention_names,
             payload=payload,
             metadata=_sdk_message_metadata(header, message),
         )
 
     raw_text = _extract_message_text_from_content(message.content)
-    mentioned = "<at " in raw_text.lower() or bool(message.mentions)
+    mentioned = "<at " in raw_text.lower() or bool(mention_names)
     trigger_text = _sanitize_trigger_text(
         _AT_TAG_PATTERN.sub("", raw_text),
         mentioned=mentioned,
@@ -363,6 +395,7 @@ def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessa
         raw_text=raw_text,
         trigger_text=trigger_text,
         mentioned=mentioned,
+        mention_names=mention_names,
         payload=payload,
         metadata=_sdk_message_metadata(header, message),
     )
@@ -434,6 +467,67 @@ def _extract_message_text_from_content(content_value: object) -> str:
         if isinstance(text, str):
             return text
     return content_value.strip()
+
+
+def _extract_mention_names(payload: dict[str, JsonValue]) -> tuple[str, ...]:
+    collected: list[str] = []
+    seen: set[str] = set()
+
+    event_value = payload.get("event")
+    message_value = (
+        event_value.get("message") if isinstance(event_value, dict) else None
+    )
+    if isinstance(message_value, dict):
+        mentions_value = message_value.get("mentions")
+        if isinstance(mentions_value, list):
+            for mention_value in mentions_value:
+                if not isinstance(mention_value, dict):
+                    continue
+                _add_mention_name(
+                    collected,
+                    seen,
+                    mention_value.get("name"),
+                )
+        content_value = message_value.get("content")
+        if isinstance(content_value, str):
+            for match in _AT_TAG_LABEL_PATTERN.finditer(content_value):
+                _add_mention_name(collected, seen, match.group(1))
+
+    return tuple(collected)
+
+
+def _add_mention_name(
+    collected: list[str],
+    seen: set[str],
+    raw_value: object,
+) -> None:
+    if not isinstance(raw_value, str):
+        return
+    normalized = _normalize_name(raw_value)
+    if normalized is None or normalized in seen:
+        return
+    seen.add(normalized)
+    collected.append(raw_value.strip())
+
+
+def _load_feishu_app_name() -> str | None:
+    raw_value = str(load_merged_env_vars().get("FEISHU_APP_NAME", "")).strip()
+    return raw_value or None
+
+
+def _mention_targets_app(*, mention_names: tuple[str, ...], app_name: str) -> bool:
+    normalized_app_name = _normalize_name(app_name)
+    if normalized_app_name is None:
+        return False
+    return any(
+        _normalize_name(mention_name) == normalized_app_name
+        for mention_name in mention_names
+    )
+
+
+def _normalize_name(value: str) -> str | None:
+    normalized = value.strip().casefold()
+    return normalized or None
 
 
 def _sanitize_trigger_text(raw_text: str, *, mentioned: bool) -> str:

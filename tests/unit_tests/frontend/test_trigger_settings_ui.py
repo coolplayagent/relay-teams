@@ -82,6 +82,8 @@ document.getElementById("feishu-app-id-input").value = "cli_demo";
 document.getElementById("feishu-app-id-input").oninput();
 document.getElementById("feishu-app-secret-input").value = "secret-demo";
 document.getElementById("feishu-app-secret-input").oninput();
+document.getElementById("feishu-app-name-input").value = "Agent Teams Bot";
+document.getElementById("feishu-app-name-input").oninput();
 document.getElementById("feishu-trigger-name-input").value = "feishu_ops";
 document.getElementById("feishu-trigger-name-input").oninput();
 document.getElementById("feishu-trigger-display-name-input").value = "Feishu Ops";
@@ -116,9 +118,10 @@ console.log(JSON.stringify({
     assert payload["updateCalls"] == []
     assert payload["enableCalls"] == []
     assert payload["disableCalls"] == []
-    assert len(env_saves) == 2
+    assert len(env_saves) == 3
     assert env_saves[0]["key"] == "FEISHU_APP_ID"
     assert env_saves[1]["key"] == "FEISHU_APP_SECRET"
+    assert env_saves[2]["key"] == "FEISHU_APP_NAME"
     assert len(create_calls) == 1
     create_payload = cast(dict[str, JsonValue], create_calls[0]["payload"])
     assert create_payload["name"] == "feishu_ops"
@@ -261,6 +264,8 @@ const translations = {
     "settings.triggers.feishu_app_id_placeholder": "cli_xxx",
     "settings.triggers.feishu_app_secret": "Feishu App Secret",
     "settings.triggers.feishu_app_secret_placeholder": "App secret",
+    "settings.triggers.feishu_app_name": "Application Name",
+    "settings.triggers.feishu_app_name_placeholder": "Agent Teams Bot",
     "settings.field.enabled": "Enabled",
     "settings.roles.disabled": "Disabled",
     "settings.roles.edit": "Edit",
@@ -377,6 +382,7 @@ function createElements() {{
         ["trigger-provider-back-btn", createElement("block")],
         ["feishu-app-id-input", createElement("block")],
         ["feishu-app-secret-input", createElement("block")],
+        ["feishu-app-name-input", createElement("block")],
         ["feishu-trigger-name-input", createElement("block")],
         ["feishu-trigger-display-name-input", createElement("block")],
         ["feishu-trigger-workspace-id-input", createElement("block")],
@@ -431,6 +437,12 @@ function installGlobals(elements, notifications) {{
             {{
                 key: "FEISHU_APP_ID",
                 value: "cli_existing",
+                scope: "app",
+                value_kind: "string",
+            }},
+            {{
+                key: "FEISHU_APP_NAME",
+                value: "Agent Teams Bot",
                 scope: "app",
                 value_kind: "string",
             }},

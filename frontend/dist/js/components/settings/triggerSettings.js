@@ -37,6 +37,14 @@ const FEISHU_CREDENTIAL_FIELDS = [
         type: 'password',
         required: true,
     },
+    {
+        envKey: 'FEISHU_APP_NAME',
+        inputId: 'feishu-app-name-input',
+        labelKey: 'settings.triggers.feishu_app_name',
+        placeholderKey: 'settings.triggers.feishu_app_name_placeholder',
+        type: 'text',
+        required: true,
+    },
 ];
 
 let handlersBound = false;

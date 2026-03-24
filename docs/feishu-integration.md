@@ -19,8 +19,8 @@ This version is designed for Feishu chat workflows:
 
 - group chats and single chats are supported
 - one Feishu chat maps to one internal session
-- group chats require `@bot` when `trigger_rule = "mention_only"`
-- single chats accept any text message and do not require `@bot`
+- group chats require `@应用名称` when `trigger_rule = "mention_only"`
+- single chats accept any text message and do not require `@应用名称`
 - tool approvals are still resolved through the existing UI/API, not inside Feishu
 
 ## Required Environment Variables
@@ -29,6 +29,7 @@ Set these in app environment variables:
 
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
+- `FEISHU_APP_NAME`
 - `FEISHU_ENCRYPT_KEY` if encrypted event delivery is enabled
 - `FEISHU_VERIFICATION_TOKEN` is optional and is not required for the long-connection trigger flow
 

@@ -22,6 +22,8 @@ def load_feishu_environment(
     )
     app_id = str(resolved_env.get("FEISHU_APP_ID", "")).strip()
     app_secret = str(resolved_env.get("FEISHU_APP_SECRET", "")).strip()
+    app_name_raw = str(resolved_env.get("FEISHU_APP_NAME", "")).strip()
+    app_name = app_name_raw or None
     verification_token_raw = str(
         resolved_env.get("FEISHU_VERIFICATION_TOKEN", "")
     ).strip()
@@ -33,6 +35,7 @@ def load_feishu_environment(
     return FeishuEnvironment(
         app_id=app_id,
         app_secret=app_secret,
+        app_name=app_name,
         verification_token=verification_token,
         encrypt_key=encrypt_key,
     )

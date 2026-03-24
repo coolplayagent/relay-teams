@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timezone
+from pathlib import Path
 
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 
@@ -107,16 +108,47 @@ class _FakeRunService:
         self.started.append(run_id)
 
 
-def test_handle_sdk_event_creates_session_binding_and_run(tmp_path) -> None:
-    trigger_service = _FakeTriggerService()
-    session_service = _FakeSessionService()
-    run_service = _FakeRunService()
+def _build_handler(
+    *,
+    tmp_path: Path,
+    trigger_service: _FakeTriggerService | None = None,
+    session_service: _FakeSessionService | None = None,
+    run_service: _FakeRunService | None = None,
+    app_name: str | None = "bot",
+) -> tuple[
+    FeishuTriggerHandler,
+    _FakeTriggerService,
+    _FakeSessionService,
+    _FakeRunService,
+    ExternalSessionBindingRepository,
+]:
+    resolved_trigger_service = (
+        _FakeTriggerService() if trigger_service is None else trigger_service
+    )
+    resolved_session_service = (
+        _FakeSessionService() if session_service is None else session_service
+    )
+    resolved_run_service = _FakeRunService() if run_service is None else run_service
     bindings = ExternalSessionBindingRepository(tmp_path / "bindings.db")
     handler = FeishuTriggerHandler(
-        trigger_service=trigger_service,
-        session_service=session_service,
-        run_service=run_service,
+        trigger_service=resolved_trigger_service,
+        session_service=resolved_session_service,
+        run_service=resolved_run_service,
         external_session_binding_repo=bindings,
+        app_name_loader=lambda: app_name,
+    )
+    return (
+        handler,
+        resolved_trigger_service,
+        resolved_session_service,
+        resolved_run_service,
+        bindings,
+    )
+
+
+def test_handle_sdk_event_creates_session_binding_and_run(tmp_path: Path) -> None:
+    handler, _trigger_service, _session_service, run_service, bindings = _build_handler(
+        tmp_path=tmp_path
     )
 
     raw_body = """
@@ -167,15 +199,9 @@ def test_handle_sdk_event_creates_session_binding_and_run(tmp_path) -> None:
     assert binding.session_id == "session-1"
 
 
-def test_handle_sdk_event_ignores_non_mentions(tmp_path) -> None:
-    run_service = _FakeRunService()
-    handler = FeishuTriggerHandler(
-        trigger_service=_FakeTriggerService(),
-        session_service=_FakeSessionService(),
-        run_service=run_service,
-        external_session_binding_repo=ExternalSessionBindingRepository(
-            tmp_path / "bindings.db"
-        ),
+def test_handle_sdk_event_ignores_non_mentions(tmp_path: Path) -> None:
+    handler, _trigger_service, _session_service, run_service, _bindings = (
+        _build_handler(tmp_path=tmp_path)
     )
 
     raw_body = """
@@ -215,17 +241,14 @@ def test_handle_sdk_event_ignores_non_mentions(tmp_path) -> None:
     assert run_service.created == []
 
 
-def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path) -> None:
-    trigger_service = _FakeTriggerService()
-    session_service = _FakeSessionService()
-    run_service = _FakeRunService()
-    bindings = ExternalSessionBindingRepository(tmp_path / "bindings.db")
-    handler = FeishuTriggerHandler(
-        trigger_service=trigger_service,
-        session_service=session_service,
-        run_service=run_service,
-        external_session_binding_repo=bindings,
-    )
+def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path: Path) -> None:
+    (
+        handler,
+        _trigger_service,
+        session_service,
+        run_service,
+        bindings,
+    ) = _build_handler(tmp_path=tmp_path)
 
     raw_body = """
     {
@@ -274,14 +297,13 @@ def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path) -> None:
     assert binding.session_id == "session-1"
 
 
-def test_handle_sdk_event_ignores_when_no_enabled_trigger(tmp_path) -> None:
-    handler = FeishuTriggerHandler(
-        trigger_service=_FakeTriggerService(enabled=False),
-        session_service=_FakeSessionService(),
-        run_service=_FakeRunService(),
-        external_session_binding_repo=ExternalSessionBindingRepository(
-            tmp_path / "bindings.db"
-        ),
+def test_handle_sdk_event_ignores_when_no_enabled_trigger(tmp_path: Path) -> None:
+    disabled_trigger_service = _FakeTriggerService(enabled=False)
+    handler, _trigger_service, _session_service, _run_service, _bindings = (
+        _build_handler(
+            tmp_path=tmp_path,
+            trigger_service=disabled_trigger_service,
+        )
     )
 
     raw_body = """
@@ -320,17 +342,11 @@ def test_handle_sdk_event_ignores_when_no_enabled_trigger(tmp_path) -> None:
     assert result.reason == "no_enabled_trigger"
 
 
-def test_handle_sdk_event_strips_residual_leading_mention_tokens(tmp_path) -> None:
-    trigger_service = _FakeTriggerService()
-    session_service = _FakeSessionService()
-    run_service = _FakeRunService()
-    handler = FeishuTriggerHandler(
-        trigger_service=trigger_service,
-        session_service=session_service,
-        run_service=run_service,
-        external_session_binding_repo=ExternalSessionBindingRepository(
-            tmp_path / "bindings.db"
-        ),
+def test_handle_sdk_event_strips_residual_leading_mention_tokens(
+    tmp_path: Path,
+) -> None:
+    handler, _trigger_service, _session_service, run_service, _bindings = (
+        _build_handler(tmp_path=tmp_path)
     )
 
     raw_body = """
@@ -352,7 +368,7 @@ def test_handle_sdk_event_strips_residual_leading_mention_tokens(tmp_path) -> No
           "chat_id": "oc_group_1",
           "chat_type": "group",
           "message_type": "text",
-          "content": "{\\"text\\":\\"@_user_1 return ok！\\"}",
+          "content": "{\\"text\\":\\"@_user_1 return ok!\\"}",
           "mentions": [
             {
               "key": "@_user_1",
@@ -373,23 +389,19 @@ def test_handle_sdk_event_strips_residual_leading_mention_tokens(tmp_path) -> No
 
     assert result.status == "accepted"
     assert len(run_service.created) == 1
-    assert run_service.created[0].intent == "return ok！"
+    assert run_service.created[0].intent == "return ok!"
 
 
-def test_handle_sdk_event_allows_explicit_yolo_disable(tmp_path) -> None:
+def test_handle_sdk_event_allows_explicit_yolo_disable(tmp_path: Path) -> None:
     trigger_service = _FakeTriggerService()
     trigger_service.trigger = trigger_service.trigger.model_copy(
         update={"target_config": {"workspace_id": "default", "yolo": False}}
     )
-    session_service = _FakeSessionService()
-    run_service = _FakeRunService()
-    handler = FeishuTriggerHandler(
-        trigger_service=trigger_service,
-        session_service=session_service,
-        run_service=run_service,
-        external_session_binding_repo=ExternalSessionBindingRepository(
-            tmp_path / "bindings.db"
-        ),
+    handler, _trigger_service, _session_service, run_service, _bindings = (
+        _build_handler(
+            tmp_path=tmp_path,
+            trigger_service=trigger_service,
+        )
     )
 
     raw_body = """
@@ -427,3 +439,98 @@ def test_handle_sdk_event_allows_explicit_yolo_disable(tmp_path) -> None:
     assert result.status == "accepted"
     assert len(run_service.created) == 1
     assert run_service.created[0].yolo is False
+
+
+def test_handle_sdk_event_ignores_mentions_for_other_people(tmp_path: Path) -> None:
+    handler, _trigger_service, _session_service, run_service, _bindings = (
+        _build_handler(tmp_path=tmp_path)
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt-6",
+        "token": "verify-token",
+        "event_type": "im.message.receive_v1",
+        "tenant_key": "tenant-1"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {"open_id": "ou_user"},
+          "sender_type": "user"
+        },
+        "message": {
+          "message_id": "om_6",
+          "chat_id": "oc_group_1",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"@_user_1 test\\"}",
+          "mentions": [
+            {
+              "key": "@_user_1",
+              "name": "steven"
+            }
+          ]
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.ignored is True
+    assert result.reason == "mention_not_for_app"
+    assert run_service.created == []
+
+
+def test_handle_sdk_event_ignores_group_mentions_when_app_name_missing(
+    tmp_path: Path,
+) -> None:
+    handler, _trigger_service, _session_service, run_service, _bindings = (
+        _build_handler(
+            tmp_path=tmp_path,
+            app_name=None,
+        )
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt-7",
+        "token": "verify-token",
+        "event_type": "im.message.receive_v1",
+        "tenant_key": "tenant-1"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {"open_id": "ou_user"},
+          "sender_type": "user"
+        },
+        "message": {
+          "message_id": "om_7",
+          "chat_id": "oc_group_1",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"<at user_id=\\\\\\"ou_bot\\\\\\">bot</at> hello\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.ignored is True
+    assert result.reason == "app_name_missing"
+    assert run_service.created == []

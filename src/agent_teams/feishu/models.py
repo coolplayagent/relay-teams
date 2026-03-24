@@ -23,6 +23,7 @@ class FeishuEnvironment(BaseModel):
 
     app_id: str = Field(min_length=1)
     app_secret: str = Field(min_length=1)
+    app_name: str | None = None
     verification_token: str | None = None
     encrypt_key: str | None = None
 
@@ -49,6 +50,7 @@ class FeishuNormalizedMessage(BaseModel):
     raw_text: str = ""
     trigger_text: str = ""
     mentioned: bool = False
+    mention_names: tuple[str, ...] = ()
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, str] = Field(default_factory=dict)
 
