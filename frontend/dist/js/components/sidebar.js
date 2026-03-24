@@ -17,6 +17,7 @@ import {
 } from '../core/api.js';
 import { state } from '../core/state.js';
 import { t } from '../utils/i18n.js';
+import { hideProjectView, openWorkspaceProjectView } from './projectView.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
 
@@ -285,6 +286,7 @@ function bindProjectCard(card, group) {
     const { workspace } = group;
     const workspaceId = workspace.workspace_id;
     const toggleBtn = card.querySelector('.project-toggle');
+    const titleButtons = card.querySelectorAll('.project-title-btn');
     const newSessionButtons = card.querySelectorAll('.project-new-session-btn');
     const sessionVisibilityButtons = card.querySelectorAll('.project-session-visibility-btn');
     const optionsButtons = card.querySelectorAll('.project-options-btn');
@@ -304,6 +306,14 @@ function bindProjectCard(card, group) {
             void loadProjects();
         };
     }
+
+    titleButtons.forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await openWorkspaceProjectView(workspace);
+            await loadProjects();
+        };
+    });
 
     newSessionButtons.forEach(button => {
         button.onclick = event => {
@@ -470,23 +480,34 @@ function renderProjectCard(group) {
         ? sessions
         : sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
     const hasHiddenSessions = sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
+    const projectViewActive = state.currentMainView === 'project'
+        && state.currentProjectViewWorkspaceId === workspaceId;
+    const sessionSelectionEnabled = state.currentMainView !== 'project';
 
     const card = document.createElement('section');
     card.className = 'project-card';
     card.setAttribute('data-workspace-id', workspaceId);
     card.innerHTML = `
         <div class="project-row">
-            <button class="project-toggle" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
-                <span class="project-icon-stack" aria-hidden="true">
-                    <span class="project-folder-icon">
-                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
-                            <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                        </svg>
+            <div class="project-title-group">
+                <button class="project-toggle" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
+                    <span class="project-icon-stack" aria-hidden="true">
+                        <span class="project-folder-icon">
+                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                            </svg>
+                        </span>
+                        <span class="project-toggle-icon" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
                     </span>
-                    <span class="project-toggle-icon" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
-                </span>
-                <span class="project-title">${escapeHtml(workspaceLabel)}</span>
-            </button>
+                </button>
+                <button
+                    class="project-title-btn${projectViewActive ? ' is-active' : ''}"
+                    type="button"
+                    aria-current="${projectViewActive ? 'page' : 'false'}"
+                >
+                    <span class="project-title">${escapeHtml(workspaceLabel)}</span>
+                </button>
+            </div>
             <div class="project-actions">
                 <button class="project-options-btn project-action-btn" type="button" title="${escapeHtml(t('sidebar.project_options'))}" aria-label="${escapeHtml(t('sidebar.project_options'))}">
                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
@@ -531,7 +552,7 @@ function renderProjectCard(group) {
                                 : {};
                             return `
                                 <div
-                                    class="session-item${session.session_id === state.currentSessionId ? ' active' : ''}"
+                                    class="session-item${sessionSelectionEnabled && session.session_id === state.currentSessionId ? ' active' : ''}"
                                     tabindex="0"
                                     role="button"
                                     data-session-id="${escapeHtml(session.session_id)}"
@@ -768,6 +789,9 @@ export async function handleRemoveWorkspaceClick(workspace) {
             }
         });
         openProjectMenuId = null;
+        if (state.currentProjectViewWorkspaceId === workspaceId) {
+            hideProjectView();
+        }
 
         if (state.currentWorkspaceId === workspaceId) {
             state.currentWorkspaceId = null;

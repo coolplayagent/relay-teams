@@ -4,6 +4,7 @@
  */
 import { fetchObservabilityBreakdowns, fetchObservabilityOverview } from '../core/api.js';
 import { state } from '../core/state.js';
+import { hideProjectView } from './projectView.js';
 import { getCurrentLanguage, t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
@@ -759,6 +760,13 @@ function setVisible(visible) {
     const chat = document.querySelector('.chat-container');
     const button = document.getElementById('observability-btn');
     const body = document.body;
+    if (visible && state.currentMainView === 'project') {
+        hideProjectView();
+        document.querySelectorAll('.project-title-btn.is-active').forEach(button => {
+            button.classList.remove('is-active');
+            button.setAttribute('aria-current', 'false');
+        });
+    }
     if (view) {
         view.style.display = visible ? 'block' : 'none';
     }

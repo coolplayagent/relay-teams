@@ -237,24 +237,20 @@ function renderEnvironmentEditorRow() {
                     autocomplete="off"
                     value="${escapeHtml(environmentState.editor.key || '')}"
                 >
-                <input
-                    type="text"
+                <textarea
                     id="env-value-input"
                     class="env-record-editor-input env-record-editor-input-value"
                     placeholder="${escapeHtml(t('settings.env.value'))}"
-                    autocomplete="off"
-                    value="${escapeHtml(environmentState.editor.value || '')}"
-                >
+                    rows="4"
+                    spellcheck="false"
+                >${escapeHtml(environmentState.editor.value || '')}</textarea>
             </div>
         </div>
     `;
 }
 
 function renderEnvironmentRecord(record) {
-    const valuePreview =
-        record.value.length > 120
-            ? `${record.value.slice(0, 117)}...`
-            : record.value;
+    const valuePreview = record.value;
     const isEditable = record.scope === 'app';
     return `
         <div class="env-record" data-env-key="${escapeHtml(record.key)}" data-env-scope="${escapeHtml(record.scope)}">
@@ -441,9 +437,23 @@ function renderEnvironmentActionMode(isEditing) {
     }
 }
 
+function autosizeEnvironmentValueInput() {
+    const valueInput = document.getElementById('env-value-input');
+    if (!(valueInput instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    valueInput.style.height = 'auto';
+    valueInput.style.height = `${Math.max(valueInput.scrollHeight, 88)}px`;
+}
+
 function focusEnvironmentEditorIfNeeded() {
     if (!environmentState.editor.visible) {
         return;
+    }
+    autosizeEnvironmentValueInput();
+    const valueInput = document.getElementById('env-value-input');
+    if (valueInput instanceof HTMLTextAreaElement) {
+        valueInput.addEventListener('input', autosizeEnvironmentValueInput);
     }
     const keyInput = document.getElementById('env-key-input');
     if (!keyInput || typeof keyInput.focus !== 'function') {

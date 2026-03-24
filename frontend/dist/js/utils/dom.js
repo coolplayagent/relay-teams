@@ -1,4 +1,4 @@
-/**
+﻿/**
  * utils/dom.js
  * Centralized DOM querying and manipulation helpers.
  */
@@ -15,6 +15,13 @@ export const els = {
     inspectorPanel: qs('#rail-inspector'),
     systemLogs: qs('#system-logs'),
     chatMessages: qs('#chat-messages'),
+    chatContainer: qs('.chat-container'),
+    projectView: qs('#project-view'),
+    projectViewTitle: qs('#project-view-title'),
+    projectViewSummary: qs('#project-view-summary'),
+    projectViewContent: qs('#project-view-content'),
+    projectViewReloadBtn: qs('#project-view-reload'),
+    projectViewCloseBtn: qs('#project-view-close'),
     sidebar: qs('.sidebar'),
     sidebarResizer: qs('#sidebar-resizer'),
     sidebarToggleBtn: qs('#toggle-sidebar'),

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * app/session.js
  * Session selection state and UI synchronization.
  */
@@ -6,6 +6,7 @@ import { clearAllPanels } from '../components/agentPanel.js';
 import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
+import { hideProjectView } from '../components/projectView.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import { fetchSessionHistory } from '../core/api.js';
 import {
@@ -67,6 +68,7 @@ export async function selectSession(sessionId) {
         el.classList.toggle('active', isActive);
     });
 
+    hideProjectView();
     setRoundsMode();
     state.agentViews = { main: els.chatMessages };
     state.activeView = 'main';

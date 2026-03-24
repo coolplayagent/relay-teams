@@ -3681,6 +3681,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.75rem;
     align-items: start;
+    min-width: 0;
     padding: 0.68rem 0;
     border-bottom: 1px solid color-mix(in srgb, var(--settings-divider) 38%, transparent);
     transition: background-color 0.16s ease;
@@ -3699,6 +3700,7 @@
     grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr);
     align-items: center;
     gap: 0.6rem;
+    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -3726,13 +3728,15 @@
     font-size: 0.78rem;
     line-height: 1.4;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .env-record-actions {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: 0.4rem;
     white-space: nowrap;
@@ -3759,6 +3763,14 @@
     font-size: 0.82rem;
     line-height: 1.4;
     padding: 0.5rem 0.65rem;
+}
+
+.env-record-editor-input-value {
+    min-height: 5.5rem;
+    resize: vertical;
+    overflow-y: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .env-record-editor-input::placeholder {
@@ -5044,16 +5056,18 @@ body.light-theme .project-session-toggle-btn {
     align-items: center;
     gap: 0.3rem;
     border-radius: 6px;
+    min-width: 0;
 }
 
 .projects-list .project-toggle {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
+    flex: 0 0 1.75rem;
+    width: 1.75rem;
+    min-width: 1.75rem;
+    display: inline-flex;
     align-items: center;
-    gap: 0.38rem;
+    justify-content: center;
     min-height: 30px;
-    padding: 0.28rem 0.42rem;
+    padding: 0.28rem 0.2rem;
     border: none;
     background: transparent;
     color: var(--text-primary);
@@ -5120,6 +5134,7 @@ body.light-theme .project-session-toggle-btn {
 
 .projects-list .project-actions {
     display: flex;
+    flex: 0 0 auto;
     gap: 0.1rem;
     opacity: 0;
     pointer-events: none;
@@ -6466,4 +6481,490 @@ body.observability-mode #back-btn {
 body.observability-mode #round-nav-float {
     display: none !important;
     pointer-events: none !important;
+}
+
+.project-view {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 1.25rem 1.5rem 1.5rem;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.1), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.08), transparent 30%),
+        var(--bg-base);
+}
+
+.project-view-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.project-view-toolbar-copy h3 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.project-view-toolbar-copy p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+}
+
+.project-view-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.project-view-content {
+    min-height: 0;
+}
+
+.workspace-view-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.5fr);
+    gap: 1rem;
+    min-height: calc(100vh - 180px);
+}
+
+.workspace-view-panel {
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+    box-shadow: 0 20px 44px -34px rgba(15, 23, 42, 0.7);
+    overflow: hidden;
+}
+
+.workspace-view-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-surface-glass) 84%, transparent);
+}
+
+.workspace-view-panel-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.workspace-view-panel-meta {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.workspace-tree-shell,
+.workspace-diff-list,
+.workspace-view-empty-state {
+    padding: 1rem;
+}
+
+.workspace-tree-root,
+.workspace-tree-children {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.workspace-tree-node {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.workspace-tree-children {
+    margin-left: 0.85rem;
+    padding-left: 0.75rem;
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+}
+
+.workspace-tree-toggle,
+.workspace-tree-entry {
+    display: grid;
+    grid-template-columns: 0.9rem 1rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.32rem 0.45rem;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.workspace-tree-toggle {
+    cursor: pointer;
+}
+
+.workspace-tree-toggle:hover,
+.workspace-tree-toggle:focus-visible,
+.workspace-tree-entry:hover,
+.workspace-tree-entry:focus-visible {
+    background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+    outline: none;
+}
+
+.workspace-tree-entry.is-selected,
+.workspace-tree-entry.is-selected:hover,
+.workspace-tree-entry.is-selected:focus-visible {
+    background: color-mix(in srgb, var(--primary) 14%, var(--surface-2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 34%, transparent);
+}
+
+.workspace-tree-entry.is-selected .workspace-tree-label {
+    color: var(--primary);
+}
+
+.workspace-tree-chevron {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+.workspace-tree-chevron.is-placeholder {
+    display: inline-block;
+}
+
+.workspace-tree-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+}
+
+.workspace-tree-icon svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.workspace-tree-icon.is-folder,
+.workspace-tree-icon.is-folder-open {
+    color: #d08a20;
+}
+
+.workspace-tree-icon.is-file {
+    color: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary));
+}
+
+.workspace-tree-icon.is-folder-open svg,
+.workspace-tree-icon.is-file svg,
+.workspace-tree-icon.is-folder svg {
+    fill: currentColor;
+}
+
+.workspace-tree-label {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-tree-placeholder {
+    padding: 0.3rem 0.45rem 0.3rem 1.95rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.workspace-tree-placeholder.is-error {
+    color: var(--danger);
+}
+
+.workspace-diff-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.workspace-diff-card {
+    border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.workspace-diff-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--primary) 18%, var(--border-color));
+}
+
+.workspace-diff-card.is-selected {
+    border-color: color-mix(in srgb, var(--primary) 34%, var(--border-color));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.workspace-diff-card:not(.has-body) .workspace-diff-header {
+    border-bottom: 0;
+}
+
+.workspace-diff-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-glass) 72%, transparent);
+}
+
+.workspace-diff-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.45rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.workspace-diff-status.is-modified,
+.workspace-diff-status.is-renamed {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border-color));
+}
+
+.workspace-diff-status.is-added,
+.workspace-diff-status.is-untracked,
+.workspace-diff-status.is-copied {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 30%, var(--border-color));
+}
+
+.workspace-diff-status.is-deleted,
+.workspace-diff-status.is-conflicted,
+.workspace-diff-status.is-type_changed {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 30%, var(--border-color));
+}
+
+.workspace-diff-path,
+.workspace-diff-previous {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+}
+
+.workspace-diff-path {
+    color: var(--text-primary);
+}
+
+.workspace-diff-previous {
+    color: var(--text-secondary);
+}
+
+.workspace-diff-pre {
+    margin: 0;
+    padding: 0.9rem;
+    overflow: auto;
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    line-height: 1.5;
+    font-family: var(--font-mono);
+}
+
+.workspace-diff-view {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    background: color-mix(in srgb, var(--bg-base) 96%, #0b1220 4%);
+}
+
+.workspace-diff-hunk + .workspace-diff-hunk {
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+}
+
+.workspace-diff-hunk-header {
+    padding: 0.45rem 0.9rem;
+    background: color-mix(in srgb, var(--primary) 8%, var(--bg-surface));
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.5;
+}
+
+.workspace-diff-grid {
+    overflow: auto;
+}
+
+.workspace-diff-row {
+    display: grid;
+    grid-template-columns: 3.4rem 3.4rem 1.5rem minmax(0, 1fr);
+    align-items: stretch;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    line-height: 1.5;
+}
+
+.workspace-diff-row:hover {
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.workspace-diff-row.is-added {
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.workspace-diff-row.is-deleted {
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.workspace-diff-row.is-meta {
+    background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+}
+
+.workspace-diff-row.is-note {
+    background: color-mix(in srgb, var(--warning, #b7791f) 10%, transparent);
+}
+
+.workspace-diff-line-number,
+.workspace-diff-line-marker,
+.workspace-diff-line-text {
+    padding: 0.14rem 0.45rem;
+    white-space: pre;
+}
+
+.workspace-diff-line-number,
+.workspace-diff-line-marker {
+    user-select: none;
+}
+
+.workspace-diff-line-number {
+    text-align: right;
+    color: var(--text-secondary);
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.workspace-diff-line-marker {
+    text-align: center;
+    color: var(--text-secondary);
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.workspace-diff-row.is-added .workspace-diff-line-number,
+.workspace-diff-row.is-added .workspace-diff-line-marker {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.workspace-diff-row.is-deleted .workspace-diff-line-number,
+.workspace-diff-row.is-deleted .workspace-diff-line-marker {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.workspace-diff-row.is-added .workspace-diff-line-marker {
+    color: var(--success);
+}
+
+.workspace-diff-row.is-deleted .workspace-diff-line-marker {
+    color: var(--danger);
+}
+
+.workspace-diff-row.is-meta .workspace-diff-line-text,
+.workspace-diff-row.is-note .workspace-diff-line-text {
+    color: var(--text-secondary);
+}
+
+.workspace-diff-line-text {
+    overflow: auto hidden;
+    color: var(--text-primary);
+}
+
+.workspace-diff-body-state {
+    padding: 0.9rem;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+}
+
+.workspace-diff-body-state p {
+    margin: 0;
+}
+
+.workspace-diff-body-state.is-error {
+    color: var(--danger);
+}
+
+.workspace-view-empty-state {
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.workspace-view-empty-state.is-error {
+    color: var(--danger);
+}
+
+.project-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.project-title-btn {
+    min-width: 0;
+    flex: 1 1 auto;
+    border: none;
+    background: transparent;
+    text-align: left;
+    color: inherit;
+    padding: 0.32rem 0.45rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.14s ease, box-shadow 0.14s ease, color 0.14s ease;
+}
+
+.project-title-btn:hover {
+    background: color-mix(in srgb, var(--bg-hover) 82%, transparent);
+}
+
+.project-title-btn:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.project-title-btn.is-active {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.project-title-btn:hover .project-title,
+.project-title-btn:focus-visible .project-title,
+.project-title-btn.is-active .project-title {
+    color: var(--primary);
+}
+
+@media (max-width: 960px) {
+    .project-view {
+        padding: 1rem;
+    }
+
+    .workspace-view-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .project-view-toolbar {
+        flex-direction: column;
+    }
+
+    .project-view-toolbar-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
 }

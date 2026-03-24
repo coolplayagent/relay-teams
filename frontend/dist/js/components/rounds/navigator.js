@@ -39,6 +39,14 @@ export function renderRoundNavigator(rounds, onSelectRound) {
     applyOffset(nav);
 }
 
+export function hideRoundNavigator() {
+    const nav = document.getElementById('round-nav-float');
+    if (!nav) {
+        return;
+    }
+    nav.style.display = 'none';
+}
+
 export function setActiveRoundNav(runId) {
     navActiveRunId = runId || null;
     const nav = document.getElementById('round-nav-float');

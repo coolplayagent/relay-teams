@@ -8,6 +8,40 @@ export async function fetchWorkspaces() {
     return requestJson('/api/workspaces', undefined, 'Failed to fetch projects');
 }
 
+export async function fetchWorkspaceSnapshot(workspaceId) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
+        undefined,
+        'Failed to fetch project workspace snapshot',
+    );
+}
+
+export async function fetchWorkspaceTree(workspaceId, path = '.') {
+    const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/tree?${query.toString()}`,
+        undefined,
+        'Failed to fetch project workspace tree',
+    );
+}
+
+export async function fetchWorkspaceDiffs(workspaceId) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/diffs`,
+        undefined,
+        'Failed to fetch project workspace diffs',
+    );
+}
+
+export async function fetchWorkspaceDiffFile(workspaceId, path) {
+    const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/diff?${query.toString()}`,
+        undefined,
+        'Failed to fetch project workspace diff file',
+    );
+}
+
 export async function pickWorkspace(rootPath = null) {
     const options = {
         method: 'POST',

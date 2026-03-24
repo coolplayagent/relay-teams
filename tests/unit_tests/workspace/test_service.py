@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -223,3 +224,261 @@ def test_workspace_service_deletes_workspace(tmp_path: Path) -> None:
     service.delete_workspace("project-alpha")
 
     assert service.list_workspaces() == ()
+
+
+def test_workspace_service_returns_progressive_snapshot_and_tree_listing(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    (root_path / "src" / "nested").mkdir(parents=True)
+    (root_path / "docs").mkdir(parents=True)
+    (root_path / "src" / "app.py").write_text('print("new")' + "\n", encoding="utf-8")
+    (root_path / "src" / "nested" / "tool.py").write_text(
+        'print("tool")' + "\n", encoding="utf-8"
+    )
+    (root_path / "docs" / "README.md").write_text(
+        "# Root Docs" + "\n", encoding="utf-8"
+    )
+    (root_path / "package.json").write_text("{}" + "\n", encoding="utf-8")
+
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    snapshot = service.get_workspace_snapshot("project-alpha")
+    src_listing = service.get_workspace_tree_listing(
+        "project-alpha",
+        directory_path="src",
+    )
+
+    assert snapshot.workspace_id == "project-alpha"
+    assert snapshot.root_path == root_path.resolve()
+    assert snapshot.tree.path == "."
+    assert [item.path for item in snapshot.tree.children] == [
+        "docs",
+        "src",
+        "package.json",
+    ]
+    assert snapshot.tree.children[0].has_children is True
+    assert snapshot.tree.children[0].children == ()
+    assert snapshot.tree.children[1].has_children is True
+    assert snapshot.tree.children[1].children == ()
+    assert src_listing.workspace_id == "project-alpha"
+    assert src_listing.directory_path == "src"
+    assert [item.path for item in src_listing.children] == [
+        "src/nested",
+        "src/app.py",
+    ]
+    assert src_listing.children[0].has_children is True
+    assert src_listing.children[1].has_children is False
+
+
+def test_workspace_service_rejects_tree_path_that_escapes_workspace_root(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="escapes root"):
+        _ = service.get_workspace_tree_listing(
+            "project-alpha",
+            directory_path="../outside",
+        )
+
+
+def test_workspace_service_returns_git_diffs_separately(tmp_path: Path) -> None:
+    root_path = tmp_path / "workspace-root"
+    (root_path / "src").mkdir(parents=True)
+    (root_path / "docs").mkdir()
+    (root_path / "notes").mkdir()
+    (root_path / "src" / "app.py").write_text('print("new")' + "\n", encoding="utf-8")
+    (root_path / "docs" / "README.md").write_text(
+        "# Root Docs" + "\n", encoding="utf-8"
+    )
+    (root_path / "notes" / "todo.txt").write_text("todo" + "\n", encoding="utf-8")
+    (root_path / "package.json").write_text("{}" + "\n", encoding="utf-8")
+
+    class SnapshotWorkspaceService(WorkspaceService):
+        def _run_git(
+            self,
+            args: tuple[str, ...],
+            *,
+            cwd: Path,
+            text: bool = True,
+        ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+            _ = cwd
+            if args == ("rev-parse", "--show-toplevel"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout=f"{root_path.resolve()}\n",
+                    stderr="",
+                )
+            if args == ("rev-parse", "--verify", "HEAD"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="abc123\n",
+                    stderr="",
+                )
+            if args == ("diff", "--name-status", "--find-renames", "HEAD", "--"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="R100\tREADME.md\tdocs/README.md\nM\tsrc/app.py\n",
+                    stderr="",
+                )
+            if args == ("ls-files", "--others", "--exclude-standard"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="notes/todo.txt\n",
+                    stderr="",
+                )
+            if args == ("show", "HEAD:README.md"):
+                if text:
+                    return subprocess.CompletedProcess(
+                        args=["git", *args],
+                        returncode=0,
+                        stdout="# Root Docs\n",
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout=b"# Root Docs\n",
+                    stderr=b"",
+                )
+            if args == ("show", "HEAD:src/app.py"):
+                if text:
+                    return subprocess.CompletedProcess(
+                        args=["git", *args],
+                        returncode=0,
+                        stdout='print("old")\n',
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout=b'print("old")\n',
+                    stderr=b"",
+                )
+            raise AssertionError(f"Unexpected git command: {args}")
+
+    service = SnapshotWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    diffs = service.get_workspace_diffs("project-alpha")
+    diff_file = service.get_workspace_diff_file(
+        "project-alpha",
+        path="src/app.py",
+    )
+
+    assert diffs.workspace_id == "project-alpha"
+    assert diffs.root_path == root_path.resolve()
+    assert diffs.is_git_repository is True
+    assert diffs.git_root_path == root_path.resolve()
+    assert [item.path for item in diffs.diff_files] == [
+        "docs/README.md",
+        "notes/todo.txt",
+        "src/app.py",
+    ]
+    assert diffs.diff_files[0].change_type.value == "renamed"
+    assert diffs.diff_files[0].previous_path == "README.md"
+    assert diffs.diff_files[1].change_type.value == "untracked"
+    assert diffs.diff_files[2].change_type.value == "modified"
+
+    assert diff_file.path == "src/app.py"
+    assert diff_file.change_type.value == "modified"
+    assert '-print("old")' in diff_file.diff
+    assert '+print("new")' in diff_file.diff
+
+
+def test_workspace_service_rejects_missing_diff_file(tmp_path: Path) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    (root_path / "src").mkdir()
+    (root_path / "src" / "app.py").write_text('print("new")' + "\n", encoding="utf-8")
+
+    class SnapshotWorkspaceService(WorkspaceService):
+        def _run_git(
+            self,
+            args: tuple[str, ...],
+            *,
+            cwd: Path,
+            text: bool = True,
+        ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+            _ = cwd
+            if args == ("rev-parse", "--show-toplevel"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout=f"{root_path.resolve()}\n",
+                    stderr="",
+                )
+            if args == ("rev-parse", "--verify", "HEAD"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="abc123\n",
+                    stderr="",
+                )
+            if args == ("diff", "--name-status", "--find-renames", "HEAD", "--"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="M	src/app.py\n",
+                    stderr="",
+                )
+            if args == ("ls-files", "--others", "--exclude-standard"):
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+            if args == ("show", "HEAD:src/app.py"):
+                if text:
+                    return subprocess.CompletedProcess(
+                        args=["git", *args],
+                        returncode=0,
+                        stdout='print("old")\n',
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    args=["git", *args],
+                    returncode=0,
+                    stdout=b'print("old")\n',
+                    stderr=b"",
+                )
+            raise AssertionError(f"Unexpected git command: {args}")
+
+    service = SnapshotWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        _ = service.get_workspace_diff_file(
+            "project-alpha",
+            path="missing.py",
+        )

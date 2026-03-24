@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from collections.abc import Generator
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -394,6 +395,34 @@ class AgentTeamsClient:
             "POST",
             "/api/workspaces",
             {"workspace_id": workspace_id, "root_path": root_path},
+        )
+
+    def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
+        return self._request_json("GET", f"/api/workspaces/{workspace_id}/snapshot")
+
+    def get_workspace_tree(
+        self,
+        workspace_id: str,
+        *,
+        path: str = ".",
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/workspaces/{workspace_id}/tree?path={quote(path, safe='')}",
+        )
+
+    def get_workspace_diffs(self, workspace_id: str) -> dict[str, JsonValue]:
+        return self._request_json("GET", f"/api/workspaces/{workspace_id}/diffs")
+
+    def get_workspace_diff_file(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/workspaces/{workspace_id}/diff?path={quote(path, safe='')}",
         )
 
     def delete_workspace(self, workspace_id: str) -> dict[str, JsonValue]:

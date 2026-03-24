@@ -715,6 +715,57 @@ Rules:
 
 Returns one registered execution workspace.
 
+### `GET /workspaces/{workspace_id}/snapshot`
+
+Returns the fast project snapshot used for initial project-view rendering.
+The response includes:
+- workspace metadata such as `workspace_id` and `root_path`
+- the root tree node plus only the first visible level of children under `root_path`
+- per-node `has_children` so the frontend can lazy-load deeper folders on demand
+
+Rules:
+- The workspace must exist and its `root_path` must still exist on disk.
+- The snapshot excludes `.git` and does not build recursive descendants or file diffs.
+- The frontend should treat this response as the initial shell for progressive loading.
+
+### `GET /workspaces/{workspace_id}/tree?path=...`
+
+Returns one directory listing for a relative workspace path.
+The response includes:
+- `directory_path`
+- one level of `children[]`
+- per-node `has_children` to support further lazy expansion
+
+Rules:
+- `path` must be relative to the workspace root.
+- Paths that escape the workspace root are rejected.
+- Non-directory paths are rejected.
+- The listing excludes `.git`.
+
+### `GET /workspaces/{workspace_id}/diffs`
+
+Returns the workspace diff summary used for initial change-list rendering.
+The response includes:
+- per-file summary entries for modified, added, deleted, renamed, copied, and untracked files
+- Git metadata such as `git_root_path` and a `diff_message` when diff inspection is unavailable
+
+Rules:
+- The workspace must exist and its `root_path` must still exist on disk.
+- Diff inspection is best-effort. Non-Git directories return `is_git_repository = false` with a `diff_message`.
+- The response intentionally excludes inline patch text so the project view can render quickly even for large workspaces.
+
+### `GET /workspaces/{workspace_id}/diff?path=...`
+
+Returns the full diff payload for one changed file.
+The response includes:
+- the changed file `path` and `change_type`
+- optional `previous_path` for renames and copies
+- the inline `diff` text or a binary marker
+
+Rules:
+- `path` must be a relative workspace path and must match one file currently reported by `/diffs`.
+- Binary files are reported with `is_binary = true` and a summary diff message instead of inline text hunks.
+
 ### `POST /workspaces/{workspace_id}:fork`
 
 Creates a forked execution workspace backed by a Git worktree.
