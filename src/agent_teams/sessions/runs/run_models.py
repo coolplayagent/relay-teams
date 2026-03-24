@@ -25,6 +25,7 @@ class RunTopologySnapshot(BaseModel):
 
     session_mode: SessionMode
     main_agent_role_id: str = Field(min_length=1)
+    normal_root_role_id: str = Field(min_length=1)
     coordinator_role_id: str = Field(min_length=1)
     orchestration_preset_id: str | None = None
     orchestration_prompt: str = ""

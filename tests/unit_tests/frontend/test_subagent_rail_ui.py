@@ -212,6 +212,14 @@ export function isReservedSystemRoleId(roleId) {
         || (!!mainAgentRoleId && safeRoleId === mainAgentRoleId)
     );
 }
+
+export function isPrimaryRoleId(roleId) {
+    return false;
+}
+
+export function isPrimaryOrReservedRoleId(roleId) {
+    return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
+}
 """.strip(),
         encoding="utf-8",
     )

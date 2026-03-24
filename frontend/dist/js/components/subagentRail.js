@@ -3,7 +3,11 @@
  * Session-level subagent rail state, selector, and visibility controls.
  */
 import { fetchSessionAgents, fetchSessionTasks } from '../core/api.js';
-import { isReservedSystemRoleId, state } from '../core/state.js';
+import {
+    isPrimaryRoleId,
+    isReservedSystemRoleId,
+    state,
+} from '../core/state.js';
 import { clearAllPanels, openAgentPanel } from './agentPanel.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -11,6 +15,10 @@ import { sysLog } from '../utils/logger.js';
 
 const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
 let languageRefreshBound = false;
+
+function isPrimaryOrReservedRoleId(roleId) {
+    return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
+}
 
 export function initializeSubagentRail() {
     const collapsed = localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) === '1';
@@ -70,7 +78,7 @@ export async function refreshSubagentRail(
 export function rememberLiveSubagent(instanceId, roleId) {
     const safeInstanceId = String(instanceId || '').trim();
     const safeRoleId = String(roleId || '').trim();
-    if (!safeInstanceId || !safeRoleId || isReservedSystemRoleId(safeRoleId)) return;
+    if (!safeInstanceId || !safeRoleId || isPrimaryOrReservedRoleId(safeRoleId)) return;
 
     const nowIso = new Date().toISOString();
     const nextAgents = [...(state.sessionAgents || [])];
@@ -143,7 +151,7 @@ export function focusSubagent(instanceId, roleId) {
 
 export function syncSelectedRoleByInstance(instanceId, roleId) {
     const safeRoleId = String(roleId || '').trim();
-    if (!safeRoleId || isReservedSystemRoleId(safeRoleId)) return;
+    if (!safeRoleId || isPrimaryOrReservedRoleId(safeRoleId)) return;
     state.selectedRoleId = safeRoleId;
     if (els.subagentRoleSelect && els.subagentRoleSelect.value !== safeRoleId) {
         els.subagentRoleSelect.value = safeRoleId;
@@ -271,7 +279,7 @@ function normalizeSessionAgents(payload) {
         if (!item || typeof item !== 'object') return;
         const roleId = String(item.role_id || '').trim();
         const instanceId = String(item.instance_id || '').trim();
-        if (!roleId || !instanceId || isReservedSystemRoleId(roleId)) return;
+        if (!roleId || !instanceId || isPrimaryOrReservedRoleId(roleId)) return;
         const record = {
             instance_id: instanceId,
             role_id: roleId,
@@ -299,7 +307,7 @@ function normalizeSessionTasks(payload) {
         .filter(item => {
             if (!item || typeof item !== 'object') return false;
             const assignedRoleId = String(item.assigned_role_id || item.role_id || '').trim();
-            return !assignedRoleId || !isReservedSystemRoleId(assignedRoleId);
+            return !assignedRoleId || !isPrimaryOrReservedRoleId(assignedRoleId);
         })
         .map(item => ({
             task_id: String(item.task_id || ''),

@@ -66,3 +66,68 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
     assert registry.get_coordinator_role_id() == "Coordinator"
     assert registry.is_coordinator_role("Coordinator") is True
     assert registry.is_coordinator_role("Crafter") is False
+
+
+def test_role_registry_lists_normal_mode_roles_with_main_agent_first() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Handle tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Implement tasks.",
+        )
+    )
+
+    roles = registry.list_normal_mode_roles()
+
+    assert [role.role_id for role in roles] == ["MainAgent", "Crafter"]
+
+
+def test_role_registry_rejects_coordinator_in_normal_mode() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Handle tasks.",
+        )
+    )
+
+    with pytest.raises(ValueError, match="Coordinator role cannot be used"):
+        _ = registry.resolve_normal_mode_role_id("Coordinator")

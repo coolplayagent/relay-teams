@@ -14,6 +14,7 @@ from agent_teams.interfaces.server.deps import (
 from agent_teams.interfaces.server.routers import roles
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
 from agent_teams.roles import (
+    NormalModeRoleOption,
     RoleConfigSource,
     RoleConfigOptions,
     RoleDefinition,
@@ -209,6 +210,18 @@ def test_get_role_config_options() -> None:
     assert response.json() == RoleConfigOptions(
         coordinator_role_id="Coordinator",
         main_agent_role_id="MainAgent",
+        normal_mode_roles=(
+            NormalModeRoleOption(
+                role_id="MainAgent",
+                name="Main Agent",
+                description="Executes normal-mode runs.",
+            ),
+            NormalModeRoleOption(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+            ),
+        ),
         tools=("create_tasks", "dispatch_task"),
         mcp_servers=("docs",),
         skills=("diff", "time"),

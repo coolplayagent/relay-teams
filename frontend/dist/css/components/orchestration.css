@@ -72,6 +72,11 @@
     gap: 0.5rem;
 }
 
+.composer-preset-field[hidden],
+.composer-mode-inline[hidden] {
+    display: none !important;
+}
+
 .composer-preset-select {
     min-height: 32px;
     min-width: 168px;

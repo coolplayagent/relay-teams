@@ -15,12 +15,15 @@ type RequestJsonCallable = Callable[
 ]
 type AutoStartCallable = Callable[[str, bool], None]
 type StreamEventsCallable = Callable[[str, str, bool], None]
-type RunSinglePromptCallable = Callable[[str, bool, SessionMode, str | None], None]
+type RunSinglePromptCallable = Callable[
+    [str, bool, SessionMode, str | None, str | None], None
+]
 type ExecutePromptCallable = Callable[..., None]
 
 QUICK_PROMPT_OPTIONS_HINT = (
     "Available quick prompt options: --message <text>, "
-    "--mode <normal|orchestration>, --orchestration <id>, --yolo/--no-yolo."
+    "--mode <normal|orchestration>, --role <role_id>, "
+    "--orchestration <id>, --yolo/--no-yolo."
 )
 
 
@@ -29,6 +32,7 @@ def root_command(
     message: str | None,
     yolo: bool,
     mode: SessionMode,
+    role: str | None,
     orchestration: str | None,
     *,
     run_single_prompt: RunSinglePromptCallable,
@@ -36,12 +40,13 @@ def root_command(
     if message is not None:
         if ctx.invoked_subcommand is not None:
             raise typer.BadParameter("Cannot combine --message with subcommands")
-        run_single_prompt(message, yolo, mode, orchestration)
+        run_single_prompt(message, yolo, mode, role, orchestration)
         return
 
-    if mode != SessionMode.NORMAL or orchestration is not None:
+    if mode != SessionMode.NORMAL or role is not None or orchestration is not None:
         raise typer.BadParameter(
-            f"--mode and --orchestration require --message. {QUICK_PROMPT_OPTIONS_HINT}"
+            "--mode, --role, and --orchestration require --message. "
+            f"{QUICK_PROMPT_OPTIONS_HINT}"
         )
 
     if ctx.invoked_subcommand is None:
@@ -52,6 +57,7 @@ def run_single_prompt(
     message: str,
     yolo: bool,
     session_mode: SessionMode,
+    role_id: str | None,
     orchestration_id: str | None,
     *,
     default_base_url: str,
@@ -60,12 +66,25 @@ def run_single_prompt(
     normalized_message = message.strip()
     if not normalized_message:
         raise typer.BadParameter("message must not be empty")
+    normalized_role_id = role_id.strip() if role_id is not None else None
     normalized_orchestration_id = (
         orchestration_id.strip() if orchestration_id is not None else None
     )
+    if role_id is not None and not normalized_role_id:
+        raise typer.BadParameter(
+            f"--role must not be empty. {QUICK_PROMPT_OPTIONS_HINT}"
+        )
     if orchestration_id is not None and not normalized_orchestration_id:
         raise typer.BadParameter(
             f"--orchestration must not be empty. {QUICK_PROMPT_OPTIONS_HINT}"
+        )
+    if (
+        session_mode == SessionMode.ORCHESTRATION
+        and normalized_role_id is not None
+    ):
+        raise typer.BadParameter(
+            "--role can only be used with --mode normal. "
+            + QUICK_PROMPT_OPTIONS_HINT
         )
     if (
         session_mode != SessionMode.ORCHESTRATION
@@ -82,6 +101,7 @@ def run_single_prompt(
         execution_mode="ai",
         yolo=yolo,
         session_mode=session_mode,
+        normal_root_role_id=normalized_role_id,
         orchestration_id=normalized_orchestration_id,
         autostart=True,
         debug=False,
@@ -95,6 +115,7 @@ def execute_prompt(
     execution_mode: str,
     yolo: bool,
     session_mode: SessionMode,
+    normal_root_role_id: str | None,
     orchestration_id: str | None,
     autostart: bool,
     debug: bool,
@@ -121,6 +142,13 @@ def execute_prompt(
             base_url=base_url,
             session_id=resolved_session_id,
             orchestration_id=orchestration_id,
+            request_json=request_json,
+        )
+    elif normal_root_role_id is not None:
+        _configure_normal_mode_role(
+            base_url=base_url,
+            session_id=resolved_session_id,
+            role_id=normal_root_role_id,
             request_json=request_json,
         )
 
@@ -222,6 +250,33 @@ def _configure_orchestration_mode(
         ) from exc
 
 
+def _configure_normal_mode_role(
+    *,
+    base_url: str,
+    session_id: str,
+    role_id: str,
+    request_json: RequestJsonCallable,
+) -> None:
+    try:
+        _ = request_json(
+            base_url,
+            "PATCH",
+            f"/api/sessions/{session_id}/topology",
+            {
+                "session_mode": SessionMode.NORMAL.value,
+                "normal_root_role_id": role_id,
+                "orchestration_preset_id": None,
+            },
+        )
+    except RuntimeError as exc:
+        raise _translate_normal_mode_role_error(
+            base_url=base_url,
+            role_id=role_id,
+            request_json=request_json,
+            error=exc,
+        ) from exc
+
+
 def _translate_orchestration_error(
     *,
     base_url: str,
@@ -280,3 +335,58 @@ def _available_orchestration_ids_hint(
     if not preset_ids:
         return "No orchestration ids are currently configured."
     return "Available orchestration ids: " + ", ".join(preset_ids) + "."
+
+
+def _translate_normal_mode_role_error(
+    *,
+    base_url: str,
+    role_id: str,
+    request_json: RequestJsonCallable,
+    error: RuntimeError,
+) -> Exception:
+    message = str(error)
+    if (
+        "Unknown normal mode role:" in message
+        or "Coordinator role cannot be used in normal mode:" in message
+        or "Reserved system role cannot be used in normal mode:" in message
+    ):
+        return typer.BadParameter(
+            f"Invalid --role '{role_id}'. "
+            f"{_available_normal_role_ids_hint(base_url, request_json)}"
+        )
+    if "Session mode can no longer be changed" in message:
+        return typer.BadParameter(
+            "The target session has already started and its topology can no longer be changed."
+        )
+    return RuntimeError(
+        "Failed to configure normal mode role before starting the run. " + message
+    )
+
+
+def _available_normal_role_ids_hint(
+    base_url: str,
+    request_json: RequestJsonCallable,
+) -> str:
+    try:
+        response = request_json(
+            base_url,
+            "GET",
+            "/api/roles:options",
+            None,
+        )
+    except RuntimeError as exc:
+        return f"Could not list available role ids from /api/roles:options: {exc}"
+    payload = _require_object_response(response, "/api/roles:options")
+    role_entries = payload.get("normal_mode_roles")
+    if not isinstance(role_entries, list):
+        return "No normal mode roles are currently configured."
+    role_ids: list[str] = []
+    for item in role_entries:
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("role_id")
+        if isinstance(candidate, str) and candidate.strip():
+            role_ids.append(candidate.strip())
+    if not role_ids:
+        return "No normal mode roles are currently configured."
+    return "Available normal mode roles: " + ", ".join(role_ids) + "."

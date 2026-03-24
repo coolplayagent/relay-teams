@@ -28,6 +28,7 @@ class UpdateSessionTopologyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_mode: SessionMode
+    normal_root_role_id: str | None = None
     orchestration_preset_id: str | None = None
 
 
@@ -90,6 +91,7 @@ def update_session_topology(
         return service.update_session_topology(
             session_id,
             session_mode=req.session_mode,
+            normal_root_role_id=req.normal_root_role_id,
             orchestration_preset_id=req.orchestration_preset_id,
         )
     except KeyError as exc:

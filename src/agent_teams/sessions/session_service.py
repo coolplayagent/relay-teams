@@ -126,17 +126,21 @@ class SessionService:
         if self._workspace_service is not None:
             self._workspace_service.require_workspace(workspace_id)
         session_mode = SessionMode.NORMAL
+        normal_root_role_id: str | None = None
         orchestration_preset_id: str | None = None
         if self._orchestration_settings_service is not None:
             session_mode = self._orchestration_settings_service.default_session_mode()
             orchestration_preset_id = (
                 self._orchestration_settings_service.default_orchestration_preset_id()
             )
+        if self._role_registry is not None:
+            normal_root_role_id = self._role_registry.get_main_agent_role_id()
         return self._session_repo.create(
             session_id=session_id,
             workspace_id=workspace_id,
             metadata=metadata,
             session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
 
@@ -148,11 +152,17 @@ class SessionService:
         session_id: str,
         *,
         session_mode: SessionMode,
+        normal_root_role_id: str | None,
         orchestration_preset_id: str | None,
     ) -> SessionRecord:
         session = self._session_repo.get(session_id)
         if session.started_at is not None:
             raise RuntimeError("Session mode can no longer be changed")
+        resolved_normal_root_role_id = self._resolve_normal_root_role_id(
+            normal_root_role_id
+            if normal_root_role_id is not None
+            else session.normal_root_role_id
+        )
         if (
             session_mode == SessionMode.ORCHESTRATION
             and self._orchestration_settings_service is not None
@@ -160,6 +170,7 @@ class SessionService:
             probe = session.model_copy(
                 update={
                     "session_mode": SessionMode.ORCHESTRATION,
+                    "normal_root_role_id": resolved_normal_root_role_id,
                     "orchestration_preset_id": orchestration_preset_id,
                 }
             )
@@ -167,9 +178,16 @@ class SessionService:
         self._session_repo.update_topology(
             session_id,
             session_mode=session_mode,
+            normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
         return self.get_session(session_id)
+
+    def _resolve_normal_root_role_id(self, role_id: str | None) -> str | None:
+        if self._role_registry is None:
+            normalized = str(role_id or "").strip()
+            return normalized or None
+        return self._role_registry.resolve_normal_mode_role_id(role_id)
 
     def delete_session(self, session_id: str) -> None:
         session = self._session_repo.get(session_id)

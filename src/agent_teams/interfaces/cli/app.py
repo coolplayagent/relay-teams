@@ -246,6 +246,14 @@ def root_command(
             "Requires --message."
         ),
     ),
+    role: str | None = typer.Option(
+        None,
+        "--role",
+        help=(
+            "Select the root role to use with --mode normal. "
+            "If omitted, the session default MainAgent is used."
+        ),
+    ),
     orchestration: str | None = typer.Option(
         None,
         "--orchestration",
@@ -265,6 +273,7 @@ def root_command(
         message,
         yolo,
         mode,
+        role,
         orchestration,
         run_single_prompt=_run_single_prompt,
     )
@@ -274,12 +283,14 @@ def _run_single_prompt(
     message: str,
     yolo: bool,
     session_mode: SessionMode,
+    normal_root_role_id: str | None,
     orchestration_id: str | None,
 ) -> None:
     _run_single_prompt_impl(
         message,
         yolo,
         session_mode,
+        normal_root_role_id,
         orchestration_id,
         default_base_url=DEFAULT_BASE_URL,
         execute_prompt=_execute_prompt,
@@ -294,6 +305,7 @@ def _execute_prompt(
     execution_mode: str = "ai",
     yolo: bool = False,
     session_mode: SessionMode = SessionMode.NORMAL,
+    normal_root_role_id: str | None = None,
     orchestration_id: str | None = None,
     autostart: bool = True,
     debug: bool = False,
@@ -305,6 +317,7 @@ def _execute_prompt(
         execution_mode,
         yolo,
         session_mode,
+        normal_root_role_id,
         orchestration_id,
         autostart,
         debug,

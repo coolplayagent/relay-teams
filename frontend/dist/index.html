@@ -160,6 +160,12 @@
                                 <button type="button" class="composer-segmented-btn active" id="session-mode-normal-btn" data-i18n="composer.mode_normal">Normal Mode</button>
                                 <button type="button" class="composer-segmented-btn" id="session-mode-orchestration-btn" data-i18n="composer.mode_orchestration">Orchestrated Mode</button>
                             </div>
+                            <label class="composer-preset-field" id="normal-role-field">
+                                <span class="composer-preset-label" data-i18n="composer.role">Role</span>
+                                <select id="normal-role-select" class="composer-preset-select">
+                                    <option value="" data-i18n="composer.no_roles">No roles</option>
+                                </select>
+                            </label>
                             <label class="composer-preset-field" id="orchestration-preset-field" hidden>
                                 <span class="composer-preset-label" data-i18n="composer.preset">Preset</span>
                                 <select id="orchestration-preset-select" class="composer-preset-select">
@@ -179,7 +185,7 @@
                             <span class="composer-mode-check" aria-hidden="true"></span>
                             <span class="composer-mode-copy">
                                 <span class="composer-mode-title" data-i18n="composer.thinking">Thinking</span>
-                                <span class="composer-mode-inline">
+                                <span class="composer-mode-inline" id="thinking-effort-field" hidden>
                                     <span class="composer-mode-inline-label" data-i18n="composer.effort">Effort</span>
                                     <select id="thinking-effort-select" class="composer-mode-inline-select">
                                         <option value="minimal">Minimal</option>

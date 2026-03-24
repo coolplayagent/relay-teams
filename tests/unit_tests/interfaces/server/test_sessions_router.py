@@ -12,7 +12,7 @@ from agent_teams.sessions.session_models import SessionMode, SessionRecord
 class _FakeSessionService:
     def __init__(self) -> None:
         self.updated_calls: list[tuple[str, dict[str, str]]] = []
-        self.topology_update_calls: list[tuple[str, str, str | None]] = []
+        self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
         self.reflection_update_calls: list[tuple[str, str, str]] = []
         self.reflection_delete_calls: list[tuple[str, str]] = []
@@ -46,15 +46,22 @@ class _FakeSessionService:
         session_id: str,
         *,
         session_mode: SessionMode,
+        normal_root_role_id: str | None,
         orchestration_preset_id: str | None,
     ) -> SessionRecord:
         self.topology_update_calls.append(
-            (session_id, session_mode.value, orchestration_preset_id)
+            (
+                session_id,
+                session_mode.value,
+                normal_root_role_id,
+                orchestration_preset_id,
+            )
         )
         return SessionRecord(
             session_id=session_id,
             workspace_id="workspace-1",
             session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
 
@@ -216,7 +223,29 @@ def test_update_session_topology_route_returns_updated_session() -> None:
     assert payload["session_mode"] == "orchestration"
     assert payload["orchestration_preset_id"] == "default"
     assert fake_service.topology_update_calls == [
-        ("session-1", "orchestration", "default")
+        ("session-1", "orchestration", None, "default")
+    ]
+
+
+def test_update_session_topology_route_accepts_normal_root_role() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1/topology",
+        json={
+            "session_mode": "normal",
+            "normal_root_role_id": "Crafter",
+            "orchestration_preset_id": None,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_mode"] == "normal"
+    assert payload["normal_root_role_id"] == "Crafter"
+    assert fake_service.topology_update_calls == [
+        ("session-1", "normal", "Crafter", None)
     ]
 
 

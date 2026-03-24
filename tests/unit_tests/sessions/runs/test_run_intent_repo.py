@@ -107,6 +107,7 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
             topology=RunTopologySnapshot(
                 session_mode=SessionMode.ORCHESTRATION,
                 main_agent_role_id="MainAgent",
+                normal_root_role_id="MainAgent",
                 coordinator_role_id="Coordinator",
                 orchestration_preset_id="default",
                 orchestration_prompt="Delegate by capability.",

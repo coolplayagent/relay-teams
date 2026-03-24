@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     workspace_id TEXT NOT NULL,
     metadata     TEXT NOT NULL,
     session_mode TEXT NOT NULL DEFAULT 'normal',
+    normal_root_role_id TEXT,
     orchestration_preset_id TEXT,
     started_at   TEXT,
     created_at   TEXT NOT NULL,
@@ -30,6 +31,7 @@ Purpose: session metadata, lifecycle, and bound execution workspace identity.
 
 Notes:
 - `session_mode` is `normal` or `orchestration`.
+- `normal_root_role_id` stores the session-selected root role for normal mode. When `NULL`, runtime falls back to the current `MainAgent`.
 - `orchestration_preset_id` stores the session-selected preset for orchestration mode.
 - `started_at` is written when the first run is created and locks further mode switching for that session.
 
@@ -444,7 +446,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `session_mode` and `topology_json` snapshot the resolved root-agent topology used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 
 ---
 

@@ -13,8 +13,7 @@ import {
     loadProjects,
     toggleProjectSortMode,
 } from '../components/sidebar.js';
-import { fetchRoleConfigOptions } from '../core/api.js';
-import { setCoordinatorRoleId, setMainAgentRoleId, state } from '../core/state.js';
+import { state } from '../core/state.js';
 import { setupNavbarBindings } from '../components/navbar.js';
 import { initBackendStatusMonitor } from '../utils/backendStatus.js';
 import { initUiFeedback } from '../utils/feedback.js';
@@ -88,22 +87,6 @@ function setupSettingsButton() {
     }
 }
 
-async function hydrateCoordinatorRoleId() {
-    try {
-        const options = await fetchRoleConfigOptions();
-        setCoordinatorRoleId(options?.coordinator_role_id || '');
-        setMainAgentRoleId(options?.main_agent_role_id || '');
-    } catch (error) {
-        logError(
-            'frontend.bootstrap.coordinator_role_failed',
-            'Failed to load coordinator role metadata',
-            errorToPayload(error),
-        );
-        setCoordinatorRoleId('');
-        setMainAgentRoleId('');
-    }
-}
-
 export async function initApp(selectSession, handleSend) {
     installGlobalErrorLogging();
     logInfo('frontend.bootstrap.started', 'Frontend bootstrap started');
@@ -117,7 +100,6 @@ export async function initApp(selectSession, handleSend) {
     await initializeSessionTopologyControls();
     initializeContextIndicators();
     initializeSessionTokenUsage();
-    await hydrateCoordinatorRoleId();
     initializeSubagentRail();
     initializeObservability();
     initializeProjectView();

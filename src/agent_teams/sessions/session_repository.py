@@ -23,6 +23,7 @@ class SessionRepository:
                 workspace_id TEXT NOT NULL DEFAULT '',
                 metadata   TEXT NOT NULL,
                 session_mode TEXT NOT NULL DEFAULT 'normal',
+                normal_root_role_id TEXT,
                 orchestration_preset_id TEXT,
                 started_at TEXT,
                 created_at TEXT NOT NULL,
@@ -42,6 +43,10 @@ class SessionRepository:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
             )
+        if "normal_root_role_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN normal_root_role_id TEXT"
+            )
         if "orchestration_preset_id" not in columns:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN orchestration_preset_id TEXT"
@@ -57,6 +62,7 @@ class SessionRepository:
         workspace_id: str,
         metadata: dict[str, str] | None = None,
         session_mode: SessionMode = SessionMode.NORMAL,
+        normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -66,6 +72,7 @@ class SessionRepository:
             workspace_id=workspace_id,
             metadata=metadata_dict,
             session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
             created_at=datetime.fromisoformat(now),
             updated_at=datetime.fromisoformat(now),
@@ -78,18 +85,20 @@ class SessionRepository:
                 workspace_id,
                 metadata,
                 session_mode,
+                normal_root_role_id,
                 orchestration_preset_id,
                 started_at,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.session_id,
                 record.workspace_id,
                 json.dumps(record.metadata),
                 record.session_mode.value,
+                record.normal_root_role_id,
                 record.orchestration_preset_id,
                 None,
                 now,
@@ -104,17 +113,19 @@ class SessionRepository:
         session_id: str,
         *,
         session_mode: SessionMode,
+        normal_root_role_id: str | None,
         orchestration_preset_id: str | None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         cursor = self._conn.execute(
             """
             UPDATE sessions
-            SET session_mode=?, orchestration_preset_id=?, updated_at=?
+            SET session_mode=?, normal_root_role_id=?, orchestration_preset_id=?, updated_at=?
             WHERE session_id=? AND started_at IS NULL
             """,
             (
                 session_mode.value,
+                normal_root_role_id,
                 orchestration_preset_id,
                 now,
                 session_id,
@@ -166,6 +177,7 @@ class SessionRepository:
         rows = self._conn.execute(
             """
             SELECT session_id, session_mode, orchestration_preset_id, started_at
+                 , normal_root_role_id
             FROM sessions
             """
         ).fetchall()
@@ -175,17 +187,26 @@ class SessionRepository:
                 continue
             session_id = str(row["session_id"])
             session_mode = SessionMode(str(row["session_mode"] or "normal"))
+            normal_root_role_id = (
+                str(row["normal_root_role_id"] or "").strip() or None
+            )
             preset_id = str(row["orchestration_preset_id"] or "").strip() or None
             next_mode = session_mode
+            next_normal_root_role_id = normal_root_role_id
             next_preset_id = preset_id
             if preset_id and preset_id not in valid_ids:
                 next_preset_id = default_preset_id
             if next_mode == SessionMode.ORCHESTRATION and next_preset_id is None:
                 next_mode = SessionMode.NORMAL
-            if next_mode != session_mode or next_preset_id != preset_id:
+            if (
+                next_mode != session_mode
+                or next_normal_root_role_id != normal_root_role_id
+                or next_preset_id != preset_id
+            ):
                 self.update_topology(
                     session_id,
                     session_mode=next_mode,
+                    normal_root_role_id=next_normal_root_role_id,
                     orchestration_preset_id=next_preset_id,
                 )
 
@@ -213,6 +234,7 @@ class SessionRepository:
             workspace_id=str(row["workspace_id"]),
             metadata=json.loads(str(row["metadata"])),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
+            normal_root_role_id=str(row["normal_root_role_id"] or "").strip() or None,
             orchestration_preset_id=str(row["orchestration_preset_id"] or "").strip()
             or None,
             started_at=(

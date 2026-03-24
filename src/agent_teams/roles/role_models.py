@@ -68,11 +68,20 @@ class RoleValidationResult(BaseModel):
     role: RoleDocumentRecord
 
 
+class NormalModeRoleOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
 class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     coordinator_role_id: str = Field(min_length=1)
     main_agent_role_id: str = Field(min_length=1)
+    normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()

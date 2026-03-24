@@ -19,7 +19,7 @@ Common status codes:
 
 - A run starts from one root task.
 - Sessions have a run mode:
-  - `normal`: one fixed root role (`MainAgent`) handles the run directly.
+  - `normal`: one session-selected root role handles the run directly. The default is `MainAgent`.
   - `orchestration`: the root role is `Coordinator`, and delegation is limited by the selected orchestration preset.
 - Session mode and orchestration preset can be changed only before the session starts its first run.
 - Every delegated task is a persisted task record under that root task.
@@ -240,6 +240,7 @@ Request:
 
 Notes:
 - New sessions default to `session_mode = "normal"`.
+- New sessions default to `normal_root_role_id = "MainAgent"`.
 - New sessions also store the current default orchestration preset id so they can be switched to orchestration before the first run.
 
 ### `GET /sessions`
@@ -252,6 +253,7 @@ Gets one session.
 
 Response fields also include:
 - `session_mode`
+- `normal_root_role_id`
 - `orchestration_preset_id`
 - `started_at`
 - `can_switch_mode`
@@ -262,19 +264,22 @@ Updates session metadata.
 
 ### `PATCH /sessions/{session_id}/topology`
 
-Updates session run mode and orchestration preset.
+Updates session run mode, normal-mode root role, and orchestration preset.
 
 Request:
 
 ```json
 {
-  "session_mode": "orchestration",
-  "orchestration_preset_id": "default"
+  "session_mode": "normal",
+  "normal_root_role_id": "Crafter",
+  "orchestration_preset_id": null
 }
 ```
 
 Rules:
 - Only sessions that have not started their first run may be changed.
+- `normal_root_role_id` is used only when `session_mode = "normal"`.
+- `normal_root_role_id` may be `MainAgent` or any non-system role. `Coordinator` is rejected.
 - `orchestration_preset_id` is required when `session_mode = "orchestration"`.
 - `orchestration_preset_id` is ignored when `session_mode = "normal"`.
 
@@ -628,6 +633,10 @@ Returns editor options for role settings.
 Response fields:
 - `coordinator_role_id`
 - `main_agent_role_id`
+- `normal_mode_roles[]`
+  - `role_id`
+  - `name`
+  - `description`
 - `tools`
 - `mcp_servers`
 - `skills`

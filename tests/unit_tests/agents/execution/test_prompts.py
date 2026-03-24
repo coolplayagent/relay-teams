@@ -116,6 +116,7 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
                     coordinator_role_id="coordinator_agent",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
@@ -185,6 +186,7 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
                     coordinator_role_id="coordinator_agent",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
@@ -272,6 +274,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
                     coordinator_role_id="coordinator_agent",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
@@ -298,6 +301,7 @@ def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> No
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.NORMAL,
                     main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
                     coordinator_role_id="Coordinator",
                     orchestration_preset_id=None,
                     orchestration_prompt="",

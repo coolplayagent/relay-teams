@@ -105,6 +105,42 @@ class RoleRegistry:
     def get_main_agent_role_id(self) -> str:
         return self.get_main_agent().role_id
 
+    def list_normal_mode_roles(self) -> tuple[RoleDefinition, ...]:
+        main_agent = self.get_main_agent()
+        roles = [main_agent]
+        non_system_roles = sorted(
+            (
+                role
+                for role in self._roles
+                if not self.is_coordinator_role(role.role_id)
+                and not self.is_main_agent_role(role.role_id)
+            ),
+            key=lambda role: (role.name, role.role_id),
+        )
+        roles.extend(non_system_roles)
+        return tuple(roles)
+
+    def resolve_normal_mode_role_id(self, role_id: str | None) -> str:
+        main_agent_role_id = self.get_main_agent_role_id()
+        normalized = str(role_id or "").strip()
+        if not normalized:
+            return main_agent_role_id
+        if self.is_coordinator_role(normalized):
+            raise ValueError(
+                f"Coordinator role cannot be used in normal mode: {normalized}"
+            )
+        try:
+            role = self.get(normalized)
+        except KeyError as exc:
+            raise ValueError(f"Unknown normal mode role: {normalized}") from exc
+        if self.is_main_agent_role(role.role_id):
+            return role.role_id
+        if is_reserved_system_role_definition(role):
+            raise ValueError(
+                f"Reserved system role cannot be used in normal mode: {role.role_id}"
+            )
+        return role.role_id
+
     def is_coordinator_role(self, role_id: str) -> bool:
         try:
             return self.get_coordinator_role_id() == role_id

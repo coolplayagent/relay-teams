@@ -6,6 +6,7 @@ import { appendRoundUserMessage, createLiveRound } from '../components/rounds.js
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import {
+    fetchRoleConfigOptions,
     fetchOrchestrationConfig,
     updateSessionTopology,
 } from '../core/api.js';
@@ -15,6 +16,10 @@ import {
 } from './recovery.js';
 import {
     applyCurrentSessionRecord,
+    getNormalModeRoles,
+    setCoordinatorRoleId,
+    setMainAgentRoleId,
+    setNormalModeRoles,
     state,
 } from '../core/state.js';
 import { startIntentStream } from '../core/stream.js';
@@ -66,18 +71,22 @@ export function initializeThinkingControls() {
 }
 
 export async function initializeSessionTopologyControls() {
+    await refreshRoleConfigOptions({ refreshControls: false });
     await refreshOrchestrationConfig({ refreshControls: false });
     bindSessionTopologyControls();
     refreshSessionTopologyControls();
 }
 
 export function refreshSessionTopologyControls() {
+    syncThinkingControls();
     if (!els.sessionModeLock || !els.sessionModeNormalBtn || !els.sessionModeOrchestrationBtn) {
         return;
     }
 
     const mode = state.currentSessionMode === 'orchestration' ? 'orchestration' : 'normal';
+    const normalModeRoles = getNormalModeRoles();
     const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
+    const hasNormalModeRoles = normalModeRoles.length > 0;
     const hasPresets = presets.length > 0;
     const canSwitch = !!state.currentSessionId && state.currentSessionCanSwitchMode === true && !state.isGenerating;
     const disabledReason = resolveTopologyDisabledReason({ canSwitch, hasPresets });
@@ -95,9 +104,16 @@ export function refreshSessionTopologyControls() {
             : t('composer.mode_normal');
     }
 
-    if (els.orchestrationPresetField) {
-        els.orchestrationPresetField.hidden = mode !== 'orchestration';
+    syncSessionTopologyFieldVisibility(mode);
+    if (els.normalRoleSelect) {
+        const selectedRoleId = resolveSelectedNormalRoleId();
+        els.normalRoleSelect.innerHTML = buildNormalRoleOptions(selectedRoleId);
+        els.normalRoleSelect.disabled = !canSwitch || mode !== 'normal' || !hasNormalModeRoles;
+        if (selectedRoleId) {
+            els.normalRoleSelect.value = selectedRoleId;
+        }
     }
+
     if (els.orchestrationPresetSelect) {
         const selectedPresetId = resolveSelectedPresetId();
         els.orchestrationPresetSelect.innerHTML = buildPresetOptions(selectedPresetId);
@@ -115,6 +131,23 @@ export async function refreshOrchestrationConfig({ refreshControls = true } = {}
     } catch (error) {
         orchestrationConfig = normalizeOrchestrationConfig(null);
         sysLog(error.message || 'Failed to load orchestration settings', 'log-error');
+    }
+    if (refreshControls) {
+        refreshSessionTopologyControls();
+    }
+}
+
+async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
+    try {
+        const options = await fetchRoleConfigOptions();
+        setCoordinatorRoleId(options?.coordinator_role_id || '');
+        setMainAgentRoleId(options?.main_agent_role_id || '');
+        setNormalModeRoles(options?.normal_mode_roles || []);
+    } catch (error) {
+        setCoordinatorRoleId('');
+        setMainAgentRoleId('');
+        setNormalModeRoles([]);
+        sysLog(error.message || 'Failed to load role options', 'log-error');
     }
     if (refreshControls) {
         refreshSessionTopologyControls();
@@ -203,12 +236,29 @@ function bindSessionTopologyControls() {
                 refreshSessionTopologyControls();
                 return;
             }
-            void persistSessionTopology('orchestration', nextPresetId);
+            void persistSessionTopology('orchestration', {
+                orchestrationPresetId: nextPresetId,
+            });
+        });
+    }
+    if (els.normalRoleSelect) {
+        els.normalRoleSelect.addEventListener('change', event => {
+            const nextRoleId = String(event?.target?.value || '').trim();
+            if (!nextRoleId) {
+                refreshSessionTopologyControls();
+                return;
+            }
+            void persistSessionTopology('normal', {
+                normalRootRoleId: nextRoleId,
+            });
         });
     }
     if (typeof document.addEventListener === 'function') {
         document.addEventListener('orchestration-settings-updated', () => {
             void refreshOrchestrationConfig({ refreshControls: true });
+        });
+        document.addEventListener('agent-teams-session-selected', () => {
+            void refreshRoleConfigOptions({ refreshControls: true });
         });
         document.addEventListener('agent-teams-language-changed', () => {
             refreshSessionTopologyControls();
@@ -232,19 +282,26 @@ async function handleTopologyModeChange(nextMode) {
         });
         return;
     }
-    await persistSessionTopology(
-        normalizedMode,
-        normalizedMode === 'orchestration' ? resolveSelectedPresetId() : null,
-    );
+    await persistSessionTopology(normalizedMode, {
+        orchestrationPresetId: normalizedMode === 'orchestration' ? resolveSelectedPresetId() : null,
+        normalRootRoleId: normalizedMode === 'normal' ? resolveSelectedNormalRoleId() : null,
+    });
 }
 
-async function persistSessionTopology(sessionMode, orchestrationPresetId) {
+async function persistSessionTopology(
+    sessionMode,
+    {
+        orchestrationPresetId = null,
+        normalRootRoleId = null,
+    } = {},
+) {
     if (!state.currentSessionId) {
         return;
     }
     try {
         const updated = await updateSessionTopology(state.currentSessionId, {
             session_mode: sessionMode,
+            normal_root_role_id: sessionMode === 'normal' ? normalRootRoleId : undefined,
             orchestration_preset_id: sessionMode === 'orchestration' ? orchestrationPresetId : null,
         });
         applyCurrentSessionRecord(updated);
@@ -295,6 +352,35 @@ function resolveSelectedPresetId() {
     return String(presets[0]?.preset_id || '').trim();
 }
 
+function resolveSelectedNormalRoleId() {
+    const roles = getNormalModeRoles();
+    if (roles.length === 0) {
+        return '';
+    }
+    const currentRoleId = String(state.currentNormalRootRoleId || '').trim();
+    if (currentRoleId && roles.some(role => role?.role_id === currentRoleId)) {
+        return currentRoleId;
+    }
+    const mainAgentRoleId = String(state.mainAgentRoleId || '').trim();
+    if (mainAgentRoleId && roles.some(role => role?.role_id === mainAgentRoleId)) {
+        return mainAgentRoleId;
+    }
+    return String(roles[0]?.role_id || '').trim();
+}
+
+function buildNormalRoleOptions(selectedRoleId) {
+    const roles = getNormalModeRoles();
+    if (roles.length === 0) {
+        return `<option value="">${escapeHtml(t('composer.no_roles'))}</option>`;
+    }
+    return roles.map(role => {
+        const roleId = String(role?.role_id || '').trim();
+        const name = String(role?.name || roleId || 'Role');
+        const selected = roleId === selectedRoleId ? ' selected' : '';
+        return `<option value="${escapeHtml(roleId)}"${selected}>${escapeHtml(name)}</option>`;
+    }).join('');
+}
+
 function buildPresetOptions(selectedPresetId) {
     const presets = Array.isArray(orchestrationConfig?.presets) ? orchestrationConfig.presets : [];
     if (presets.length === 0) {
@@ -310,6 +396,20 @@ function buildPresetOptions(selectedPresetId) {
 
 function resolveMissingPresetMessage() {
     return 'Create an orchestration preset in Settings before switching to Orchestrated Mode.';
+}
+
+function syncSessionTopologyFieldVisibility(mode) {
+    const safeMode = mode === 'orchestration' ? 'orchestration' : 'normal';
+    if (els.normalRoleField) {
+        const showNormalRole = safeMode === 'normal';
+        els.normalRoleField.hidden = !showNormalRole;
+        els.normalRoleField.style.display = showNormalRole ? 'inline-flex' : 'none';
+    }
+    if (els.orchestrationPresetField) {
+        const showPreset = safeMode === 'orchestration';
+        els.orchestrationPresetField.hidden = !showPreset;
+        els.orchestrationPresetField.style.display = showPreset ? 'inline-flex' : 'none';
+    }
 }
 
 function normalizeOrchestrationConfig(config) {
@@ -390,6 +490,7 @@ function applyThinkingState(nextState, { persist = true } = {}) {
     if (els.thinkingEffortSelect) {
         els.thinkingEffortSelect.value = effort;
     }
+    syncThinkingControls();
     if (!persist) return;
     try {
         localStorage.setItem(THINKING_MODE_STORAGE_KEY, enabled ? 'true' : 'false');
@@ -405,4 +506,15 @@ function normalizeThinkingEffort(value) {
         return safeValue;
     }
     return 'medium';
+}
+
+function syncThinkingControls() {
+    const enabled = state.thinking?.enabled === true;
+    if (els.thinkingEffortField) {
+        els.thinkingEffortField.hidden = !enabled;
+        els.thinkingEffortField.style.display = enabled ? 'inline-flex' : 'none';
+    }
+    if (els.thinkingEffortSelect) {
+        els.thinkingEffortSelect.disabled = state.isGenerating || !enabled;
+    }
 }

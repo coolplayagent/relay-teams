@@ -57,11 +57,15 @@ class OrchestrationSettingsService:
         settings = self._config_manager.get_orchestration_settings()
         role_registry = self._get_role_registry()
         main_agent_role_id = role_registry.get_main_agent_role_id()
+        normal_root_role_id = role_registry.resolve_normal_mode_role_id(
+            session.normal_root_role_id
+        )
         coordinator_role_id = role_registry.get_coordinator_role_id()
         if session.session_mode == SessionMode.NORMAL:
             return RunTopologySnapshot(
                 session_mode=SessionMode.NORMAL,
                 main_agent_role_id=main_agent_role_id,
+                normal_root_role_id=normal_root_role_id,
                 coordinator_role_id=coordinator_role_id,
                 orchestration_preset_id=session.orchestration_preset_id,
             )
@@ -84,6 +88,7 @@ class OrchestrationSettingsService:
         return RunTopologySnapshot(
             session_mode=SessionMode.ORCHESTRATION,
             main_agent_role_id=main_agent_role_id,
+            normal_root_role_id=normal_root_role_id,
             coordinator_role_id=coordinator_role_id,
             orchestration_preset_id=preset.preset_id,
             orchestration_prompt=preset.orchestration_prompt,

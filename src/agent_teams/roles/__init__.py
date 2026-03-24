@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent_teams.roles.role_models import (
+    NormalModeRoleOption,
     RoleConfigOptions,
     RoleConfigSource,
     RoleDefinition,
@@ -21,6 +22,7 @@ from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
 __all__ = [
     "default_memory_profile",
     "MemoryProfile",
+    "NormalModeRoleOption",
     "RoleConfigOptions",
     "RoleConfigSource",
     "RoleDefinition",

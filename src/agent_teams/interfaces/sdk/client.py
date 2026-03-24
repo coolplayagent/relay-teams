@@ -143,10 +143,12 @@ class AgentTeamsClient:
         session_id: str,
         *,
         session_mode: str,
+        normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "session_mode": session_mode,
+            "normal_root_role_id": normal_root_role_id,
             "orchestration_preset_id": orchestration_preset_id,
         }
         return self._request_json(

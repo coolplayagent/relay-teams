@@ -19,6 +19,7 @@ class SessionRecord(BaseModel):
     workspace_id: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
     session_mode: SessionMode = SessionMode.NORMAL
+    normal_root_role_id: str | None = None
     orchestration_preset_id: str | None = None
     started_at: datetime | None = None
     can_switch_mode: bool = True

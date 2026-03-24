@@ -4,6 +4,7 @@ export const state = {
     currentSessionId: null,
     currentWorkspaceId: null,
     currentSessionMode: 'normal',
+    currentNormalRootRoleId: null,
     currentOrchestrationPresetId: null,
     currentSessionCanSwitchMode: false,
     currentMainView: 'session',
@@ -29,6 +30,7 @@ export const state = {
         enabled: false,
         effort: 'medium',
     },
+    normalModeRoles: [],
     selectedRoleId: null,
     coordinatorRoleId: null,
     mainAgentRoleId: null,
@@ -49,6 +51,21 @@ export function setMainAgentRoleId(roleId) {
 
 export function getMainAgentRoleId() {
     return normalizeRoleId(state.mainAgentRoleId);
+}
+
+export function setNormalModeRoles(roleOptions) {
+    const rows = Array.isArray(roleOptions) ? roleOptions : [];
+    state.normalModeRoles = rows
+        .map(item => ({
+            role_id: normalizeRoleId(item?.role_id),
+            name: String(item?.name || '').trim(),
+            description: String(item?.description || '').trim(),
+        }))
+        .filter(item => item.role_id);
+}
+
+export function getNormalModeRoles() {
+    return Array.isArray(state.normalModeRoles) ? state.normalModeRoles : [];
 }
 
 export function isCoordinatorRoleId(roleId) {
@@ -74,11 +91,13 @@ export function isReservedSystemRoleId(roleId) {
 export function getPrimaryRoleId(sessionMode = state.currentSessionMode) {
     return sessionMode === 'orchestration'
         ? getCoordinatorRoleId()
-        : getMainAgentRoleId();
+        : (normalizeRoleId(state.currentNormalRootRoleId) || getMainAgentRoleId());
 }
 
 export function getPrimaryRoleLabel(sessionMode = state.currentSessionMode) {
-    return sessionMode === 'orchestration' ? 'Coordinator' : 'Main Agent';
+    return getRoleDisplayName(getPrimaryRoleId(sessionMode), {
+        fallback: sessionMode === 'orchestration' ? 'Coordinator' : 'Main Agent',
+    });
 }
 
 export function isPrimaryRoleId(roleId, sessionMode = state.currentSessionMode) {
@@ -89,8 +108,13 @@ export function isPrimaryRoleId(roleId, sessionMode = state.currentSessionMode) 
     return safeRoleId === getPrimaryRoleId(sessionMode);
 }
 
+export function isPrimaryOrReservedRoleId(roleId, sessionMode = state.currentSessionMode) {
+    return isPrimaryRoleId(roleId, sessionMode) || isReservedSystemRoleId(roleId);
+}
+
 export function applyCurrentSessionRecord(record) {
     state.currentSessionMode = normalizeSessionMode(record?.session_mode);
+    state.currentNormalRootRoleId = normalizeRoleId(record?.normal_root_role_id) || null;
     state.currentOrchestrationPresetId = normalizeRoleId(record?.orchestration_preset_id) || null;
     state.currentSessionCanSwitchMode = record?.can_switch_mode === true;
     state.currentMainView = 'session';
@@ -99,8 +123,31 @@ export function applyCurrentSessionRecord(record) {
 
 export function resetCurrentSessionTopology() {
     state.currentSessionMode = 'normal';
+    state.currentNormalRootRoleId = null;
     state.currentOrchestrationPresetId = null;
     state.currentSessionCanSwitchMode = false;
+}
+
+export function getRoleDisplayName(roleId, { fallback = 'Agent' } = {}) {
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRoleId) {
+        return fallback;
+    }
+    if (isCoordinatorRoleId(safeRoleId)) {
+        return 'Coordinator';
+    }
+    if (isMainAgentRoleId(safeRoleId)) {
+        return 'Main Agent';
+    }
+    const matchingRole = getNormalModeRoles().find(role => role.role_id === safeRoleId);
+    if (matchingRole && matchingRole.name) {
+        return matchingRole.name;
+    }
+    return safeRoleId
+        .split(/[_\\s-]+/)
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ') || fallback;
 }
 
 export function humanizeRoleId(roleId, { coordinatorLabel = 'Coordinator', fallback = 'Agent' } = {}) {
@@ -114,11 +161,7 @@ export function humanizeRoleId(roleId, { coordinatorLabel = 'Coordinator', fallb
     if (isMainAgentRoleId(safeRoleId)) {
         return 'Main Agent';
     }
-    return safeRoleId
-        .split(/[_\\s-]+/)
-        .filter(Boolean)
-        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
+    return getRoleDisplayName(safeRoleId, { fallback });
 }
 
 function normalizeRoleId(roleId) {

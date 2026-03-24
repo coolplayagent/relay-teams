@@ -52,7 +52,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "Stop requested. Wait for the active worker to exit before attempting recovery."
         in recovery_script
     )
-    assert "isReservedSystemRoleId(roleId)" in recovery_script
+    assert "isPrimaryOrReservedRoleId(roleId)" in recovery_script
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
     assert (

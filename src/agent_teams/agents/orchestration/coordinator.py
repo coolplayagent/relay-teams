@@ -178,7 +178,7 @@ class CoordinatorGraph(BaseModel):
             coordinator_instance_id=root_instance_id,
         )
         root_role_id = _require_task_role_id(root_task)
-        if self.role_registry.is_main_agent_role(root_role_id):
+        if not self.role_registry.is_coordinator_role(root_role_id):
             result = await self._task_executor(
                 instance_id=root_instance_id,
                 role_id=root_role_id,
@@ -583,7 +583,7 @@ class CoordinatorGraph(BaseModel):
         if topology is None:
             return self.role_registry.get_coordinator_role_id()
         if topology.session_mode == SessionMode.NORMAL:
-            return topology.main_agent_role_id
+            return topology.normal_root_role_id
         return topology.coordinator_role_id
 
     def _publish_run_event(

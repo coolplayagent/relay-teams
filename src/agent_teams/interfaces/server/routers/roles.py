@@ -12,6 +12,7 @@ from agent_teams.interfaces.server.deps import (
 )
 from agent_teams.mcp.mcp_service import McpService
 from agent_teams.roles import (
+    NormalModeRoleOption,
     RoleConfigOptions,
     RoleDocumentDraft,
     RoleDocumentRecord,
@@ -43,6 +44,14 @@ def get_role_config_options(
     return RoleConfigOptions(
         coordinator_role_id=role_registry.get_coordinator_role_id(),
         main_agent_role_id=role_registry.get_main_agent_role_id(),
+        normal_mode_roles=tuple(
+            NormalModeRoleOption(
+                role_id=role.role_id,
+                name=role.name,
+                description=role.description,
+            )
+            for role in role_registry.list_normal_mode_roles()
+        ),
         tools=tool_registry.list_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),
