@@ -8,20 +8,15 @@ try:
 except Exception:  # pragma: no cover - import availability depends on environment
     keyring = None
 
-from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.feishu.models import FeishuTriggerSecretConfig
 
 _KEYRING_SERVICE_NAME = "agent-teams.feishu-trigger"
-
-_ENV_APP_SECRET = "FEISHU_APP_SECRET"
-_ENV_VERIFICATION_TOKEN = "FEISHU_VERIFICATION_TOKEN"
-_ENV_ENCRYPT_KEY = "FEISHU_ENCRYPT_KEY"
 
 
 class FeishuTriggerSecretStore:
     def get_secret_config(self, config_dir: Path, trigger_id: str) -> FeishuTriggerSecretConfig:
         if not self.can_persist_secrets():
-            return _load_secret_config_from_env()
+            return FeishuTriggerSecretConfig()
         assert keyring is not None
         account_name = self._account_name(config_dir, trigger_id)
         try:
@@ -50,9 +45,7 @@ class FeishuTriggerSecretStore:
     ) -> None:
         if not self.can_persist_secrets():
             raise RuntimeError(
-                "Feishu trigger secret persistence requires a usable system keyring backend. "
-                "On systems without keyring, set FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN, "
-                "and FEISHU_ENCRYPT_KEY environment variables or in the .env file instead."
+                "Feishu trigger secret persistence requires a usable system keyring backend."
             )
         assert keyring is not None
         account_name = self._account_name(config_dir, trigger_id)
@@ -128,15 +121,6 @@ _FEISHU_TRIGGER_SECRET_STORE = FeishuTriggerSecretStore()
 
 def get_feishu_trigger_secret_store() -> FeishuTriggerSecretStore:
     return _FEISHU_TRIGGER_SECRET_STORE
-
-
-def _load_secret_config_from_env() -> FeishuTriggerSecretConfig:
-    env = load_merged_env_vars()
-    return FeishuTriggerSecretConfig(
-        app_secret=_normalize_secret(env.get(_ENV_APP_SECRET)),
-        verification_token=_normalize_secret(env.get(_ENV_VERIFICATION_TOKEN)),
-        encrypt_key=_normalize_secret(env.get(_ENV_ENCRYPT_KEY)),
-    )
 
 
 def _normalize_secret(value: str | None) -> str | None:
