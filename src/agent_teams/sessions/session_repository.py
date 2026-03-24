@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_teams.persistence.db import open_sqlite
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from agent_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
 
 
 class SessionRepository:
@@ -21,6 +21,8 @@ class SessionRepository:
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 workspace_id TEXT NOT NULL DEFAULT '',
+                project_kind TEXT NOT NULL DEFAULT 'workspace',
+                project_id TEXT NOT NULL DEFAULT '',
                 metadata   TEXT NOT NULL,
                 session_mode TEXT NOT NULL DEFAULT 'normal',
                 normal_root_role_id TEXT,
@@ -38,6 +40,17 @@ class SessionRepository:
         if "workspace_id" not in columns:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "project_kind" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN project_kind TEXT NOT NULL DEFAULT 'workspace'"
+            )
+        if "project_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''"
+            )
+            self._conn.execute(
+                "UPDATE sessions SET project_id=workspace_id WHERE project_id=''"
             )
         if "session_mode" not in columns:
             self._conn.execute(
@@ -61,15 +74,20 @@ class SessionRepository:
         session_id: str,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        project_kind: ProjectKind = ProjectKind.WORKSPACE,
+        project_id: str | None = None,
         session_mode: SessionMode = SessionMode.NORMAL,
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         metadata_dict = metadata or {}
+        resolved_project_id = (project_id or workspace_id).strip()
         record = SessionRecord(
             session_id=session_id,
             workspace_id=workspace_id,
+            project_kind=project_kind,
+            project_id=resolved_project_id,
             metadata=metadata_dict,
             session_mode=session_mode,
             normal_root_role_id=normal_root_role_id,
@@ -83,6 +101,8 @@ class SessionRepository:
             INSERT INTO sessions(
                 session_id,
                 workspace_id,
+                project_kind,
+                project_id,
                 metadata,
                 session_mode,
                 normal_root_role_id,
@@ -91,11 +111,13 @@ class SessionRepository:
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.session_id,
                 record.workspace_id,
+                record.project_kind.value,
+                record.project_id,
                 json.dumps(record.metadata),
                 record.session_mode.value,
                 record.normal_root_role_id,
@@ -229,9 +251,12 @@ class SessionRepository:
         self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
+        project_id = str(row["project_id"] or "").strip() or str(row["workspace_id"])
         return SessionRecord(
             session_id=str(row["session_id"]),
             workspace_id=str(row["workspace_id"]),
+            project_kind=ProjectKind(str(row["project_kind"] or "workspace")),
+            project_id=project_id,
             metadata=json.loads(str(row["metadata"])),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             normal_root_role_id=str(row["normal_root_role_id"] or "").strip() or None,

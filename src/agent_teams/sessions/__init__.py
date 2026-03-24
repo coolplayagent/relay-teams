@@ -17,11 +17,16 @@ if TYPE_CHECKING:
         find_round_by_run_id,
         paginate_rounds,
     )
-    from agent_teams.sessions.session_models import SessionMode, SessionRecord
+    from agent_teams.sessions.session_models import (
+        ProjectKind,
+        SessionMode,
+        SessionRecord,
+    )
     from agent_teams.sessions.session_repository import SessionRepository
     from agent_teams.sessions.session_service import SessionService
 
 __all__ = [
+    "ProjectKind",
     "SessionRecord",
     "SessionMode",
     "ExternalSessionBinding",
@@ -35,6 +40,7 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "ProjectKind": ("agent_teams.sessions.session_models", "ProjectKind"),
     "SessionRecord": ("agent_teams.sessions.session_models", "SessionRecord"),
     "SessionMode": ("agent_teams.sessions.session_models", "SessionMode"),
     "ExternalSessionBinding": (

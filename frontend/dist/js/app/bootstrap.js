@@ -108,6 +108,14 @@ export async function initApp(selectSession, handleSend) {
     setupSettingsButton();
     await loadProjects();
 
+    document.addEventListener('agent-teams-select-session', event => {
+        const sessionId = String(event?.detail?.sessionId || '').trim();
+        if (!sessionId) {
+            return;
+        }
+        void selectSession(sessionId);
+    });
+
     const firstSessionEl = document.querySelector('.session-item');
     if (firstSessionEl) {
         const sessionId = String(firstSessionEl.getAttribute('data-session-id') || '').trim();

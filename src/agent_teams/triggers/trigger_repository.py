@@ -226,6 +226,9 @@ class TriggerRepository:
         return tuple(self._row_to_trigger(row) for row in rows)
 
     def delete_trigger(self, trigger_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM trigger_events WHERE trigger_id=?", (trigger_id,)
+        )
         self._conn.execute("DELETE FROM triggers WHERE trigger_id=?", (trigger_id,))
         self._conn.commit()
 

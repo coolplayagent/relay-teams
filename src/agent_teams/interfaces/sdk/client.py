@@ -445,6 +445,61 @@ class AgentTeamsClient:
     def delete_workspace(self, workspace_id: str) -> dict[str, JsonValue]:
         return self._request_json("DELETE", f"/api/workspaces/{workspace_id}")
 
+    def list_automation_projects(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/automation/projects")
+        raw = data.get("data")
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
+
+    def get_automation_project(
+        self, automation_project_id: str
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/automation/projects/{automation_project_id}",
+        )
+
+    def create_automation_project(
+        self,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json("POST", "/api/automation/projects", payload)
+
+    def update_automation_project(
+        self,
+        automation_project_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PATCH",
+            f"/api/automation/projects/{automation_project_id}",
+            payload,
+        )
+
+    def run_automation_project(
+        self,
+        automation_project_id: str,
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/automation/projects/{automation_project_id}:run",
+            {},
+        )
+
+    def list_automation_project_sessions(
+        self,
+        automation_project_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        data = self._request_json(
+            "GET",
+            f"/api/automation/projects/{automation_project_id}/sessions",
+        )
+        raw = data.get("data")
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
+
     def delete_subagent_reflection(
         self,
         session_id: str,

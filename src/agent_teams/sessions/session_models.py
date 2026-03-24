@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SessionMode(str, Enum):
@@ -12,11 +12,18 @@ class SessionMode(str, Enum):
     ORCHESTRATION = "orchestration"
 
 
+class ProjectKind(str, Enum):
+    WORKSPACE = "workspace"
+    AUTOMATION = "automation"
+
+
 class SessionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(min_length=1)
     workspace_id: str = Field(min_length=1)
+    project_kind: ProjectKind = ProjectKind.WORKSPACE
+    project_id: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     session_mode: SessionMode = SessionMode.NORMAL
     normal_root_role_id: str | None = None
@@ -30,3 +37,9 @@ class SessionRecord(BaseModel):
     pending_tool_approval_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @model_validator(mode="after")
+    def _default_project_id(self) -> SessionRecord:
+        if self.project_id is None or not self.project_id.strip():
+            self.project_id = self.workspace_id
+        return self

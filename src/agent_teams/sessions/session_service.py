@@ -48,7 +48,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 from agent_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from agent_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -64,6 +64,9 @@ from agent_teams.workspace import (
     build_instance_role_scope_id,
     build_instance_session_scope_id,
 )
+
+
+AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
 
 
 class SessionService:
@@ -124,26 +127,33 @@ class SessionService:
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        project_kind: ProjectKind = ProjectKind.WORKSPACE,
+        project_id: str | None = None,
         session_mode: SessionMode | None = None,
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         if not session_id:
             session_id = f"session-{uuid.uuid4().hex[:8]}"
-        if self._workspace_service is not None:
+        if self._workspace_service is not None and not (
+            project_kind == ProjectKind.AUTOMATION
+            and workspace_id == AUTOMATION_INTERNAL_WORKSPACE_ID
+        ):
             self._workspace_service.require_workspace(workspace_id)
-        resolved_session_mode = session_mode
+        resolved_session_mode = session_mode or SessionMode.NORMAL
         resolved_normal_root_role_id = normal_root_role_id
         resolved_orchestration_preset_id = orchestration_preset_id
-        if resolved_session_mode is None:
-            resolved_session_mode = SessionMode.NORMAL
-            if self._orchestration_settings_service is not None:
-                resolved_session_mode = (
-                    self._orchestration_settings_service.default_session_mode()
-                )
-                resolved_orchestration_preset_id = (
-                    self._orchestration_settings_service.default_orchestration_preset_id()
-                )
+        if (
+            session_mode is None
+            and orchestration_preset_id is None
+            and self._orchestration_settings_service is not None
+        ):
+            resolved_session_mode = (
+                self._orchestration_settings_service.default_session_mode()
+            )
+            resolved_orchestration_preset_id = (
+                self._orchestration_settings_service.default_orchestration_preset_id()
+            )
         if resolved_normal_root_role_id is None and self._role_registry is not None:
             resolved_normal_root_role_id = self._role_registry.get_main_agent_role_id()
         resolved_normal_root_role_id = self._resolve_normal_root_role_id(
@@ -156,6 +166,8 @@ class SessionService:
             probe = SessionRecord(
                 session_id=session_id,
                 workspace_id=workspace_id,
+                project_kind=project_kind,
+                project_id=project_id,
                 metadata={} if metadata is None else dict(metadata),
                 session_mode=SessionMode.ORCHESTRATION,
                 normal_root_role_id=resolved_normal_root_role_id,
@@ -166,6 +178,8 @@ class SessionService:
             session_id=session_id,
             workspace_id=workspace_id,
             metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
             session_mode=resolved_session_mode,
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=resolved_orchestration_preset_id,
@@ -324,6 +338,18 @@ class SessionService:
                 )
             )
         return tuple(enriched)
+
+    def list_sessions_by_project(
+        self,
+        *,
+        project_kind: ProjectKind,
+        project_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(
+            record.model_dump(mode="json")
+            for record in self.list_sessions()
+            if record.project_kind == project_kind and record.project_id == project_id
+        )
 
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
         records = self._agent_repo.list_session_role_instances(session_id)

@@ -502,3 +502,51 @@ CREATE TABLE IF NOT EXISTS metric_points (
 Indexes:
 - `idx_metric_points_scope(scope, scope_id, bucket_start)`
 - `idx_metric_points_metric(metric_name, bucket_start)`
+
+### 2.1.2 `automation_projects`
+
+```sql
+CREATE TABLE IF NOT EXISTS automation_projects (
+    automation_project_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    schedule_mode TEXT NOT NULL,
+    cron_expression TEXT,
+    run_at TEXT,
+    timezone TEXT NOT NULL,
+    run_config_json TEXT NOT NULL,
+    trigger_id TEXT NOT NULL UNIQUE,
+    last_session_id TEXT,
+    last_run_started_at TEXT,
+    last_error TEXT,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_projects_schedule
+    ON automation_projects(status, next_run_at);
+```
+
+Purpose: stores virtual automation projects shown in the sidebar, their schedule definition, run configuration, and the latest execution pointers.
+
+Notes:
+- `schedule_mode` is `cron` or `one_shot`.
+- `run_config_json` stores session mode, orchestration preset, execution mode, YOLO, and thinking configuration.
+- `trigger_id` points at the backing `triggers` row used as the schedule event ledger.
+- `last_session_id` points at the most recent generated session instance.
+- `next_run_at` is the scheduler cursor used to find due projects.
+
+### 2.1.3 `sessions` additions
+
+The `sessions` table now also stores:
+- `project_kind TEXT NOT NULL DEFAULT 'workspace'`
+- `project_id TEXT NOT NULL DEFAULT ''`
+
+Purpose: lets one session belong to either a regular workspace project or an automation project while preserving the existing `workspace_id` execution binding.
+
+Notes:
+- Existing rows are backfilled as `project_kind='workspace'` and `project_id=workspace_id`.
+- Automation-generated sessions keep `workspace_id='automation-system'` internally, but project grouping uses `project_kind='automation'` and the automation project id.

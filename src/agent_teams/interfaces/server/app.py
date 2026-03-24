@@ -19,6 +19,7 @@ from agent_teams.env.runtime_env import sync_app_env_to_process_env
 from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
+    automation,
     logs,
     mcp,
     observability,
@@ -87,6 +88,7 @@ app = FastAPI(
 )
 
 app.include_router(system.router, prefix="/api")
+app.include_router(automation.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
 app.include_router(observability.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")

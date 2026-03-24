@@ -3,10 +3,17 @@
  * Renders the main workspace snapshot for a selected project.
  */
 import {
+    disableAutomationProject,
+    enableAutomationProject,
+    fetchAutomationProject,
+    fetchAutomationProjectSessions,
     fetchWorkspaceDiffFile,
+    fetchWorkspaces,
     fetchWorkspaceDiffs,
     fetchWorkspaceSnapshot,
     fetchWorkspaceTree,
+    runAutomationProject,
+    updateAutomationProject,
 } from '../core/api.js';
 import { clearAllPanels } from './agentPanel.js';
 import { hideRoundNavigator } from './rounds/navigator.js';
@@ -14,9 +21,12 @@ import { setSubagentRailExpanded } from './subagentRail.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
+import { showFormDialog } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 
 let currentWorkspace = null;
+let currentAutomationProject = null;
+let currentProjectViewMode = 'workspace';
 let currentSnapshot = null;
 let currentSnapshotWorkspaceId = null;
 let currentLoadToken = 0;
@@ -27,6 +37,118 @@ const expandedTreePaths = new Set();
 const loadingTreePaths = new Set();
 const treeLoadErrors = new Map();
 const workspaceViewCache = new Map();
+
+
+function findWorkspaceById(workspaces, workspaceId) {
+    const safeWorkspaceId = String(workspaceId || '').trim();
+    return (Array.isArray(workspaces) ? workspaces : []).find(workspace => String(workspace?.workspace_id || '').trim() === safeWorkspaceId) || null;
+}
+
+function formatWorkspaceOptionLabel(workspace) {
+    const workspaceId = String(workspace?.workspace_id || '').trim();
+    const rootPath = String(workspace?.root_path || '').trim();
+    if (workspaceId && rootPath) {
+        return `${workspaceId} - ${rootPath}`;
+    }
+    return workspaceId || rootPath;
+}
+
+function formatWorkspaceOptionDescription(workspace) {
+    const rootPath = String(workspace?.root_path || '').trim();
+    return rootPath || t('automation.workspace.help');
+}
+
+const AUTOMATION_TIMEZONE_OPTIONS = [
+    { value: 'UTC', label: 'UTC' },
+    { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
+    { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
+    { value: 'America/New_York', label: 'America/New_York' },
+    { value: 'Europe/London', label: 'Europe/London' },
+];
+
+async function requestAutomationProjectEditInput(project) {
+    const workspaces = await fetchWorkspaces();
+    const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
+        value: String(workspace?.workspace_id || '').trim(),
+        label: formatWorkspaceOptionLabel(workspace),
+        description: formatWorkspaceOptionDescription(workspace),
+    })).filter(option => option.value);
+    if (workspaceOptions.length === 0) {
+        return null;
+    }
+    const values = await showFormDialog({
+        title: t('automation.edit.title'),
+        message: t('automation.edit.message'),
+        tone: 'info',
+        confirmLabel: t('automation.edit.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'display_name',
+                label: t('automation.field.project_name'),
+                placeholder: 'Daily Briefing',
+                value: String(project?.display_name || project?.name || '').trim(),
+            },
+            {
+                id: 'workspace_id',
+                label: 'Workspace Directory',
+                type: 'select',
+                value: String(project?.workspace_id || '').trim(),
+                options: workspaceOptions,
+            },
+            {
+                id: 'prompt',
+                label: t('automation.detail.prompt'),
+                placeholder: 'Summarize the latest project changes.',
+                value: String(project?.prompt || '').trim(),
+                multiline: true,
+            },
+            {
+                id: 'cron_expression',
+                label: t('automation.detail.schedule'),
+                placeholder: '0 9 * * *',
+                value: String(project?.cron_expression || '').trim(),
+            },
+            {
+                id: 'timezone',
+                label: t('automation.detail.timezone'),
+                type: 'select',
+                value: String(project?.timezone || 'UTC').trim() || 'UTC',
+                options: AUTOMATION_TIMEZONE_OPTIONS,
+            },
+            {
+                id: 'enabled',
+                label: t('automation.field.enabled'),
+                type: 'checkbox',
+                value: String(project?.status || '').trim().toLowerCase() === 'enabled',
+                description: t('automation.field.enabled_help'),
+            },
+        ],
+    });
+    if (!values || typeof values !== 'object') {
+        return null;
+    }
+    const displayName = String(values.display_name || '').trim();
+    const workspaceId = String(values.workspace_id || '').trim();
+    const prompt = String(values.prompt || '').trim();
+    const cronExpression = String(values.cron_expression || '').trim();
+    const timezone = String(values.timezone || 'UTC').trim() || 'UTC';
+    const enabled = values.enabled !== false;
+    if (!workspaceId || !displayName || !prompt || !cronExpression) {
+        return null;
+    }
+    const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || String(project?.name || 'automation-project');
+    return {
+        name: slug,
+        display_name: displayName,
+        workspace_id: workspaceId,
+        prompt,
+        schedule_mode: 'cron',
+        cron_expression: cronExpression,
+        timezone,
+        enabled,
+    };
+}
 
 export function initializeProjectView() {
     syncActionLabels();
@@ -45,12 +167,19 @@ export function initializeProjectView() {
     if (!languageBound && typeof document?.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
             syncActionLabels();
-            if (state.currentMainView === 'project') {
-                if (currentSnapshot) {
-                    renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
-                } else {
-                    renderLoadingState(currentWorkspace);
+            if (state.currentMainView !== 'project') {
+                return;
+            }
+            if (currentProjectViewMode === 'automation') {
+                if (currentAutomationProject) {
+                    void openAutomationProjectView(currentAutomationProject);
                 }
+                return;
+            }
+            if (currentSnapshot) {
+                renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
+            } else {
+                renderLoadingState(currentWorkspace);
             }
         });
         languageBound = true;
@@ -74,11 +203,14 @@ export async function openWorkspaceProjectView(workspace) {
     }
 
     cacheProjectViewState();
+    currentProjectViewMode = 'workspace';
+    currentAutomationProject = null;
     currentWorkspace = workspace;
     currentSnapshotWorkspaceId = workspaceId;
     state.currentMainView = 'project';
     state.currentProjectViewWorkspaceId = workspaceId;
     state.currentWorkspaceId = workspaceId;
+    state.currentSessionId = null;
     clearAllPanels();
     hideRoundNavigator();
     setSubagentRailExpanded(false);
@@ -104,7 +236,55 @@ export async function openWorkspaceProjectView(workspace) {
     void loadWorkspaceDiffs(workspaceId, loadToken);
 }
 
+export async function openAutomationProjectView(project) {
+    const automationProjectId = String(project?.automation_project_id || '').trim();
+    if (!automationProjectId) {
+        return;
+    }
+
+    currentProjectViewMode = 'automation';
+    currentWorkspace = null;
+    currentAutomationProject = project;
+    currentSnapshot = null;
+    currentSnapshotWorkspaceId = null;
+    selectedTreePath = null;
+    currentDiffState = createInitialDiffState();
+    state.currentMainView = 'project';
+    state.currentProjectViewWorkspaceId = `automation:${automationProjectId}`;
+    state.currentWorkspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
+    state.currentSessionId = null;
+    clearAllPanels();
+    hideRoundNavigator();
+    setSubagentRailExpanded(false);
+    setProjectViewVisible(true);
+    renderAutomationLoadingState(project);
+
+    try {
+        const [freshProject, sessions, workspaces] = await Promise.all([
+            fetchAutomationProject(automationProjectId),
+            fetchAutomationProjectSessions(automationProjectId),
+            fetchWorkspaces(),
+        ]);
+        currentAutomationProject = freshProject;
+        renderAutomationProjectView(
+            freshProject,
+            Array.isArray(sessions) ? sessions : [],
+            findWorkspaceById(workspaces, freshProject.workspace_id),
+        );
+    } catch (error) {
+        renderAutomationErrorState(project, error);
+        sysLog(`Failed to load automation project: ${error?.message || error}`, 'log-error');
+    }
+}
+
 export async function refreshProjectView() {
+    if (currentProjectViewMode === 'automation') {
+        if (!currentAutomationProject) {
+            return;
+        }
+        await openAutomationProjectView(currentAutomationProject);
+        return;
+    }
     if (!currentWorkspace) {
         return;
     }
@@ -114,6 +294,8 @@ export async function refreshProjectView() {
 export function hideProjectView() {
     cacheProjectViewState();
     currentWorkspace = null;
+    currentAutomationProject = null;
+    currentProjectViewMode = 'workspace';
     resetProjectViewState(null);
     state.currentMainView = 'session';
     state.currentProjectViewWorkspaceId = null;
@@ -280,6 +462,220 @@ function setProjectViewVisible(visible) {
     }
 }
 
+function renderAutomationLoadingState(project) {
+    renderToolbar(project, {
+        summary: 'Loading automation project...',
+        mode: 'automation',
+        actions: '',
+    });
+    if (els.projectViewContent) {
+        els.projectViewContent.innerHTML = `
+            <div class="workspace-view-grid">
+                <section class="workspace-view-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>Schedule</h3>
+                        <span class="workspace-view-panel-meta">Automation</span>
+                    </div>
+                    ${renderInlineState('Loading automation details...')}
+                </section>
+                <section class="workspace-view-panel workspace-diff-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>Recent Runs</h3>
+                        <span class="workspace-view-panel-meta"></span>
+                    </div>
+                    ${renderInlineState('Loading automation sessions...')}
+                </section>
+            </div>
+        `;
+    }
+}
+
+function renderAutomationErrorState(project, error) {
+    renderToolbar(project, {
+        summary: 'Failed to load automation project',
+        mode: 'automation',
+        actions: '',
+    });
+    if (els.projectViewContent) {
+        els.projectViewContent.innerHTML = `
+            <div class="workspace-view-empty-state is-error">
+                <p>Failed to load automation project.</p>
+                <p>${escapeHtml(String(error?.message || error || ''))}</p>
+            </div>
+        `;
+    }
+}
+
+function renderAutomationProjectView(project, sessions, workspaceRecord = null) {
+    const safeSessions = Array.isArray(sessions) ? sessions : [];
+    const status = String(project?.status || '').trim() || 'unknown';
+    const scheduleMode = String(project?.schedule_mode || '').trim() || 'cron';
+    const scheduleText = scheduleMode === 'one_shot'
+        ? (String(project?.run_at || '').trim() || t('automation.detail.not_scheduled'))
+        : (String(project?.cron_expression || '').trim() || t('automation.detail.not_scheduled'));
+    const cronDescription = scheduleMode === 'one_shot'
+        ? t('automation.cron.one_shot')
+        : describeCronExpression(project?.cron_expression);
+    const timezone = String(project?.timezone || 'UTC').trim() || 'UTC';
+    const workspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
+    const workspaceRootPath = String(workspaceRecord?.root_path || '').trim() || t('automation.workspace.missing');
+    const nextRunAt = String(project?.next_run_at || '').trim() || t('automation.detail.not_scheduled');
+    const lastRunAt = String(project?.last_run_started_at || '').trim() || t('automation.detail.never');
+    const lastError = String(project?.last_error || '').trim() || t('automation.detail.none');
+    const runButtonLabel = t('automation.action.run_now');
+    const toggleButtonLabel = status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable');
+    const statusLabel = t(`automation.status.${status}`);
+
+    renderToolbar(project, {
+        summary: `${statusLabel} - ${safeSessions.length} ${t('automation.detail.session_count')}`,
+        mode: 'automation',
+        actions: `
+            <button class="secondary-btn project-view-toolbar-btn" type="button" data-automation-edit>${escapeHtml(t('automation.action.edit'))}</button>
+            <button class="secondary-btn project-view-toolbar-btn" type="button" data-automation-run>${escapeHtml(runButtonLabel)}</button>
+            <button class="secondary-btn project-view-toolbar-btn" type="button" data-automation-toggle>${escapeHtml(toggleButtonLabel)}</button>
+        `,
+    });
+    if (!els.projectViewContent) {
+        return;
+    }
+
+    els.projectViewContent.innerHTML = `
+        <div class="automation-detail-layout">
+            <section class="workspace-view-panel automation-hero-panel">
+                <div class="automation-hero-grid">
+                    <div class="automation-hero-copy">
+                        <span class="automation-status-pill is-${escapeHtml(status.toLowerCase())}">${escapeHtml(statusLabel)}</span>
+                        <h3>${escapeHtml(t('automation.detail.overview'))}</h3>
+                        <p>${escapeHtml(t('automation.detail.overview_copy'))}</p>
+                    </div>
+                    <div class="automation-stat-grid">
+                        <article class="automation-stat-card automation-stat-card-wide">
+                            <span>${escapeHtml(t('automation.detail.schedule'))}</span>
+                            <strong>${escapeHtml(scheduleText)}</strong>
+                            <p class="automation-stat-note">${escapeHtml(cronDescription)}</p>
+                            <p class="automation-stat-hint">${escapeHtml(t('automation.cron.hint'))}</p>
+                        </article>
+                        <article class="automation-stat-card">
+                            <span>${escapeHtml(t('automation.field.workspace'))}</span>
+                            <strong>${escapeHtml(workspaceId)}</strong>
+                        </article>
+                        <article class="automation-stat-card">
+                            <span>${escapeHtml(t('automation.detail.timezone'))}</span>
+                            <strong>${escapeHtml(timezone)}</strong>
+                        </article>
+                        <article class="automation-stat-card">
+                            <span>${escapeHtml(t('automation.detail.next_run'))}</span>
+                            <strong>${escapeHtml(nextRunAt)}</strong>
+                        </article>
+                        <article class="automation-stat-card">
+                            <span>${escapeHtml(t('automation.detail.last_run'))}</span>
+                            <strong>${escapeHtml(lastRunAt)}</strong>
+                        </article>
+                    </div>
+                </div>
+            </section>
+            <div class="automation-detail-grid">
+                <section class="workspace-view-panel automation-detail-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>${escapeHtml(t('automation.detail.configuration'))}</h3>
+                        <span class="workspace-view-panel-meta">${escapeHtml(scheduleMode)}</span>
+                    </div>
+                    <div class="automation-detail-section">
+                        <div class="automation-detail-row automation-detail-row-block">
+                            <span class="automation-detail-label">${escapeHtml(t('automation.detail.prompt'))}</span>
+                            <div class="automation-prompt-card">${escapeHtml(String(project?.prompt || ''))}</div>
+                        </div>
+                        <div class="automation-detail-row">
+                            <span class="automation-detail-label">${escapeHtml(t('automation.detail.last_error'))}</span>
+                            <span class="automation-detail-value${lastError === t('automation.detail.none') ? '' : ' is-error'}">${escapeHtml(lastError)}</span>
+                        </div>
+                    </div>
+                </section>
+                <section class="workspace-view-panel automation-binding-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>${escapeHtml(t('automation.workspace.title'))}</h3>
+                        <span class="workspace-view-panel-meta">${escapeHtml(workspaceId)}</span>
+                    </div>
+                    <div class="automation-binding-list">
+                        <div class="automation-binding-item">
+                            <span>${escapeHtml(t('automation.field.workspace'))}</span>
+                            <strong>${escapeHtml(workspaceId)}</strong>
+                        </div>
+                        <div class="automation-binding-item">
+                            <span>${escapeHtml(t('automation.workspace.directory'))}</span>
+                            <code>${escapeHtml(workspaceRootPath)}</code>
+                        </div>
+                        <p class="automation-binding-help">${escapeHtml(t('automation.workspace.help'))}</p>
+                    </div>
+                </section>
+            </div>
+            <section class="workspace-view-panel automation-runs-panel">
+                <div class="workspace-view-panel-header">
+                    <h3>${escapeHtml(t('automation.detail.recent_runs'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(safeSessions.length))} ${escapeHtml(t('automation.detail.session_count'))}</span>
+                </div>
+                ${safeSessions.length > 0 ? `
+                    <div class="automation-run-list">
+                        ${safeSessions.map(session => {
+                            const sessionStatus = String(session.active_run_status || 'completed').trim() || 'completed';
+                            const sessionStatusLabel = t(`automation.run_status.${sessionStatus}`);
+                            const sessionTitle = String(session?.metadata?.title || session.session_id || '').trim() || String(session.session_id || '');
+                            return `
+                                <article class="automation-run-card" data-automation-session-id="${escapeHtml(String(session.session_id || ''))}">
+                                    <div class="automation-run-card-header">
+                                        <span class="workspace-diff-status is-modified">${escapeHtml(sessionStatusLabel)}</span>
+                                        <code class="workspace-diff-path">${escapeHtml(sessionTitle)}</code>
+                                    </div>
+                                    <div class="automation-run-card-meta">
+                                        <span>${escapeHtml(t('automation.detail.updated_at'))}</span>
+                                        <strong>${escapeHtml(String(session.updated_at || ''))}</strong>
+                                    </div>
+                                </article>
+                            `;
+                        }).join('')}
+                    </div>
+                ` : renderInlineState(t('automation.detail.no_runs'))}
+            </section>
+        </div>
+    `;
+
+    const editAction = async () => {
+        const nextPayload = await requestAutomationProjectEditInput(project);
+        if (!nextPayload) {
+            return;
+        }
+        await updateAutomationProject(String(project?.automation_project_id || ''), nextPayload);
+        document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
+        await openAutomationProjectView(project);
+    };
+    document.querySelector('[data-automation-edit]')?.addEventListener('click', editAction);
+    const runAction = async () => {
+        const result = await runAutomationProject(String(project?.automation_project_id || ''));
+        if (result?.session_id) {
+            document.dispatchEvent(new CustomEvent('agent-teams-select-session', { detail: { sessionId: result.session_id } }));
+        }
+        await openAutomationProjectView(project);
+    };
+    document.querySelector('[data-automation-run]')?.addEventListener('click', runAction);
+    const toggleAction = async () => {
+        const projectId = String(project?.automation_project_id || '');
+        if (status === 'enabled') {
+            await disableAutomationProject(projectId);
+        } else {
+            await enableAutomationProject(projectId);
+        }
+        await openAutomationProjectView(project);
+    };
+    document.querySelector('[data-automation-toggle]')?.addEventListener('click', toggleAction);
+    els.projectViewContent.querySelectorAll('[data-automation-session-id]').forEach(node => {
+        node.addEventListener('click', () => {
+            const sessionId = String(node.getAttribute('data-automation-session-id') || '').trim();
+            if (!sessionId) return;
+            document.dispatchEvent(new CustomEvent('agent-teams-select-session', { detail: { sessionId } }));
+        });
+    });
+}
+
 function renderLoadingState(workspace) {
     renderToolbar(workspace, {
         summary: t('workspace_view.loading'),
@@ -353,12 +749,37 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
     bindDiffInteractions();
 }
 
-function renderToolbar(workspace, { summary = '' } = {}) {
+function renderToolbar(projectOrWorkspace, { summary = '', mode = 'workspace', actions = '' } = {}) {
     if (els.projectViewTitle) {
-        els.projectViewTitle.textContent = formatWorkspaceTitle(workspace);
+        els.projectViewTitle.textContent = mode === 'automation'
+            ? formatAutomationTitle(projectOrWorkspace)
+            : formatWorkspaceTitle(projectOrWorkspace);
     }
     if (els.projectViewSummary) {
         els.projectViewSummary.textContent = summary;
+    }
+    if (els.projectViewToolbarActions) {
+        els.projectViewToolbarActions.innerHTML = `
+            ${actions || ''}
+            <button id="project-view-reload" class="secondary-btn" type="button" data-project-view-reload>${escapeHtml(t('workspace_view.reload'))}</button>
+            <button id="project-view-close" class="icon-btn" type="button" title="${escapeHtml(t('workspace_view.back'))}" aria-label="${escapeHtml(t('workspace_view.back'))}" data-project-view-close>
+                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                    <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+            </button>
+        `;
+        els.projectViewReloadBtn = els.projectViewToolbarActions.querySelector('[data-project-view-reload]');
+        els.projectViewCloseBtn = els.projectViewToolbarActions.querySelector('[data-project-view-close]');
+        if (els.projectViewReloadBtn) {
+            els.projectViewReloadBtn.onclick = () => {
+                void refreshProjectView();
+            };
+        }
+        if (els.projectViewCloseBtn) {
+            els.projectViewCloseBtn.onclick = () => {
+                hideProjectView();
+            };
+        }
     }
 }
 
@@ -1058,6 +1479,57 @@ function cloneDiffFile(diffFile) {
     };
 }
 
+
+function describeCronExpression(expression) {
+    const cron = String(expression || '').trim();
+    if (!cron) {
+        return t('automation.cron.empty');
+    }
+    const parts = cron.split(/\s+/);
+    if (parts.length !== 5) {
+        return formatTemplate(t('automation.cron.fallback'), { expression: cron });
+    }
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    if (month === '*' && dayOfMonth === '*' && dayOfWeek === '*') {
+        return formatTemplate(t('automation.cron.daily'), {
+            time: formatCronTime(hour, minute),
+        });
+    }
+    if (month === '*' && dayOfMonth === '*' && dayOfWeek !== '*') {
+        return formatTemplate(t('automation.cron.weekly'), {
+            weekday: formatCronWeekday(dayOfWeek),
+            time: formatCronTime(hour, minute),
+        });
+    }
+    if (month === '*' && dayOfMonth !== '*' && dayOfWeek === '*') {
+        return formatTemplate(t('automation.cron.monthly'), {
+            day: dayOfMonth,
+            time: formatCronTime(hour, minute),
+        });
+    }
+    return formatTemplate(t('automation.cron.fallback'), { expression: cron });
+}
+
+function formatCronTime(hour, minute) {
+    const safeHour = /^\d+$/.test(String(hour || '')) ? String(hour).padStart(2, '0') : String(hour || '*');
+    const safeMinute = /^\d+$/.test(String(minute || '')) ? String(minute).padStart(2, '0') : String(minute || '*');
+    return `${safeHour}:${safeMinute}`;
+}
+
+function formatCronWeekday(value) {
+    const map = {
+        '0': t('automation.cron.weekday.sun'),
+        '1': t('automation.cron.weekday.mon'),
+        '2': t('automation.cron.weekday.tue'),
+        '3': t('automation.cron.weekday.wed'),
+        '4': t('automation.cron.weekday.thu'),
+        '5': t('automation.cron.weekday.fri'),
+        '6': t('automation.cron.weekday.sat'),
+        '7': t('automation.cron.weekday.sun'),
+    };
+    return map[String(value || '').trim()] || String(value || '*');
+}
+
 function renderFolderIcon(isExpanded) {
     const folderClass = isExpanded ? 'workspace-tree-icon is-folder-open' : 'workspace-tree-icon is-folder';
     return `
@@ -1078,6 +1550,11 @@ function renderFileIcon() {
             </svg>
         </span>
     `;
+}
+
+function formatAutomationTitle(project) {
+    const label = String(project?.display_name || project?.name || project?.automation_project_id || '').trim();
+    return label ? `${label} Automation` : 'Automation Project';
 }
 
 function formatWorkspaceTitle(workspace) {

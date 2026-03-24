@@ -151,6 +151,10 @@ class TriggerService:
     def get_event(self, event_id: str) -> TriggerEventRecord:
         return self._trigger_repo.get_event(event_id)
 
+    def delete_trigger(self, trigger_id: str) -> None:
+        _ = self._trigger_repo.get_trigger(trigger_id)
+        self._trigger_repo.delete_trigger(trigger_id)
+
     def list_events(
         self,
         trigger_id: str,

@@ -11,6 +11,7 @@ from agent_teams.agents.orchestration.settings_service import (
 )
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from agent_teams.automation import AutomationService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -58,6 +59,10 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
 
 def get_trigger_service(request: Request) -> TriggerService:
     return get_container(request).trigger_service
+
+
+def get_automation_service(request: Request) -> AutomationService:
+    return get_container(request).automation_service
 
 
 def get_feishu_trigger_handler(request: Request) -> FeishuTriggerHandler:

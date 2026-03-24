@@ -103,6 +103,25 @@ export function showTextInputDialog({
     });
 }
 
+export function showFormDialog({
+    title = 'Form',
+    message = '',
+    tone = 'info',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    fields = [],
+} = {}) {
+    return enqueueDialog({
+        kind: 'form',
+        title,
+        message,
+        tone,
+        confirmLabel,
+        cancelLabel,
+        fields: Array.isArray(fields) ? fields : [],
+    });
+}
+
 function enqueueDialog(dialog) {
     ensureHosts();
     return new Promise(resolve => {
@@ -138,6 +157,67 @@ function renderNextDialog() {
                     `
                     : ''
                 }
+                ${activeDialog.kind === 'form'
+                    ? `
+                        <div class="feedback-dialog-form">
+                            ${(Array.isArray(activeDialog.fields) ? activeDialog.fields : []).map((field, index) => {
+                                const fieldId = field.id || `field_${index}`;
+                                const inputLabel = escapeHtml(field.label || fieldId || `Field ${index + 1}`);
+                                const placeholder = escapeHtml(field.placeholder || '');
+                                const fieldValue = field.value ?? '';
+                                const fieldType = String(field.type || '').trim().toLowerCase();
+                                if (fieldType === 'checkbox') {
+                                    return `
+                                        <label class="feedback-dialog-input-wrap feedback-dialog-checkbox-wrap">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            <span class="feedback-dialog-checkbox">
+                                                <input type="checkbox" class="feedback-dialog-checkbox-input" data-feedback-form-input="${escapeHtml(fieldId)}" ${fieldValue === true ? 'checked' : ''} />
+                                                <span class="feedback-dialog-checkbox-copy">${escapeHtml(field.description || 'Enable this automation after creation.')}</span>
+                                            </span>
+                                        </label>
+                                    `;
+                                }
+                                const fieldCopy = field.description
+                                    ? `<span class="feedback-dialog-field-copy">${escapeHtml(field.description)}</span>`
+                                    : '';
+                                if (fieldType === 'select') {
+                                    const options = Array.isArray(field.options) ? field.options : [];
+                                    return `
+                                        <label class="feedback-dialog-input-wrap">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            ${fieldCopy}
+                                            <select class="feedback-dialog-input feedback-dialog-select" data-feedback-form-input="${escapeHtml(fieldId)}">
+                                                ${options.map(option => {
+                                                    const optionValue = String(option?.value ?? '');
+                                                    const optionLabel = escapeHtml(option?.label || optionValue);
+                                                    const selected = optionValue === String(fieldValue ?? '') ? 'selected' : '';
+                                                    return `<option value="${escapeHtml(optionValue)}" ${selected}>${optionLabel}</option>`;
+                                                }).join('')}
+                                            </select>
+                                        </label>
+                                    `;
+                                }
+                                if (String(field.multiline || '').trim() === 'true' || field.multiline === true || fieldType === 'textarea') {
+                                    return `
+                                        <label class="feedback-dialog-input-wrap">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            ${fieldCopy}
+                                            <textarea class="feedback-dialog-input feedback-dialog-textarea" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}">${escapeHtml(fieldValue)}</textarea>
+                                        </label>
+                                    `;
+                                }
+                                return `
+                                    <label class="feedback-dialog-input-wrap">
+                                        <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                        ${fieldCopy}
+                                        <input type="text" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" />
+                                    </label>
+                                `;
+                            }).join('')}
+                        </div>
+                    `
+                    : ''
+                }
                 <div class="feedback-dialog-actions">
                     ${activeDialog.kind !== 'alert'
                         ? `<button type="button" class="secondary-btn feedback-action-btn" data-feedback-cancel>${escapeHtml(activeDialog.cancelLabel || 'Cancel')}</button>`
@@ -154,17 +234,32 @@ function renderNextDialog() {
     const confirmBtn = hosts.dialogRoot.querySelector('[data-feedback-confirm]');
     const cancelBtn = hosts.dialogRoot.querySelector('[data-feedback-cancel]');
     const input = hosts.dialogRoot.querySelector('[data-feedback-input]');
+    const formInputs = Array.from(hosts.dialogRoot.querySelectorAll('[data-feedback-form-input]'));
     if (confirmBtn) {
         confirmBtn.onclick = () => {
             if (activeDialog?.kind === 'prompt') {
                 settleDialog(String(input?.value || '').trim());
                 return;
             }
+            if (activeDialog?.kind === 'form') {
+                const payload = {};
+                formInputs.forEach(node => {
+                    const key = String(node.getAttribute('data-feedback-form-input') || '').trim();
+                    if (!key) return;
+                    if (node instanceof HTMLInputElement && node.type === 'checkbox') {
+                        payload[key] = node.checked;
+                        return;
+                    }
+                    payload[key] = String(node.value || '').trim();
+                });
+                settleDialog(payload);
+                return;
+            }
             settleDialog(true);
         };
     }
     if (cancelBtn) {
-        cancelBtn.onclick = () => settleDialog(activeDialog?.kind === 'prompt' ? null : false);
+        cancelBtn.onclick = () => settleDialog(activeDialog?.kind === 'prompt' || activeDialog?.kind === 'form' ? null : false);
     }
     if (backdrop) {
         backdrop.onclick = event => {
@@ -173,7 +268,7 @@ function renderNextDialog() {
                 settleDialog(true);
                 return;
             }
-            settleDialog(activeDialog?.kind === 'prompt' ? null : false);
+            settleDialog(activeDialog?.kind === 'prompt' || activeDialog?.kind === 'form' ? null : false);
         };
     }
     if (input) {
@@ -185,6 +280,18 @@ function renderNextDialog() {
         };
         input.focus();
         input.select?.();
+    } else if (formInputs.length > 0) {
+        formInputs.forEach(node => {
+            node.onkeydown = event => {
+                const tagName = String(node.tagName || '').toUpperCase();
+                if (event.key === 'Enter' && tagName !== 'TEXTAREA' && tagName !== 'SELECT') {
+                    event.preventDefault();
+                    confirmBtn?.click();
+                }
+            };
+        });
+        formInputs[0].focus();
+        formInputs[0].select?.();
     } else if (confirmBtn) {
         confirmBtn.focus();
     }
@@ -235,7 +342,7 @@ function bindEscapeHandler() {
             settleDialog(true);
             return;
         }
-        settleDialog(activeDialog.kind === 'prompt' ? null : false);
+        settleDialog(activeDialog.kind === 'prompt' || activeDialog.kind === 'form' ? null : false);
     });
     escapeHandlerBound = true;
 }

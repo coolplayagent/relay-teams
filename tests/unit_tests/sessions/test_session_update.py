@@ -103,6 +103,7 @@ def test_update_session_raises_for_unknown_session(tmp_path: Path) -> None:
         service.update_session("missing-session", {"title": "Nope"})
 
 
+
 def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> None:
     db_path = tmp_path / "session_update_auto_title.db"
     service = _build_service(db_path)
@@ -115,7 +116,7 @@ def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> 
     service.update_session(
         "session-1",
         {
-            "title": "Feishu Bot · Ops",
+            "title": "Feishu Bot ? Ops",
             SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_AUTO,
         },
     )
@@ -123,7 +124,7 @@ def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> 
     updated = service.get_session("session-1")
 
     assert updated.metadata == {
-        "title": "Feishu Bot · Ops",
+        "title": "Feishu Bot ? Ops",
         SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_AUTO,
     }
 
@@ -172,3 +173,16 @@ def test_update_session_topology_persists_normal_root_role(tmp_path: Path) -> No
     )
 
     assert updated.normal_root_role_id == "Crafter"
+
+
+def test_create_session_defaults_project_scope_to_workspace(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_project_scope.db"
+    service = _build_service(db_path)
+
+    created = service.create_session(
+        session_id="session-project-1",
+        workspace_id="default",
+    )
+
+    assert created.project_kind.value == "workspace"
+    assert created.project_id == "default"

@@ -1356,12 +1356,13 @@
 }
 
 .feedback-dialog {
-    width: min(420px, 100%);
+    width: min(760px, calc(100vw - 2rem));
+    max-height: min(88vh, 900px);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: 16px;
     background: var(--bg-surface);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
-    overflow: hidden;
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.22);
+    overflow: auto;
 }
 
 .feedback-dialog-header {
@@ -1395,6 +1396,69 @@
     color: var(--text-primary);
     padding: 0.72rem 0.8rem;
     font: inherit;
+}
+
+.feedback-dialog-form {
+    display: grid;
+    gap: 0.55rem;
+    padding-bottom: 0.35rem;
+}
+
+.feedback-dialog-input-label {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 0.35rem;
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+.feedback-dialog-field-copy {
+    display: block;
+    margin-bottom: 0.45rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.feedback-dialog-textarea {
+    min-height: 132px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+.feedback-dialog-select {
+    appearance: none;
+    cursor: pointer;
+}
+
+.feedback-dialog-checkbox-wrap {
+    gap: 0.2rem;
+}
+
+.feedback-dialog-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-surface-muted);
+}
+
+.feedback-dialog-checkbox-input {
+    width: 16px;
+    height: 16px;
+    margin-top: 0.1rem;
+    accent-color: var(--primary);
+    flex: 0 0 auto;
+}
+
+.feedback-dialog-checkbox-copy {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
 }
 
 .feedback-dialog-input:focus {
@@ -5277,6 +5341,69 @@ body.light-theme .project-session-toggle-btn {
     color: var(--danger);
 }
 
+.projects-list .project-menu-workspace,
+.projects-list .project-menu-automation {
+    min-width: 13.5rem;
+    padding: 0.45rem;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    box-shadow: 0 14px 30px rgba(17, 19, 18, 0.14);
+    backdrop-filter: blur(10px);
+}
+
+.projects-list .project-workspace-menu-btn,
+
+.projects-list .project-workspace-menu-btn,
+.projects-list .project-run-automation-btn,
+.projects-list .project-toggle-automation-btn,
+.projects-list .project-remove-automation-btn {
+    width: 100%;
+    min-height: 36px;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.12s ease;
+}
+
+.projects-list .project-workspace-menu-btn:hover,
+.projects-list .project-run-automation-btn:hover,
+.projects-list .project-toggle-automation-btn:hover,
+.projects-list .project-remove-automation-btn:hover {
+    background: color-mix(in srgb, var(--primary) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--primary) 20%, transparent);
+    transform: translateY(-1px);
+}
+
+.projects-list .project-remove-automation-btn:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.projects-list .project-menu-icon {
+    width: 1.65rem;
+    height: 1.65rem;
+    flex: 0 0 1.65rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-hover) 86%, transparent);
+    color: inherit;
+}
+
+.projects-list .project-menu-automation .icon-sm {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
 .projects-list .project-body {
     padding: 0;
     border-top: none;
@@ -6803,6 +6930,12 @@ body.observability-mode #round-nav-float {
     display: flex;
     align-items: center;
     gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.project-view-toolbar-btn {
+    width: auto;
+    min-width: 104px;
 }
 
 .project-view-content {
@@ -7253,4 +7386,273 @@ body.observability-mode #round-nav-float {
         width: 100%;
         justify-content: flex-end;
     }
+}
+
+
+.automation-detail-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.automation-hero-panel {
+    padding: 1.15rem;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 30%),
+        linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 94%, transparent), color-mix(in srgb, var(--bg-base) 96%, transparent));
+}
+
+.automation-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.3fr);
+    gap: 1rem;
+    align-items: stretch;
+}
+
+.automation-hero-copy h3 {
+    margin: 0.55rem 0 0.45rem;
+    font-size: 1.12rem;
+}
+
+.automation-hero-copy p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.automation-status-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.7rem;
+    padding: 0.16rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+
+.automation-status-pill.is-enabled {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+    border-color: color-mix(in srgb, var(--success) 28%, transparent);
+}
+
+.automation-status-pill.is-disabled,
+.automation-status-pill.is-unknown {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+    border-color: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.automation-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+
+.automation-stat-card,
+.automation-run-card {
+    border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+    padding: 0.95rem 1rem;
+}
+
+.automation-stat-card span,
+.automation-detail-label,
+.automation-run-card-meta span {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.automation-stat-card strong,
+.automation-run-card-meta strong {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.automation-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(300px, 1fr) minmax(280px, 0.95fr);
+    gap: 1rem;
+}
+
+.automation-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.automation-detail-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.automation-detail-row-block {
+    gap: 0.6rem;
+}
+
+.automation-detail-value {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.automation-detail-value.is-error {
+    color: var(--danger);
+}
+
+.automation-prompt-card {
+    padding: 0.95rem 1rem;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-base) 94%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    color: var(--text-primary);
+    line-height: 1.7;
+    white-space: pre-wrap;
+}
+
+.automation-run-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 1rem;
+}
+
+.automation-run-card {
+    cursor: pointer;
+    transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.automation-run-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border-color));
+    box-shadow: 0 12px 32px -26px rgba(15, 23, 42, 0.7);
+}
+
+.automation-run-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.automation-run-card-meta {
+    margin-top: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+}
+
+@media (max-width: 960px) {
+    .automation-hero-grid,
+    .automation-detail-grid,
+    .automation-stat-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+.automation-stat-card-wide {
+    grid-column: span 2;
+}
+
+.automation-stat-note {
+    margin: 0.55rem 0 0;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.automation-stat-hint {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+    .automation-stat-card-wide {
+        grid-column: span 1;
+    }
+}
+
+
+.feedback-dialog-input-wrap {
+    padding: 0.95rem 1.15rem 0;
+}
+
+.feedback-dialog-header {
+    padding: 1.15rem 1.15rem 0;
+}
+
+.feedback-dialog-body {
+    padding: 0.6rem 1.15rem 0;
+}
+
+.feedback-dialog-actions {
+    padding: 1.15rem;
+}
+
+.automation-detail-grid {
+    grid-template-columns: minmax(320px, 1.15fr) minmax(320px, 0.95fr);
+    align-items: start;
+}
+
+.automation-binding-panel {
+    padding-bottom: 0.2rem;
+}
+
+.automation-binding-list {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1rem;
+}
+
+.automation-binding-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.automation-binding-item span {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.automation-binding-item strong,
+.automation-binding-item code {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.automation-binding-item code {
+    padding: 0.8rem 0.9rem;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--bg-base) 94%, transparent);
+    font-family: var(--font-mono);
+}
+
+.automation-binding-help {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.55;
+}
+
+.projects-list .project-remove-workspace-btn:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--danger) 22%, transparent);
 }

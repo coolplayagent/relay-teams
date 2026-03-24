@@ -5,6 +5,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
+from agent_teams.automation import (
+    AutomationProjectRepository,
+    AutomationSchedulerService,
+    AutomationService,
+)
 from agent_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -243,6 +248,9 @@ class ServerContainer:
             workspace_service=self.workspace_service,
             external_session_binding_repo=self.external_session_binding_repo,
         )
+        self.automation_repo: AutomationProjectRepository = AutomationProjectRepository(
+            runtime.paths.db_path
+        )
         self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
             runtime.paths.db_path
         )
@@ -373,6 +381,15 @@ class ServerContainer:
             feishu_config_service=self.feishu_trigger_config_service,
             event_handler=self.feishu_trigger_handler,
         )
+        self.automation_service: AutomationService = AutomationService(
+            repository=self.automation_repo,
+            trigger_service=self.trigger_service,
+            session_service=self.session_service,
+            run_service=self.run_service,
+        )
+        self.automation_scheduler_service: AutomationSchedulerService = (
+            AutomationSchedulerService(automation_service=self.automation_service)
+        )
         self.config_status_service: ConfigStatusService = ConfigStatusService(
             get_runtime=lambda: self.runtime,
             get_mcp_registry=lambda: self.mcp_registry,
@@ -500,9 +517,13 @@ class ServerContainer:
 
     async def start(self) -> None:
         self.feishu_subscription_service.start()
+        await self.automation_scheduler_service.start()
+        return None
 
     async def stop(self) -> None:
+        await self.automation_scheduler_service.stop()
         self.feishu_subscription_service.stop()
+        return None
 
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()

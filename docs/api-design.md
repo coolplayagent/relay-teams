@@ -1065,3 +1065,76 @@ Returns observability KPIs and trend buckets for `scope=global|session|run`. Non
 ### `GET /observability/breakdowns`
 
 Returns tool-level breakdown rows for `scope=global|session|run`. Non-global scopes require `scope_id`.
+
+## Automation APIs
+
+### `GET /automation/projects`
+
+Returns all automation projects.
+Each record includes:
+- `automation_project_id`
+- `name`
+- `display_name`
+- `status`: `enabled` or `disabled`
+- `prompt`
+- `schedule_mode`: `cron` or `one_shot`
+- `cron_expression`
+- `run_at`
+- `timezone`
+- `run_config`
+- `trigger_id`
+- `last_session_id`
+- `last_run_started_at`
+- `last_error`
+- `next_run_at`
+
+### `POST /automation/projects`
+
+Creates an automation project and a backing schedule trigger.
+Request fields:
+- `name`
+- `display_name` optional
+- `prompt`
+- `schedule_mode`
+- `cron_expression` for `cron`
+- `run_at` for `one_shot`
+- `timezone`
+- `run_config`
+- `enabled`
+
+### `GET /automation/projects/{automation_project_id}`
+
+Returns one automation project.
+
+### `PATCH /automation/projects/{automation_project_id}`
+
+Updates automation project definition, schedule, and stored run config.
+
+### `DELETE /automation/projects/{automation_project_id}`
+
+Deletes the automation project and its backing trigger. Historical sessions are preserved.
+
+### `POST /automation/projects/{automation_project_id}:run`
+
+Creates a new session for that automation project and starts the run immediately.
+Response fields:
+- `automation_project_id`
+- `session_id`
+
+### `POST /automation/projects/{automation_project_id}:enable`
+
+Enables scheduling and recomputes `next_run_at`.
+
+### `POST /automation/projects/{automation_project_id}:disable`
+
+Disables scheduling and clears `next_run_at`.
+
+### `GET /automation/projects/{automation_project_id}/sessions`
+
+Returns sessions generated for one automation project.
+
+## Session Projection Additions
+
+`GET /sessions` and `GET /sessions/{session_id}` now also include:
+- `project_kind`: `workspace` or `automation`
+- `project_id`: workspace id or automation project id used by the sidebar grouping logic

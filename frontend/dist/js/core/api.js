@@ -77,4 +77,13 @@ export {
     fetchWorkspaces,
     forkWorkspace,
     pickWorkspace,
+    createAutomationProject,
+    deleteAutomationProject,
+    disableAutomationProject,
+    enableAutomationProject,
+    fetchAutomationProject,
+    fetchAutomationProjectSessions,
+    fetchAutomationProjects,
+    runAutomationProject,
+    updateAutomationProject,
 } from './api/index.js';

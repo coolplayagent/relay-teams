@@ -19,6 +19,7 @@ export const els = {
     projectView: qs('#project-view'),
     projectViewTitle: qs('#project-view-title'),
     projectViewSummary: qs('#project-view-summary'),
+    projectViewToolbarActions: qs('.project-view-toolbar-actions'),
     projectViewContent: qs('#project-view-content'),
     projectViewReloadBtn: qs('#project-view-reload'),
     projectViewCloseBtn: qs('#project-view-close'),

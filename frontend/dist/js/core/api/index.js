@@ -100,3 +100,15 @@ export {
     fetchObservabilityOverview,
 } from './observability.js';
 
+
+export {
+    createAutomationProject,
+    deleteAutomationProject,
+    disableAutomationProject,
+    enableAutomationProject,
+    fetchAutomationProject,
+    fetchAutomationProjectSessions,
+    fetchAutomationProjects,
+    runAutomationProject,
+    updateAutomationProject,
+} from './automation.js';
