@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from agent_teams.feishu.models import (
@@ -8,8 +9,12 @@ from agent_teams.feishu.models import (
     FeishuTriggerRuntimeConfig,
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
+    TriggerProcessingResult,
 )
-from agent_teams.feishu.subscription_service import FeishuSubscriptionService
+from agent_teams.feishu.subscription_service import (
+    FeishuSubscriptionService,
+    _FeishuWsHub,
+)
 from agent_teams.triggers import (
     TriggerAuthMode,
     TriggerAuthPolicy,
@@ -76,8 +81,9 @@ class _FakeFeishuConfigService:
 
     def list_enabled_runtime_configs(
         self,
-        _triggers: tuple[TriggerDefinition, ...] | list[TriggerDefinition],
+        triggers: tuple[TriggerDefinition, ...] | list[TriggerDefinition],
     ) -> tuple[FeishuTriggerRuntimeConfig, ...]:
+        _ = triggers
         return self.runtime_configs
 
 
@@ -97,7 +103,44 @@ class _FakeRunner:
 
 
 class _FakeHandler:
-    pass
+    def handle_sdk_event(self, **_kwargs: object) -> TriggerProcessingResult:
+        return TriggerProcessingResult(
+            status="ignored",
+            trigger_id="trg_test",
+            ignored=True,
+            reason="test",
+        )
+
+
+class _FakeShutdownableRunnerFactory:
+    def __init__(self, runner: _FakeRunner) -> None:
+        self._runner = runner
+        self.shutdown_calls = 0
+
+    def __call__(self, **_kwargs: object) -> _FakeRunner:
+        return self._runner
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
+class _FakeAsyncController:
+    def __init__(self, *, trigger_id: str) -> None:
+        self.trigger_id = trigger_id
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        await asyncio.sleep(0)
+        self.started = True
+        self.stopped = False
+
+    async def stop(self) -> None:
+        await asyncio.sleep(0)
+        self.stopped = True
+
+    def is_running(self) -> bool:
+        return self.started and not self.stopped
 
 
 def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
@@ -146,7 +189,6 @@ def test_subscription_service_reloads_only_changed_bot_runner() -> None:
         (_build_runtime(trigger, app_secret="secret-a"),),
         (_build_runtime(trigger, app_secret="secret-b"),),
     ]
-    runtime_index = {"value": 0}
 
     service = FeishuSubscriptionService(
         trigger_service=_FakeTriggerService(trigger),
@@ -189,3 +231,82 @@ def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
 
     assert runner.started is True
     assert runner.stopped is True
+
+
+def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_a",
+        name="bot_a",
+        app_id="cli_a",
+        app_name="bot-a",
+    )
+    runner = _FakeRunner()
+    runner_factory = _FakeShutdownableRunnerFactory(runner)
+    service = FeishuSubscriptionService(
+        trigger_service=_FakeTriggerService(trigger),
+        feishu_config_service=_FakeFeishuConfigService(
+            (_build_runtime(trigger, app_secret="secret-a"),)
+        ),
+        event_handler=_FakeHandler(),
+        runner_factory=runner_factory,
+    )
+
+    service.start()
+    service.stop()
+
+    assert runner.started is True
+    assert runner.stopped is True
+    assert runner_factory.shutdown_calls == 1
+
+
+def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots() -> None:
+    trigger_a = _build_trigger(
+        trigger_id="trg_a",
+        name="bot_a",
+        app_id="cli_a",
+        app_name="bot-a",
+    )
+    trigger_b = _build_trigger(
+        trigger_id="trg_b",
+        name="bot_b",
+        app_id="cli_b",
+        app_name="bot-b",
+    )
+    runtime_a = _build_runtime(trigger_a, app_secret="secret-a")
+    runtime_b = _build_runtime(trigger_b, app_secret="secret-b")
+    created_controllers: dict[str, _FakeAsyncController] = {}
+
+    def _controller_factory(
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        event_handler: object,
+    ) -> _FakeAsyncController:
+        _ = event_handler
+        controller = _FakeAsyncController(trigger_id=runtime_config.trigger_id)
+        created_controllers[runtime_config.trigger_id] = controller
+        return controller
+
+    hub = _FeishuWsHub(controller_factory=_controller_factory)
+
+    hub.start_client(runtime_config=runtime_a, event_handler=_FakeHandler())
+    thread = hub._thread
+    hub.start_client(runtime_config=runtime_b, event_handler=_FakeHandler())
+
+    assert thread is not None
+    assert hub._thread is thread
+    assert hub.is_client_active("trg_a") is True
+    assert hub.is_client_active("trg_b") is True
+    assert created_controllers["trg_a"].started is True
+    assert created_controllers["trg_b"].started is True
+
+    hub.stop_client("trg_a")
+
+    assert hub.is_client_active("trg_a") is False
+    assert hub.is_client_active("trg_b") is True
+    assert created_controllers["trg_a"].stopped is True
+    assert created_controllers["trg_b"].stopped is False
+
+    hub.shutdown()
+
+    assert created_controllers["trg_b"].stopped is True
+    assert hub._thread is None
