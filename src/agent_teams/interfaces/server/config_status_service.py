@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 from collections.abc import Callable
 
+from pydantic import JsonValue
+from typing import cast
+
+from agent_teams.mcp.mcp_models import McpConfigScope
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
-
 from agent_teams.skills.skill_registry import SkillRegistry
 
 
@@ -29,19 +30,34 @@ class ConfigStatusService:
         runtime = self._get_runtime()
         mcp_registry = self._get_mcp_registry()
         skill_registry = self._get_skill_registry()
-        return {
-            "model": {
-                "loaded": runtime.model_status.loaded,
-                "profiles": list(runtime.model_status.profiles),
-                "error": runtime.model_status.error,
-            },
-            "mcp": {
-                "loaded": True,
-                "servers": list(mcp_registry.list_names()),
-            },
-            "skills": {
-                "loaded": True,
-                "skills": list(skill_registry.list_names()),
-            },
+        app_mcp_server_names = [
+            spec.name
+            for spec in mcp_registry.list_specs()
+            if spec.source == McpConfigScope.APP
+        ]
+        status: dict[str, JsonValue] = {
+            "model": cast(
+                JsonValue,
+                {
+                    "loaded": runtime.model_status.loaded,
+                    "profiles": list(runtime.model_status.profiles),
+                    "error": runtime.model_status.error,
+                },
+            ),
+            "mcp": cast(
+                JsonValue,
+                {
+                    "loaded": True,
+                    "servers": app_mcp_server_names,
+                },
+            ),
+            "skills": cast(
+                JsonValue,
+                {
+                    "loaded": True,
+                    "skills": list(skill_registry.list_names()),
+                },
+            ),
             "proxy": self._get_proxy_status(),
         }
+        return status
