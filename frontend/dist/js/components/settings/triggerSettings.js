@@ -22,6 +22,7 @@ const DEFAULT_TRIGGER_RULE = 'mention_only';
 const DEFAULT_WORKSPACE_ID = 'default';
 const DEFAULT_SESSION_MODE = 'normal';
 const DEFAULT_THINKING_EFFORT = 'medium';
+const MASKED_SECRET_PLACEHOLDER = '************';
 
 let handlersBound = false;
 let languageBound = false;
@@ -103,6 +104,7 @@ function normalizeFeishuTriggers(payload) {
             status: String(trigger?.status || 'disabled').trim() || 'disabled',
             source_config: trigger?.source_config && typeof trigger.source_config === 'object' ? { ...trigger.source_config } : {},
             target_config: trigger?.target_config && typeof trigger.target_config === 'object' ? { ...trigger.target_config } : {},
+            secret_config: trigger?.secret_config && typeof trigger.secret_config === 'object' ? { ...trigger.secret_config } : {},
             secret_status: trigger?.secret_status && typeof trigger.secret_status === 'object' ? { ...trigger.secret_status } : {},
         }));
 }
@@ -309,7 +311,15 @@ function renderEditor() {
                             </div>
                             <div class="form-group">
                                 <label for="feishu-app-secret-input">${escapeHtml(t('settings.triggers.feishu_app_secret'))}</label>
-                                <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
+                                <div class="secure-input-row">
+                                    <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus.app_secret_configured ? MASKED_SECRET_PLACEHOLDER : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
+                                    <button class="secure-input-btn" id="toggle-feishu-app-secret-btn" type="button" title="Show App Secret" aria-label="Show App Secret" style="display:none;">
+                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </section>
@@ -381,7 +391,6 @@ function bindDraftInputs() {
         'feishu-trigger-name-input',
         'feishu-app-name-input',
         'feishu-app-id-input',
-        'feishu-app-secret-input',
         'feishu-trigger-workspace-id-input',
         'feishu-trigger-rule-input',
         'feishu-session-mode-input',
@@ -398,6 +407,19 @@ function bindDraftInputs() {
         input.oninput = syncEditorVisibility;
         input.onchange = syncEditorVisibility;
     });
+
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    if (appSecretInput) {
+        appSecretInput.oninput = handleDraftAppSecretInput;
+        appSecretInput.onchange = handleDraftAppSecretInput;
+    }
+
+    const toggleAppSecretBtn = document.getElementById('toggle-feishu-app-secret-btn');
+    if (toggleAppSecretBtn) {
+        toggleAppSecretBtn.onclick = toggleDraftAppSecretVisibility;
+    }
+
+    renderDraftAppSecretField();
 }
 
 function syncEditorVisibility() {
@@ -442,6 +464,7 @@ function handleAddTrigger() {
             yolo: true,
             thinking: { enabled: false, effort: null },
         },
+        secret_config: {},
         secret_status: {},
     };
     renderTriggerSettingsPanel();
@@ -462,6 +485,7 @@ function openTriggerEditor(triggerId) {
         status: trigger.status,
         source_config: { ...trigger.source_config },
         target_config: { ...trigger.target_config },
+        secret_config: { ...trigger.secret_config },
         secret_status: { ...trigger.secret_status },
     };
     renderTriggerSettingsPanel();
@@ -561,7 +585,7 @@ function readDraftFromInputs() {
     }
     const appId = readValue('feishu-app-id-input');
     const appName = readValue('feishu-app-name-input');
-    const appSecret = readValue('feishu-app-secret-input');
+    const appSecret = readDraftAppSecretValue();
     const name = readValue('feishu-trigger-name-input');
     const workspaceId = readValue('feishu-trigger-workspace-id-input');
     const sessionMode = readValue('feishu-session-mode-input') || DEFAULT_SESSION_MODE;
@@ -837,6 +861,117 @@ function syncThinkingVisibility() {
     const effortField = document.getElementById('feishu-thinking-effort-field');
     if (effortField) {
         effortField.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function createDraftAppSecretState(secretConfig, secretStatus) {
+    const persistedValue = typeof secretConfig?.app_secret === 'string' ? secretConfig.app_secret : '';
+    const hasPersistedValue = Boolean(persistedValue) || secretStatus?.app_secret_configured === true;
+    return {
+        persistedValue,
+        draftValue: '',
+        hasPersistedValue,
+        isDirty: false,
+        revealed: false,
+    };
+}
+
+function getDraftAppSecretState() {
+    if (!state.editingTriggerDraft) {
+        return createDraftAppSecretState({}, {});
+    }
+    if (!state.editingTriggerDraft.__appSecretState) {
+        state.editingTriggerDraft.__appSecretState = createDraftAppSecretState(
+            state.editingTriggerDraft.secret_config || {},
+            state.editingTriggerDraft.secret_status || {},
+        );
+    }
+    return state.editingTriggerDraft.__appSecretState;
+}
+
+function handleDraftAppSecretInput() {
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    const appSecretState = getDraftAppSecretState();
+    const nextValue = appSecretInput ? appSecretInput.value : '';
+    appSecretState.draftValue = nextValue;
+    appSecretState.isDirty = nextValue.trim().length > 0;
+    if (!appSecretState.isDirty) {
+        appSecretState.revealed = false;
+    }
+    renderDraftAppSecretField();
+    syncEditorVisibility();
+}
+
+function toggleDraftAppSecretVisibility() {
+    const appSecretState = getDraftAppSecretState();
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    if (!appSecretInput) {
+        return;
+    }
+    const hasValue = appSecretState.hasPersistedValue || Boolean(appSecretState.draftValue.trim()) || Boolean(appSecretInput.value.trim());
+    if (!hasValue) {
+        return;
+    }
+    appSecretState.revealed = !appSecretState.revealed;
+    renderDraftAppSecretField();
+    if (typeof appSecretInput.focus === 'function') {
+        appSecretInput.focus();
+    }
+}
+
+function readDraftAppSecretValue() {
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    const inputValue = appSecretInput ? appSecretInput.value.trim() : '';
+    const appSecretState = getDraftAppSecretState();
+    if (!appSecretState.hasPersistedValue) {
+        return inputValue || appSecretState.draftValue.trim();
+    }
+    if (appSecretState.isDirty || inputValue) {
+        return inputValue || appSecretState.draftValue.trim();
+    }
+    return '';
+}
+
+function renderDraftAppSecretField() {
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    if (!appSecretInput) {
+        return;
+    }
+    const appSecretState = getDraftAppSecretState();
+    if (appSecretState.revealed) {
+        appSecretInput.type = 'text';
+        appSecretInput.value = appSecretState.isDirty
+            ? appSecretState.draftValue
+            : appSecretState.persistedValue;
+        appSecretInput.placeholder = '';
+    } else if (appSecretState.hasPersistedValue && !appSecretState.isDirty) {
+        appSecretInput.type = 'password';
+        appSecretInput.value = '';
+        appSecretInput.placeholder = MASKED_SECRET_PLACEHOLDER;
+    } else {
+        appSecretInput.type = 'password';
+        appSecretInput.value = appSecretState.draftValue;
+        appSecretInput.placeholder = t('settings.triggers.feishu_app_secret_placeholder');
+    }
+    renderDraftAppSecretToggle();
+}
+
+function renderDraftAppSecretToggle() {
+    const toggleAppSecretBtn = document.getElementById('toggle-feishu-app-secret-btn');
+    const appSecretInput = document.getElementById('feishu-app-secret-input');
+    if (!toggleAppSecretBtn) {
+        return;
+    }
+    const appSecretState = getDraftAppSecretState();
+    const inputValue = appSecretInput ? appSecretInput.value.trim() : '';
+    const hasValue = appSecretState.hasPersistedValue || Boolean(appSecretState.draftValue.trim()) || Boolean(inputValue);
+    toggleAppSecretBtn.style.display = hasValue ? 'inline-flex' : 'none';
+    toggleAppSecretBtn.className = appSecretState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleAppSecretBtn.title = appSecretState.revealed ? 'Hide App Secret' : 'Show App Secret';
+    if (typeof toggleAppSecretBtn.setAttribute === 'function') {
+        toggleAppSecretBtn.setAttribute('aria-label', toggleAppSecretBtn.title);
+    } else {
+        toggleAppSecretBtn.ariaLabel = toggleAppSecretBtn.title;
     }
 }
 

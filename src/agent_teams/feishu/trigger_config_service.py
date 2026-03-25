@@ -63,16 +63,26 @@ class FeishuTriggerConfigService:
 
     def is_feishu_trigger(self, trigger: TriggerDefinition) -> bool:
         provider = str(trigger.source_config.get("provider", "")).strip().lower()
-        return trigger.source_type == TriggerSourceType.IM and provider == FEISHU_PLATFORM
+        return (
+            trigger.source_type == TriggerSourceType.IM and provider == FEISHU_PLATFORM
+        )
 
     def attach_secret_status(self, trigger: TriggerDefinition) -> TriggerDefinition:
         if not self.is_feishu_trigger(trigger):
             return trigger
+        secret_config = self._secret_store.get_secret_config(
+            self._config_dir,
+            trigger.trigger_id,
+        )
         return trigger.model_copy(
             update={
+                "secret_config": secret_config.model_dump(
+                    mode="json", exclude_none=True
+                )
+                or None,
                 "secret_status": self.get_secret_status(trigger.trigger_id).model_dump(
                     mode="json"
-                )
+                ),
             }
         )
 
@@ -83,7 +93,9 @@ class FeishuTriggerConfigService:
         return tuple(self.attach_secret_status(trigger) for trigger in triggers)
 
     def get_secret_status(self, trigger_id: str) -> FeishuTriggerSecretStatus:
-        secret_config = self._secret_store.get_secret_config(self._config_dir, trigger_id)
+        secret_config = self._secret_store.get_secret_config(
+            self._config_dir, trigger_id
+        )
         return FeishuTriggerSecretStatus(
             app_secret_configured=secret_config.app_secret is not None,
             verification_token_configured=secret_config.verification_token is not None,

@@ -174,7 +174,10 @@ class _FakeFeishuTriggerConfigService:
 
     def attach_secret_status(self, trigger: TriggerDefinition) -> TriggerDefinition:
         return trigger.model_copy(
-            update={"secret_status": {"app_secret_configured": True}}
+            update={
+                "secret_config": {"app_secret": "secret-demo"},
+                "secret_status": {"app_secret_configured": True},
+            }
         )
 
     def attach_secret_statuses(
@@ -312,6 +315,7 @@ def test_trigger_router_reloads_feishu_subscription_on_feishu_trigger_create() -
     assert feishu_config_service.saved_secret_calls == [
         ("trg_feishu", {"app_secret": "secret-demo"}, True)
     ]
+    assert response.json()["secret_config"]["app_secret"] == "secret-demo"
     assert response.json()["secret_status"]["app_secret_configured"] is True
 
 
@@ -350,7 +354,9 @@ def test_trigger_router_clears_bindings_when_feishu_runtime_settings_change() ->
             target_config = getattr(req, "target_config", None)
             if target_config is None:
                 return self.trigger
-            self.trigger = self.trigger.model_copy(update={"target_config": target_config})
+            self.trigger = self.trigger.model_copy(
+                update={"target_config": target_config}
+            )
             return self.trigger
 
     subscription_service = _FakeFeishuSubscriptionService()
@@ -379,7 +385,9 @@ def test_trigger_router_clears_bindings_when_feishu_runtime_settings_change() ->
     assert feishu_config_service.cleared_trigger_ids == ["trg_feishu"]
 
 
-def test_trigger_router_reloads_feishu_subscription_when_runtime_credentials_change() -> None:
+def test_trigger_router_reloads_feishu_subscription_when_runtime_credentials_change() -> (
+    None
+):
     now = datetime.now(tz=UTC)
     trigger = TriggerDefinition(
         trigger_id="trg_feishu",
@@ -411,7 +419,9 @@ def test_trigger_router_reloads_feishu_subscription_when_runtime_credentials_cha
             updated_source_config = (
                 self.trigger.source_config if source_config is None else source_config
             )
-            self.trigger = self.trigger.model_copy(update={"source_config": updated_source_config})
+            self.trigger = self.trigger.model_copy(
+                update={"source_config": updated_source_config}
+            )
             return self.trigger
 
     subscription_service = _FakeFeishuSubscriptionService()

@@ -185,6 +185,82 @@ console.log(JSON.stringify({
     assert payload["saveDisplay"] == "none"
 
 
+def test_trigger_settings_app_secret_toggle_matches_model_style_behavior(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-record-edit-btn")[0].onclick({ stopPropagation() {} });
+
+const input = document.getElementById("feishu-app-secret-input");
+const toggle = document.getElementById("toggle-feishu-app-secret-btn");
+const initial = {
+    type: input.type,
+    value: input.value,
+    placeholder: input.placeholder,
+    toggleDisplay: toggle.style.display,
+    toggleClassName: toggle.className,
+};
+
+toggle.onclick();
+
+const revealed = {
+    type: input.type,
+    value: input.value,
+    placeholder: input.placeholder,
+    toggleTitle: toggle.title,
+    toggleClassName: toggle.className,
+};
+
+toggle.onclick();
+
+console.log(JSON.stringify({
+    initial,
+    revealed,
+    final: {
+        type: input.type,
+        value: input.value,
+        placeholder: input.placeholder,
+        toggleTitle: toggle.title,
+        toggleClassName: toggle.className,
+    }
+}));
+""".strip(),
+    )
+
+    initial = cast(dict[str, str], payload["initial"])
+    revealed = cast(dict[str, str], payload["revealed"])
+    final = cast(dict[str, str], payload["final"])
+
+    assert initial["type"] == "password"
+    assert initial["value"] == ""
+    assert initial["placeholder"] == "************"
+    assert initial["toggleDisplay"] == "inline-flex"
+    assert initial["toggleClassName"] == "secure-input-btn"
+
+    assert revealed["type"] == "text"
+    assert revealed["value"] == "secret-demo"
+    assert revealed["placeholder"] == ""
+    assert revealed["toggleTitle"] == "Hide App Secret"
+    assert revealed["toggleClassName"] == "secure-input-btn is-active"
+
+    assert final["type"] == "password"
+    assert final["value"] == ""
+    assert final["placeholder"] == "************"
+    assert final["toggleTitle"] == "Show App Secret"
+    assert final["toggleClassName"] == "secure-input-btn"
+
+
 def test_trigger_settings_updates_existing_trigger_without_create_only_fields(
     tmp_path: Path,
 ) -> None:
@@ -564,6 +640,7 @@ function createElements() {{
         "feishu-app-id-input",
         "feishu-app-name-input",
         "feishu-app-secret-input",
+        "toggle-feishu-app-secret-btn",
         "feishu-trigger-name-input",
         "feishu-normal-role-field",
         "feishu-preset-field",
@@ -631,6 +708,9 @@ function installGlobals(elements, notifications) {{
                 trigger_rule: "mention_only",
                 app_id: "cli_existing",
                 app_name: "Agent Teams Bot"
+            }},
+            secret_config: {{
+                app_secret: "secret-demo"
             }},
             target_config: {{
                 workspace_id: "default",

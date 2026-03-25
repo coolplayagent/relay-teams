@@ -92,6 +92,7 @@ class TriggerDefinition(BaseModel):
     source_config: dict[str, JsonValue] = Field(default_factory=dict)
     auth_policies: tuple[TriggerAuthPolicy, ...] = ()
     target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
     secret_status: dict[str, bool] | None = None
     created_at: datetime
     updated_at: datetime

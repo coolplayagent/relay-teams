@@ -55,11 +55,14 @@ Each Feishu trigger stores:
 Secrets are stored only in the system keyring. They are not written back to the
 trigger table or `.env`.
 
-Read APIs expose `secret_status` instead of secret values:
+Read APIs expose both the current `secret_config` payload and `secret_status`.
+The settings UI uses that to render `App Secret` as masked by default and reveal
+it on demand.
 
-- `app_secret_configured`
-- `verification_token_configured`
-- `encrypt_key_configured`
+- `secret_config.app_secret`
+- `secret_status.app_secret_configured`
+- `secret_status.verification_token_configured`
+- `secret_status.encrypt_key_configured`
 
 ## Trigger Setup
 

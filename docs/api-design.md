@@ -940,12 +940,12 @@ For Feishu IM triggers, the request may also include top-level `secret_config`.
 ### `GET /triggers`
 
 Lists trigger definitions.
-For Feishu IM triggers, responses also include read-only `secret_status`.
+For Feishu IM triggers, responses also include `secret_status` and the current `secret_config`.
 
 ### `GET /triggers/{trigger_id}`
 
 Gets one trigger definition.
-For Feishu IM triggers, the response also includes read-only `secret_status`.
+For Feishu IM triggers, the response also includes `secret_status` and the current `secret_config`.
 
 ### `PATCH /triggers/{trigger_id}`
 
@@ -1037,9 +1037,10 @@ Feishu-specific response additions:
 - `secret_status.app_secret_configured`
 - `secret_status.verification_token_configured`
 - `secret_status.encrypt_key_configured`
+- `secret_config.app_secret`
 
 Notes:
-- Feishu secrets are write-only through the API and are stored in keyring, not in the trigger table.
+- Feishu secrets are stored in keyring, not in the trigger table, and trigger read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
 - When a Feishu trigger's runtime preset changes, the backend clears that trigger's external chat bindings so the next message creates a session with the new preset.
 
 ### `GET /triggers/{trigger_id}/events`
