@@ -82,6 +82,7 @@ console.log(JSON.stringify({
         "environment": 0,
         "notifications": 1,
         "web": 0,
+        "github": 0,
         "proxy": 0,
         "mcp": 0,
         "skills": 0,
@@ -103,6 +104,7 @@ const tabs = document.querySelectorAll(".settings-tab");
 const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
 const webTab = tabs.find(tab => tab.dataset.tab === "web");
+const githubTab = tabs.find(tab => tab.dataset.tab === "github");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
@@ -114,6 +116,8 @@ await notificationsTab.onclick();
 const notificationsSaveDisplay = document.getElementById("save-notifications-btn").style.display;
 await webTab.onclick();
 const webSaveDisplay = document.getElementById("save-web-btn").style.display;
+await githubTab.onclick();
+const githubSaveDisplay = document.getElementById("save-github-btn").style.display;
 await proxyTab.onclick();
 const proxySaveDisplay = document.getElementById("save-proxy-btn").style.display;
 await mcpTab.onclick();
@@ -126,6 +130,7 @@ console.log(JSON.stringify({
     roleAddDisplay,
     notificationsSaveDisplay,
     webSaveDisplay,
+    githubSaveDisplay,
     proxySaveDisplay,
     mcpReloadDisplay,
     skillsReloadDisplay,
@@ -137,6 +142,7 @@ console.log(JSON.stringify({
     assert payload["roleAddDisplay"] == "inline-flex"
     assert payload["notificationsSaveDisplay"] == "inline-flex"
     assert payload["webSaveDisplay"] == "inline-flex"
+    assert payload["githubSaveDisplay"] == "inline-flex"
     assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
     assert payload["skillsReloadDisplay"] == "inline-flex"
@@ -167,7 +173,8 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
         'data-tab="web"'
     )
-    assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="proxy"')
+    assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="github"')
+    assert tabs_html.index('data-tab="github"') < tabs_html.index('data-tab="proxy"')
     assert tabs_html.index('data-tab="proxy"') < tabs_html.index(
         'data-tab="environment"'
     )
@@ -175,6 +182,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">Skills</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
     assert ">Web</span>" in tabs_html
+    assert ">GitHub</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
     assert ">Triggers</span>" in tabs_html
     assert ">Model Profiles</span>" not in tabs_html
@@ -357,6 +365,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_trigger_settings_path = tmp_path / "mockTriggerSettings.mjs"
     mock_web_settings_path = tmp_path / "mockWebSettings.mjs"
+    mock_github_settings_path = tmp_path / "mockGitHubSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "index.mjs"
@@ -458,6 +467,18 @@ export async function loadWebSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_github_settings_path.write_text(
+        """
+export function bindGitHubSettingsHandlers() {
+    globalThis.__bindCalls.github += 1;
+}
+
+export async function loadGitHubSettingsPanel() {
+    globalThis.__loadCalls.github += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_system_status_path.write_text(
         """
 export function bindSystemStatusHandlers() {
@@ -494,6 +515,8 @@ export function t(key) {
         'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
         'settings.panel.web.title': 'Web',
         'settings.panel.web.description': 'Choose the web search provider and optionally store an API key for higher limits.',
+        'settings.panel.github.title': 'GitHub',
+        'settings.panel.github.description': 'Store a GitHub token for the bundled gh CLI and verify the current shell integration.',
         'settings.panel.proxy.title': 'Proxy',
         'settings.panel.proxy.description': 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
         'settings.panel.environment.title': 'Environment',
@@ -516,6 +539,7 @@ export function translateDocument() {
         .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
         .replace("./triggerSettings.js", "./mockTriggerSettings.mjs")
         .replace("./webSettings.js", "./mockWebSettings.mjs")
+        .replace("./githubSettings.js", "./mockGitHubSettings.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
@@ -690,6 +714,7 @@ globalThis.__bindCalls = {{
     environment: 0,
     notifications: 0,
     web: 0,
+    github: 0,
     proxy: 0,
     system: 0,
 }};
@@ -701,6 +726,7 @@ globalThis.__loadCalls = {{
     environment: 0,
     notifications: 0,
     web: 0,
+    github: 0,
     proxy: 0,
     mcp: 0,
     skills: 0,

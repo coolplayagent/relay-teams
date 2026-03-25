@@ -11,6 +11,7 @@ from agent_teams.agents.orchestration.settings_service import (
 )
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from agent_teams.env.github_config_service import GitHubConfigService
 from agent_teams.automation import AutomationService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.web_config_service import WebConfigService
@@ -121,6 +122,10 @@ def get_environment_variable_service(request: Request) -> EnvironmentVariableSer
 
 def get_web_config_service(request: Request) -> WebConfigService:
     return get_container(request).web_config_service
+
+
+def get_github_config_service(request: Request) -> GitHubConfigService:
+    return get_container(request).github_config_service
 
 
 def get_ui_language_settings_service(request: Request) -> UiLanguageSettingsService:

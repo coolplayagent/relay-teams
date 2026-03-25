@@ -44,6 +44,9 @@ class AgentTeamsClient:
     def get_web_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/web")
 
+    def get_github_config(self) -> dict[str, JsonValue]:
+        return self._request_json("GET", "/api/system/configs/github")
+
     def save_proxy_config(
         self,
         *,
@@ -77,6 +80,14 @@ class AgentTeamsClient:
             "api_key": api_key,
         }
         return self._request_json("PUT", "/api/system/configs/web", payload)
+
+    def save_github_config(
+        self,
+        *,
+        token: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"token": token}
+        return self._request_json("PUT", "/api/system/configs/github", payload)
 
     def probe_web_connectivity(
         self,
@@ -116,6 +127,19 @@ class AgentTeamsClient:
                 "ssl_verify": ssl_verify,
             }
         return self._request_json("POST", "/api/system/configs/web:probe", payload)
+
+    def probe_github_connectivity(
+        self,
+        *,
+        token: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {}
+        if token is not None:
+            payload["token"] = token
+        if timeout_ms is not None:
+            payload["timeout_ms"] = timeout_ms
+        return self._request_json("POST", "/api/system/configs/github:probe", payload)
 
     def create_session(
         self,

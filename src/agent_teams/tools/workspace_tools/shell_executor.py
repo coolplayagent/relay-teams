@@ -10,7 +10,10 @@ import subprocess
 from pathlib import Path
 from typing import AsyncGenerator
 
-from agent_teams.env import build_subprocess_env, get_env_var
+from agent_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
+from agent_teams.env.github_config_service import GitHubConfigService
+from agent_teams.env.runtime_env import get_app_config_dir
+from agent_teams.tools.workspace_tools.github_cli import get_gh_path
 from agent_teams.tools.workspace_tools.shell_policy import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_TIMEOUT_SECONDS,
@@ -234,6 +237,10 @@ async def spawn_shell(
     bash = resolve_bash_path()
 
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
+    shell_env.update(_load_github_cli_env())
+    gh_path = await _resolve_gh_path()
+    if gh_path is not None:
+        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
 
     proc = await asyncio.create_subprocess_exec(
         bash,
@@ -302,11 +309,16 @@ def run_git_bash(
 ) -> tuple[int, str, str, bool]:
     """Run command synchronously under bash for compatibility."""
     bash = resolve_bash_path()
+    shell_env = build_subprocess_env(base_env=os.environ)
+    shell_env.update(_load_github_cli_env())
+    gh_path = _resolve_gh_path_sync()
+    if gh_path is not None:
+        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
     try:
         proc = subprocess.run(
             [bash, "-lc", command],
             cwd=str(workdir),
-            env=build_subprocess_env(base_env=os.environ),
+            env=shell_env,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -321,3 +333,29 @@ def run_git_bash(
         out = exc.stdout or ""
         err = exc.stderr or ""
         return 124, str(out), str(err), True
+
+
+def _load_github_cli_env() -> dict[str, str]:
+    config = GitHubConfigService(config_dir=get_app_config_dir()).get_github_config()
+    return build_github_cli_env(config.token)
+
+
+async def _resolve_gh_path() -> Path | None:
+    try:
+        return await get_gh_path()
+    except Exception:
+        return None
+
+
+def _resolve_gh_path_sync() -> Path | None:
+    try:
+        return asyncio.run(get_gh_path())
+    except Exception:
+        return None
+
+
+def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
+    path_parts = [str(directory)]
+    if existing_path:
+        path_parts.append(existing_path)
+    return os.pathsep.join(path_parts)

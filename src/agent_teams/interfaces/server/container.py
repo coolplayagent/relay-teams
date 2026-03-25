@@ -32,6 +32,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from agent_teams.env.github_config_service import GitHubConfigService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.env.web_config_service import WebConfigService
@@ -155,6 +156,10 @@ class ServerContainer:
         )
         self.web_config_service: WebConfigService = WebConfigService(
             config_dir=config_dir
+        )
+        self.github_config_service: GitHubConfigService = GitHubConfigService(
+            config_dir=config_dir,
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=config_dir

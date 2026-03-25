@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import subprocess
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -378,6 +380,66 @@ async def test_spawn_shell_passes_role_env_to_subprocess(monkeypatch) -> None:
     env = captured_kwargs.get("env")
     assert isinstance(env, dict)
     assert env["AGENT_TEAMS_CURRENT_ROLE_ID"] == "Crafter"
+
+
+@pytest.mark.asyncio
+async def test_spawn_shell_injects_github_token_and_bundled_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_kwargs: dict[str, object] = {}
+    proc = _FakeProcess()
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir(parents=True)
+    gh.write_text("", encoding="utf-8")
+
+    async def capturing_factory(*args: object, **kwargs: object) -> _FakeProcess:
+        captured_kwargs.update(kwargs)
+
+        async def _feed() -> None:
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+            await asyncio.sleep(0.01)
+            proc.returncode = 0
+            proc._wait_event.set()
+
+        asyncio.create_task(_feed())
+        return proc
+
+    monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
+    monkeypatch.setattr(
+        shell_executor,
+        "_load_github_cli_env",
+        lambda: {
+            "GH_TOKEN": "ghp_secret",
+            "GITHUB_TOKEN": "ghp_secret",
+            "GH_PROMPT_DISABLED": "1",
+        },
+    )
+    monkeypatch.setattr(shell_executor, "_resolve_gh_path", AsyncMock(return_value=gh))
+    monkeypatch.setattr(
+        shell_executor.asyncio,
+        "create_subprocess_exec",
+        capturing_factory,
+    )
+
+    _ = [
+        item
+        async for item in shell_executor.spawn_shell(
+            command="true",
+            cwd=Path("."),
+            timeout_ms=100,
+        )
+    ]
+
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env["GH_TOKEN"] == "ghp_secret"
+    assert env["GITHUB_TOKEN"] == "ghp_secret"
+    assert env["GH_PROMPT_DISABLED"] == "1"
+    assert str(gh.parent) == env["PATH"].split(os.pathsep)[0]
 
 
 # ---------------------------------------------------------------------------

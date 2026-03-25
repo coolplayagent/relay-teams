@@ -60,6 +60,10 @@ export async function fetchWebConfig() {
     return requestJson('/api/system/configs/web', undefined, 'Failed to fetch web config');
 }
 
+export async function fetchGitHubConfig() {
+    return requestJson('/api/system/configs/github', undefined, 'Failed to fetch GitHub config');
+}
+
 export async function fetchSystemHealth() {
     return requestJson('/api/system/health', undefined, 'Failed to fetch system health');
 }
@@ -174,6 +178,18 @@ export async function saveWebConfig(config) {
     );
 }
 
+export async function saveGitHubConfig(config) {
+    return requestJson(
+        '/api/system/configs/github',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        },
+        'Failed to save GitHub config',
+    );
+}
+
 export async function reloadMcpConfig() {
     return requestJson(
         '/api/system/configs/mcp:reload',
@@ -239,5 +255,17 @@ export async function probeWebConnectivity(payload) {
             body: JSON.stringify(payload),
         },
         'Failed to probe web connectivity',
+    );
+}
+
+export async function probeGitHubConnectivity(payload) {
+    return requestJson(
+        '/api/system/configs/github:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to probe GitHub connectivity',
     );
 }

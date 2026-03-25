@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import logging
 import re
 import signal
+import sys
 import time
 from types import FrameType
 
@@ -46,10 +48,17 @@ FRONTEND_DIST_DIR = get_frontend_dist_dir()
 RequestHandler = Callable[[Request], Awaitable[Response]]
 SignalHandler = Callable[[int, FrameType | None], None]
 SignalHandlerRef = int | SignalHandler | None
+AsyncioExceptionContext = dict[str, object]
+AsyncioExceptionHandler = Callable[
+    [asyncio.AbstractEventLoop, AsyncioExceptionContext], None
+]
 _SUPPRESSED_SUCCESS_PATHS = (
     re.compile(r"^/api/system/health$"),
     re.compile(r"^/api/sessions/[^/]+/recovery$"),
     re.compile(r"^/api/sessions/[^/]+/runs/[^/]+/token-usage$"),
+)
+_SUPPRESSED_NOISY_PATHS = (
+    re.compile(r"^/\.well-known/appspecific/com\.chrome\.devtools\.json$"),
 )
 
 
@@ -59,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
     configure_logging(config_dir=config_dir)
+    _configure_asyncio_exception_handler()
     _register_signal_handlers()
     app.state.container = ServerContainer(config_dir=config_dir)
     await app.state.container.start()
@@ -148,6 +158,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 def _resolve_request_log_level(*, path: str, status_code: int) -> int | None:
     if status_code >= 500:
         return logging.ERROR
+    if _is_suppressed_noisy_path(path):
+        return None
     if status_code >= 400:
         return logging.WARNING
     if _is_suppressed_success_path(path):
@@ -157,6 +169,45 @@ def _resolve_request_log_level(*, path: str, status_code: int) -> int | None:
 
 def _is_suppressed_success_path(path: str) -> bool:
     return any(pattern.match(path) is not None for pattern in _SUPPRESSED_SUCCESS_PATHS)
+
+
+def _is_suppressed_noisy_path(path: str) -> bool:
+    return any(pattern.match(path) is not None for pattern in _SUPPRESSED_NOISY_PATHS)
+
+
+def _should_ignore_asyncio_exception(context: AsyncioExceptionContext) -> bool:
+    if sys.platform != "win32":
+        return False
+    exception = context.get("exception")
+    message = context.get("message")
+    if not isinstance(exception, ConnectionResetError):
+        return False
+    if not isinstance(message, str):
+        return False
+    return (
+        "_ProactorBasePipeTransport._call_connection_lost" in message
+        and "WinError 10054" in str(exception)
+    )
+
+
+def _configure_asyncio_exception_handler() -> None:
+    if sys.platform != "win32":
+        return
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+
+    def _handler(
+        current_loop: asyncio.AbstractEventLoop,
+        context: AsyncioExceptionContext,
+    ) -> None:
+        if _should_ignore_asyncio_exception(context):
+            return
+        if previous_handler is not None:
+            previous_handler(current_loop, context)
+            return
+        current_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
 
 
 def _register_signal_handlers() -> None:

@@ -11,6 +11,12 @@ from agent_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
 )
 from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from agent_teams.env.github_config_models import GitHubConfig
+from agent_teams.env.github_config_service import GitHubConfigService
+from agent_teams.env.github_connectivity import (
+    GitHubConnectivityProbeRequest,
+    GitHubConnectivityProbeResult,
+)
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvInput
 from agent_teams.env.web_config_models import WebConfig
@@ -22,6 +28,7 @@ from agent_teams.env.web_connectivity import (
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
+    get_github_config_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -304,6 +311,27 @@ def save_web_config(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/configs/github")
+def get_github_config(
+    service: GitHubConfigService = Depends(get_github_config_service),
+) -> GitHubConfig:
+    return service.get_github_config()
+
+
+@router.put("/configs/github")
+def save_github_config(
+    req: GitHubConfig,
+    service: GitHubConfigService = Depends(get_github_config_service),
+) -> dict[str, str]:
+    try:
+        service.save_github_config(req)
+        return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 class NotificationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -376,6 +404,17 @@ def probe_web_connectivity(
 ) -> WebConnectivityProbeResult:
     try:
         return service.probe_web_connectivity(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/configs/github:probe")
+def probe_github_connectivity(
+    req: GitHubConnectivityProbeRequest,
+    service: GitHubConfigService = Depends(get_github_config_service),
+) -> GitHubConnectivityProbeResult:
+    try:
+        return service.probe_connectivity(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

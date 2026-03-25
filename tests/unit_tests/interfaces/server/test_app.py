@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
 import signal
 from types import FrameType
+from typing import cast
 
 import pytest
 
@@ -95,6 +97,13 @@ def test_resolve_request_log_level_suppresses_noisy_success_paths() -> None:
         )
         is None
     )
+    assert (
+        server_app._resolve_request_log_level(
+            path="/.well-known/appspecific/com.chrome.devtools.json",
+            status_code=404,
+        )
+        is None
+    )
 
 
 def test_resolve_request_log_level_downgrades_success_and_escalates_failures() -> None:
@@ -119,3 +128,105 @@ def test_resolve_request_log_level_downgrades_success_and_escalates_failures() -
         )
         == logging.ERROR
     )
+
+
+def test_should_ignore_asyncio_exception_for_windows_proactor_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server_app.sys, "platform", "win32")
+
+    assert (
+        server_app._should_ignore_asyncio_exception(
+            {
+                "message": (
+                    "Exception in callback "
+                    "_ProactorBasePipeTransport._call_connection_lost()"
+                ),
+                "exception": ConnectionResetError(
+                    "[WinError 10054] remote host forcibly closed the connection"
+                ),
+            }
+        )
+        is True
+    )
+
+
+def test_should_not_ignore_asyncio_exception_for_non_matching_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server_app.sys, "platform", "win32")
+
+    assert (
+        server_app._should_ignore_asyncio_exception(
+            {
+                "message": "Exception in callback something_else()",
+                "exception": ConnectionResetError(
+                    "[WinError 10054] remote host forcibly closed the connection"
+                ),
+            }
+        )
+        is False
+    )
+
+
+def test_configure_asyncio_exception_handler_ignores_only_benign_windows_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server_app.sys, "platform", "win32")
+
+    delegated_contexts: list[server_app.AsyncioExceptionContext] = []
+
+    def previous_handler(
+        _loop: asyncio.AbstractEventLoop,
+        context: server_app.AsyncioExceptionContext,
+    ) -> None:
+        delegated_contexts.append(context)
+
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.handler: server_app.AsyncioExceptionHandler | None = None
+
+        def get_exception_handler(
+            self,
+        ) -> server_app.AsyncioExceptionHandler | None:
+            return previous_handler
+
+        def set_exception_handler(
+            self, handler: server_app.AsyncioExceptionHandler | None
+        ) -> None:
+            self.handler = handler
+
+        def default_exception_handler(
+            self, _context: server_app.AsyncioExceptionContext
+        ) -> None:
+            raise AssertionError("default handler should not be called")
+
+    loop = FakeLoop()
+    monkeypatch.setattr(
+        server_app.asyncio,
+        "get_running_loop",
+        lambda: cast(asyncio.AbstractEventLoop, loop),
+    )
+
+    server_app._configure_asyncio_exception_handler()
+
+    assert loop.handler is not None
+    current_loop = cast(asyncio.AbstractEventLoop, loop)
+
+    ignored_context: server_app.AsyncioExceptionContext = {
+        "message": (
+            "Exception in callback _ProactorBasePipeTransport._call_connection_lost()"
+        ),
+        "exception": ConnectionResetError(
+            "[WinError 10054] remote host forcibly closed the connection"
+        ),
+    }
+    loop.handler(current_loop, ignored_context)
+    assert delegated_contexts == []
+
+    forwarded_context: server_app.AsyncioExceptionContext = {
+        "message": "Exception in callback another_callback()",
+        "exception": RuntimeError("boom"),
+    }
+    loop.handler(current_loop, forwarded_context)
+    assert delegated_contexts == [forwarded_context]

@@ -111,6 +111,32 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"token": None}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.get_github_config()
+
+    assert response == {"token": None}
+    assert captured == {
+        "method": "GET",
+        "path": "/api/system/configs/github",
+        "payload": None,
+    }
+
+
 def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
@@ -180,6 +206,34 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
     }
 
 
+def test_save_github_config_passes_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.save_github_config(token="ghp_secret")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "PUT",
+        "path": "/api/system/configs/github",
+        "payload": {
+            "token": "ghp_secret",
+        },
+    }
+
+
 def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
@@ -221,5 +275,37 @@ def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
                 "proxy_password": "secret",
                 "ssl_verify": None,
             },
+        },
+    }
+
+
+def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.probe_github_connectivity(
+        token="ghp_secret",
+        timeout_ms=2500,
+    )
+
+    assert response == {"ok": True}
+    assert captured == {
+        "method": "POST",
+        "path": "/api/system/configs/github:probe",
+        "payload": {
+            "token": "ghp_secret",
+            "timeout_ms": 2500,
         },
     }

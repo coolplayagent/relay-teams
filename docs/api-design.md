@@ -142,6 +142,39 @@ Saves the web tool configuration.
 `api_key` is optional because Exa hosted MCP can be used without a key; providing one only raises the rate-limit ceiling.
 The backend persists the API key only through a usable system keyring backend and does not write it back to `.env`.
 
+### `GET /system/configs/github`
+
+Returns the saved GitHub CLI configuration.
+Fields:
+- `token`: optional value rehydrated from the system keyring when available, otherwise read from `GH_TOKEN` / `GITHUB_TOKEN` in `.env`
+
+The GitHub settings UI exists specifically for the bundled `gh` CLI integration used by shell subprocesses. When configured, the runtime injects the token into shell environments as both `GH_TOKEN` and `GITHUB_TOKEN`, and also disables interactive auth/update prompts for non-interactive runs.
+
+### `PUT /system/configs/github`
+
+Saves the GitHub CLI configuration.
+`token` is optional. When a usable system keyring backend is available, the backend persists it there and removes any legacy plaintext `GH_TOKEN` / `GITHUB_TOKEN` entries from `.env`. When no keyring backend is available, the backend falls back to writing `GH_TOKEN` into `.env`.
+
+### `POST /system/configs/github:probe`
+
+Tests the bundled or system `gh` CLI against `github.com` using the saved token or an optional request override.
+The backend runs `gh api user` in a non-interactive subprocess and returns:
+- `ok`
+- `username`
+- `gh_path`
+- `gh_version`
+- `status_code`
+- `exit_code`
+- `latency_ms`
+- `diagnostics.binary_available`
+- `diagnostics.auth_valid`
+- `diagnostics.used_proxy`
+- `diagnostics.bundled_binary`
+
+The request may include:
+- optional `token`
+- optional `timeout_ms`
+
 ### `POST /system/configs/proxy:reload`
 
 Reloads effective proxy env into runtime.

@@ -5,11 +5,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.env.github_config_models import GitHubConfig
+from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
+from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
 from agent_teams.env.web_config_models import WebConfig, WebProvider
 from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
+    get_github_config_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -25,6 +29,7 @@ from agent_teams.interfaces.server.ui_language_models import (
 )
 from agent_teams.interfaces.server.routers import system
 from agent_teams.providers.model_connectivity import (
+    ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelDiscoveryResult,
 )
@@ -40,6 +45,7 @@ class _FakeSystemService:
         )
         self.saved_proxy_config: dict[str, object] | None = None
         self.saved_web_config: dict[str, object] | None = None
+        self.saved_github_config: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
 
@@ -114,6 +120,12 @@ class _FakeSystemService:
 
     def save_web_config(self, config: WebConfig) -> None:
         self.saved_web_config = config.model_dump(mode="json")
+
+    def get_github_config(self) -> GitHubConfig:
+        return GitHubConfig(token=None)
+
+    def save_github_config(self, config: GitHubConfig) -> None:
+        self.saved_github_config = config.model_dump(mode="json")
 
     def reload_mcp_config(self) -> None:
         return None
@@ -196,8 +208,30 @@ class _FakeSystemService:
 
     def probe_connectivity(
         self,
-        _request: object,
-    ) -> ModelConnectivityProbeResult:
+        request: object,
+    ) -> ModelConnectivityProbeResult | GitHubConnectivityProbeResult:
+        if isinstance(request, GitHubConnectivityProbeRequest):
+            return GitHubConnectivityProbeResult.model_validate(
+                {
+                    "ok": True,
+                    "username": "octocat",
+                    "host": "github.com",
+                    "gh_path": "/tmp/gh",
+                    "gh_version": "2.88.1",
+                    "status_code": 200,
+                    "exit_code": 0,
+                    "latency_ms": 51,
+                    "checked_at": "2026-03-12T00:00:00Z",
+                    "diagnostics": {
+                        "binary_available": True,
+                        "auth_valid": True,
+                        "used_proxy": False,
+                        "bundled_binary": True,
+                    },
+                    "retryable": False,
+                }
+            )
+        assert isinstance(request, ModelConnectivityProbeRequest)
         return ModelConnectivityProbeResult.model_validate(
             {
                 "ok": True,
@@ -275,6 +309,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
+    app.dependency_overrides[get_github_config_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -384,6 +419,33 @@ def test_get_orchestration_config() -> None:
     payload = response.json()
     assert payload["default_orchestration_preset_id"] == "default"
     assert payload["presets"][0]["role_ids"] == ["writer", "reviewer"]
+
+
+def test_save_github_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/github",
+        json={"token": "ghp_secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_github_config == {"token": "ghp_secret"}
+
+
+def test_probe_github_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/github:probe",
+        json={"token": "ghp_secret", "timeout_ms": 2500},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["username"] == "octocat"
 
 
 def test_save_orchestration_config() -> None:
