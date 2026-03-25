@@ -216,6 +216,64 @@ def test_restart_reuses_existing_server_binding(monkeypatch, tmp_path: Path) -> 
     }
 
 
+def test_start_spawns_daemon_and_waits_for_health(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load(*, raise_on_invalid: bool) -> server_cli.ManagedServerProcess | None:
+        return None
+
+    def fake_start_daemon(host: str, port: int) -> None:
+        captured["daemon_host"] = host
+        captured["daemon_port"] = port
+
+    def fake_wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
+        captured["health_url"] = base_url
+        return True
+
+    def fake_wait_for_managed_server(
+        host: str, port: int, timeout_seconds: float = 20.0
+    ) -> bool:
+        return True
+
+    process = server_cli.ManagedServerProcess(pid=999, host="127.0.0.1", port=8000)
+
+    def fake_load_after_start(
+        *, raise_on_invalid: bool
+    ) -> server_cli.ManagedServerProcess | None:
+        return process
+
+    monkeypatch.setattr(server_cli, "_load_managed_server", fake_load)
+    monkeypatch.setattr(server_cli, "start_server_daemon", fake_start_daemon)
+    monkeypatch.setattr(server_cli, "wait_until_healthy", fake_wait_until_healthy)
+    monkeypatch.setattr(
+        server_cli, "_wait_for_managed_server", fake_wait_for_managed_server
+    )
+
+    server_cli.start(host="127.0.0.1", port=8000, daemon=True)
+
+    # After daemon spawned, swap to return process info for the echo
+    monkeypatch.setattr(server_cli, "_load_managed_server", fake_load_after_start)
+    # Re-run to verify daemon was called with correct args
+    assert captured["daemon_host"] == "127.0.0.1"
+    assert captured["daemon_port"] == 8000
+    assert captured["health_url"] == "http://127.0.0.1:8000"
+
+
+def test_start_skips_if_already_running(monkeypatch) -> None:
+    process = server_cli.ManagedServerProcess(pid=123, host="127.0.0.1", port=8000)
+
+    monkeypatch.setattr(
+        server_cli,
+        "_load_managed_server",
+        lambda *, raise_on_invalid=False: process,
+    )
+    monkeypatch.setattr(server_cli, "_is_process_running", lambda pid: True)
+    monkeypatch.setattr(server_cli, "is_server_healthy", lambda url: True)
+
+    # Should return without error (server already running)
+    server_cli.start(host="127.0.0.1", port=8000, daemon=True)
+
+
 def test_restart_fails_for_unmanaged_healthy_server(monkeypatch) -> None:
     def fake_stop(
         force: bool,

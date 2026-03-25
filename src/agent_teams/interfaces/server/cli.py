@@ -103,6 +103,9 @@ def wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
     return False
 
 
+_DAEMON_START_TIMEOUT_SECONDS = 20.0
+
+
 def start(
     host: str = typer.Option(
         DEFAULT_SERVER_HOST, "--host", help="Host to bind the server to"
@@ -110,7 +113,17 @@ def start(
     port: int = typer.Option(
         DEFAULT_SERVER_PORT, "--port", help="Port to bind the server to"
     ),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        "-d",
+        help="Run the server as a background process.",
+    ),
 ) -> None:
+    if daemon:
+        _start_daemon(host=host, port=port)
+        return
+
     uvicorn_module = import_module("uvicorn")
     server_module = import_module("agent_teams.interfaces.server.app")
     fastapi_app = getattr(server_module, "app")
@@ -131,6 +144,33 @@ def start(
         )
     finally:
         _clear_managed_server(expected_pid=current_pid)
+
+
+def _start_daemon(host: str, port: int) -> None:
+    base_url = f"http://{host}:{port}"
+
+    existing = _load_managed_server(raise_on_invalid=False)
+    if existing is not None and _is_process_running(existing.pid):
+        if is_server_healthy(base_url):
+            typer.echo(
+                f"Agent Teams server is already running on {base_url} "
+                f"(pid {existing.pid})"
+            )
+            return
+        _stop_managed_server(force=False)
+
+    start_server_daemon(host=host, port=port)
+
+    if not wait_until_healthy(
+        base_url, timeout_seconds=_DAEMON_START_TIMEOUT_SECONDS
+    ) or not _wait_for_managed_server(
+        host, port, timeout_seconds=_DAEMON_START_TIMEOUT_SECONDS
+    ):
+        raise RuntimeError(f"Failed to start Agent Teams server at {base_url}")
+
+    process = _load_managed_server(raise_on_invalid=False)
+    pid_info = f" (pid {process.pid})" if process is not None else ""
+    typer.echo(f"Agent Teams server started on {base_url}{pid_info}")
 
 
 def stop(
