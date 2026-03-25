@@ -274,6 +274,13 @@ def test_start_skips_if_already_running(monkeypatch) -> None:
     server_cli.start(host="127.0.0.1", port=8000, daemon=True)
 
 
+def test_health_check_host_resolves_wildcard_addresses() -> None:
+    assert server_cli._health_check_host("0.0.0.0") == "127.0.0.1"
+    assert server_cli._health_check_host("::") == "::1"
+    assert server_cli._health_check_host("127.0.0.1") == "127.0.0.1"
+    assert server_cli._health_check_host("10.0.1.5") == "10.0.1.5"
+
+
 def test_restart_fails_for_unmanaged_healthy_server(monkeypatch) -> None:
     def fake_stop(
         force: bool,

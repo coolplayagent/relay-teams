@@ -38,6 +38,14 @@ def get_server_process_file_path(project_root: Path | None = None) -> Path:
     return get_project_config_dir(project_root=project_root) / _SERVER_PROCESS_FILE_NAME
 
 
+def _health_check_host(host: str) -> str:
+    if host == "0.0.0.0":
+        return "127.0.0.1"
+    if host == "::":
+        return "::1"
+    return host
+
+
 def is_server_healthy(base_url: str) -> bool:
     request = Request(
         url=f"{base_url.rstrip('/')}{_SERVER_HEALTH_PATH}",
@@ -147,13 +155,14 @@ def start(
 
 
 def _start_daemon(host: str, port: int) -> None:
-    base_url = f"http://{host}:{port}"
+    check_host = _health_check_host(host)
+    check_url = f"http://{check_host}:{port}"
 
     existing = _load_managed_server(raise_on_invalid=False)
     if existing is not None and _is_process_running(existing.pid):
-        if is_server_healthy(base_url):
+        if is_server_healthy(check_url):
             typer.echo(
-                f"Agent Teams server is already running on {base_url} "
+                f"Agent Teams server is already running on http://{host}:{port} "
                 f"(pid {existing.pid})"
             )
             return
@@ -162,15 +171,17 @@ def _start_daemon(host: str, port: int) -> None:
     start_server_daemon(host=host, port=port)
 
     if not wait_until_healthy(
-        base_url, timeout_seconds=_DAEMON_START_TIMEOUT_SECONDS
+        check_url, timeout_seconds=_DAEMON_START_TIMEOUT_SECONDS
     ) or not _wait_for_managed_server(
         host, port, timeout_seconds=_DAEMON_START_TIMEOUT_SECONDS
     ):
-        raise RuntimeError(f"Failed to start Agent Teams server at {base_url}")
+        raise RuntimeError(
+            f"Failed to start Agent Teams server at http://{host}:{port}"
+        )
 
     process = _load_managed_server(raise_on_invalid=False)
     pid_info = f" (pid {process.pid})" if process is not None else ""
-    typer.echo(f"Agent Teams server started on {base_url}{pid_info}")
+    typer.echo(f"Agent Teams server started on http://{host}:{port}{pid_info}")
 
 
 def stop(
@@ -209,28 +220,30 @@ def restart(
     resolved_port = port or (
         existing_process.port if existing_process is not None else DEFAULT_SERVER_PORT
     )
-    base_url = f"http://{resolved_host}:{resolved_port}"
+    check_host = _health_check_host(resolved_host)
+    check_url = f"http://{check_host}:{resolved_port}"
+    display_url = f"http://{resolved_host}:{resolved_port}"
 
     stopped_process = _stop_managed_server(force=force)
-    if stopped_process is None and is_server_healthy(base_url):
+    if stopped_process is None and is_server_healthy(check_url):
         raise RuntimeError(
-            f"Agent Teams server is already responding at {base_url}, "
+            f"Agent Teams server is already responding at {display_url}, "
             "but it is not managed by this CLI."
         )
 
     start_server_daemon(host=resolved_host, port=resolved_port)
 
     if not wait_until_healthy(
-        base_url,
+        check_url,
         timeout_seconds=_RESTART_TIMEOUT_SECONDS,
     ) or not _wait_for_managed_server(
         resolved_host,
         resolved_port,
         timeout_seconds=_RESTART_TIMEOUT_SECONDS,
     ):
-        raise RuntimeError(f"Failed to restart Agent Teams server at {base_url}")
+        raise RuntimeError(f"Failed to restart Agent Teams server at {display_url}")
 
-    typer.echo(f"Restarted Agent Teams server on {base_url}")
+    typer.echo(f"Restarted Agent Teams server on {display_url}")
 
 
 def build_server_app() -> typer.Typer:
