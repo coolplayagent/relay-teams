@@ -650,6 +650,8 @@ export function sysLog(message, tone = "log-info") {
 
     runner = """
 import { handleSend } from "./prompt.js";
+import { state } from "./mockState.mjs";
+import { els } from "./mockDom.mjs";
 
 globalThis.__streamCalls = [];
 globalThis.__logs = [];
@@ -657,9 +659,13 @@ globalThis.__liveRounds = [];
 globalThis.__roundMessages = [];
 
 await handleSend();
+els.promptInput.value = "＠Writer ship it";
+els.promptInput.disabled = false;
+state.isGenerating = false;
+await handleSend();
 
 console.log(JSON.stringify({
-    streamCall: globalThis.__streamCalls[0],
+    streamCalls: globalThis.__streamCalls,
     liveRounds: globalThis.__liveRounds,
     roundMessages: globalThis.__roundMessages,
 }));
@@ -673,11 +679,23 @@ console.log(JSON.stringify({
     )
 
     payload = json.loads(result.stdout)
-    assert payload["streamCall"]["text"] == "ship it"
-    assert payload["streamCall"]["sessionId"] == "session-1"
-    assert payload["streamCall"]["options"]["targetRoleId"] == "writer"
-    assert payload["liveRounds"] == [{"runId": "run-1", "text": "ship it"}]
-    assert payload["roundMessages"] == [{"runId": "run-1", "text": "ship it"}]
+    assert [call["text"] for call in payload["streamCalls"]] == ["ship it", "ship it"]
+    assert [call["sessionId"] for call in payload["streamCalls"]] == [
+        "session-1",
+        "session-1",
+    ]
+    assert [call["options"]["targetRoleId"] for call in payload["streamCalls"]] == [
+        "writer",
+        "writer",
+    ]
+    assert payload["liveRounds"] == [
+        {"runId": "run-1", "text": "ship it"},
+        {"runId": "run-1", "text": "ship it"},
+    ]
+    assert payload["roundMessages"] == [
+        {"runId": "run-1", "text": "ship it"},
+        {"runId": "run-1", "text": "ship it"},
+    ]
 
 
 def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
@@ -924,12 +942,32 @@ import {
 import { els } from "./mockDom.mjs";
 
 handlePromptComposerInput();
-const beforeSelect = {
+const beforeAsciiSelect = {
     menuHidden: els.promptMentionMenu.hidden,
     menuHtml: els.promptMentionMenu.innerHTML,
 };
 
-const enterHandled = handlePromptComposerKeydown({
+const asciiEnterHandled = handlePromptComposerKeydown({
+    key: "Enter",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+const asciiValue = els.promptInput.value;
+const asciiSelectionStart = els.promptInput.selectionStart;
+const asciiSelectionEnd = els.promptInput.selectionEnd;
+
+els.promptInput.value = "＠Ma";
+els.promptInput.selectionStart = 3;
+els.promptInput.selectionEnd = 3;
+handlePromptComposerInput();
+const beforeFullwidthSelect = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+const fullwidthEnterHandled = handlePromptComposerKeydown({
     key: "Enter",
     preventDefault() { return undefined; },
     stopImmediatePropagation() { return undefined; },
@@ -937,11 +975,16 @@ const enterHandled = handlePromptComposerKeydown({
 });
 
 console.log(JSON.stringify({
-    beforeSelect,
-    enterHandled,
-    value: els.promptInput.value,
-    selectionStart: els.promptInput.selectionStart,
-    selectionEnd: els.promptInput.selectionEnd,
+    beforeAsciiSelect,
+    asciiEnterHandled,
+    asciiValue,
+    asciiSelectionStart,
+    asciiSelectionEnd,
+    beforeFullwidthSelect,
+    fullwidthEnterHandled,
+    fullwidthValue: els.promptInput.value,
+    fullwidthSelectionStart: els.promptInput.selectionStart,
+    fullwidthSelectionEnd: els.promptInput.selectionEnd,
 }));
 """.strip()
     result = subprocess.run(
@@ -953,15 +996,28 @@ console.log(JSON.stringify({
     )
 
     payload = json.loads(result.stdout)
-    rendered_text = re.sub(r"<[^>]+>", "", payload["beforeSelect"]["menuHtml"])
-    assert payload["beforeSelect"]["menuHidden"] is False
-    assert "prompt-mention-menu-header" in payload["beforeSelect"]["menuHtml"]
-    assert "prompt-mention-item-accent" in payload["beforeSelect"]["menuHtml"]
-    assert "prompt-mention-menu-footer" in payload["beforeSelect"]["menuHtml"]
-    assert "prompt-mention-match" in payload["beforeSelect"]["menuHtml"]
-    assert "Main Agent" in rendered_text
-    assert "MainAgent" in rendered_text
-    assert payload["enterHandled"] is True
-    assert payload["value"] == "@Main Agent "
-    assert payload["selectionStart"] == 12
-    assert payload["selectionEnd"] == 12
+    rendered_ascii_text = re.sub(
+        r"<[^>]+>", "", payload["beforeAsciiSelect"]["menuHtml"]
+    )
+    rendered_fullwidth_text = re.sub(
+        r"<[^>]+>", "", payload["beforeFullwidthSelect"]["menuHtml"]
+    )
+    assert payload["beforeAsciiSelect"]["menuHidden"] is False
+    assert payload["beforeFullwidthSelect"]["menuHidden"] is False
+    assert "prompt-mention-menu-header" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-item-accent" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-menu-footer" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-match" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-match" in payload["beforeFullwidthSelect"]["menuHtml"]
+    assert "Main Agent" in rendered_ascii_text
+    assert "MainAgent" in rendered_ascii_text
+    assert "Main Agent" in rendered_fullwidth_text
+    assert "MainAgent" in rendered_fullwidth_text
+    assert payload["asciiEnterHandled"] is True
+    assert payload["asciiValue"] == "@Main Agent "
+    assert payload["asciiSelectionStart"] == 12
+    assert payload["asciiSelectionEnd"] == 12
+    assert payload["fullwidthEnterHandled"] is True
+    assert payload["fullwidthValue"] == "＠Main Agent "
+    assert payload["fullwidthSelectionStart"] == 12
+    assert payload["fullwidthSelectionEnd"] == 12

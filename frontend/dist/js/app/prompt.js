@@ -34,6 +34,7 @@ import { sysLog } from "../utils/logger.js";
 const YOLO_STORAGE_KEY = "agent_teams_yolo";
 const THINKING_MODE_STORAGE_KEY = "agent_teams_thinking_enabled";
 const THINKING_EFFORT_STORAGE_KEY = "agent_teams_thinking_effort";
+const DEFAULT_PROMPT_MENTION_TRIGGER = "@";
 let orchestrationConfig = {
   default_orchestration_preset_id: "",
   presets: [],
@@ -43,6 +44,7 @@ let promptMentionAutocompleteBound = false;
 let promptMentionOptions = [];
 let activePromptMentionIndex = -1;
 let promptMentionQuery = "";
+let promptMentionTrigger = DEFAULT_PROMPT_MENTION_TRIGGER;
 let promptMentionRange = {
   start: 0,
   end: 0,
@@ -218,7 +220,7 @@ export async function handleSend() {
   }
 
   const mention = parseLeadingRoleMention(rawText);
-  if (rawText.startsWith("@") && mention.error) {
+  if (startsWithPromptMention(rawText) && mention.error) {
     sysLog(mention.error, "log-error");
     return;
   }
@@ -599,6 +601,7 @@ function refreshPromptMentionAutocomplete() {
     promptMentionOptions[activePromptMentionIndex]?.roleId || "";
   promptMentionOptions = nextOptions;
   promptMentionQuery = mentionContext.query;
+  promptMentionTrigger = mentionContext.trigger;
   promptMentionRange = {
     start: mentionContext.start,
     end: mentionContext.end,
@@ -612,12 +615,13 @@ function refreshPromptMentionAutocomplete() {
 
 function parseLeadingRoleMention(text) {
   const source = String(text || "").trim();
-  if (!source.startsWith("@")) {
+  const trigger = getPromptMentionTrigger(source);
+  if (!trigger) {
     return { roleId: null, promptText: source, error: "" };
   }
   const candidates = listMentionableRoleCandidates();
   const matched = [];
-  const normalizedSource = source.toLowerCase();
+  const normalizedSource = normalizePromptMentionSource(source).toLowerCase();
   candidates.forEach((candidate) => {
     const prefix = `@${candidate.term}`.toLowerCase();
     if (!normalizedSource.startsWith(prefix)) {
@@ -803,10 +807,11 @@ function getPromptMentionContext() {
     return null;
   }
   const sourceAfterLeadingWhitespace = source.slice(mentionStart);
-  if (!sourceAfterLeadingWhitespace.startsWith("@")) {
+  const trigger = getPromptMentionTrigger(sourceAfterLeadingWhitespace);
+  if (!trigger) {
     return null;
   }
-  const mentionTokenMatch = sourceAfterLeadingWhitespace.match(/^@(\S*)/);
+  const mentionTokenMatch = sourceAfterLeadingWhitespace.match(/^[@＠](\S*)/);
   if (!mentionTokenMatch) {
     return null;
   }
@@ -815,12 +820,13 @@ function getPromptMentionContext() {
     return null;
   }
   const prefix = source.slice(mentionStart, selectionStart);
-  if (!prefix.startsWith("@") || /\s/.test(prefix.slice(1))) {
+  if (!startsWithPromptMention(prefix) || /\s/.test(prefix.slice(1))) {
     return null;
   }
   return {
     start: mentionStart,
     end: mentionEnd,
+    trigger,
     query: prefix.slice(1).trim(),
   };
 }
@@ -915,7 +921,10 @@ function selectPromptMentionOption(index) {
   const before = source.slice(0, promptMentionRange.start);
   const after = source.slice(promptMentionRange.end);
   const spacer = after.length === 0 || /^\s/.test(after) ? "" : " ";
-  const insertedMention = `@${option.insertTerm}`;
+  const mentionTrigger =
+    getPromptMentionTrigger(source.slice(promptMentionRange.start))
+    || promptMentionTrigger;
+  const insertedMention = `${mentionTrigger}${option.insertTerm}`;
   const nextValue = `${before}${insertedMention}${spacer}${after || " "}`;
 
   els.promptInput.value = nextValue;
@@ -940,6 +949,7 @@ function dismissPromptMentionAutocomplete() {
   promptMentionOptions = [];
   activePromptMentionIndex = -1;
   promptMentionQuery = "";
+  promptMentionTrigger = DEFAULT_PROMPT_MENTION_TRIGGER;
   promptMentionRange = {
     start: 0,
     end: 0,
@@ -980,6 +990,19 @@ function containsNode(node, target) {
     return true;
   }
   return typeof node.contains === "function" ? node.contains(target) : false;
+}
+
+function getPromptMentionTrigger(value) {
+  const firstChar = String(value || "").charAt(0);
+  return firstChar === "@" || firstChar === "＠" ? firstChar : "";
+}
+
+function startsWithPromptMention(value) {
+  return getPromptMentionTrigger(value) !== "";
+}
+
+function normalizePromptMentionSource(value) {
+  return String(value || "").replace(/^＠/, "@");
 }
 
 function getPromptMentionMonogram(value) {
