@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-teams"
-version = "0.1.0"
+name = "cool-play-agent-teams"
+version = "0.0.1"
 description = "Role-driven multi-agent framework with strong typing and tool-based collaboration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -73,3 +73,4 @@ default-groups = ["evals"]
 [tool.pyright]
 extraPaths = ["src", "tests"]
 typeCheckingMode = "standard"
+

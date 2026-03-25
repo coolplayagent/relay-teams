@@ -1,4 +1,4 @@
-# agent-teams
+# cool-play-agent-teams
 
 Role-driven multi-agent orchestration framework built with strong typing and tool-only collaboration flow.
 Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
@@ -35,7 +35,7 @@ Frontend assets are now decoupled under `frontend/dist` and served by the backen
 
 ### 1) Install dependencies
 
-Use the setup script for your platform, or install directly with `uv`.
+Use the setup script for your platform, install from PyPI, or install directly with `uv`.
 
 Windows:
 
@@ -47,6 +47,12 @@ Linux/macOS:
 
 ```bash
 sh setup.sh
+```
+
+Install from PyPI:
+
+```bash
+pip install cool-play-agent-teams
 ```
 
 Direct install:
@@ -63,3 +69,4 @@ agent-teams --help
 # for evals
 agent-teams-evals --help
 ```
+
