@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from datetime import UTC, datetime
+from typing import cast
+
+import httpx
+
+from agent_teams.env.proxy_env import ProxyEnvConfig
 
 from agent_teams.feishu.models import (
     FeishuEnvironment,
@@ -11,9 +17,15 @@ from agent_teams.feishu.models import (
     FeishuTriggerTargetConfig,
     TriggerProcessingResult,
 )
+from lark_oapi.ws.model import ClientConfig
+
 from agent_teams.feishu.subscription_service import (
     FeishuSubscriptionService,
+    _FeishuWsController,
     _FeishuWsHub,
+    _build_websocket_ssl_context,
+    _resolve_websocket_proxy_url,
+    WsClientLike,
 )
 from agent_teams.triggers import (
     TriggerAuthMode,
@@ -53,7 +65,9 @@ def _build_trigger(
     )
 
 
-def _build_runtime(trigger: TriggerDefinition, *, app_secret: str) -> FeishuTriggerRuntimeConfig:
+def _build_runtime(
+    trigger: TriggerDefinition, *, app_secret: str
+) -> FeishuTriggerRuntimeConfig:
     return FeishuTriggerRuntimeConfig(
         trigger_id=trigger.trigger_id,
         trigger_name=trigger.name,
@@ -162,7 +176,10 @@ def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
     service = FeishuSubscriptionService(
         trigger_service=_FakeTriggerService(trigger_a, trigger_b),
         feishu_config_service=_FakeFeishuConfigService(
-            (_build_runtime(trigger_a, app_secret="secret-a"), _build_runtime(trigger_b, app_secret="secret-b"))
+            (
+                _build_runtime(trigger_a, app_secret="secret-a"),
+                _build_runtime(trigger_b, app_secret="secret-b"),
+            )
         ),
         event_handler=_FakeHandler(),
         runner_factory=lambda **_kwargs: runners.pop(0),
@@ -310,3 +327,155 @@ def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots() -> None:
 
     assert created_controllers["trg_b"].stopped is True
     assert hub._thread is None
+
+
+class _FakeWsConnection:
+    async def close(self) -> None:
+        return None
+
+    async def recv(self) -> bytes | str:
+        return b""
+
+
+class _FakeEndpointClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.requests: list[tuple[str, dict[str, str], dict[str, str]]] = []
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, str],
+    ) -> httpx.Response:
+        self.requests.append((url, headers, json))
+        return self.response
+
+
+class _FakeWsClient:
+    def __init__(self) -> None:
+        self._app_id = "cli_demo"
+        self._app_secret = "secret-demo"
+        self._auto_reconnect = True
+        self._ping_interval = 120
+        self._reconnect_count = -1
+        self._reconnect_interval = 120
+        self._reconnect_nonce = 30
+        self._conn: _FakeWsConnection | None = None
+        self._conn_url = ""
+        self._service_id = ""
+        self._conn_id = ""
+        self.configured_ping_interval: int | None = None
+
+    async def _disconnect(self) -> None:
+        self._conn = None
+
+    async def _handle_message(self, msg: bytes) -> None:
+        _ = msg
+
+    async def _write_message(self, data: bytes) -> None:
+        _ = data
+
+    def _fmt_log(self, fmt: str, *args: object) -> str:
+        return fmt.format(*args)
+
+    def _get_conn_url(self) -> str:
+        raise AssertionError("controller should not call SDK _get_conn_url directly")
+
+    def _configure(self, conf: ClientConfig) -> None:
+        ping_interval = getattr(conf, "PingInterval", None)
+        if isinstance(ping_interval, int):
+            self.configured_ping_interval = ping_interval
+
+
+def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> None:
+    controller = _FeishuWsController(
+        runtime_config=_build_runtime(
+            _build_trigger(
+                trigger_id="trg_a",
+                name="bot_a",
+                app_id="cli_demo",
+                app_name="bot-a",
+            ),
+            app_secret="secret-demo",
+        ),
+        event_handler=_FakeHandler(),
+    )
+    fake_http_client = _FakeEndpointClient(
+        httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "URL": "wss://open.feishu.cn/ws?device_id=device-1&service_id=7",
+                    "ClientConfig": {"PingInterval": 45},
+                },
+            },
+            request=httpx.Request(
+                "POST", "https://open.feishu.cn/callback/ws/endpoint"
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        controller, "_create_feishu_http_client", lambda: fake_http_client
+    )
+    ws_client = _FakeWsClient()
+
+    conn_url = controller._get_conn_url(cast(WsClientLike, ws_client))
+
+    assert conn_url == "wss://open.feishu.cn/ws?device_id=device-1&service_id=7"
+    assert fake_http_client.requests == [
+        (
+            "https://open.feishu.cn/callback/ws/endpoint",
+            {"locale": "zh"},
+            {"AppID": "cli_demo", "AppSecret": "secret-demo"},
+        )
+    ]
+    assert ws_client.configured_ping_interval == 45
+
+
+def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        lambda: ProxyEnvConfig(ssl_verify=False),
+    )
+
+    ssl_context = _build_websocket_ssl_context("wss://open.feishu.cn/ws")
+
+    assert ssl_context is not None
+    assert ssl_context.verify_mode == ssl.CERT_NONE
+    assert ssl_context.check_hostname is False
+
+
+def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        lambda: ProxyEnvConfig(
+            https_proxy="http://proxy.internal:8443",
+            http_proxy="http://proxy.internal:8080",
+            no_proxy="localhost,127.0.0.1",
+        ),
+    )
+
+    proxy_url = _resolve_websocket_proxy_url(
+        "wss://open.feishu.cn/ws?device_id=1&service_id=2"
+    )
+
+    assert proxy_url == "http://proxy.internal:8443"
+
+
+def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        lambda: ProxyEnvConfig(
+            https_proxy="http://proxy.internal:8443", no_proxy="open.feishu.cn"
+        ),
+    )
+
+    proxy_url = _resolve_websocket_proxy_url(
+        "wss://open.feishu.cn/ws?device_id=1&service_id=2"
+    )
+
+    assert proxy_url is None

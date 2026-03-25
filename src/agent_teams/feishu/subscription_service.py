@@ -4,24 +4,40 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import ssl
 from contextlib import suppress
 from threading import Event, Lock, Thread
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 from lark_oapi.core.json import JSON
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from websockets.legacy.exceptions import InvalidStatusCode
 
-from agent_teams.feishu.models import FeishuTriggerRuntimeConfig, TriggerProcessingResult
+from agent_teams.env.proxy_env import (
+    load_proxy_env_config,
+    proxy_applies_to_url,
+    resolve_ssl_verify,
+)
+from agent_teams.feishu.models import (
+    FeishuTriggerRuntimeConfig,
+    TriggerProcessingResult,
+)
 from agent_teams.logger import get_logger, log_event
+from agent_teams.net import create_sync_http_client
 from agent_teams.triggers import TriggerDefinition
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from lark_oapi.ws.model import ClientConfig
+
 
 class TriggerServiceLike(Protocol):
-    def list_triggers(self) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
+    def list_triggers(
+        self,
+    ) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
 
 
 class FeishuConfigServiceLike(Protocol):
@@ -72,6 +88,8 @@ class WsConnectionLike(Protocol):
 
 
 class WsClientLike(Protocol):
+    _app_id: str
+    _app_secret: str
     _auto_reconnect: bool
     _ping_interval: int
     _reconnect_count: int
@@ -91,6 +109,8 @@ class WsClientLike(Protocol):
     def _fmt_log(self, fmt: str, *args: object) -> str: ...
 
     def _get_conn_url(self) -> str: ...
+
+    def _configure(self, conf: ClientConfig) -> None: ...
 
 
 class FeishuWsControllerLike(Protocol):
@@ -123,12 +143,12 @@ class FeishuSubscriptionService:
         self._feishu_config_service = feishu_config_service
         self._event_handler = event_handler
         self._runner_factory = (
-            _SharedFeishuRunnerFactory()
-            if runner_factory is None
-            else runner_factory
+            _SharedFeishuRunnerFactory() if runner_factory is None else runner_factory
         )
         self._lock = Lock()
-        self._runners: dict[str, tuple[FeishuTriggerRuntimeConfig, EventRunnerLike]] = {}
+        self._runners: dict[
+            str, tuple[FeishuTriggerRuntimeConfig, EventRunnerLike]
+        ] = {}
 
     def start(self) -> None:
         self.reload()
@@ -255,9 +275,7 @@ class _FeishuWsHub:
         controller_factory: FeishuWsControllerFactory | None = None,
     ) -> None:
         self._controller_factory = (
-            _create_ws_controller
-            if controller_factory is None
-            else controller_factory
+            _create_ws_controller if controller_factory is None else controller_factory
         )
         self._controllers: dict[str, FeishuWsControllerLike] = {}
         self._lock = Lock()
@@ -511,14 +529,18 @@ class _FeishuWsController:
         import lark_oapi.ws.client as ws_client_module
         from lark_oapi.ws.const import DEVICE_ID, SERVICE_ID
 
-        conn_url = client._get_conn_url()
+        conn_url = await asyncio.to_thread(self._get_conn_url, client)
         conn_query = parse_qs(urlparse(conn_url).query)
         conn_ids = conn_query.get(DEVICE_ID)
         service_ids = conn_query.get(SERVICE_ID)
         if not conn_ids or not service_ids:
             raise RuntimeError("Feishu websocket connection metadata is incomplete")
         try:
-            connection = await ws_client_module.websockets.connect(conn_url)
+            connection = await ws_client_module.websockets.connect(
+                conn_url,
+                proxy=_resolve_websocket_proxy_url(conn_url),
+                ssl=_build_websocket_ssl_context(conn_url),
+            )
         except InvalidStatusCode as exc:
             ws_client_module._parse_ws_conn_exception(exc)
             raise
@@ -604,6 +626,49 @@ class _FeishuWsController:
             return random.random() * client._reconnect_nonce
         return float(max(client._reconnect_interval, 1))
 
+    def _get_conn_url(self, client: WsClientLike) -> str:
+        from lark_oapi.ws.const import GEN_ENDPOINT_URI
+        from lark_oapi.ws.exception import ClientException, ServerException
+        from lark_oapi.ws.model import EndpointResp
+
+        response = self._create_feishu_http_client().post(
+            f"https://open.feishu.cn{GEN_ENDPOINT_URI}",
+            headers={"locale": "zh"},
+            json={
+                "AppID": client._app_id,
+                "AppSecret": client._app_secret,
+            },
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ServerException(
+                response.status_code,
+                response.text.strip() or "system busy",
+            ) from exc
+        response_json = _require_json_object(
+            response.json(),
+            error_context="load Feishu websocket endpoint",
+        )
+        endpoint = EndpointResp(response_json)
+        endpoint_code = int(endpoint.code or 0)
+        endpoint_message = str(endpoint.msg or "").strip()
+        if endpoint_code == 0:
+            pass
+        elif endpoint_code in (1, 1000040343):
+            raise ServerException(endpoint_code, endpoint_message or "system busy")
+        else:
+            raise ClientException(endpoint_code, endpoint_message or "unknown error")
+        endpoint_data = endpoint.data
+        if endpoint_data is None or not endpoint_data.URL:
+            raise RuntimeError("Feishu websocket endpoint response missing URL")
+        if endpoint_data.ClientConfig is not None:
+            client._configure(endpoint_data.ClientConfig)
+        return endpoint_data.URL
+
+    def _create_feishu_http_client(self) -> httpx.Client:
+        return create_sync_http_client(proxy_config=load_proxy_env_config())
+
 
 def _create_ws_controller(
     *,
@@ -614,6 +679,50 @@ def _create_ws_controller(
         runtime_config=runtime_config,
         event_handler=event_handler,
     )
+
+
+def _require_json_object(
+    value: object,
+    *,
+    error_context: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{error_context}: invalid JSON response")
+    return dict(value.items())
+
+
+def _build_websocket_ssl_context(url: str) -> ssl.SSLContext | None:
+    if not url.startswith("wss://"):
+        return None
+    ssl_context = ssl.create_default_context()
+    if resolve_ssl_verify(proxy_config=load_proxy_env_config()):
+        return ssl_context
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    return ssl_context
+
+
+def _resolve_websocket_proxy_url(url: str) -> str | None:
+    proxy_config = load_proxy_env_config()
+    if not proxy_applies_to_url(_httpish_url_for_websocket(url), proxy_config):
+        return None
+    if url.startswith("wss://"):
+        return (
+            proxy_config.https_proxy
+            or proxy_config.http_proxy
+            or proxy_config.all_proxy
+        )
+    if url.startswith("ws://"):
+        return proxy_config.http_proxy or proxy_config.all_proxy
+    return None
+
+
+def _httpish_url_for_websocket(url: str) -> str:
+    if url.startswith("wss://"):
+        return f"https://{url.removeprefix('wss://')}"
+    if url.startswith("ws://"):
+        return f"http://{url.removeprefix('ws://')}"
+    return url
 
 
 def _log_processing_result(result: TriggerProcessingResult) -> None:

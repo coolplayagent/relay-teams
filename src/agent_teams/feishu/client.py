@@ -3,17 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from json import dumps
+import time
 
-import lark_oapi as lark
-from lark_oapi.api.contact.v3.model.get_user_request import GetUserRequest
-from lark_oapi.api.im.v1.model.get_chat_request import GetChatRequest
-from lark_oapi.api.im.v1.model.create_message_request import CreateMessageRequest
-from lark_oapi.api.im.v1.model.create_message_request_body import (
-    CreateMessageRequestBody,
-)
+import httpx
 
 from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.feishu.models import FeishuEnvironment
+from agent_teams.net import create_sync_http_client
+
+_TOKEN_REFRESH_SKEW_SECONDS = 60.0
 
 
 def load_feishu_environment(
@@ -43,6 +41,15 @@ def load_feishu_environment(
     )
 
 
+class _CachedTenantAccessToken:
+    def __init__(self, *, value: str, expires_at_epoch_seconds: float) -> None:
+        self.value = value
+        self.expires_at_epoch_seconds = expires_at_epoch_seconds
+
+    def is_expired(self, *, now_epoch_seconds: float) -> bool:
+        return now_epoch_seconds >= self.expires_at_epoch_seconds
+
+
 class FeishuClient:
     def __init__(
         self,
@@ -52,7 +59,8 @@ class FeishuClient:
     ) -> None:
         self._merged_env = None if merged_env is None else dict(merged_env.items())
         self._base_url = base_url.rstrip("/")
-        self._sdk_clients: dict[tuple[str, str, str], lark.Client] = {}
+        self._http_client: httpx.Client | None = None
+        self._token_cache: dict[tuple[str, str, str], _CachedTenantAccessToken] = {}
         self._chat_name_cache: dict[tuple[str, str, str], str] = {}
         self._user_name_cache: dict[tuple[str, str, str], str] = {}
 
@@ -116,16 +124,17 @@ class FeishuClient:
         existing = self._chat_name_cache.get(cache_key)
         if existing is not None:
             return existing
-        request = GetChatRequest.builder().chat_id(normalized_chat_id).build()
-        sdk_client = self._sdk(resolved_environment)
-        im_service = sdk_client.im
-        if im_service is None or im_service.v1 is None:
-            raise RuntimeError("Feishu SDK client did not initialize IM services.")
-        response = im_service.v1.chat.get(request)
-        if not response.success():
-            message = str(response.msg or "").strip() or "unknown_error"
-            raise RuntimeError(f"Feishu API failed to load chat: {message}")
-        chat_name = str(response.data.name or "").strip() if response.data is not None else ""
+        response_json = self._request_json(
+            method="GET",
+            path=f"/open-apis/im/v1/chats/{normalized_chat_id}",
+            environment=resolved_environment,
+            error_context="load chat",
+        )
+        response_data = _require_json_object(
+            response_json.get("data"),
+            error_context="load chat",
+        )
+        chat_name = str(response_data.get("name", "")).strip()
         if not chat_name:
             return None
         self._chat_name_cache[cache_key] = chat_name
@@ -149,25 +158,22 @@ class FeishuClient:
         existing = self._user_name_cache.get(cache_key)
         if existing is not None:
             return existing
-        request = (
-            GetUserRequest.builder()
-            .user_id_type("open_id")
-            .user_id(normalized_open_id)
-            .build()
+        response_json = self._request_json(
+            method="GET",
+            path=f"/open-apis/contact/v3/users/{normalized_open_id}",
+            params={"user_id_type": "open_id"},
+            environment=resolved_environment,
+            error_context="load user",
         )
-        sdk_client = self._sdk(resolved_environment)
-        contact_service = sdk_client.contact
-        if contact_service is None or contact_service.v3 is None:
-            raise RuntimeError("Feishu SDK client did not initialize Contact services.")
-        response = contact_service.v3.user.get(request)
-        if not response.success():
-            message = str(response.msg or "").strip() or "unknown_error"
-            raise RuntimeError(f"Feishu API failed to load user: {message}")
-        user_name = (
-            str(response.data.user.name or "").strip()
-            if response.data is not None and response.data.user is not None
-            else ""
+        response_data = _require_json_object(
+            response_json.get("data"),
+            error_context="load user",
         )
+        user_data = _require_json_object(
+            response_data.get("user"),
+            error_context="load user",
+        )
+        user_name = str(user_data.get("name", "")).strip()
         if not user_name:
             return None
         self._user_name_cache[cache_key] = user_name
@@ -181,48 +187,92 @@ class FeishuClient:
         content: dict[str, object],
         environment: FeishuEnvironment | None,
     ) -> None:
-        request = (
-            CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
-            .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(chat_id)
-                .msg_type(msg_type)
-                .content(dumps(content, ensure_ascii=False))
-                .build()
-            )
-            .build()
+        self._request_json(
+            method="POST",
+            path="/open-apis/im/v1/messages",
+            params={"receive_id_type": "chat_id"},
+            json_body={
+                "receive_id": chat_id,
+                "msg_type": msg_type,
+                "content": dumps(content, ensure_ascii=False),
+            },
+            environment=self.require_environment(environment),
+            error_context="send message",
         )
-        sdk_client = self._sdk(environment)
-        im_service = sdk_client.im
-        if im_service is None:
-            raise RuntimeError("Feishu SDK client did not initialize IM services.")
-        response = im_service.v1.message.create(request)
-        if response.success():
-            return
-        message = str(response.msg or "").strip() or "unknown_error"
-        raise RuntimeError(f"Feishu API failed to send message: {message}")
 
-    def _sdk(self, environment: FeishuEnvironment | None = None) -> lark.Client:
-        resolved_environment = self.require_environment(environment)
-        signature = (
-            resolved_environment.app_id,
-            resolved_environment.app_secret,
+    def _request_json(
+        self,
+        *,
+        method: str,
+        path: str,
+        environment: FeishuEnvironment,
+        error_context: str,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        include_access_token: bool = True,
+    ) -> dict[str, object]:
+        headers: dict[str, str] = {"Content-Type": "application/json; charset=utf-8"}
+        if include_access_token:
+            headers["Authorization"] = (
+                f"Bearer {self._get_tenant_access_token(environment)}"
+            )
+        response = self._client().request(
+            method=method,
+            url=f"{self._base_url}{path}",
+            headers=headers,
+            params=None if params is None else dict(params.items()),
+            json=None if json_body is None else dict(json_body.items()),
+        )
+        response_json = _parse_json_response(response, error_context=error_context)
+        response_code = response_json.get("code")
+        if response_code not in (0, "0", None):
+            response_message = str(response_json.get("msg", "")).strip()
+            message = response_message or "unknown_error"
+            raise RuntimeError(f"Feishu API failed to {error_context}: {message}")
+        return response_json
+
+    def _get_tenant_access_token(self, environment: FeishuEnvironment) -> str:
+        cache_key = (
+            environment.app_id,
+            environment.app_secret,
             self._base_url,
         )
-        existing = self._sdk_clients.get(signature)
-        if existing is not None:
-            return existing
-        client = (
-            lark.Client.builder()
-            .app_id(resolved_environment.app_id)
-            .app_secret(resolved_environment.app_secret)
-            .domain(self._base_url)
-            .log_level(lark.LogLevel.WARNING)
-            .build()
+        now_epoch_seconds = time.time()
+        cached = self._token_cache.get(cache_key)
+        if cached is not None and not cached.is_expired(
+            now_epoch_seconds=now_epoch_seconds
+        ):
+            return cached.value
+        response_json = self._request_json(
+            method="POST",
+            path="/open-apis/auth/v3/tenant_access_token/internal",
+            environment=environment,
+            error_context="obtain tenant access token",
+            json_body={
+                "app_id": environment.app_id,
+                "app_secret": environment.app_secret,
+            },
+            include_access_token=False,
         )
-        self._sdk_clients[signature] = client
-        return client
+        access_token = str(response_json.get("tenant_access_token", "")).strip()
+        if not access_token:
+            raise RuntimeError(
+                "Feishu API failed to obtain tenant access token: missing token"
+            )
+        expire_seconds = _coerce_expire_seconds(response_json.get("expire"))
+        self._token_cache[cache_key] = _CachedTenantAccessToken(
+            value=access_token,
+            expires_at_epoch_seconds=(
+                now_epoch_seconds
+                + max(expire_seconds - _TOKEN_REFRESH_SKEW_SECONDS, 0.0)
+            ),
+        )
+        return access_token
+
+    def _client(self) -> httpx.Client:
+        if self._http_client is None:
+            self._http_client = create_sync_http_client(merged_env=self._merged_env)
+        return self._http_client
 
     def _load_environment(self) -> FeishuEnvironment | None:
         return load_feishu_environment(self._merged_env)
@@ -234,3 +284,49 @@ class FeishuClient:
         if environment is not None:
             return environment
         return self._load_environment()
+
+
+def _parse_json_response(
+    response: httpx.Response,
+    *,
+    error_context: str,
+) -> dict[str, object]:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body_text = exc.response.text.strip()
+        detail = body_text or str(exc)
+        raise RuntimeError(f"Feishu API failed to {error_context}: {detail}") from exc
+    try:
+        response_json = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Feishu API failed to {error_context}: invalid JSON response"
+        ) from exc
+    if not isinstance(response_json, dict):
+        raise RuntimeError(
+            f"Feishu API failed to {error_context}: invalid JSON response"
+        )
+    return dict(response_json.items())
+
+
+def _require_json_object(
+    value: object,
+    *,
+    error_context: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Feishu API failed to {error_context}: missing data")
+    return dict(value.items())
+
+
+def _coerce_expire_seconds(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    value_text = str(value or "").strip()
+    if not value_text:
+        return 0.0
+    try:
+        return float(value_text)
+    except ValueError:
+        return 0.0
