@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
 
 from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
@@ -14,7 +15,7 @@ from agent_teams.triggers.trigger_models import (
     TriggerSourceType,
     TriggerStatus,
 )
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 
 
 class TriggerNameConflictError(ValueError):
@@ -32,108 +33,125 @@ class TriggerEventDuplicateError(ValueError):
 
 class TriggerRepository:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS triggers (
-                trigger_id         TEXT PRIMARY KEY,
-                name               TEXT NOT NULL UNIQUE,
-                display_name       TEXT NOT NULL,
-                source_type        TEXT NOT NULL,
-                status             TEXT NOT NULL,
-                public_token       TEXT UNIQUE,
-                source_config_json TEXT NOT NULL,
-                auth_policies_json TEXT NOT NULL,
-                target_config_json TEXT,
-                created_at         TEXT NOT NULL,
-                updated_at         TEXT NOT NULL
+        def operation() -> None:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS triggers (
+                    trigger_id         TEXT PRIMARY KEY,
+                    name               TEXT NOT NULL UNIQUE,
+                    display_name       TEXT NOT NULL,
+                    source_type        TEXT NOT NULL,
+                    status             TEXT NOT NULL,
+                    public_token       TEXT UNIQUE,
+                    source_config_json TEXT NOT NULL,
+                    auth_policies_json TEXT NOT NULL,
+                    target_config_json TEXT,
+                    created_at         TEXT NOT NULL,
+                    updated_at         TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_triggers_source_type ON triggers(source_type)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers(status)"
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS trigger_events (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id           TEXT NOT NULL UNIQUE,
-                trigger_id         TEXT NOT NULL,
-                trigger_name       TEXT NOT NULL,
-                source_type        TEXT NOT NULL,
-                event_key          TEXT,
-                status             TEXT NOT NULL,
-                received_at        TEXT NOT NULL,
-                occurred_at        TEXT,
-                payload_json       TEXT NOT NULL,
-                metadata_json      TEXT NOT NULL,
-                headers_json       TEXT NOT NULL,
-                remote_addr        TEXT,
-                auth_mode          TEXT,
-                auth_result        TEXT NOT NULL,
-                auth_reason        TEXT,
-                FOREIGN KEY(trigger_id) REFERENCES triggers(trigger_id)
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_triggers_source_type ON triggers(source_type)"
             )
-            """
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers(status)"
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trigger_events (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id           TEXT NOT NULL UNIQUE,
+                    trigger_id         TEXT NOT NULL,
+                    trigger_name       TEXT NOT NULL,
+                    source_type        TEXT NOT NULL,
+                    event_key          TEXT,
+                    status             TEXT NOT NULL,
+                    received_at        TEXT NOT NULL,
+                    occurred_at        TEXT,
+                    payload_json       TEXT NOT NULL,
+                    metadata_json      TEXT NOT NULL,
+                    headers_json       TEXT NOT NULL,
+                    remote_addr        TEXT,
+                    auth_mode          TEXT,
+                    auth_result        TEXT NOT NULL,
+                    auth_reason        TEXT,
+                    FOREIGN KEY(trigger_id) REFERENCES triggers(trigger_id)
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_trigger_events_key
+                ON trigger_events(trigger_id, event_key)
+                WHERE event_key IS NOT NULL
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_trigger_events_trigger
+                ON trigger_events(trigger_id, id DESC)
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_trigger_events_status
+                ON trigger_events(status, id DESC)
+                """
+            )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="TriggerRepository",
+            operation_name="init_tables",
         )
-        self._conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_trigger_events_key
-            ON trigger_events(trigger_id, event_key)
-            WHERE event_key IS NOT NULL
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_trigger_events_trigger
-            ON trigger_events(trigger_id, id DESC)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_trigger_events_status
-            ON trigger_events(status, id DESC)
-            """
-        )
-        self._conn.commit()
 
     def create_trigger(self, trigger: TriggerDefinition) -> TriggerDefinition:
         try:
-            self._conn.execute(
-                """
-                INSERT INTO triggers(
-                    trigger_id, name, display_name, source_type, status, public_token,
-                    source_config_json, auth_policies_json, target_config_json,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    trigger.trigger_id,
-                    trigger.name,
-                    trigger.display_name,
-                    trigger.source_type.value,
-                    trigger.status.value,
-                    trigger.public_token,
-                    json.dumps(trigger.source_config),
-                    json.dumps(
-                        [policy.model_dump() for policy in trigger.auth_policies]
+            run_sqlite_write_with_retry(
+                conn=self._conn,
+                db_path=self._db_path,
+                operation=lambda: self._conn.execute(
+                    """
+                    INSERT INTO triggers(
+                        trigger_id, name, display_name, source_type, status, public_token,
+                        source_config_json, auth_policies_json, target_config_json,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trigger.trigger_id,
+                        trigger.name,
+                        trigger.display_name,
+                        trigger.source_type.value,
+                        trigger.status.value,
+                        trigger.public_token,
+                        json.dumps(trigger.source_config),
+                        json.dumps(
+                            [policy.model_dump() for policy in trigger.auth_policies]
+                        ),
+                        json.dumps(trigger.target_config)
+                        if trigger.target_config is not None
+                        else None,
+                        trigger.created_at.isoformat(),
+                        trigger.updated_at.isoformat(),
                     ),
-                    json.dumps(trigger.target_config)
-                    if trigger.target_config is not None
-                    else None,
-                    trigger.created_at.isoformat(),
-                    trigger.updated_at.isoformat(),
                 ),
+                lock=self._lock,
+                repository_name="TriggerRepository",
+                operation_name="create_trigger",
             )
-            self._conn.commit()
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
             if (
@@ -148,38 +166,44 @@ class TriggerRepository:
 
     def update_trigger(self, trigger: TriggerDefinition) -> TriggerDefinition:
         try:
-            self._conn.execute(
-                """
-                UPDATE triggers
-                SET name=?,
-                    display_name=?,
-                    source_type=?,
-                    status=?,
-                    public_token=?,
-                    source_config_json=?,
-                    auth_policies_json=?,
-                    target_config_json=?,
-                    updated_at=?
-                WHERE trigger_id=?
-                """,
-                (
-                    trigger.name,
-                    trigger.display_name,
-                    trigger.source_type.value,
-                    trigger.status.value,
-                    trigger.public_token,
-                    json.dumps(trigger.source_config),
-                    json.dumps(
-                        [policy.model_dump() for policy in trigger.auth_policies]
+            run_sqlite_write_with_retry(
+                conn=self._conn,
+                db_path=self._db_path,
+                operation=lambda: self._conn.execute(
+                    """
+                    UPDATE triggers
+                    SET name=?,
+                        display_name=?,
+                        source_type=?,
+                        status=?,
+                        public_token=?,
+                        source_config_json=?,
+                        auth_policies_json=?,
+                        target_config_json=?,
+                        updated_at=?
+                    WHERE trigger_id=?
+                    """,
+                    (
+                        trigger.name,
+                        trigger.display_name,
+                        trigger.source_type.value,
+                        trigger.status.value,
+                        trigger.public_token,
+                        json.dumps(trigger.source_config),
+                        json.dumps(
+                            [policy.model_dump() for policy in trigger.auth_policies]
+                        ),
+                        json.dumps(trigger.target_config)
+                        if trigger.target_config is not None
+                        else None,
+                        trigger.updated_at.isoformat(),
+                        trigger.trigger_id,
                     ),
-                    json.dumps(trigger.target_config)
-                    if trigger.target_config is not None
-                    else None,
-                    trigger.updated_at.isoformat(),
-                    trigger.trigger_id,
                 ),
+                lock=self._lock,
+                repository_name="TriggerRepository",
+                operation_name="update_trigger",
             )
-            self._conn.commit()
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
             if (
@@ -226,45 +250,65 @@ class TriggerRepository:
         return tuple(self._row_to_trigger(row) for row in rows)
 
     def delete_trigger(self, trigger_id: str) -> None:
-        self._conn.execute("DELETE FROM triggers WHERE trigger_id=?", (trigger_id,))
-        self._conn.commit()
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM triggers WHERE trigger_id=?", (trigger_id,)
+            ),
+            lock=self._lock,
+            repository_name="TriggerRepository",
+            operation_name="delete_trigger",
+        )
 
     def delete_events_by_trigger(self, trigger_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM trigger_events WHERE trigger_id=?", (trigger_id,)
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM trigger_events WHERE trigger_id=?", (trigger_id,)
+            ),
+            lock=self._lock,
+            repository_name="TriggerRepository",
+            operation_name="delete_events_by_trigger",
         )
-        self._conn.commit()
 
     def create_event(self, event: TriggerEventRecord) -> TriggerEventRecord:
         try:
-            cursor = self._conn.execute(
-                """
-                INSERT INTO trigger_events(
-                    event_id, trigger_id, trigger_name, source_type, event_key,
-                    status, received_at, occurred_at, payload_json, metadata_json,
-                    headers_json, remote_addr, auth_mode, auth_result, auth_reason
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.event_id,
-                    event.trigger_id,
-                    event.trigger_name,
-                    event.source_type.value,
-                    event.event_key,
-                    event.status.value,
-                    event.received_at.isoformat(),
-                    event.occurred_at.isoformat() if event.occurred_at else None,
-                    json.dumps(event.payload),
-                    json.dumps(event.metadata),
-                    json.dumps(event.headers),
-                    event.remote_addr,
-                    event.auth_mode.value if event.auth_mode else None,
-                    event.auth_result,
-                    event.auth_reason,
+            cursor = run_sqlite_write_with_retry(
+                conn=self._conn,
+                db_path=self._db_path,
+                operation=lambda: self._conn.execute(
+                    """
+                    INSERT INTO trigger_events(
+                        event_id, trigger_id, trigger_name, source_type, event_key,
+                        status, received_at, occurred_at, payload_json, metadata_json,
+                        headers_json, remote_addr, auth_mode, auth_result, auth_reason
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        event.trigger_id,
+                        event.trigger_name,
+                        event.source_type.value,
+                        event.event_key,
+                        event.status.value,
+                        event.received_at.isoformat(),
+                        event.occurred_at.isoformat() if event.occurred_at else None,
+                        json.dumps(event.payload),
+                        json.dumps(event.metadata),
+                        json.dumps(event.headers),
+                        event.remote_addr,
+                        event.auth_mode.value if event.auth_mode else None,
+                        event.auth_result,
+                        event.auth_reason,
+                    ),
                 ),
+                lock=self._lock,
+                repository_name="TriggerRepository",
+                operation_name="create_event",
             )
-            self._conn.commit()
             sequence_id = cursor.lastrowid
             if not isinstance(sequence_id, int):
                 raise RuntimeError("Failed to resolve inserted trigger event row id")

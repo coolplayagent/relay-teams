@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -147,3 +148,102 @@ class TriggerProcessingResult(BaseModel):
     run_id: str | None = None
     ignored: bool = False
     reason: str | None = None
+
+
+class FeishuMessageProcessingStatus(str, Enum):
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    WAITING_RESULT = "waiting_result"
+    RETRYABLE_FAILED = "retryable_failed"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+    IGNORED = "ignored"
+    DEAD_LETTER = "dead_letter"
+
+
+class FeishuMessageDeliveryStatus(str, Enum):
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class FeishuMessagePoolRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sequence_id: int = Field(default=0, ge=0)
+    message_pool_id: str = Field(min_length=1)
+    trigger_id: str = Field(min_length=1)
+    trigger_name: str = Field(min_length=1)
+    tenant_key: str = Field(min_length=1)
+    chat_id: str = Field(min_length=1)
+    chat_type: str = Field(min_length=1)
+    event_id: str = Field(min_length=1)
+    message_key: str = Field(min_length=1)
+    message_id: str | None = None
+    command_name: str | None = None
+    intent_text: str = ""
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
+    processing_status: FeishuMessageProcessingStatus = (
+        FeishuMessageProcessingStatus.QUEUED
+    )
+    ack_status: FeishuMessageDeliveryStatus = FeishuMessageDeliveryStatus.PENDING
+    ack_text: str | None = None
+    final_reply_status: FeishuMessageDeliveryStatus = (
+        FeishuMessageDeliveryStatus.PENDING
+    )
+    final_reply_text: str | None = None
+    delivery_count: int = Field(default=1, ge=1)
+    process_attempts: int = Field(default=0, ge=0)
+    ack_attempts: int = Field(default=0, ge=0)
+    final_reply_attempts: int = Field(default=0, ge=0)
+    session_id: str | None = None
+    run_id: str | None = None
+    next_attempt_at: datetime
+    last_claimed_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class FeishuChatQueueItemPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    message_pool_id: str = Field(min_length=1)
+    processing_status: FeishuMessageProcessingStatus
+    intent_preview: str = ""
+    run_id: str | None = None
+    run_status: str | None = None
+    run_phase: str | None = None
+    blocking_reason: str | None = None
+    last_error: str | None = None
+
+
+class FeishuChatQueueSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trigger_id: str = Field(min_length=1)
+    tenant_key: str = Field(min_length=1)
+    chat_id: str = Field(min_length=1)
+    active_total: int = Field(default=0, ge=0)
+    queued_count: int = Field(default=0, ge=0)
+    claimed_count: int = Field(default=0, ge=0)
+    waiting_result_count: int = Field(default=0, ge=0)
+    retryable_failed_count: int = Field(default=0, ge=0)
+    cancelled_count: int = Field(default=0, ge=0)
+    dead_letter_count: int = Field(default=0, ge=0)
+    processing_item: FeishuChatQueueItemPreview | None = None
+    queued_items: tuple[FeishuChatQueueItemPreview, ...] = ()
+
+
+class FeishuChatQueueClearResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trigger_id: str = Field(min_length=1)
+    tenant_key: str = Field(min_length=1)
+    chat_id: str = Field(min_length=1)
+    cleared_queue_count: int = Field(default=0, ge=0)
+    stopped_run_count: int = Field(default=0, ge=0)

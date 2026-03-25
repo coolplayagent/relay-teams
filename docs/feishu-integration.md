@@ -123,18 +123,50 @@ If a bot's runtime preset changes, Agent Teams clears that bot's external chat
 bindings. Existing sessions keep their history, but the next inbound message starts
 or rebinds to a new session using the new preset.
 
+## Inbound Message Pool
+
+Inbound Feishu text messages are now processed through a durable message pool.
+
+Behavior:
+
+- the SDK callback no longer creates runs directly
+- each accepted message is first written to the local `feishu_message_pool`
+- deduplication still uses the Feishu `message_id`, falling back to `event_id`
+- duplicate deliveries do not send a second acknowledgement
+- same-chat messages are processed in order
+- acknowledgement text is queue-aware
+  - no backlog: `收到，正在处理。`
+  - backlog exists: `收到，已进入排队。当前聊天前面还有 N 条消息。`
+- final Feishu replies for inbound chat messages are sent by the message-pool worker
+  after the run reaches a terminal state
+- current queue-aware acknowledgement text is:
+  - no backlog: `收到，正在处理。`
+  - backlog exists: `收到，已进入排队。当前聊天前面还有 N 条消息。`
+- waiting messages reconcile against `run_runtime`; stalled rows are retried instead
+  of remaining stuck in `waiting_result`
+
+This separates three concerns:
+
+- `trigger_events`: raw ingest audit
+- `feishu_message_pool`: inbound message lifecycle and retry state
+- `run_runtime` / run events: actual run execution state
+
+For inbound Feishu chat messages, automatic `run_completed` / `run_failed`
+notifications to Feishu are suppressed so the user receives only the message-pool
+final reply, not a duplicate terminal notification.
+
 ## Session Commands
 
 Feishu chat sessions also support lightweight chat commands:
 
 - `help`: shows the command list
-- `status`: shows the active post-clear message count and active post-clear token totals
-- `clear`: inserts a logical history divider for that session
+- `status`: shows the active session summary and the current chat queue state
+- `clear`: clears the active session context and cancels queued messages for that chat
 
-`clear` no longer deletes persisted `messages` or `token_usage`. It resets only the
-active conversation context used for subsequent Feishu status output and future run
-continuity. Earlier rounds remain available in the web UI and are rendered behind a
-history-cleared divider.
+`clear` still does not delete persisted `messages` or `token_usage`. It inserts the
+session history divider as before, and also marks the current chat's active
+`feishu_message_pool` items as cancelled so they no longer execute or emit final
+chat replies.
 
 ## Notifications
 

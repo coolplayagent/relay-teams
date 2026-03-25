@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import Future as ThreadFuture
 from json import dumps
-from typing import Awaitable, Callable, cast
+from typing import Awaitable, Callable, TypeVar, cast
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
@@ -48,6 +49,7 @@ from agent_teams.trace import bind_trace_context
 from agent_teams.agents.tasks.models import TaskRecord
 
 logger = get_logger(__name__)
+_T = TypeVar("_T")
 
 
 class RunManager:
@@ -94,6 +96,10 @@ class RunManager:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+
+    def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._event_loop = loop
 
     def _ensure_session(self, session_id: str) -> str:
         _ = self._session_repo.get(session_id)
@@ -208,6 +214,14 @@ class RunManager:
                 self._running_run_ids.discard(run_id)
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        if self._should_delegate_to_bound_loop():
+            delegated_intent = intent.model_copy(deep=True)
+            return self._call_in_bound_loop(
+                lambda: self._create_run_local(delegated_intent)
+            )
+        return self._create_run_local(intent)
+
+    def _create_run_local(self, intent: IntentInput) -> tuple[str, str]:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
         intent = self._prepare_intent(intent)
@@ -312,6 +326,12 @@ class RunManager:
         return run_id, session_id
 
     def ensure_run_started(self, run_id: str) -> None:
+        if self._should_delegate_to_bound_loop():
+            self._call_in_bound_loop(lambda: self._ensure_run_started_local(run_id))
+            return
+        self._ensure_run_started_local(run_id)
+
+    def _ensure_run_started_local(self, run_id: str) -> None:
         if run_id in self._running_run_ids:
             return
         if run_id in self._pending_runs:
@@ -728,6 +748,12 @@ class RunManager:
         )
 
     def stop_run(self, run_id: str) -> None:
+        if self._should_delegate_to_bound_loop():
+            self._call_in_bound_loop(lambda: self._stop_run_local(run_id))
+            return
+        self._stop_run_local(run_id)
+
+    def _stop_run_local(self, run_id: str) -> None:
         self._run_control_manager.clear_paused_subagent_for_run(run_id)
         if run_id in self._pending_runs and run_id not in self._running_run_ids:
             intent = self._pending_runs.pop(run_id)
@@ -790,6 +816,30 @@ class RunManager:
                 message="Run stop requested",
                 payload={"was_running": requested},
             )
+
+    def _should_delegate_to_bound_loop(self) -> bool:
+        loop = self._event_loop
+        if loop is None:
+            return False
+        try:
+            return asyncio.get_running_loop() is not loop
+        except RuntimeError:
+            return True
+
+    def _call_in_bound_loop(self, callback: Callable[[], _T]) -> _T:
+        loop = self._event_loop
+        if loop is None:
+            return callback()
+        result: ThreadFuture[_T] = ThreadFuture()
+
+        def runner() -> None:
+            try:
+                result.set_result(callback())
+            except Exception as exc:
+                result.set_exception(exc)
+
+        loop.call_soon_threadsafe(runner)
+        return result.result(timeout=30)
 
     def resume_run(self, run_id: str) -> str:
         if run_id in self._running_run_ids:

@@ -85,6 +85,15 @@ class _FakeFeishuClient:
         self.sent.append(("card", chat_id, card, environment))
 
 
+class _FakeTerminalNotificationSuppressor:
+    def __init__(self, *, suppress: bool) -> None:
+        self.suppress = suppress
+
+    def should_suppress_terminal_notification(self, run_id: str | None) -> bool:
+        _ = run_id
+        return self.suppress
+
+
 def _build_runtime() -> FeishuTriggerRuntimeConfig:
     return FeishuTriggerRuntimeConfig(
         trigger_id="trg_feishu",
@@ -174,6 +183,36 @@ def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
         session_repo=_FakeSessionRepo(),
         runtime_config_lookup=_FakeRuntimeConfigLookup(None),
         feishu_client=client,
+    )
+
+    dispatcher.dispatch(
+        NotificationRequest(
+            notification_type=NotificationType.RUN_COMPLETED,
+            title="Run Completed",
+            body="ok",
+            channels=(NotificationChannel.FEISHU,),
+            dedupe_key="run_completed:run-1",
+            context=NotificationContext(
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="trace-1",
+            ),
+        )
+    )
+
+    assert client.sent == []
+
+
+def test_dispatcher_skips_terminal_notifications_when_pool_owns_reply() -> None:
+    client = _FakeFeishuClient()
+    runtime = _build_runtime()
+    dispatcher = FeishuNotificationDispatcher(
+        session_repo=_FakeSessionRepo(),
+        runtime_config_lookup=_FakeRuntimeConfigLookup(runtime),
+        feishu_client=client,
+        terminal_notification_suppressor=_FakeTerminalNotificationSuppressor(
+            suppress=True
+        ),
     )
 
     dispatcher.dispatch(

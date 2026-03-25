@@ -989,13 +989,18 @@ Behavior:
 - Accepts `group` and `p2p` text messages.
 - For `group` chats configured with `trigger_rule = "mention_only"`, only messages whose mention list includes the configured application name create runs.
 - For `p2p` chats, any text message creates a run and `mention_only` does not require an application mention.
-- Deduplicates delivery using the Feishu `event_id`.
+- Persists accepted inbound messages in a local message pool before execution.
+- Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
+- Same-chat inbound messages are processed in queue order.
+- Acknowledgement text reflects the current chat backlog.
 - Reuses one internal session per `trigger_id + tenant_key + chat_id`.
 - Requires no public callback URL.
 - Runs one SDK long connection per enabled Feishu trigger whose credentials are ready.
 - Supports multiple Feishu bots at the same time.
 - Supports session commands `help`, `status`, and `clear`.
-- `clear` inserts a logical history divider instead of deleting persisted session rows.
+- `status` shows both session usage and the current chat queue state.
+- `clear` inserts the logical session history divider and also cancels active queued
+  messages for that chat so they do not continue executing.
 
 Recommended trigger contract:
 - `source_type = "im"`
@@ -1052,6 +1057,7 @@ Feishu-specific response additions:
 Notes:
 - Feishu secrets are stored in keyring, not in the trigger table, and trigger read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
 - When a Feishu trigger's runtime preset changes, the backend clears that trigger's external chat bindings so the next message creates a session with the new preset.
+- For inbound Feishu chat messages, terminal Feishu replies are owned by the message pool worker, and the generic Feishu `run_completed` / `run_failed` notification path is suppressed to avoid duplicate replies.
 
 ### `GET /triggers/{trigger_id}/events`
 

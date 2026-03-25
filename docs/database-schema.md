@@ -399,7 +399,81 @@ Purpose: append-only ingest audit log for trigger events.
 
 ---
 
-### 2.9.1 `gateway_sessions`
+### 2.10 `feishu_message_pool`
+
+```sql
+CREATE TABLE IF NOT EXISTS feishu_message_pool (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_pool_id       TEXT NOT NULL UNIQUE,
+    trigger_id            TEXT NOT NULL,
+    trigger_name          TEXT NOT NULL,
+    tenant_key            TEXT NOT NULL,
+    chat_id               TEXT NOT NULL,
+    chat_type             TEXT NOT NULL,
+    event_id              TEXT NOT NULL,
+    message_key           TEXT NOT NULL,
+    message_id            TEXT,
+    command_name          TEXT,
+    intent_text           TEXT NOT NULL,
+    payload_json          TEXT NOT NULL,
+    metadata_json         TEXT NOT NULL,
+    processing_status     TEXT NOT NULL,
+    ack_status            TEXT NOT NULL,
+    ack_text              TEXT,
+    final_reply_status    TEXT NOT NULL,
+    final_reply_text      TEXT,
+    delivery_count        INTEGER NOT NULL,
+    process_attempts      INTEGER NOT NULL,
+    ack_attempts          INTEGER NOT NULL,
+    final_reply_attempts  INTEGER NOT NULL,
+    session_id            TEXT,
+    run_id                TEXT,
+    next_attempt_at       TEXT NOT NULL,
+    last_claimed_at       TEXT,
+    last_error            TEXT,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    completed_at          TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feishu_message_pool_key
+    ON feishu_message_pool(trigger_id, tenant_key, message_key);
+CREATE INDEX IF NOT EXISTS idx_feishu_message_pool_status
+    ON feishu_message_pool(processing_status, next_attempt_at, id ASC);
+CREATE INDEX IF NOT EXISTS idx_feishu_message_pool_chat
+    ON feishu_message_pool(trigger_id, tenant_key, chat_id, id ASC);
+CREATE INDEX IF NOT EXISTS idx_feishu_message_pool_run
+    ON feishu_message_pool(run_id, updated_at DESC);
+```
+
+Purpose: durable inbound Feishu message queue and lifecycle ledger.
+
+`processing_status` values:
+- `queued`
+- `claimed`
+- `waiting_result`
+- `retryable_failed`
+- `cancelled`
+- `completed`
+- `ignored`
+- `dead_letter`
+
+`ack_status` and `final_reply_status` values:
+- `pending`
+- `sending`
+- `sent`
+- `skipped`
+- `failed`
+- `failed`
+
+Notes:
+- same-chat Feishu messages are processed in sequence order
+- `delivery_count` tracks repeated delivery attempts for the same dedupe key
+- `run_id` links the inbound chat message to the created internal run
+
+---
+
+### 2.10.1 `gateway_sessions`
 
 ```sql
 CREATE TABLE IF NOT EXISTS gateway_sessions (

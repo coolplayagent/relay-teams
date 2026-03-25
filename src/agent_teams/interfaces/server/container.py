@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,6 +33,9 @@ from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_
 from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.feishu import (
     FeishuClient,
+    FeishuInboundRuntime,
+    FeishuMessagePoolRepository,
+    FeishuMessagePoolService,
     FeishuNotificationDispatcher,
     FeishuSubscriptionService,
     FeishuTriggerConfigService,
@@ -249,6 +253,9 @@ class ServerContainer:
         self.trigger_service: TriggerService = TriggerService(
             trigger_repo=self.trigger_repo
         )
+        self.feishu_message_pool_repo: FeishuMessagePoolRepository = (
+            FeishuMessagePoolRepository(runtime.paths.db_path)
+        )
         self.feishu_trigger_config_service = FeishuTriggerConfigService(
             config_dir=config_dir,
             get_trigger=self.trigger_service.get_trigger,
@@ -300,6 +307,7 @@ class ServerContainer:
                     session_repo=self.session_repo,
                     runtime_config_lookup=self.feishu_trigger_config_service,
                     feishu_client=self.feishu_client,
+                    terminal_notification_suppressor=None,
                 ),
             ),
         )
@@ -389,12 +397,41 @@ class ServerContainer:
             orchestration_settings_service=self.orchestration_settings_service,
             get_runtime=lambda: self.runtime,
         )
+        self.feishu_inbound_runtime = FeishuInboundRuntime(
+            session_service=self.session_service,
+            run_service=self.run_service,
+            external_session_binding_repo=self.external_session_binding_repo,
+            feishu_client=self.feishu_client,
+        )
+        self.feishu_message_pool_service = FeishuMessagePoolService(
+            trigger_service=self.trigger_service,
+            runtime_config_lookup=self.feishu_trigger_config_service,
+            inbound_runtime=self.feishu_inbound_runtime,
+            feishu_client=self.feishu_client,
+            message_pool_repo=self.feishu_message_pool_repo,
+            run_runtime_repo=self.run_runtime_repo,
+            event_log=self.event_log,
+        )
+        self.notification_service = NotificationService(
+            run_event_hub=self.run_event_hub,
+            get_config=self.notification_config_manager.get_notification_config,
+            dispatchers=(
+                FeishuNotificationDispatcher(
+                    session_repo=self.session_repo,
+                    runtime_config_lookup=self.feishu_trigger_config_service,
+                    feishu_client=self.feishu_client,
+                    terminal_notification_suppressor=self.feishu_message_pool_service,
+                ),
+            ),
+        )
+        self.run_service._notification_service = self.notification_service
         self.feishu_trigger_handler = FeishuTriggerHandler(
             trigger_service=self.trigger_service,
             feishu_config_service=self.feishu_trigger_config_service,
             session_service=self.session_service,
             run_service=self.run_service,
             external_session_binding_repo=self.external_session_binding_repo,
+            message_pool_service=self.feishu_message_pool_service,
             feishu_client=self.feishu_client,
         )
         self.feishu_subscription_service = FeishuSubscriptionService(
@@ -538,12 +575,15 @@ class ServerContainer:
         )
 
     async def start(self) -> None:
+        self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.feishu_subscription_service.start()
+        self.feishu_message_pool_service.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
+        self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
         return None
 

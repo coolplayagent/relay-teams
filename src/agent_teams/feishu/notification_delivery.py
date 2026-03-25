@@ -52,6 +52,10 @@ class FeishuMessageSender(Protocol):
     ) -> None: ...
 
 
+class TerminalNotificationSuppressor(Protocol):
+    def should_suppress_terminal_notification(self, run_id: str | None) -> bool: ...
+
+
 class FeishuNotificationDispatcher:
     def __init__(
         self,
@@ -59,13 +63,24 @@ class FeishuNotificationDispatcher:
         session_repo: SessionLookup,
         runtime_config_lookup: FeishuRuntimeConfigLookup,
         feishu_client: FeishuMessageSender,
+        terminal_notification_suppressor: TerminalNotificationSuppressor | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._runtime_config_lookup = runtime_config_lookup
         self._feishu_client = feishu_client
+        self._terminal_notification_suppressor = terminal_notification_suppressor
 
     def dispatch(self, request: NotificationRequest) -> None:
         if NotificationChannel.FEISHU not in request.channels:
+            return
+        if (
+            request.notification_type
+            in {NotificationType.RUN_COMPLETED, NotificationType.RUN_FAILED}
+            and self._terminal_notification_suppressor is not None
+            and self._terminal_notification_suppressor.should_suppress_terminal_notification(
+                request.context.run_id
+            )
+        ):
             return
         session = self._session_repo.get(request.context.session_id)
         metadata = session.metadata

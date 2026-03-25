@@ -4,8 +4,9 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.sessions.external_session_binding_models import (
     ExternalSessionBinding,
 )
@@ -13,38 +14,17 @@ from agent_teams.sessions.external_session_binding_models import (
 
 class ExternalSessionBindingRepository:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS external_session_bindings (
-                platform          TEXT NOT NULL,
-                trigger_id        TEXT NOT NULL,
-                tenant_key        TEXT NOT NULL,
-                external_chat_id  TEXT NOT NULL,
-                session_id        TEXT NOT NULL,
-                created_at        TEXT NOT NULL,
-                updated_at        TEXT NOT NULL,
-                PRIMARY KEY (platform, trigger_id, tenant_key, external_chat_id)
-            )
-            """
-        )
-        columns = [
-            str(row["name"])
-            for row in self._conn.execute(
-                "PRAGMA table_info(external_session_bindings)"
-            ).fetchall()
-        ]
-        if "trigger_id" not in columns:
-            # Legacy bindings did not distinguish multiple bots within the same chat.
-            # Rebuild the table to avoid cross-bot session reuse.
-            self._conn.execute("DROP TABLE IF EXISTS external_session_bindings")
+        def operation() -> None:
             self._conn.execute(
                 """
-                CREATE TABLE external_session_bindings (
+                CREATE TABLE IF NOT EXISTS external_session_bindings (
                     platform          TEXT NOT NULL,
                     trigger_id        TEXT NOT NULL,
                     tenant_key        TEXT NOT NULL,
@@ -56,19 +36,49 @@ class ExternalSessionBindingRepository:
                 )
                 """
             )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_external_session_bindings_session
-            ON external_session_bindings(session_id)
-            """
+            columns = [
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(external_session_bindings)"
+                ).fetchall()
+            ]
+            if "trigger_id" not in columns:
+                self._conn.execute("DROP TABLE IF EXISTS external_session_bindings")
+                self._conn.execute(
+                    """
+                    CREATE TABLE external_session_bindings (
+                        platform          TEXT NOT NULL,
+                        trigger_id        TEXT NOT NULL,
+                        tenant_key        TEXT NOT NULL,
+                        external_chat_id  TEXT NOT NULL,
+                        session_id        TEXT NOT NULL,
+                        created_at        TEXT NOT NULL,
+                        updated_at        TEXT NOT NULL,
+                        PRIMARY KEY (platform, trigger_id, tenant_key, external_chat_id)
+                    )
+                    """
+                )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_external_session_bindings_session
+                ON external_session_bindings(session_id)
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_external_session_bindings_trigger
+                ON external_session_bindings(trigger_id, updated_at DESC)
+                """
+            )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="ExternalSessionBindingRepository",
+            operation_name="init_tables",
         )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_external_session_bindings_trigger
-            ON external_session_bindings(trigger_id, updated_at DESC)
-            """
-        )
-        self._conn.commit()
 
     def get_binding(
         self,
@@ -100,34 +110,40 @@ class ExternalSessionBindingRepository:
         session_id: str,
     ) -> ExternalSessionBinding:
         now = datetime.now(tz=timezone.utc).isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO external_session_bindings(
-                platform,
-                trigger_id,
-                tenant_key,
-                external_chat_id,
-                session_id,
-                created_at,
-                updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(platform, trigger_id, tenant_key, external_chat_id)
-            DO UPDATE SET
-                session_id=excluded.session_id,
-                updated_at=excluded.updated_at
-            """,
-            (
-                platform,
-                trigger_id,
-                tenant_key,
-                external_chat_id,
-                session_id,
-                now,
-                now,
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                """
+                INSERT INTO external_session_bindings(
+                    platform,
+                    trigger_id,
+                    tenant_key,
+                    external_chat_id,
+                    session_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform, trigger_id, tenant_key, external_chat_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    platform,
+                    trigger_id,
+                    tenant_key,
+                    external_chat_id,
+                    session_id,
+                    now,
+                    now,
+                ),
             ),
+            lock=self._lock,
+            repository_name="ExternalSessionBindingRepository",
+            operation_name="upsert_binding",
         )
-        self._conn.commit()
         binding = self.get_binding(
             platform=platform,
             trigger_id=trigger_id,
@@ -139,18 +155,30 @@ class ExternalSessionBindingRepository:
         return binding
 
     def delete_by_session(self, session_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM external_session_bindings WHERE session_id=?",
-            (session_id,),
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM external_session_bindings WHERE session_id=?",
+                (session_id,),
+            ),
+            lock=self._lock,
+            repository_name="ExternalSessionBindingRepository",
+            operation_name="delete_by_session",
         )
-        self._conn.commit()
 
     def delete_by_trigger(self, trigger_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM external_session_bindings WHERE trigger_id=?",
-            (trigger_id,),
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM external_session_bindings WHERE trigger_id=?",
+                (trigger_id,),
+            ),
+            lock=self._lock,
+            repository_name="ExternalSessionBindingRepository",
+            operation_name="delete_by_trigger",
         )
-        self._conn.commit()
 
     @staticmethod
     def _to_record(row: sqlite3.Row) -> ExternalSessionBinding:

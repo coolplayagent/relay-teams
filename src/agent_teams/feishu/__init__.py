@@ -13,6 +13,10 @@ if TYPE_CHECKING:
         FEISHU_METADATA_TENANT_KEY,
         FEISHU_METADATA_TRIGGER_ID_KEY,
         FEISHU_PLATFORM,
+        FeishuChatQueueClearResult,
+        FeishuChatQueueItemPreview,
+        FeishuChatQueueSummary,
+        FeishuMessageDeliveryStatus,
         SESSION_METADATA_SOURCE_ICON_KEY,
         SESSION_METADATA_SOURCE_KIND_KEY,
         SESSION_METADATA_SOURCE_LABEL_KEY,
@@ -24,10 +28,15 @@ if TYPE_CHECKING:
         SESSION_TITLE_SOURCE_MANUAL,
         FeishuEnvironment,
         FeishuMessageFormat,
+        FeishuMessagePoolRecord,
+        FeishuMessageProcessingStatus,
         FeishuNormalizedMessage,
         FeishuNotificationTarget,
         TriggerProcessingResult,
     )
+    from agent_teams.feishu.inbound_runtime import FeishuInboundRuntime
+    from agent_teams.feishu.message_pool_repository import FeishuMessagePoolRepository
+    from agent_teams.feishu.message_pool_service import FeishuMessagePoolService
     from agent_teams.feishu.notification_delivery import FeishuNotificationDispatcher
     from agent_teams.feishu.subscription_service import FeishuSubscriptionService
     from agent_teams.feishu.trigger_config_service import FeishuTriggerConfigService
@@ -40,6 +49,10 @@ __all__ = [
     "FEISHU_METADATA_TENANT_KEY",
     "FEISHU_METADATA_TRIGGER_ID_KEY",
     "FEISHU_PLATFORM",
+    "FeishuChatQueueClearResult",
+    "FeishuChatQueueItemPreview",
+    "FeishuChatQueueSummary",
+    "FeishuInboundRuntime",
     "SESSION_METADATA_SOURCE_ICON_KEY",
     "SESSION_METADATA_SOURCE_KIND_KEY",
     "SESSION_METADATA_SOURCE_LABEL_KEY",
@@ -51,7 +64,12 @@ __all__ = [
     "SESSION_TITLE_SOURCE_MANUAL",
     "FeishuClient",
     "FeishuEnvironment",
+    "FeishuMessageDeliveryStatus",
     "FeishuMessageFormat",
+    "FeishuMessagePoolRecord",
+    "FeishuMessagePoolRepository",
+    "FeishuMessagePoolService",
+    "FeishuMessageProcessingStatus",
     "FeishuNormalizedMessage",
     "FeishuNotificationDispatcher",
     "FeishuNotificationTarget",
@@ -84,6 +102,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "FEISHU_METADATA_TRIGGER_ID_KEY",
     ),
     "FEISHU_PLATFORM": ("agent_teams.feishu.models", "FEISHU_PLATFORM"),
+    "FeishuInboundRuntime": (
+        "agent_teams.feishu.inbound_runtime",
+        "FeishuInboundRuntime",
+    ),
     "SESSION_METADATA_SOURCE_ICON_KEY": (
         "agent_teams.feishu.models",
         "SESSION_METADATA_SOURCE_ICON_KEY",
@@ -121,8 +143,40 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "SESSION_TITLE_SOURCE_MANUAL",
     ),
     "FeishuClient": ("agent_teams.feishu.client", "FeishuClient"),
+    "FeishuChatQueueClearResult": (
+        "agent_teams.feishu.models",
+        "FeishuChatQueueClearResult",
+    ),
+    "FeishuChatQueueItemPreview": (
+        "agent_teams.feishu.models",
+        "FeishuChatQueueItemPreview",
+    ),
+    "FeishuChatQueueSummary": (
+        "agent_teams.feishu.models",
+        "FeishuChatQueueSummary",
+    ),
     "FeishuEnvironment": ("agent_teams.feishu.models", "FeishuEnvironment"),
+    "FeishuMessageDeliveryStatus": (
+        "agent_teams.feishu.models",
+        "FeishuMessageDeliveryStatus",
+    ),
     "FeishuMessageFormat": ("agent_teams.feishu.models", "FeishuMessageFormat"),
+    "FeishuMessagePoolRecord": (
+        "agent_teams.feishu.models",
+        "FeishuMessagePoolRecord",
+    ),
+    "FeishuMessagePoolRepository": (
+        "agent_teams.feishu.message_pool_repository",
+        "FeishuMessagePoolRepository",
+    ),
+    "FeishuMessagePoolService": (
+        "agent_teams.feishu.message_pool_service",
+        "FeishuMessagePoolService",
+    ),
+    "FeishuMessageProcessingStatus": (
+        "agent_teams.feishu.models",
+        "FeishuMessageProcessingStatus",
+    ),
     "FeishuNormalizedMessage": (
         "agent_teams.feishu.models",
         "FeishuNormalizedMessage",
