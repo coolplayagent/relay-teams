@@ -41,7 +41,7 @@ def create_task_execution_service(
     workspace_manager: WorkspaceManager,
     app_config_dir: Path | None,
     prompt_instructions: tuple[str, ...] = (),
-    provider_factory: Callable[[RoleDefinition], LLMProvider],
+    provider_factory: Callable[[RoleDefinition, str | None], LLMProvider],
     tool_registry: ToolRegistry,
     skill_registry: SkillRegistry,
     mcp_registry: McpRegistry,

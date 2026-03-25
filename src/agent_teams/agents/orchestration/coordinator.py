@@ -60,7 +60,7 @@ class CoordinatorGraph(BaseModel):
     event_bus: EventLog
     agent_repo: AgentInstanceRepository
     prompt_builder: RuntimePromptBuilder
-    provider_factory: Callable[[RoleDefinition], LLMProvider]
+    provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
     task_execution_service: TaskExecutionService
     run_runtime_repo: RunRuntimeRepository
     run_control_manager: RunControlManager

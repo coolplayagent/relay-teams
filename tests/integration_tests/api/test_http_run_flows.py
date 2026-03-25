@@ -43,7 +43,9 @@ def test_ai_run_uses_fake_llm(
     integration_env: IntegrationEnvironment,
 ) -> None:
     before_response = httpx.get(
-        f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0
+        f"{integration_env.fake_llm_admin_url}/metrics",
+        timeout=5.0,
+        trust_env=False,
     )
     before_response.raise_for_status()
     before_calls = int(before_response.json()["chat_completions_calls"])
@@ -62,7 +64,9 @@ def test_ai_run_uses_fake_llm(
     assert "run_failed" not in event_types
 
     after_response = httpx.get(
-        f"{integration_env.fake_llm_admin_url}/metrics", timeout=5.0
+        f"{integration_env.fake_llm_admin_url}/metrics",
+        timeout=5.0,
+        trust_env=False,
     )
     after_response.raise_for_status()
     after_calls = int(after_response.json()["chat_completions_calls"])

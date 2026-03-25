@@ -136,6 +136,8 @@ class ServerContainer:
         config_dir: Path,
         roles_dir: Path | None = None,
         db_path: Path | None = None,
+        session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
+        | None = None,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -145,6 +147,7 @@ class ServerContainer:
         ensure_app_config_bootstrap(config_dir)
         self.config_dir: Path = config_dir
         self.runtime: RuntimeConfig = runtime
+        self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
             config_dir=config_dir
@@ -358,7 +361,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -577,6 +580,7 @@ class ServerContainer:
             metric_recorder=self.metric_recorder,
             feishu_tool_service=self.feishu_tool_service,
             external_agent_session_manager=self.external_acp_session_manager,
+            session_model_profile_lookup=self._session_model_profile_lookup,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,

@@ -13,7 +13,13 @@ from agent_teams.gateway.gateway_models import (
     GatewayMcpServerSpec,
     GatewaySessionRecord,
 )
+from agent_teams.gateway.gateway_model_profile_override import (
+    GatewayModelProfileOverride,
+)
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
+from agent_teams.gateway.gateway_session_model_profile_store import (
+    GatewaySessionModelProfileStore,
+)
 from agent_teams.sessions import SessionService
 
 
@@ -23,9 +29,13 @@ class GatewaySessionService:
         *,
         repository: GatewaySessionRepository,
         session_service: SessionService,
+        session_model_profile_store: GatewaySessionModelProfileStore | None = None,
     ) -> None:
         self._repository = repository
         self._session_service = session_service
+        self._session_model_profile_store = (
+            session_model_profile_store or GatewaySessionModelProfileStore()
+        )
 
     def create_session(
         self,
@@ -34,6 +44,7 @@ class GatewaySessionService:
         cwd: str | None,
         capabilities: dict[str, JsonValue],
         session_mcp_servers: tuple[GatewayMcpServerSpec, ...] = (),
+        model_profile_override: GatewayModelProfileOverride | None = None,
         external_session_id: str | None = None,
         peer_user_id: str | None = None,
         peer_chat_id: str | None = None,
@@ -51,11 +62,22 @@ class GatewaySessionService:
             peer_chat_id=peer_chat_id,
             cwd=cwd,
             capabilities=capabilities,
+            channel_state=(
+                {"acp_model_profile_override": model_profile_override.to_public_state()}
+                if model_profile_override is not None
+                else {}
+            ),
             session_mcp_servers=session_mcp_servers,
             created_at=now,
             updated_at=now,
         )
-        return self._repository.create(record)
+        created = self._repository.create(record)
+        if model_profile_override is not None:
+            self._session_model_profile_store.set(
+                created.internal_session_id,
+                model_profile_override.to_model_endpoint_config(),
+            )
+        return created
 
     def get_session(self, gateway_session_id: str) -> GatewaySessionRecord:
         return self._repository.get(gateway_session_id)
@@ -83,6 +105,32 @@ class GatewaySessionService:
         updated = existing.model_copy(
             update={
                 "session_mcp_servers": session_mcp_servers,
+                "updated_at": self._utcnow(),
+            }
+        )
+        return self._repository.update(updated)
+
+    def set_session_model_profile_override(
+        self,
+        gateway_session_id: str,
+        model_profile_override: GatewayModelProfileOverride | None,
+    ) -> GatewaySessionRecord:
+        existing = self._repository.get(gateway_session_id)
+        channel_state = dict(existing.channel_state)
+        if model_profile_override is None:
+            channel_state.pop("acp_model_profile_override", None)
+            self._session_model_profile_store.delete(existing.internal_session_id)
+        else:
+            channel_state["acp_model_profile_override"] = (
+                model_profile_override.to_public_state()
+            )
+            self._session_model_profile_store.set(
+                existing.internal_session_id,
+                model_profile_override.to_model_endpoint_config(),
+            )
+        updated = existing.model_copy(
+            update={
+                "channel_state": channel_state,
                 "updated_at": self._utcnow(),
             }
         )

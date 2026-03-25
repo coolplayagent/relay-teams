@@ -75,6 +75,7 @@ def _get_fake_llm_call_count(integration_env: IntegrationEnvironment) -> int:
     response = httpx.get(
         f"{integration_env.fake_llm_admin_url}/metrics",
         timeout=5.0,
+        trust_env=False,
     )
     response.raise_for_status()
     payload = response.json()

@@ -78,8 +78,12 @@ def create_provider_factory(
     metric_recorder: MetricRecorder | None = None,
     feishu_tool_service: FeishuToolService | None = None,
     external_agent_session_manager: ExternalAcpSessionManager | None = None,
-) -> Callable[[RoleDefinition], LLMProvider]:
-    def provider_factory(role: RoleDefinition) -> LLMProvider:
+    session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
+    | None = None,
+) -> Callable[[RoleDefinition, str | None], LLMProvider]:
+    def provider_factory(
+        role: RoleDefinition, session_id: str | None = None
+    ) -> LLMProvider:
         if role.bound_agent_id:
             if external_agent_session_manager is None:
                 return MisconfiguredProvider(
@@ -90,13 +94,21 @@ def create_provider_factory(
                 role=role,
                 session_manager=external_agent_session_manager,
             )
-
+        runtime_to_use = runtime
+        if (
+            session_id is not None
+            and session_model_profile_lookup is not None
+            and (override := session_model_profile_lookup(session_id)) is not None
+        ):
+            runtime_to_use = apply_default_model_profile_override(
+                runtime=runtime, override=override
+            )
         config_to_use = resolve_model_profile_config(
-            runtime=runtime,
+            runtime=runtime_to_use,
             profile_name=role.model_profile,
         )
         if config_to_use is None:
-            config_dir = runtime.paths.config_dir / "model.json"
+            config_dir = runtime_to_use.paths.config_dir / "model.json"
             return MisconfiguredProvider(
                 "No model profile is configured. "
                 f"Configure at least one profile in {config_dir}."
@@ -133,13 +145,36 @@ def create_provider_factory(
                 notification_service=notification_service,
                 token_usage_repo=token_usage_repo,
                 metric_recorder=metric_recorder,
-                retry_config=runtime.llm_retry,
+                retry_config=runtime_to_use.llm_retry,
                 feishu_tool_service=feishu_tool_service,
             ),
         )
         return provider_registry.create(config_to_use)
 
     return provider_factory
+
+
+def apply_default_model_profile_override(
+    *,
+    runtime: RuntimeConfig,
+    override: ModelEndpointConfig,
+) -> RuntimeConfig:
+    next_profiles = dict(runtime.llm_profiles)
+    next_profiles["default"] = override
+    next_status_profiles = tuple(sorted(next_profiles.keys()))
+    return runtime.model_copy(
+        update={
+            "llm_profiles": next_profiles,
+            "default_model_profile": "default",
+            "model_status": runtime.model_status.model_copy(
+                update={
+                    "loaded": True,
+                    "profiles": next_status_profiles,
+                    "error": None,
+                }
+            ),
+        }
+    )
 
 
 def resolve_model_profile_config(

@@ -12,6 +12,9 @@ from agent_teams.env.runtime_env import sync_app_env_to_process_env
 from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay, GatewayAwareMcpRegistry
 from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
+from agent_teams.gateway.gateway_session_model_profile_store import (
+    GatewaySessionModelProfileStore,
+)
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.logger import configure_logging
@@ -36,7 +39,11 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
     configure_logging(config_dir=config_dir, console_enabled_override=False)
-    container = ServerContainer(config_dir=config_dir)
+    session_model_profile_store = GatewaySessionModelProfileStore()
+    container = ServerContainer(
+        config_dir=config_dir,
+        session_model_profile_lookup=session_model_profile_store.get,
+    )
     mcp_relay = AcpMcpRelay()
     gateway_mcp_registry = GatewayAwareMcpRegistry(
         base_registry=container.mcp_registry,
@@ -51,6 +58,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     gateway_session_service = GatewaySessionService(
         repository=gateway_session_repository,
         session_service=container.session_service,
+        session_model_profile_store=session_model_profile_store,
     )
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,

@@ -54,7 +54,7 @@ def wait_for_http_ready(
     process: ManagedProcess,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
-    with httpx.Client(timeout=1.0) as client:
+    with httpx.Client(timeout=1.0, trust_env=False) as client:
         while time.monotonic() < deadline:
             if process.process.poll() is not None:
                 raise RuntimeError(
