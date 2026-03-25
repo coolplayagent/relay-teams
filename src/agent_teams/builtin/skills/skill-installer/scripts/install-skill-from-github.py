@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from agent_teams.skills.installer_support import (
     InstallMethod,
@@ -20,7 +21,6 @@ def main() -> int:
     parser.add_argument("--ref", default="main")
     parser.add_argument("--dest")
     parser.add_argument("--name")
-    parser.add_argument("--role", action="append", default=[])
     parser.add_argument(
         "--method",
         choices=tuple(method.value for method in InstallMethod),
@@ -36,7 +36,6 @@ def main() -> int:
                 url=args.url,
                 dest_root=args.dest,
                 name=args.name,
-                role_ids=tuple(args.role),
                 method=InstallMethod(args.method),
             )
         else:
@@ -50,11 +49,10 @@ def main() -> int:
                 paths=tuple(args.path),
                 dest_root=args.dest,
                 name=args.name,
-                role_ids=tuple(args.role),
                 method=InstallMethod(args.method),
             )
     except SkillInstallerError as exc:
-        print(str(exc))
+        print(str(exc), file=sys.stderr)
         return 1
 
     print(render_install_results_text(results))

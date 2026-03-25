@@ -80,7 +80,9 @@ class AutomationDeliveryRepository:
             operation_name="init_tables",
         )
 
-    def create(self, record: AutomationRunDeliveryRecord) -> AutomationRunDeliveryRecord:
+    def create(
+        self, record: AutomationRunDeliveryRecord
+    ) -> AutomationRunDeliveryRecord:
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
@@ -118,7 +120,9 @@ class AutomationDeliveryRepository:
         )
         return self.get_by_run_id(record.run_id)
 
-    def update(self, record: AutomationRunDeliveryRecord) -> AutomationRunDeliveryRecord:
+    def update(
+        self, record: AutomationRunDeliveryRecord
+    ) -> AutomationRunDeliveryRecord:
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
@@ -265,8 +269,9 @@ class AutomationDeliveryRepository:
         updated = run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
-            operation=lambda: self._conn.execute(
-                """
+            operation=lambda: (
+                self._conn.execute(
+                    """
                 UPDATE automation_deliveries
                 SET started_status=?,
                     updated_at=?
@@ -276,15 +281,16 @@ class AutomationDeliveryRepository:
                     OR (started_status=? AND updated_at<=?)
                   )
                 """,
-                (
-                    AutomationDeliveryStatus.SENDING.value,
-                    updated_at,
-                    automation_delivery_id,
-                    AutomationDeliveryStatus.PENDING.value,
-                    AutomationDeliveryStatus.SENDING.value,
-                    claimed_at,
-                ),
-            ).rowcount,
+                    (
+                        AutomationDeliveryStatus.SENDING.value,
+                        updated_at,
+                        automation_delivery_id,
+                        AutomationDeliveryStatus.PENDING.value,
+                        AutomationDeliveryStatus.SENDING.value,
+                        claimed_at,
+                    ),
+                ).rowcount
+            ),
             lock=self._lock,
             repository_name="AutomationDeliveryRepository",
             operation_name="claim_started",
@@ -310,8 +316,9 @@ class AutomationDeliveryRepository:
         updated = run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
-            operation=lambda: self._conn.execute(
-                """
+            operation=lambda: (
+                self._conn.execute(
+                    """
                 UPDATE automation_deliveries
                 SET terminal_status=?,
                     updated_at=?
@@ -321,15 +328,16 @@ class AutomationDeliveryRepository:
                     OR (terminal_status=? AND updated_at<=?)
                   )
                 """,
-                (
-                    AutomationDeliveryStatus.SENDING.value,
-                    updated_at,
-                    automation_delivery_id,
-                    AutomationDeliveryStatus.PENDING.value,
-                    AutomationDeliveryStatus.SENDING.value,
-                    claimed_at,
-                ),
-            ).rowcount,
+                    (
+                        AutomationDeliveryStatus.SENDING.value,
+                        updated_at,
+                        automation_delivery_id,
+                        AutomationDeliveryStatus.PENDING.value,
+                        AutomationDeliveryStatus.SENDING.value,
+                        claimed_at,
+                    ),
+                ).rowcount
+            ),
             lock=self._lock,
             repository_name="AutomationDeliveryRepository",
             operation_name="claim_terminal",
@@ -402,7 +410,9 @@ class AutomationDeliveryRepository:
             started_attempts=int(row["started_attempts"] or 0),
             terminal_attempts=int(row["terminal_attempts"] or 0),
             started_message=(
-                str(row["started_message"]) if row["started_message"] is not None else None
+                str(row["started_message"])
+                if row["started_message"] is not None
+                else None
             ),
             terminal_message=(
                 str(row["terminal_message"])
@@ -411,7 +421,9 @@ class AutomationDeliveryRepository:
             ),
             started_sent_at=_from_iso(row["started_sent_at"]),
             terminal_sent_at=_from_iso(row["terminal_sent_at"]),
-            last_error=str(row["last_error"]) if row["last_error"] is not None else None,
+            last_error=str(row["last_error"])
+            if row["last_error"] is not None
+            else None,
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )

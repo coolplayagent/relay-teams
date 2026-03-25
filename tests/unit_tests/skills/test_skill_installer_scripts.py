@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import threading
+from urllib.error import URLError
 import zipfile
 
 import pytest
@@ -66,11 +67,6 @@ def test_install_from_repo_paths_falls_back_to_git_on_download_auth_error(
         "_install_via_git",
         lambda **kwargs: expected_result,
     )
-    monkeypatch.setattr(
-        installer_support,
-        "mount_skills_to_roles",
-        lambda **kwargs: ("MainAgent",),
-    )
 
     result = installer_support.install_from_repo_paths(
         repo="openai/skills",
@@ -78,14 +74,45 @@ def test_install_from_repo_paths_falls_back_to_git_on_download_auth_error(
         paths=("skills/.curated/demo-skill",),
         dest_root=str(tmp_path / "skills"),
         name=None,
-        role_ids=("MainAgent",),
         method=installer_support.InstallMethod.AUTO,
     )
 
-    assert result[0].skill_name == expected_result[0].skill_name
-    assert result[0].destination == expected_result[0].destination
-    assert result[0].source == expected_result[0].source
-    assert result[0].mounted_roles == ("MainAgent",)
+    assert result == expected_result
+
+
+def test_install_from_repo_paths_reports_download_and_git_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        installer_support,
+        "_install_via_download",
+        lambda **kwargs: (_ for _ in ()).throw(
+            installer_support._DownloadAuthError("download auth failure")
+        ),
+    )
+    monkeypatch.setattr(
+        installer_support,
+        "_install_via_git",
+        lambda **kwargs: (_ for _ in ()).throw(
+            installer_support.SkillInstallerError("git fallback failure")
+        ),
+    )
+
+    with pytest.raises(installer_support.SkillInstallerError) as exc_info:
+        installer_support.install_from_repo_paths(
+            repo="openai/skills",
+            ref="main",
+            paths=("skills/.curated/demo-skill",),
+            dest_root=str(tmp_path / "skills"),
+            name=None,
+            method=installer_support.InstallMethod.AUTO,
+        )
+
+    message = str(exc_info.value)
+    assert "Direct download failed and git fallback also failed." in message
+    assert "download auth failure" in message
+    assert "git fallback failure" in message
 
 
 def test_list_skills_script_reports_installed_annotations(tmp_path: Path) -> None:
@@ -168,16 +195,72 @@ def test_install_skill_script_downloads_and_installs_skill(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr
     installed_skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "demo-skill"
-    mounted_role_path = tmp_path / ".config" / "agent-teams" / "roles" / "MainAgent.md"
     assert (installed_skill_dir / "SKILL.md").exists()
     assert (installed_skill_dir / "scripts" / "demo.py").exists()
-    assert mounted_role_path.exists()
-    mounted_role_text = mounted_role_path.read_text(encoding="utf-8")
-    assert "skills:" in mounted_role_text
-    assert "- skill-installer" in mounted_role_text
-    assert "- demo-skill" in mounted_role_text
-    assert "Mounted on roles: MainAgent" in result.stdout
+    assert not (
+        tmp_path / ".config" / "agent-teams" / "roles" / "MainAgent.md"
+    ).exists()
     assert "Restart Agent Teams to pick up new skills." in result.stdout
+    assert result.stderr == ""
+
+
+def test_bind_skill_script_updates_main_agent_role(tmp_path: Path) -> None:
+    skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo installer\n---\nUse demo.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_script(
+        script_name="bind-skill-to-role.py",
+        args=(
+            "--skill",
+            "demo-skill",
+            "--role",
+            "MainAgent",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={},
+    )
+
+    assert result.returncode == 0, result.stderr
+    role_path = tmp_path / ".config" / "agent-teams" / "roles" / "MainAgent.md"
+    assert role_path.exists()
+    role_text = role_path.read_text(encoding="utf-8")
+    assert "- demo-skill" in role_text
+    assert "Updated roles: MainAgent" in result.stdout
+    assert result.stderr == ""
+
+
+def test_bind_skill_script_defaults_to_current_role_env(tmp_path: Path) -> None:
+    skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo installer\n---\nUse demo.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_script(
+        script_name="bind-skill-to-role.py",
+        args=(
+            "--skill",
+            "demo-skill",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={
+            "AGENT_TEAMS_CURRENT_ROLE_ID": "Crafter",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    role_path = tmp_path / ".config" / "agent-teams" / "roles" / "Crafter.md"
+    assert role_path.exists()
+    role_text = role_path.read_text(encoding="utf-8")
+    assert "- demo-skill" in role_text
+    assert "Updated roles: Crafter" in result.stdout
 
 
 def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> None:
@@ -224,6 +307,112 @@ def test_resolve_role_mount_targets_defaults_to_current_role_env(
     targets = installer_support._resolve_role_mount_targets(())
 
     assert targets == ("Crafter",)
+
+
+def test_request_bytes_reports_timeout_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_timeout(*args: object, **kwargs: object) -> object:
+        raise URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(installer_support, "urlopen", _raise_timeout)
+
+    with pytest.raises(installer_support.SkillInstallerError) as exc_info:
+        installer_support._request_bytes("https://example.com/skills")
+
+    message = str(exc_info.value)
+    assert "Request timed out after" in message
+    assert "https://example.com/skills" in message
+    assert "TimeoutError: timed out" in message
+
+
+def test_run_git_reports_command_context_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def _failed_run(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["git", "fetch"],
+            returncode=1,
+            stdout="",
+            stderr="fatal: could not read from remote repository",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _failed_run)
+
+    with pytest.raises(installer_support.SkillInstallerError) as exc_info:
+        installer_support._run_git(tmp_path, "git", "fetch")
+
+    message = str(exc_info.value)
+    assert "Git command failed with exit code 1" in message
+    assert "git fetch" in message
+    assert tmp_path.resolve().as_posix() in message
+    assert "fatal: could not read from remote repository" in message
+
+
+def test_run_git_reports_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def _timeout_run(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            cmd=["git", "fetch"],
+            timeout=installer_support._GIT_TIMEOUT_SECONDS,
+        )
+
+    monkeypatch.setattr(subprocess, "run", _timeout_run)
+
+    with pytest.raises(installer_support.SkillInstallerError) as exc_info:
+        installer_support._run_git(tmp_path, "git", "fetch")
+
+    message = str(exc_info.value)
+    assert "Git command timed out after" in message
+    assert "git fetch" in message
+    assert tmp_path.resolve().as_posix() in message
+
+
+def test_install_skill_script_reports_errors_on_stderr(tmp_path: Path) -> None:
+    existing_skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "demo-skill"
+    existing_skill_dir.mkdir(parents=True)
+    (existing_skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: existing\n---\nUse demo.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_script(
+        script_name="install-skill-from-github.py",
+        args=(
+            "--repo",
+            "openai/skills",
+            "--path",
+            "skills/.curated/demo-skill",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={},
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Destination skill directory already exists" in result.stderr
+
+
+def test_bind_skill_script_requires_skill_argument(tmp_path: Path) -> None:
+    result = _run_script(
+        script_name="bind-skill-to-role.py",
+        args=(),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={},
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Provide at least one --skill value" in result.stderr
 
 
 def _run_script(

@@ -34,10 +34,12 @@ Install from a SkillsMP page when the user provides a skillsmp.com/zh skill page
 - SkillsMP page:
   `python "<install-skill-from-github.py>" --url <skillsmp-page-url>`
 
-By default the install script mounts the installed skill onto the current running role.
+After a skill is installed, bind it to one or more roles with the separate binding script.
 
-- Mount to other roles:
-  `python "<install-skill-from-github.py>" --repo <owner>/<repo> --path <path/to/skill> --role MainAgent --role Crafter`
+- Bind to the current running role, or `MainAgent` if no role context is available:
+  `python "<bind-skill-to-role.py>" --skill <skill-name>`
+- Bind to specific roles:
+  `python "<bind-skill-to-role.py>" --skill <skill-name> --role MainAgent --role Crafter`
 
 Communication rules:
 
@@ -47,24 +49,25 @@ Communication rules:
   `<skill-2> (already installed)`
   `Which ones would you like installed?`
 - If the user asked for experimental skills, label the source as experimental.
-- After a successful install, tell the user:
-  `Restart Agent Teams to pick up new skills.`
-- Mention which roles were updated to include the skill.
+- After a successful bind, mention which roles were updated to include the skill.
 - If the runtime server is already open, you may also tell them they can reload skills from the existing settings/API flow.
+- If a script fails, surface the full error text, including timeout, HTTP, network, or git command details. Do not replace it with a generic summary.
 
 Behavior:
 
 - Default install destination is `~/.config/agent-teams/skills/<skill-name>`.
-- Default role mount target is the current running role.
-- If no runtime role context is available, fall back to `MainAgent`.
+- Binding defaults to the current running role.
+- If no runtime role context is available during binding, fall back to `MainAgent`.
 - Listing annotates already-installed skills from the current effective Agent Teams skill registry.
 - Public repos default to direct download.
 - If direct download fails with auth or permission errors, fall back to git sparse checkout.
 - Abort if the destination skill directory already exists.
 - Multiple `--path` values install multiple skills in one run.
-- Supported options: `--ref <ref>`, `--dest <path>`, `--method auto|download|git`, `--name <skill-name>`.
+- Install options: `--ref <ref>`, `--dest <path>`, `--method auto|download|git`, `--name <skill-name>`.
+- Bind options: `--skill <skill-name>` and optional `--role <role-id>`.
 - Use `skills/.curated` by default for curated skills and `skills/.experimental` for experimental skills.
 
 ## Scripts
 - list-skills: List remote skills with installed annotations. (scripts/list-skills.py)
 - install-skill-from-github: Install one or more skills from GitHub or a SkillsMP page URL. (scripts/install-skill-from-github.py)
+- bind-skill-to-role: Bind one or more installed skills to one or more roles. (scripts/bind-skill-to-role.py)

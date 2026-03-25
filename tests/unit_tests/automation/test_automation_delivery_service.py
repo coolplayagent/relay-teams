@@ -114,7 +114,10 @@ def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
 
     assert record is not None
     assert len(feishu_client.sent_messages) == 1
-    assert feishu_client.sent_messages[0]["text"] == "Daily Briefing 定时任务开始执行（手动触发）。"
+    assert (
+        feishu_client.sent_messages[0]["text"]
+        == "Daily Briefing 定时任务开始执行（手动触发）。"
+    )
     persisted = repository.get_by_run_id("run-1")
     assert persisted.started_status.value == "sent"
     assert persisted.terminal_status.value == "pending"
@@ -142,7 +145,9 @@ def test_attempt_started_delivery_claim_prevents_duplicate_send(tmp_path: Path) 
     assert len(feishu_client.sent_messages) == 1
 
 
-def test_process_pending_sends_completed_message_when_run_finishes(tmp_path: Path) -> None:
+def test_process_pending_sends_completed_message_when_run_finishes(
+    tmp_path: Path,
+) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository = _build_service(
         tmp_path
     )

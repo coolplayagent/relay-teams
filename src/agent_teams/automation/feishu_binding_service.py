@@ -63,9 +63,10 @@ class AutomationFeishuBindingService:
             except KeyError:
                 continue
             metadata = session.metadata
-            chat_type = str(
-                metadata.get(FEISHU_METADATA_CHAT_TYPE_KEY, "")
-            ).strip() or "unknown"
+            chat_type = (
+                str(metadata.get(FEISHU_METADATA_CHAT_TYPE_KEY, "")).strip()
+                or "unknown"
+            )
             source_label = str(
                 metadata.get(SESSION_METADATA_SOURCE_LABEL_KEY, "")
             ).strip() or _fallback_source_label(binding.external_chat_id)
@@ -95,7 +96,9 @@ class AutomationFeishuBindingService:
     ) -> AutomationFeishuBinding:
         trigger = self._trigger_lookup.get_trigger(binding.trigger_id)
         if not self._runtime_config_lookup.is_feishu_trigger(trigger):
-            raise ValueError("delivery_binding.trigger_id must reference a Feishu IM trigger")
+            raise ValueError(
+                "delivery_binding.trigger_id must reference a Feishu IM trigger"
+            )
         if (
             self._runtime_config_lookup.get_runtime_config_by_trigger_id(
                 binding.trigger_id

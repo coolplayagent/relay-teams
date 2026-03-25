@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import json
 import subprocess
@@ -399,20 +400,28 @@ export async function runAutomationProject(projectId) {
 """.strip(),
     )
 
-    assert payload["createPayload"]["delivery_binding"]["trigger_id"] == "trg_feishu"
-    assert payload["createPayload"]["delivery_binding"]["chat_id"] == "oc_123"
-    assert payload["createPayload"]["delivery_events"] == [
+    create_payload = cast(dict[str, object], payload["createPayload"])
+    delivery_binding = cast(dict[str, object], create_payload["delivery_binding"])
+    delivery_events = cast(list[object], create_payload["delivery_events"])
+    form_options = cast(dict[str, object], payload["formOptions"])
+    binding_options = cast(
+        list[dict[str, object]],
+        next(
+            cast(list[dict[str, object]], field["options"])
+            for field in cast(list[dict[str, object]], form_options["fields"])
+            if field["id"] == "delivery_binding_key"
+        ),
+    )
+
+    assert delivery_binding["trigger_id"] == "trg_feishu"
+    assert delivery_binding["chat_id"] == "oc_123"
+    assert delivery_events == [
         "started",
         "completed",
         "failed",
     ]
-    bindingField = next(
-        field
-        for field in payload["formOptions"]["fields"]
-        if field["id"] == "delivery_binding_key"
-    )
-    assert bindingField["options"][1]["label"] == "feishu_main - Release Updates"
-    assert bindingField["options"][1]["description"] == "Feishu Main - group"
+    assert binding_options[1]["label"] == "feishu_main - Release Updates"
+    assert binding_options[1]["description"] == "Feishu Main - group"
     assert payload["runCalls"] == ["aut_created"]
 
 

@@ -30,6 +30,7 @@ from agent_teams.tools.registry import build_default_registry
 _DEFAULT_GITHUB_API_BASE = "https://api.github.com"
 _DEFAULT_GITHUB_BASE = "https://github.com"
 _HTTP_TIMEOUT_SECONDS = 30.0
+_GIT_TIMEOUT_SECONDS = 60.0
 _CURRENT_ROLE_ENV_KEY = "AGENT_TEAMS_CURRENT_ROLE_ID"
 _GITHUB_TREE_URL_RE = re.compile(
     r"https://github\.com/(?P<repo>[^/]+/[^/]+)/(?:tree|blob)/(?P<ref>[^/]+)/(?P<path>[^\"'\s<]+)"
@@ -76,7 +77,6 @@ class SkillInstallResult(BaseModel):
     skill_name: str = Field(min_length=1)
     destination: Path
     source: SkillSource
-    mounted_roles: tuple[str, ...] = ()
 
 
 def build_listing_payload(
@@ -118,9 +118,22 @@ def render_install_results_text(results: tuple[SkillInstallResult, ...]) -> str:
         lines.append(
             f"Installed {result.skill_name} -> {result.destination.resolve().as_posix()}"
         )
-        if result.mounted_roles:
-            lines.append("Mounted on roles: " + ", ".join(result.mounted_roles))
     lines.append("Restart Agent Teams to pick up new skills.")
+    return "\n".join(lines)
+
+
+def render_mount_results_text(
+    *,
+    skill_names: tuple[str, ...],
+    role_ids: tuple[str, ...],
+) -> str:
+    normalized_skill_names = _dedupe_non_empty(skill_names)
+    normalized_role_ids = _dedupe_non_empty(role_ids)
+    lines = [
+        "Bound skills: " + ", ".join(normalized_skill_names),
+        "Updated roles: " + ", ".join(normalized_role_ids),
+        "Restart Agent Teams to pick up new skills.",
+    ]
     return "\n".join(lines)
 
 
@@ -161,7 +174,6 @@ def install_from_url(
     url: str,
     dest_root: str | None,
     name: str | None,
-    role_ids: tuple[str, ...],
     method: InstallMethod,
 ) -> tuple[SkillInstallResult, ...]:
     source = resolve_source_from_url(url)
@@ -171,7 +183,6 @@ def install_from_url(
         paths=(source.path,),
         dest_root=dest_root,
         name=name,
-        role_ids=role_ids,
         method=method,
     )
 
@@ -183,7 +194,6 @@ def install_from_repo_paths(
     paths: tuple[str, ...],
     dest_root: str | None,
     name: str | None,
-    role_ids: tuple[str, ...],
     method: InstallMethod,
 ) -> tuple[SkillInstallResult, ...]:
     normalized_paths = tuple(
@@ -212,37 +222,38 @@ def install_from_repo_paths(
     )
     _ensure_destinations_available(destinations)
 
-    resolved_role_ids = _resolve_role_mount_targets(role_ids)
-
     if method == InstallMethod.DOWNLOAD:
-        results = _install_via_download(
+        return _install_via_download(
             source_specs=source_specs,
             destinations=destinations,
             override_name=name,
         )
-        return _mount_roles_for_results(results, resolved_role_ids)
     if method == InstallMethod.GIT:
-        results = _install_via_git(
+        return _install_via_git(
             source_specs=source_specs,
             destinations=destinations,
             override_name=name,
         )
-        return _mount_roles_for_results(results, resolved_role_ids)
 
     try:
-        results = _install_via_download(
+        return _install_via_download(
             source_specs=source_specs,
             destinations=destinations,
             override_name=name,
         )
-        return _mount_roles_for_results(results, resolved_role_ids)
-    except _DownloadAuthError:
-        results = _install_via_git(
-            source_specs=source_specs,
-            destinations=destinations,
-            override_name=name,
-        )
-        return _mount_roles_for_results(results, resolved_role_ids)
+    except _DownloadAuthError as download_error:
+        try:
+            return _install_via_git(
+                source_specs=source_specs,
+                destinations=destinations,
+                override_name=name,
+            )
+        except SkillInstallerError as git_error:
+            raise SkillInstallerError(
+                "Direct download failed and git fallback also failed.\n"
+                f"Download: {download_error}\n"
+                f"Git: {git_error}"
+            ) from git_error
 
 
 def resolve_source_from_url(url: str) -> SkillSource:
@@ -345,7 +356,7 @@ def _install_via_git(
         tmp_dir = Path(tmp_dir_name)
         checkout_dir = tmp_dir / "checkout"
         checkout_dir.mkdir(parents=True, exist_ok=True)
-        last_error: SkillInstallerError | None = None
+        attempt_errors: list[str] = []
         for remote_url in _iter_git_remote_urls(source_specs[0].repo):
             try:
                 _checkout_sparse_repo(
@@ -361,12 +372,12 @@ def _install_via_git(
                     override_name=override_name,
                 )
             except SkillInstallerError as exc:
-                last_error = exc
+                attempt_errors.append(f"{remote_url}: {exc}")
                 _remove_tree(checkout_dir)
                 checkout_dir.mkdir(parents=True, exist_ok=True)
-        if last_error is None:
+        if not attempt_errors:
             raise SkillInstallerError("Git fallback failed")
-        raise last_error
+        raise SkillInstallerError("Git fallback failed:\n" + "\n".join(attempt_errors))
 
 
 def _extract_archive_to_destinations(
@@ -433,15 +444,17 @@ def _download_repo_archive(*, repo: str, ref: str) -> bytes:
     url = f"{github_api_base()}/repos/{repo}/zipball/{ref}"
     try:
         return _request_bytes(url)
-    except HTTPError as exc:
-        if exc.code in {401, 403, 404}:
-            raise _DownloadAuthError(
-                f"Direct download failed for {repo}@{ref}: HTTP {exc.code}"
-            ) from exc
-        raise SkillInstallerError(
-            f"Direct download failed for {repo}@{ref}: HTTP {exc.code}"
-        ) from exc
-    except URLError as exc:
+    except _RequestHttpError as exc:
+        message = (
+            f"Direct download failed for {repo}@{ref}: HTTP {exc.status_code} "
+            f"from {exc.url}"
+        )
+        if exc.detail:
+            message += f" ({exc.detail})"
+        if exc.status_code in {401, 403, 404}:
+            raise _DownloadAuthError(message) from exc
+        raise SkillInstallerError(message) from exc
+    except SkillInstallerError as exc:
         raise SkillInstallerError(
             f"Direct download failed for {repo}@{ref}: {exc}"
         ) from exc
@@ -524,18 +537,37 @@ def _checkout_sparse_repo(
 
 
 def _run_git(cwd: Path, *args: str) -> None:
-    completed = subprocess.run(
-        list(args),
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    command = list(args)
+    command_text = " ".join(command)
+    resolved_cwd = cwd.resolve().as_posix()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise SkillInstallerError(
+            f"Git command not found while running '{command_text}' in "
+            f"{resolved_cwd}: {_format_exception_detail(exc)}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SkillInstallerError(
+            f"Git command timed out after {_GIT_TIMEOUT_SECONDS:.1f}s while "
+            f"running '{command_text}' in {resolved_cwd}: "
+            f"{_format_exception_detail(exc)}"
+        ) from exc
     if completed.returncode != 0:
         stderr = completed.stderr.strip()
         stdout = completed.stdout.strip()
         detail = stderr or stdout or "git command failed"
-        raise SkillInstallerError(detail)
+        raise SkillInstallerError(
+            f"Git command failed with exit code {completed.returncode} while "
+            f"running '{command_text}' in {resolved_cwd}: {detail}"
+        )
 
 
 def _iter_git_remote_urls(repo: str) -> tuple[str, ...]:
@@ -564,8 +596,30 @@ def _request_bytes(url: str) -> bytes:
         headers=_request_headers(),
         method="GET",
     )
-    with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
-        return response.read()
+    try:
+        with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+            return response.read()
+    except HTTPError as exc:
+        raise _RequestHttpError(
+            url=url,
+            status_code=exc.code,
+            detail=_http_error_detail(exc),
+        ) from exc
+    except URLError as exc:
+        reason = exc.reason if exc.reason is not None else exc
+        if _is_timeout_error(reason):
+            raise SkillInstallerError(
+                f"Request timed out after {_HTTP_TIMEOUT_SECONDS:.1f}s: "
+                f"{url} ({_format_error_detail(reason)})"
+            ) from exc
+        raise SkillInstallerError(
+            f"Request failed: {url} ({_format_error_detail(reason)})"
+        ) from exc
+    except TimeoutError as exc:
+        raise SkillInstallerError(
+            f"Request timed out after {_HTTP_TIMEOUT_SECONDS:.1f}s: "
+            f"{url} ({_format_exception_detail(exc)})"
+        ) from exc
 
 
 def _request_headers() -> dict[str, str]:
@@ -602,28 +656,12 @@ def _ensure_destinations_available(destinations: tuple[Path, ...]) -> None:
             )
 
 
-def _mount_roles_for_results(
-    results: tuple[SkillInstallResult, ...],
-    role_ids: tuple[str, ...],
-) -> tuple[SkillInstallResult, ...]:
-    if not results:
-        return ()
-    mounted_role_ids = mount_skills_to_roles(
-        role_ids=role_ids,
-        skill_names=tuple(result.skill_name for result in results),
-    )
-    return tuple(
-        result.model_copy(update={"mounted_roles": mounted_role_ids})
-        for result in results
-    )
-
-
 def mount_skills_to_roles(
     *,
     role_ids: tuple[str, ...],
     skill_names: tuple[str, ...],
 ) -> tuple[str, ...]:
-    normalized_role_ids = _dedupe_non_empty(role_ids)
+    normalized_role_ids = _resolve_role_mount_targets(role_ids)
     normalized_skill_names = _dedupe_non_empty(skill_names)
     if not normalized_skill_names:
         return ()
@@ -682,6 +720,17 @@ class _DownloadAuthError(SkillInstallerError):
     pass
 
 
+class _RequestHttpError(SkillInstallerError):
+    def __init__(self, *, url: str, status_code: int, detail: str) -> None:
+        self.url = url
+        self.status_code = status_code
+        self.detail = detail
+        message = f"HTTP {status_code} for {url}"
+        if detail:
+            message += f" ({detail})"
+        super().__init__(message)
+
+
 def _resolve_role_mount_targets(role_ids: tuple[str, ...]) -> tuple[str, ...]:
     normalized = _dedupe_non_empty(role_ids)
     if normalized:
@@ -715,3 +764,30 @@ def _merge_names(
             known.add(item)
             merged.append(item)
     return tuple(merged)
+
+
+def _http_error_detail(error: HTTPError) -> str:
+    reason = str(error.reason).strip()
+    return reason
+
+
+def _format_exception_detail(error: BaseException) -> str:
+    detail = str(error).strip()
+    if detail:
+        return f"{type(error).__name__}: {detail}"
+    return type(error).__name__
+
+
+def _format_error_detail(value: object) -> str:
+    if isinstance(value, BaseException):
+        return _format_exception_detail(value)
+    detail = str(value).strip()
+    if detail:
+        return detail
+    return type(value).__name__
+
+
+def _is_timeout_error(value: object) -> bool:
+    if isinstance(value, TimeoutError):
+        return True
+    return "timed out" in str(value).strip().lower()

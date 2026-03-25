@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 from agent_teams.skills.installer_support import (
     SkillInstallerError,
@@ -26,7 +27,7 @@ def main() -> int:
             path=args.path,
         )
     except SkillInstallerError as exc:
-        print(str(exc))
+        print(str(exc), file=sys.stderr)
         return 1
 
     if args.format == "json":
