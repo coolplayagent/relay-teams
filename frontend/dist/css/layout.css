@@ -266,6 +266,12 @@
   line-height: 1.25;
 }
 
+.prompt-mention-item-description {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
 .prompt-mention-item-enter {
   flex: 0 0 auto;
   padding: 0.15rem 0.45rem;

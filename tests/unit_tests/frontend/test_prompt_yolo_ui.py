@@ -480,8 +480,8 @@ export async function fetchRoleConfigOptions() {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
         normal_mode_roles: [
-            { role_id: "writer", name: "Writer", description: "" },
-            { role_id: "reviewer", name: "Reviewer", description: "" },
+            { role_id: "writer", name: "Writer", description: "Draft final responses" },
+            { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
         ],
     };
 }
@@ -540,8 +540,8 @@ export const state = {
 let coordinatorRoleId = "Coordinator";
 let mainAgentRoleId = "MainAgent";
 let normalModeRoles = [
-    { role_id: "writer", name: "Writer", description: "" },
-    { role_id: "reviewer", name: "Reviewer", description: "" },
+    { role_id: "writer", name: "Writer", description: "Draft final responses" },
+    { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
 
 export function applyCurrentSessionRecord() {
@@ -754,8 +754,8 @@ export async function fetchRoleConfigOptions() {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
         normal_mode_roles: [
-            { role_id: "writer", name: "Writer", description: "" },
-            { role_id: "reviewer", name: "Reviewer", description: "" },
+            { role_id: "writer", name: "Writer", description: "Draft final responses" },
+            { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
         ],
     };
 }
@@ -814,8 +814,8 @@ export const state = {
 let coordinatorRoleId = "Coordinator";
 let mainAgentRoleId = "MainAgent";
 let normalModeRoles = [
-    { role_id: "writer", name: "Writer", description: "" },
-    { role_id: "reviewer", name: "Reviewer", description: "" },
+    { role_id: "writer", name: "Writer", description: "Draft final responses" },
+    { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
 
 export function applyCurrentSessionRecord() {
@@ -881,8 +881,19 @@ function createElement(initial = {}) {
         dataset: {},
         classList: { toggle() { return undefined; } },
         _listeners: new Map(),
+        _scrollEvents: [],
         addEventListener(type, listener) {
             this._listeners.set(type, listener);
+        },
+        querySelector(selector) {
+            if (selector !== ".prompt-mention-item.active") {
+                return null;
+            }
+            return {
+                scrollIntoView: (options) => {
+                    this._scrollEvents.push(options);
+                },
+            };
         },
         focus() { return undefined; },
         contains(target) {
@@ -894,9 +905,9 @@ function createElement(initial = {}) {
 
 export const els = {
     promptInput: createElement({
-        value: "@Ma",
-        selectionStart: 3,
-        selectionEnd: 3,
+        value: "@",
+        selectionStart: 1,
+        selectionEnd: 1,
         hidden: false,
     }),
     promptMentionMenu: createElement({ hidden: true }),
@@ -945,7 +956,17 @@ handlePromptComposerInput();
 const beforeAsciiSelect = {
     menuHidden: els.promptMentionMenu.hidden,
     menuHtml: els.promptMentionMenu.innerHTML,
+    scrollEvents: els.promptMentionMenu._scrollEvents.slice(),
 };
+
+const arrowDownHandled = handlePromptComposerKeydown({
+    key: "ArrowDown",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+const afterArrowDownScrollEvents = els.promptMentionMenu._scrollEvents.slice();
 
 const asciiEnterHandled = handlePromptComposerKeydown({
     key: "Enter",
@@ -965,6 +986,7 @@ handlePromptComposerInput();
 const beforeFullwidthSelect = {
     menuHidden: els.promptMentionMenu.hidden,
     menuHtml: els.promptMentionMenu.innerHTML,
+    scrollEvents: els.promptMentionMenu._scrollEvents.slice(),
 };
 
 const fullwidthEnterHandled = handlePromptComposerKeydown({
@@ -976,6 +998,8 @@ const fullwidthEnterHandled = handlePromptComposerKeydown({
 
 console.log(JSON.stringify({
     beforeAsciiSelect,
+    arrowDownHandled,
+    afterArrowDownScrollEvents,
     asciiEnterHandled,
     asciiValue,
     asciiSelectionStart,
@@ -1007,12 +1031,18 @@ console.log(JSON.stringify({
     assert "prompt-mention-menu-header" in payload["beforeAsciiSelect"]["menuHtml"]
     assert "prompt-mention-item-accent" in payload["beforeAsciiSelect"]["menuHtml"]
     assert "prompt-mention-menu-footer" in payload["beforeAsciiSelect"]["menuHtml"]
-    assert "prompt-mention-match" in payload["beforeAsciiSelect"]["menuHtml"]
     assert "prompt-mention-match" in payload["beforeFullwidthSelect"]["menuHtml"]
+    assert "Draft final responses" in rendered_ascii_text
     assert "Main Agent" in rendered_ascii_text
     assert "MainAgent" in rendered_ascii_text
     assert "Main Agent" in rendered_fullwidth_text
     assert "MainAgent" in rendered_fullwidth_text
+    assert payload["arrowDownHandled"] is True
+    assert (
+        len(payload["afterArrowDownScrollEvents"])
+        == len(payload["beforeAsciiSelect"]["scrollEvents"]) + 1
+    )
+    assert payload["afterArrowDownScrollEvents"][-1] == {"block": "nearest"}
     assert payload["asciiEnterHandled"] is True
     assert payload["asciiValue"] == "@Main Agent "
     assert payload["asciiSelectionStart"] == 12

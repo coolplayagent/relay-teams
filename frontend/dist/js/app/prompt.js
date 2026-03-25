@@ -696,9 +696,14 @@ function listMentionableRoleCandidates() {
 function listMentionableRoleOptions() {
   const entries = [];
   const byRoleId = new Map();
-  const upsertOption = (roleId, displayName, aliases = []) => {
+  const upsertOption = (
+    roleId,
+    displayName,
+    { aliases = [], description = "" } = {},
+  ) => {
     const safeRoleId = String(roleId || "").trim();
     const safeDisplayName = String(displayName || safeRoleId).trim();
+    const safeDescription = String(description || "").trim();
     if (!safeRoleId || !safeDisplayName) {
       return;
     }
@@ -714,6 +719,9 @@ function listMentionableRoleOptions() {
         existing.displayName = safeDisplayName;
         existing.insertTerm = safeDisplayName;
       }
+      if (!existing.description && safeDescription) {
+        existing.description = safeDescription;
+      }
       nextAliases.forEach((alias) => existing.aliasSet.add(alias));
       return;
     }
@@ -721,6 +729,7 @@ function listMentionableRoleOptions() {
       roleId: safeRoleId,
       displayName: safeDisplayName,
       insertTerm: safeDisplayName,
+      description: safeDescription,
       aliasSet: new Set(nextAliases),
     };
     byRoleId.set(safeRoleId, entry);
@@ -739,13 +748,17 @@ function listMentionableRoleOptions() {
     );
   }
   getNormalModeRoles().forEach((role) => {
-    upsertOption(role?.role_id, role?.name || role?.role_id, [role?.role_id]);
+    upsertOption(role?.role_id, role?.name || role?.role_id, {
+      aliases: [role?.role_id],
+      description: role?.description,
+    });
   });
 
   return entries.map((entry) => ({
     roleId: entry.roleId,
     displayName: entry.displayName,
     insertTerm: entry.insertTerm,
+    description: entry.description,
     aliases: Array.from(entry.aliasSet),
   }));
 }
@@ -859,6 +872,11 @@ function renderPromptMentionAutocomplete() {
                   option.displayName.toLowerCase() === option.roleId.toLowerCase()
                     ? ""
                     : `<span class="prompt-mention-item-id">@${highlightPromptMentionText(option.roleId, promptMentionQuery)}</span>`;
+                const descriptionMeta = option.description
+                  ? `<span class="prompt-mention-item-description">${escapeHtml(
+                      option.description,
+                    )}</span>`
+                  : "";
                 return `
                     <button
                         type="button"
@@ -879,6 +897,7 @@ function renderPromptMentionAutocomplete() {
                                 )}</span>
                                 <span class="prompt-mention-item-enter" aria-hidden="true">Enter</span>
                             </span>
+                            ${descriptionMeta}
                             ${roleIdMeta}
                         </span>
                     </button>
@@ -892,6 +911,7 @@ function renderPromptMentionAutocomplete() {
             <span class="prompt-mention-menu-key">Esc</span>
         </div>
     `;
+  syncPromptMentionActiveOptionIntoView(menu);
 }
 
 function movePromptMentionSelection(direction) {
@@ -980,6 +1000,19 @@ function findPromptMentionOptionElement(target) {
     node = node.parentElement || null;
   }
   return null;
+}
+
+function syncPromptMentionActiveOptionIntoView(menu) {
+  if (!menu || typeof menu.querySelector !== "function") {
+    return;
+  }
+  const activeOption = menu.querySelector(".prompt-mention-item.active");
+  if (!activeOption || typeof activeOption.scrollIntoView !== "function") {
+    return;
+  }
+  activeOption.scrollIntoView({
+    block: "nearest",
+  });
 }
 
 function containsNode(node, target) {
