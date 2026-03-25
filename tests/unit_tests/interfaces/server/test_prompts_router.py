@@ -4,9 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent_teams.agents.execution import system_prompts
 from agent_teams.interfaces.server.deps import (
     get_mcp_registry,
     get_role_registry,
@@ -27,6 +29,17 @@ from agent_teams.workspace import (
     WorkspaceRepository,
     WorkspaceService,
 )
+
+
+@pytest.fixture(autouse=True)
+def _suppress_host_github_prompt_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
 
 
 class _FakeWorkspaceService:

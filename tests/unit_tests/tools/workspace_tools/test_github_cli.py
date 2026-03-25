@@ -39,6 +39,32 @@ class TestGitHubCliPath:
                 assert path == gh
 
     @pytest.mark.asyncio
+    async def test_get_gh_path_prefers_system_gh_over_bundled_binary(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        bundled_name = "gh.exe" if os.name == "nt" else "gh"
+        bundled_gh = cache_dir / bundled_name
+        bundled_gh.write_bytes(b"bundled")
+        system_gh = tmp_path / "system-gh.exe"
+        system_gh.write_bytes(b"system")
+
+        with patch("shutil.which", return_value=str(system_gh)):
+            with patch(
+                "agent_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                cache_dir,
+            ):
+                from agent_teams.tools.workspace_tools import github_cli
+
+                github_cli.clear_gh_path_cache()
+                path = await github_cli.get_gh_path()
+
+        assert path == system_gh
+
+    @pytest.mark.asyncio
     async def test_get_gh_path_downloads_once_for_parallel_calls(
         self,
         tmp_path: Path,
@@ -75,7 +101,7 @@ class TestGitHubCliPath:
                 assert mock_download.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_system_gh_on_download_failure(
+    async def test_get_gh_path_uses_system_gh_without_attempting_download(
         self,
         tmp_path: Path,
     ) -> None:
@@ -96,9 +122,11 @@ class TestGitHubCliPath:
                 with patch(
                     "agent_teams.tools.workspace_tools.github_cli._download_gh",
                     new=AsyncMock(side_effect=RuntimeError("no network")),
-                ):
+                ) as mock_download:
                     path = await github_cli.get_gh_path()
-                    assert path == system_gh
+
+        assert path == system_gh
+        assert mock_download.await_count == 0
 
 
 class TestGitHubCliDownload:

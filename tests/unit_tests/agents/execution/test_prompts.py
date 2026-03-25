@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
+from agent_teams.agents.execution import system_prompts
 from agent_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
@@ -24,6 +27,17 @@ from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.sessions.session_models import SessionMode
+
+
+@pytest.fixture(autouse=True)
+def _suppress_host_github_prompt_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
 
 
 def _role(role_id: str) -> RoleDefinition:
@@ -173,6 +187,41 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert "## Runtime Environment Information" in prompt
     assert "- Operating System:" in prompt
     assert f"- Working Directory: {working_directory.resolve()}" in prompt
+
+
+def test_runtime_environment_prompt_mentions_github_when_token_and_system_gh_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_gh_path = Path("/usr/bin/gh")
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (True, system_gh_path),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert (
+        f"- GitHub CLI: token configured; using system gh at {system_gh_path}" in prompt
+    )
+
+
+def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (True, None),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "- GitHub CLI: token configured; gh will be resolved on demand" in prompt
 
 
 def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_context() -> (

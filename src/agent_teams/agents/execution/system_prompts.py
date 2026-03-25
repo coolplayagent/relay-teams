@@ -144,7 +144,42 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
         f"- Working Directory: {cwd}",
         f"- Shell Type: {shell_info} (Path: {bash_path})",
     ]
+    github_line = _build_github_cli_environment_line()
+    if github_line:
+        lines.append(github_line)
     return "\n".join(lines)
+
+
+def _build_github_cli_environment_line() -> str | None:
+    token_configured, system_gh_path = _get_github_cli_environment_status()
+    if not token_configured:
+        return None
+    if system_gh_path is not None:
+        return f"- GitHub CLI: token configured; using system gh at {system_gh_path}"
+    return "- GitHub CLI: token configured; gh will be resolved on demand"
+
+
+def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
+    try:
+        from agent_teams.env.github_config_service import GitHubConfigService
+        from agent_teams.paths import get_app_config_dir
+        from agent_teams.tools.workspace_tools.github_cli import resolve_system_gh_path
+    except Exception:
+        return False, None
+
+    try:
+        config = GitHubConfigService(
+            config_dir=get_app_config_dir()
+        ).get_github_config()
+    except Exception:
+        return False, None
+    if config.token is None:
+        return False, None
+    try:
+        system_gh_path = resolve_system_gh_path()
+    except Exception:
+        system_gh_path = None
+    return True, system_gh_path
 
 
 async def build_runtime_system_prompt(
