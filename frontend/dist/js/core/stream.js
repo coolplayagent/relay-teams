@@ -25,6 +25,9 @@ import * as messageRenderer from '../components/messageRenderer.js';
 import {
     getPrimaryRoleId,
     getPrimaryRoleLabel,
+    getRunPrimaryRoleId,
+    getRunPrimaryRoleLabel,
+    setRunPrimaryRole,
     state,
 } from './state.js';
 
@@ -77,16 +80,24 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
 
     let runId = null;
     try {
-        const run = await sendUserPrompt(sessionId, promptText, yolo, thinking);
+        const run = await sendUserPrompt(
+            sessionId,
+            promptText,
+            yolo,
+            thinking,
+            options.targetRoleId || null,
+        );
         runId = run.run_id;
         clearRunUnavailableCooldown(runId);
         state.activeRunId = runId;
+        setRunPrimaryRole(runId, run.target_role_id || options.targetRoleId || getPrimaryRoleId());
         logInfo('frontend.run.created', 'Frontend run created', {
             run_id: runId,
             session_id: sessionId,
             yolo,
             thinking_enabled: thinking.enabled,
             thinking_effort: thinking.effort,
+            target_role_id: run.target_role_id || options.targetRoleId || null,
         });
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
@@ -209,11 +220,12 @@ export function attachRunStream(runId, sessionId = state.currentSessionId, onCom
         mode: 'active',
         lastEventId: afterEventId !== null ? afterEventId : 0,
         primaryRoleId: String(getPrimaryRoleId() || '').trim(),
-        primaryLabel: String(getPrimaryRoleLabel() || 'Main Agent'),
+        primaryLabel: String(getRunPrimaryRoleLabel(safeRunId) || 'Main Agent'),
         closed: false,
         terminal: false,
         reconnectTimer: null,
     };
+    connection.primaryRoleId = String(getRunPrimaryRoleId(safeRunId) || connection.primaryRoleId || '').trim();
     openRunStreamConnection(connection, {
         reason,
         afterEventId,
@@ -272,8 +284,8 @@ function promoteBackgroundStream(connection, options = {}) {
     connection.mode = 'active';
     connection.sessionId = String(options.sessionId || state.currentSessionId || connection.sessionId || '').trim();
     connection.onCompleted = options.onCompleted || null;
-    connection.primaryRoleId = String(getPrimaryRoleId() || connection.primaryRoleId || '').trim();
-    connection.primaryLabel = String(getPrimaryRoleLabel() || connection.primaryLabel || 'Main Agent');
+    connection.primaryRoleId = String(getRunPrimaryRoleId(connection.runId) || connection.primaryRoleId || '').trim();
+    connection.primaryLabel = String(getRunPrimaryRoleLabel(connection.runId) || connection.primaryLabel || 'Main Agent');
     activeConnection = connection;
     state.activeRunId = connection.runId;
     state.activeEventSource = connection.eventSource;
@@ -459,11 +471,12 @@ function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {
     const primaryRoleId = String(connection.primaryRoleId || '').trim();
     const isPrimary = !roleId || (primaryRoleId && String(roleId).trim() === primaryRoleId);
     const label = isPrimary ? connection.primaryLabel : (roleId || 'Agent');
+    const streamInstanceId = isPrimary ? 'primary' : instanceId;
 
     if (typeof messageRenderer.applyStreamOverlayEvent === 'function') {
         messageRenderer.applyStreamOverlayEvent(evType, payload, {
             runId: connection.runId,
-            instanceId,
+            instanceId: streamInstanceId,
             roleId: isPrimary ? primaryRoleId : roleId,
             label,
             cleanupDelayMs: 4000,
@@ -613,6 +626,13 @@ async function attachBackgroundStreamForSession(record) {
         if (recoveredStatus !== 'running' && recoveredStatus !== 'queued') {
             return false;
         }
+        const recoveredPrimaryRoleId = String(
+            activeRun?.primary_role_id
+            || snapshot?.round_snapshot?.primary_role_id
+            || snapshot?.roundSnapshot?.primary_role_id
+            || '',
+        ).trim();
+        setRunPrimaryRole(runId, recoveredPrimaryRoleId || null);
         const sessionMode = String(record?.session_mode || 'normal').trim().toLowerCase();
         const afterEventId = resolveBackgroundAfterEventId(activeRun);
         const connection = {
@@ -622,8 +642,10 @@ async function attachBackgroundStreamForSession(record) {
             onCompleted: null,
             mode: 'background',
             lastEventId: afterEventId,
-            primaryRoleId: String(getPrimaryRoleId(sessionMode) || '').trim(),
-            primaryLabel: String(getPrimaryRoleLabel(sessionMode) || 'Main Agent'),
+            primaryRoleId: String(
+                recoveredPrimaryRoleId || getRunPrimaryRoleId(runId, sessionMode) || getPrimaryRoleId(sessionMode) || ''
+            ).trim(),
+            primaryLabel: String(getRunPrimaryRoleLabel(runId, sessionMode) || getPrimaryRoleLabel(sessionMode) || 'Main Agent'),
             closed: false,
             terminal: false,
             reconnectTimer: null,

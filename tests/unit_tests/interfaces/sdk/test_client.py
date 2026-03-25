@@ -309,3 +309,72 @@ def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
             "timeout_ms": 2500,
         },
     }
+
+
+def test_create_run_includes_target_role_id(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"run_id": "run-1", "session_id": "session-1"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    handle = client.create_run(
+        intent="hello",
+        session_id="session-1",
+        target_role_id="writer",
+    )
+
+    assert handle.run_id == "run-1"
+    assert handle.session_id == "session-1"
+    assert captured == {
+        "method": "POST",
+        "path": "/api/runs",
+        "payload": {
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+            "yolo": False,
+            "target_role_id": "writer",
+        },
+    }
+
+
+def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object] | list[object]:
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/api/system/configs/agents":
+            return [{"agent_id": "codex_local"}]
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.list_external_agents() == [{"agent_id": "codex_local"}]
+    assert client.get_external_agent("codex_local") == {"status": "ok"}
+    assert client.save_external_agent("codex_local", {"agent_id": "codex_local"}) == {
+        "status": "ok"
+    }
+    assert client.test_external_agent("codex_local") == {"status": "ok"}
+    assert client.delete_external_agent("codex_local") == {"status": "ok"}
+    assert calls == [
+        ("GET", "/api/system/configs/agents", None),
+        ("GET", "/api/system/configs/agents/codex_local", None),
+        ("PUT", "/api/system/configs/agents/codex_local", {"agent_id": "codex_local"}),
+        ("POST", "/api/system/configs/agents/codex_local:test", {}),
+        ("DELETE", "/api/system/configs/agents/codex_local", None),
+    ]

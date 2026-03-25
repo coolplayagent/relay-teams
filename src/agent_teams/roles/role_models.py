@@ -24,6 +24,7 @@ class RoleDefinition(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default")
+    bound_agent_id: str | None = None
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -36,6 +37,7 @@ class RoleDocumentSummary(BaseModel):
     description: str = Field(min_length=1)
     version: str = Field(min_length=1)
     model_profile: str = Field(min_length=1)
+    bound_agent_id: str | None = None
     source: RoleConfigSource = RoleConfigSource.APP
 
 
@@ -51,6 +53,7 @@ class RoleDocumentDraft(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default", min_length=1)
+    bound_agent_id: str | None = None
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -76,6 +79,14 @@ class NormalModeRoleOption(BaseModel):
     description: str = Field(min_length=1)
 
 
+class RoleAgentOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    transport: str = Field(min_length=1)
+
+
 class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,3 +96,4 @@ class RoleConfigOptions(BaseModel):
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
+    agents: tuple[RoleAgentOption, ...] = ()

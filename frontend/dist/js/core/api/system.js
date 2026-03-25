@@ -56,6 +56,46 @@ export async function fetchProxyConfig() {
     return requestJson('/api/system/configs/proxy', undefined, 'Failed to fetch proxy config');
 }
 
+export async function fetchExternalAgents() {
+    return requestJson('/api/system/configs/agents', undefined, 'Failed to fetch agents');
+}
+
+export async function fetchExternalAgent(agentId) {
+    return requestJson(
+        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        undefined,
+        'Failed to fetch agent config',
+    );
+}
+
+export async function saveExternalAgent(agentId, payload) {
+    return requestJson(
+        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save agent config',
+    );
+}
+
+export async function deleteExternalAgent(agentId) {
+    return requestJson(
+        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        { method: 'DELETE' },
+        'Failed to delete agent config',
+    );
+}
+
+export async function testExternalAgent(agentId) {
+    return requestJson(
+        `/api/system/configs/agents/${encodeURIComponent(agentId)}:test`,
+        { method: 'POST' },
+        'Failed to test agent config',
+    );
+}
+
 export async function fetchWebConfig() {
     return requestJson('/api/system/configs/web', undefined, 'Failed to fetch web config');
 }

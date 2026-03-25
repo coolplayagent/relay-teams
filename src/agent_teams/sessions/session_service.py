@@ -572,6 +572,8 @@ class SessionService:
             round_snapshot = self.get_round(session_id, run_id)
         except KeyError:
             round_snapshot = None
+        if isinstance(round_snapshot, dict):
+            active_run["primary_role_id"] = round_snapshot.get("primary_role_id")
         return {
             "active_run": active_run,
             "pending_tool_approvals": approvals,

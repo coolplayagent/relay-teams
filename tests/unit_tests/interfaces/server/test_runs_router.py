@@ -106,6 +106,31 @@ def test_create_run_route_accepts_thinking_config() -> None:
     assert fake_service.started_run_ids == ["run-1"]
 
 
+def test_create_run_route_accepts_target_role_id() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+            "target_role_id": "writer",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": "run-1",
+        "session_id": "session-1",
+        "target_role_id": "writer",
+    }
+    created = fake_service.created_run_inputs[0]
+    assert created.target_role_id == "writer"
+    assert fake_service.started_run_ids == ["run-1"]
+
+
 def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:
     fake_service = _FakeRunService()
     fake_service.raise_on_tool_approval = True

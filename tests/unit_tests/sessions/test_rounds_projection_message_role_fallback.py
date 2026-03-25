@@ -325,5 +325,6 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
         "created_at": clear_marker_created_at,
         "label": "History cleared",
     }
+    assert round_new["primary_role_id"] == "coordinator_agent"
     assert coordinator_messages[0]["reconstructed"] is True
     assert parts[0]["content"] == "reconstructed final output"

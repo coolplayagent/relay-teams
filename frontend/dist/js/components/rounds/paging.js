@@ -3,7 +3,7 @@
  * Data paging helpers for session rounds.
  */
 import { fetchSessionRounds } from '../../core/api.js';
-import { state } from '../../core/state.js';
+import { setRunPrimaryRole, state } from '../../core/state.js';
 import { roundsState } from './state.js';
 
 export async function fetchInitialRoundsPage(sessionId) {
@@ -20,6 +20,9 @@ export async function fetchOlderRoundsPage() {
 
 export function applyRoundPage(page, { prepend }) {
     const rawItems = Array.isArray(page?.items) ? page.items : [];
+    rawItems.forEach(item => {
+        setRunPrimaryRole(item?.run_id, item?.primary_role_id || null);
+    });
     const sortedItems = rawItems.slice().sort((a, b) =>
         new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );

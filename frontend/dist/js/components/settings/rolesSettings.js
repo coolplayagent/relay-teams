@@ -20,6 +20,7 @@ let roleConfigOptions = {
     tools: [],
     mcp_servers: [],
     skills: [],
+    agents: [],
     coordinator_role_id: '',
     main_agent_role_id: '',
 };
@@ -34,6 +35,7 @@ let currentSelections = {
     mcp_servers: [],
     skills: [],
 };
+let currentBoundAgentId = '';
 let languageBound = false;
 
 export function bindRoleSettingsHandlers() {
@@ -108,6 +110,11 @@ function normalizeRoleConfigOptions(options) {
         tools: Array.isArray(options?.tools) ? options.tools : [],
         mcp_servers: Array.isArray(options?.mcp_servers) ? options.mcp_servers : [],
         skills: Array.isArray(options?.skills) ? options.skills : [],
+        agents: Array.isArray(options?.agents) ? options.agents.map(agent => ({
+            agent_id: String(agent?.agent_id || '').trim(),
+            name: String(agent?.name || '').trim(),
+            transport: String(agent?.transport || '').trim(),
+        })).filter(agent => agent.agent_id) : [],
     };
 }
 
@@ -162,6 +169,7 @@ function renderRolesList() {
                     <div class="role-record-meta">
                         <span>v${escapeHtml(role.version)}</span>
                         <span>${escapeHtml(role.model_profile)}</span>
+                        ${renderRoleBoundAgentMeta(role.bound_agent_id)}
                         ${renderRoleUsageMeta(role.role_id)}
                     </div>
                 </div>
@@ -211,6 +219,7 @@ function applyRoleRecord(record) {
     if (emptyEl) emptyEl.style.display = 'none';
 
     currentMemoryProfile = normalizeMemoryProfile(record.memory_profile);
+    currentBoundAgentId = String(record.bound_agent_id || '').trim();
     currentSelections = {
         tools: Array.isArray(record.tools) ? [...record.tools] : [],
         mcp_servers: Array.isArray(record.mcp_servers) ? [...record.mcp_servers] : [],
@@ -222,6 +231,7 @@ function applyRoleRecord(record) {
     setInputValue('role-description-input', record.description || '');
     setInputValue('role-version-input', record.version || '');
     renderModelProfileSelect(record.model_profile || 'default');
+    renderBoundAgentSelect(currentBoundAgentId);
     renderRoleOptionPickers();
     renderMemoryProfileSelects(currentMemoryProfile);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
@@ -301,6 +311,41 @@ function renderRoleOptionPickers() {
     renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
     renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, t('settings.roles.no_skills'));
     renderSkillsShellAdvisory();
+}
+
+function renderBoundAgentSelect(selectedAgentId) {
+    const selectEl = document.getElementById('role-bound-agent-input');
+    if (!selectEl) return;
+
+    const safeSelectedId = String(selectedAgentId || '').trim();
+    const availableAgents = Array.isArray(roleConfigOptions.agents) ? roleConfigOptions.agents : [];
+    const options = [
+        {
+            value: '',
+            label: 'Local runtime',
+            unavailable: false,
+        },
+        ...availableAgents.map(agent => ({
+            value: agent.agent_id,
+            label: agent.name || agent.agent_id,
+            unavailable: false,
+        })),
+    ];
+    if (safeSelectedId && !options.some(option => option.value === safeSelectedId)) {
+        options.push({
+            value: safeSelectedId,
+            label: safeSelectedId,
+            unavailable: true,
+        });
+    }
+    selectEl.innerHTML = options.map(option => {
+        const selected = option.value === safeSelectedId ? ' selected' : '';
+        const suffix = option.unavailable ? ' (Unavailable)' : '';
+        return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(option.label + suffix)}</option>`;
+    }).join('');
+    selectEl.onchange = event => {
+        currentBoundAgentId = String(event?.target?.value || '').trim();
+    };
 }
 
 function renderSkillsShellAdvisory() {
@@ -433,6 +478,7 @@ function handleAddRole() {
         mcp_servers: [],
         skills: [],
         model_profile: 'default',
+        bound_agent_id: null,
         memory_profile: { enabled: true },
         system_prompt: '',
         file_name: '',
@@ -503,6 +549,8 @@ function buildDraftFromForm() {
     }
 
     const selectedModelProfile = resolveSelectedModelProfile();
+    const selectedBoundAgentId = String(getInputValue('role-bound-agent-input')).trim();
+    currentBoundAgentId = selectedBoundAgentId;
     const memoryProfile = {
         ...(currentMemoryProfile || {}),
         enabled: getBooleanSelectValue('role-memory-enabled-input', true),
@@ -515,6 +563,7 @@ function buildDraftFromForm() {
         description,
         version: String(getInputValue('role-version-input')).trim(),
         model_profile: selectedModelProfile,
+        bound_agent_id: selectedBoundAgentId || null,
         tools: [...currentSelections.tools],
         mcp_servers: [...currentSelections.mcp_servers],
         skills: [...currentSelections.skills],
@@ -683,6 +732,16 @@ function renderRoleUsageMeta(roleId) {
         return `<span>${escapeHtml(t('settings.roles.coordinator_root'))}</span>`;
     }
     return '';
+}
+
+function renderRoleBoundAgentMeta(boundAgentId) {
+    const safeAgentId = String(boundAgentId || '').trim();
+    if (!safeAgentId) {
+        return '';
+    }
+    const agent = roleConfigOptions.agents.find(item => item.agent_id === safeAgentId) || null;
+    const label = agent?.name || safeAgentId;
+    return `<span>ACP: ${escapeHtml(label)}</span>`;
 }
 
 function buildReservedPromptTitle(roleId) {

@@ -107,12 +107,19 @@ class RunManager:
 
     def _prepare_intent(self, intent: IntentInput) -> IntentInput:
         session = self._session_repo.get(intent.session_id)
+        target_role_id = str(intent.target_role_id or "").strip() or None
         if self._orchestration_settings_service is None:
-            return intent.model_copy(update={"session_mode": session.session_mode})
+            return intent.model_copy(
+                update={
+                    "session_mode": session.session_mode,
+                    "target_role_id": target_role_id,
+                }
+            )
         topology = self._orchestration_settings_service.resolve_run_topology(session)
         return intent.model_copy(
             update={
                 "session_mode": session.session_mode,
+                "target_role_id": target_role_id,
                 "topology": topology,
             }
         )

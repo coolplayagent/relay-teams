@@ -2,6 +2,7 @@
  * components/settings/index.js
  * Settings modal shell and tab routing.
  */
+import { bindAgentSettingsHandlers, loadAgentSettingsPanel } from './agentsSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
 import {
     bindNotificationSettingsHandlers,
@@ -36,6 +37,10 @@ const TAB_METADATA = {
     mcp: {
         titleKey: 'settings.panel.mcp.title',
         descriptionKey: 'settings.panel.mcp.description',
+    },
+    agents: {
+        titleKey: 'settings.panel.agents.title',
+        descriptionKey: 'settings.panel.agents.description',
     },
     roles: {
         titleKey: 'settings.panel.roles.title',
@@ -97,6 +102,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
+                    </button>
+                    <button class="settings-tab" data-tab="agents">
+                        <span class="settings-tab-label" data-i18n="settings.tab.agents">Agents</span>
                     </button>
                     <button class="settings-tab" data-tab="roles">
                         <span class="settings-tab-label" data-i18n="settings.tab.roles">Roles</span>
@@ -242,6 +250,111 @@ function createModal() {
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="agents-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack">
+                                <div class="roles-list" id="agents-list"></div>
+                                <div class="role-editor-panel" id="agent-editor-panel" style="display:none;">
+                                    <div class="roles-editor-empty settings-empty-state settings-empty-state-compact" id="agents-editor-empty" style="display:none;">
+                                        <h4>No agent selected</h4>
+                                        <p>Select an external ACP agent to edit its transport settings.</p>
+                                    </div>
+                                    <div class="role-editor-form" id="agent-editor-form" style="display:none;">
+                                        <div class="role-editor-header">
+                                            <div>
+                                                <h4>Agent Editor</h4>
+                                                <p>Configure an ACP-compatible external agent and bind it to roles.</p>
+                                            </div>
+                                        </div>
+                                        <div class="role-editor-sections">
+                                            <section class="role-editor-section">
+                                                <div class="profile-editor-grid role-editor-grid">
+                                                    <div class="form-group">
+                                                        <label for="agent-id-input">Agent ID</label>
+                                                        <input type="text" id="agent-id-input" placeholder="e.g. codex_local">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="agent-name-input">Name</label>
+                                                        <input type="text" id="agent-name-input" placeholder="e.g. Codex Local">
+                                                    </div>
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-description-input">Description</label>
+                                                        <input type="text" id="agent-description-input" placeholder="Short summary shown in role binding pickers">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="agent-transport-input">Transport</label>
+                                                        <select id="agent-transport-input">
+                                                            <option value="stdio">stdio</option>
+                                                            <option value="streamable_http">streamable_http</option>
+                                                            <option value="custom">custom</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                            <section class="role-editor-section" id="agent-transport-stdio">
+                                                <h5>Stdio Transport</h5>
+                                                <div class="profile-editor-grid role-editor-grid">
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-stdio-command-input">Command</label>
+                                                        <input type="text" id="agent-stdio-command-input" placeholder="e.g. codex">
+                                                    </div>
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-stdio-args-input">Args</label>
+                                                        <textarea class="config-textarea role-prompt-textarea" id="agent-stdio-args-input" placeholder="One argument per line"></textarea>
+                                                    </div>
+                                                </div>
+                                                <div class="role-prompt-header">
+                                                    <h5>Environment Bindings</h5>
+                                                    <div class="role-prompt-tabs">
+                                                        <button class="role-prompt-tab active" id="add-agent-stdio-env-btn" type="button">Add Row</button>
+                                                    </div>
+                                                </div>
+                                                <div id="agent-stdio-env-list"></div>
+                                            </section>
+                                            <section class="role-editor-section" id="agent-transport-http" style="display:none;">
+                                                <h5>HTTP Transport</h5>
+                                                <div class="profile-editor-grid role-editor-grid">
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-http-url-input">URL</label>
+                                                        <input type="text" id="agent-http-url-input" placeholder="e.g. http://127.0.0.1:4000/acp">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="agent-http-ssl-verify-input">SSL Verification</label>
+                                                        <select id="agent-http-ssl-verify-input">
+                                                            <option value="">Inherit</option>
+                                                            <option value="true">Verify</option>
+                                                            <option value="false">Skip Verify</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div class="role-prompt-header">
+                                                    <h5>Header Bindings</h5>
+                                                    <div class="role-prompt-tabs">
+                                                        <button class="role-prompt-tab active" id="add-agent-http-header-btn" type="button">Add Row</button>
+                                                    </div>
+                                                </div>
+                                                <div id="agent-http-header-list"></div>
+                                            </section>
+                                            <section class="role-editor-section" id="agent-transport-custom" style="display:none;">
+                                                <h5>Custom Transport</h5>
+                                                <div class="profile-editor-grid role-editor-grid">
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-custom-adapter-id-input">Adapter ID</label>
+                                                        <input type="text" id="agent-custom-adapter-id-input" placeholder="e.g. plugin.acp">
+                                                    </div>
+                                                    <div class="form-group form-group-span-2">
+                                                        <label for="agent-custom-config-input">Config JSON</label>
+                                                        <textarea class="config-textarea role-prompt-textarea" id="agent-custom-config-input" placeholder="{&#10;  &quot;endpoint&quot;: &quot;...&quot;&#10;}"></textarea>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        </div>
+                                        <div class="role-editor-status" id="agent-editor-status" style="display:none;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="roles-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack">
@@ -280,6 +393,10 @@ function createModal() {
                                                     <div class="form-group">
                                                         <label for="role-model-profile-input" data-i18n="settings.roles.model_profile">Model Profile</label>
                                                         <select id="role-model-profile-input"></select>
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="role-bound-agent-input">Bound Agent</label>
+                                                        <select id="role-bound-agent-input"></select>
                                                     </div>
                                                 </div>
                                             </section>
@@ -603,12 +720,17 @@ function createModal() {
                     <div class="settings-panel-actions" id="settings-panel-actions">
                         <div class="settings-panel-actions-group settings-panel-actions-group-start">
                             <button class="secondary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="test-agent-btn" type="button" style="display:none;">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-agent-btn" type="button" style="display:none;">Add Agent</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-agent-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="delete-agent-btn" type="button" style="display:none;">Delete</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-agent-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;" data-i18n="settings.action.add_role">Add Role</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-orchestration-preset-btn" type="button" style="display:none;" data-i18n="settings.action.add_orchestration">Add Orchestration</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.add_trigger">Add Trigger</button>
@@ -657,6 +779,7 @@ function setupEventListeners() {
     });
 
     bindModelProfileHandlers();
+    bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
     bindTriggerSettingsHandlers();
@@ -691,6 +814,7 @@ async function showPanel(tab) {
     updatePanelHeading(tab);
     renderPanelActions(tab);
     bindModelProfileHandlers();
+    bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
     bindTriggerSettingsHandlers();
@@ -702,6 +826,8 @@ async function showPanel(tab) {
 
     if (tab === 'model') {
         await loadModelProfilesPanel();
+    } else if (tab === 'agents') {
+        await loadAgentSettingsPanel();
     } else if (tab === 'roles') {
         await loadRoleSettingsPanel();
     } else if (tab === 'orchestration') {
@@ -743,6 +869,10 @@ function renderPanelActions(tab) {
     if (actionsBar) actionsBar.style.display = 'flex';
     if (tab === 'model') {
         document.getElementById('add-profile-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'agents') {
+        document.getElementById('add-agent-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'roles') {

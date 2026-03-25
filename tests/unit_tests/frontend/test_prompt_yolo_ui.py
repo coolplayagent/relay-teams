@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import subprocess
 
@@ -15,8 +16,9 @@ def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     assert 'id="yolo-toggle"' in html
     assert 'id="thinking-mode-toggle"' in html
     assert 'id="thinking-effort-field"' in html
-    assert 'id="thinking-effort-field" hidden' in html
+    assert re.search(r'id="thinking-effort-field"[\s\S]*?\bhidden\b', html)
     assert 'id="thinking-effort-select"' in html
+    assert 'id="prompt-mention-menu"' in html
     assert ".composer-preset-field[hidden]," in orchestration_css
     assert ".composer-mode-inline[hidden]" in orchestration_css
 
@@ -188,8 +190,24 @@ export function applyCurrentSessionRecord(record) {
     state.currentSessionCanSwitchMode = record?.can_switch_mode === true;
 }
 
+export function getCoordinatorRoleId() {
+    return String(state.coordinatorRoleId || "");
+}
+
+export function getMainAgentRoleId() {
+    return String(state.mainAgentRoleId || "");
+}
+
 export function getNormalModeRoles() {
     return normalModeRoles;
+}
+
+export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
+    if (String(roleId || "") === String(state.mainAgentRoleId || "")) {
+        return "Main Agent";
+    }
+    const match = normalModeRoles.find(role => role.role_id === roleId);
+    return match?.name || fallback;
 }
 
 export function setCoordinatorRoleId(roleId) {
@@ -404,3 +422,541 @@ console.log(JSON.stringify({
         "effortDisplay": "none",
         "effortDisabled": True,
     }
+
+
+def test_handle_send_strips_leading_role_mention_and_targets_run_role(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
+    temp_dir = tmp_path / "prompt_mentions"
+    temp_dir.mkdir()
+
+    (temp_dir / "prompt.js").write_text(
+        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("./recovery.js", "./mockRecovery.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRounds.mjs").write_text(
+        """
+export function appendRoundUserMessage(runId, text) {
+    globalThis.__roundMessages.push({ runId, text });
+}
+
+export function createLiveRound(runId, text) {
+    globalThis.__liveRounds.push({ runId, text });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearAllStreamState() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockApi.mjs").write_text(
+        """
+export async function fetchRoleConfigOptions() {
+    return {
+        coordinator_role_id: "Coordinator",
+        main_agent_role_id: "MainAgent",
+        normal_mode_roles: [
+            { role_id: "writer", name: "Writer", description: "" },
+            { role_id: "reviewer", name: "Reviewer", description: "" },
+        ],
+    };
+}
+
+export async function fetchOrchestrationConfig() {
+    return {
+        default_orchestration_preset_id: "",
+        presets: [],
+    };
+}
+
+export async function updateSessionTopology() {
+    return {
+        session_mode: "normal",
+        normal_root_role_id: "MainAgent",
+        orchestration_preset_id: null,
+        can_switch_mode: true,
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRecovery.mjs").write_text(
+        """
+export async function hydrateSessionView() {
+    return null;
+}
+
+export function startSessionContinuity() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    currentSessionMode: "normal",
+    currentSessionCanSwitchMode: true,
+    currentNormalRootRoleId: "MainAgent",
+    currentOrchestrationPresetId: null,
+    pausedSubagent: null,
+    isGenerating: false,
+    yolo: true,
+    thinking: { enabled: false, effort: "medium" },
+    instanceRoleMap: {},
+    roleInstanceMap: {},
+    taskInstanceMap: {},
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+    autoSwitchedSubagentInstances: {},
+    activeRunId: null,
+};
+
+let coordinatorRoleId = "Coordinator";
+let mainAgentRoleId = "MainAgent";
+let normalModeRoles = [
+    { role_id: "writer", name: "Writer", description: "" },
+    { role_id: "reviewer", name: "Reviewer", description: "" },
+];
+
+export function applyCurrentSessionRecord() {
+    return undefined;
+}
+
+export function getCoordinatorRoleId() {
+    return coordinatorRoleId;
+}
+
+export function getMainAgentRoleId() {
+    return mainAgentRoleId;
+}
+
+export function getNormalModeRoles() {
+    return normalModeRoles;
+}
+
+export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
+    if (roleId === coordinatorRoleId) return "Coordinator";
+    if (roleId === mainAgentRoleId) return "Main Agent";
+    const match = normalModeRoles.find(role => role.role_id === roleId);
+    return match?.name || fallback;
+}
+
+export function setCoordinatorRoleId(roleId) {
+    coordinatorRoleId = String(roleId || "");
+}
+
+export function setMainAgentRoleId(roleId) {
+    mainAgentRoleId = String(roleId || "");
+}
+
+export function setNormalModeRoles(roleOptions) {
+    normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockStream.mjs").write_text(
+        """
+export async function startIntentStream(text, sessionId, onCompleted, options = {}) {
+    globalThis.__streamCalls.push({ text, sessionId, options });
+    if (typeof options.onRunCreated === "function") {
+        options.onRunCreated({ run_id: "run-1", target_role_id: options.targetRoleId || null });
+    }
+    return onCompleted;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockDom.mjs").write_text(
+        """
+function createElement(initial = {}) {
+    return {
+        value: "",
+        checked: false,
+        disabled: false,
+        hidden: false,
+        textContent: "",
+        innerHTML: "",
+        title: "",
+        style: { display: "", height: "" },
+        classList: { toggle() { return undefined; } },
+        addEventListener() { return undefined; },
+        focus() { return undefined; },
+        ...initial,
+    };
+}
+
+export const els = {
+    promptInput: createElement({ value: "@Writer ship it" }),
+    sendBtn: createElement(),
+    stopBtn: createElement({ style: { display: "none" } }),
+    yoloToggle: createElement({ checked: true }),
+    thinkingModeToggle: createElement({ checked: false }),
+    thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockFeedback.mjs").write_text(
+        """
+export function showToast() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockLogger.mjs").write_text(
+        """
+export function sysLog(message, tone = "log-info") {
+    globalThis.__logs.push({ message, tone });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import { handleSend } from "./prompt.js";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__liveRounds = [];
+globalThis.__roundMessages = [];
+
+await handleSend();
+
+console.log(JSON.stringify({
+    streamCall: globalThis.__streamCalls[0],
+    liveRounds: globalThis.__liveRounds,
+    roundMessages: globalThis.__roundMessages,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["streamCall"]["text"] == "ship it"
+    assert payload["streamCall"]["sessionId"] == "session-1"
+    assert payload["streamCall"]["options"]["targetRoleId"] == "writer"
+    assert payload["liveRounds"] == [{"runId": "run-1", "text": "ship it"}]
+    assert payload["roundMessages"] == [{"runId": "run-1", "text": "ship it"}]
+
+
+def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
+    temp_dir = tmp_path / "prompt_autocomplete"
+    temp_dir.mkdir()
+
+    (temp_dir / "prompt.js").write_text(
+        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("./recovery.js", "./mockRecovery.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRounds.mjs").write_text(
+        """
+export function appendRoundUserMessage() {
+    return undefined;
+}
+
+export function createLiveRound() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearAllStreamState() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockApi.mjs").write_text(
+        """
+export async function fetchRoleConfigOptions() {
+    return {
+        coordinator_role_id: "Coordinator",
+        main_agent_role_id: "MainAgent",
+        normal_mode_roles: [
+            { role_id: "writer", name: "Writer", description: "" },
+            { role_id: "reviewer", name: "Reviewer", description: "" },
+        ],
+    };
+}
+
+export async function fetchOrchestrationConfig() {
+    return {
+        default_orchestration_preset_id: "",
+        presets: [],
+    };
+}
+
+export async function updateSessionTopology() {
+    return {
+        session_mode: "normal",
+        normal_root_role_id: "MainAgent",
+        orchestration_preset_id: null,
+        can_switch_mode: true,
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRecovery.mjs").write_text(
+        """
+export async function hydrateSessionView() {
+    return null;
+}
+
+export function startSessionContinuity() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    currentSessionMode: "normal",
+    currentSessionCanSwitchMode: true,
+    currentNormalRootRoleId: "MainAgent",
+    currentOrchestrationPresetId: null,
+    pausedSubagent: null,
+    isGenerating: false,
+    yolo: true,
+    thinking: { enabled: false, effort: "medium" },
+    instanceRoleMap: {},
+    roleInstanceMap: {},
+    taskInstanceMap: {},
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+    autoSwitchedSubagentInstances: {},
+    activeRunId: null,
+};
+
+let coordinatorRoleId = "Coordinator";
+let mainAgentRoleId = "MainAgent";
+let normalModeRoles = [
+    { role_id: "writer", name: "Writer", description: "" },
+    { role_id: "reviewer", name: "Reviewer", description: "" },
+];
+
+export function applyCurrentSessionRecord() {
+    return undefined;
+}
+
+export function getCoordinatorRoleId() {
+    return coordinatorRoleId;
+}
+
+export function getMainAgentRoleId() {
+    return mainAgentRoleId;
+}
+
+export function getNormalModeRoles() {
+    return normalModeRoles;
+}
+
+export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
+    if (roleId === coordinatorRoleId) return "Coordinator";
+    if (roleId === mainAgentRoleId) return "Main Agent";
+    const match = normalModeRoles.find(role => role.role_id === roleId);
+    return match?.name || fallback;
+}
+
+export function setCoordinatorRoleId(roleId) {
+    coordinatorRoleId = String(roleId || "");
+}
+
+export function setMainAgentRoleId(roleId) {
+    mainAgentRoleId = String(roleId || "");
+}
+
+export function setNormalModeRoles(roleOptions) {
+    normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockStream.mjs").write_text(
+        """
+export async function startIntentStream() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockDom.mjs").write_text(
+        """
+function createElement(initial = {}) {
+    return {
+        value: "",
+        checked: false,
+        disabled: false,
+        hidden: true,
+        textContent: "",
+        innerHTML: "",
+        title: "",
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollHeight: 36,
+        style: { display: "", height: "" },
+        dataset: {},
+        classList: { toggle() { return undefined; } },
+        _listeners: new Map(),
+        addEventListener(type, listener) {
+            this._listeners.set(type, listener);
+        },
+        focus() { return undefined; },
+        contains(target) {
+            return target === this;
+        },
+        ...initial,
+    };
+}
+
+export const els = {
+    promptInput: createElement({
+        value: "@Ma",
+        selectionStart: 3,
+        selectionEnd: 3,
+        hidden: false,
+    }),
+    promptMentionMenu: createElement({ hidden: true }),
+    sendBtn: createElement({ hidden: false }),
+    stopBtn: createElement({ style: { display: "none" }, hidden: false }),
+    yoloToggle: createElement({ checked: true, hidden: false }),
+    thinkingModeToggle: createElement({ checked: false, hidden: false }),
+    thinkingEffortSelect: createElement({ value: "medium", disabled: true, hidden: false }),
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockFeedback.mjs").write_text(
+        """
+export function showToast() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockLogger.mjs").write_text(
+        """
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import {
+    handlePromptComposerInput,
+    handlePromptComposerKeydown,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+
+handlePromptComposerInput();
+const beforeSelect = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+const enterHandled = handlePromptComposerKeydown({
+    key: "Enter",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+console.log(JSON.stringify({
+    beforeSelect,
+    enterHandled,
+    value: els.promptInput.value,
+    selectionStart: els.promptInput.selectionStart,
+    selectionEnd: els.promptInput.selectionEnd,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["beforeSelect"]["menuHidden"] is False
+    assert "Main Agent" in payload["beforeSelect"]["menuHtml"]
+    assert "MainAgent" in payload["beforeSelect"]["menuHtml"]
+    assert payload["enterHandled"] is True
+    assert payload["value"] == "@Main Agent "
+    assert payload["selectionStart"] == 12
+    assert payload["selectionEnd"] == 12

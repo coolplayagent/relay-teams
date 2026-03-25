@@ -257,6 +257,11 @@ class RoleLoader:
             mcp_servers=tuple(str(item) for item in mcp_servers),
             skills=tuple(str(item) for item in skills),
             model_profile=str(parsed.get("model_profile", "default")),
+            bound_agent_id=(
+                str(parsed["bound_agent_id"]).strip()
+                if "bound_agent_id" in parsed and parsed["bound_agent_id"] is not None
+                else None
+            ),
             memory_profile=memory_profile,
             system_prompt=body.strip(),
         )
