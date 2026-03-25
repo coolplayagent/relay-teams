@@ -5,6 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.automation import (
+    AutomationFeishuBinding,
+    AutomationProjectRecord,
+    AutomationProjectStatus,
+    AutomationRunConfig,
+    AutomationScheduleMode,
+)
 from agent_teams.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
@@ -14,7 +21,7 @@ from agent_teams.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.sessions.session_models import SessionRecord
+from agent_teams.sessions.session_models import ProjectKind, SessionRecord
 from agent_teams.tools.feishu_tools import FeishuToolContextResolver, FeishuToolService
 from agent_teams.tools.registry import ToolResolutionContext
 
@@ -32,6 +39,7 @@ _TARGET = FeishuTriggerTargetConfig()
 _CHAT_ID = "oc_test_chat"
 _TRIGGER_ID = "trigger-1"
 _SESSION_ID = "session-1"
+_AUTOMATION_PROJECT_ID = "aut-1"
 
 
 def _make_session(
@@ -40,10 +48,14 @@ def _make_session(
     platform: str = "feishu",
     chat_id: str = _CHAT_ID,
     trigger_id: str = _TRIGGER_ID,
+    project_kind: ProjectKind = ProjectKind.WORKSPACE,
+    project_id: str | None = None,
 ) -> SessionRecord:
     return SessionRecord(
         session_id=session_id,
         workspace_id="ws-1",
+        project_kind=project_kind,
+        project_id=project_id,
         metadata={
             FEISHU_METADATA_PLATFORM_KEY: platform,
             FEISHU_METADATA_CHAT_ID_KEY: chat_id,
@@ -75,6 +87,19 @@ class _FakeRuntimeConfigLookup:
         return self._configs.get(trigger_id)
 
 
+class _FakeAutomationProjectRepo:
+    def __init__(
+        self,
+        projects: dict[str, AutomationProjectRecord] | None = None,
+    ) -> None:
+        self._projects = projects or {}
+
+    def get(self, automation_project_id: str) -> AutomationProjectRecord:
+        if automation_project_id not in self._projects:
+            raise KeyError(automation_project_id)
+        return self._projects[automation_project_id]
+
+
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_texts: list[tuple[str, str]] = []
@@ -104,12 +129,14 @@ def _build_service(
     *,
     sessions: dict[str, SessionRecord] | None = None,
     configs: dict[str, FeishuTriggerRuntimeConfig] | None = None,
+    projects: dict[str, AutomationProjectRecord] | None = None,
     feishu_client: _FakeFeishuClient | None = None,
 ) -> tuple[FeishuToolService, _FakeFeishuClient]:
     client = feishu_client or _FakeFeishuClient()
     service = FeishuToolService(
         session_repo=_FakeSessionRepo(sessions),
         runtime_config_lookup=_FakeRuntimeConfigLookup(configs),
+        automation_project_repo=_FakeAutomationProjectRepo(projects),
         feishu_client=client,
     )
     return service, client
@@ -119,10 +146,12 @@ def _build_context_resolver(
     *,
     sessions: dict[str, SessionRecord] | None = None,
     configs: dict[str, FeishuTriggerRuntimeConfig] | None = None,
+    projects: dict[str, AutomationProjectRecord] | None = None,
 ) -> FeishuToolContextResolver:
     return FeishuToolContextResolver(
         session_repo=_FakeSessionRepo(sessions),
         runtime_config_lookup=_FakeRuntimeConfigLookup(configs),
+        automation_project_repo=_FakeAutomationProjectRepo(projects),
     )
 
 
@@ -142,6 +171,48 @@ def _default_sessions() -> dict[str, SessionRecord]:
     return {_SESSION_ID: _make_session()}
 
 
+def _automation_session(
+    *,
+    session_id: str = _SESSION_ID,
+    project_id: str = _AUTOMATION_PROJECT_ID,
+) -> SessionRecord:
+    return SessionRecord(
+        session_id=session_id,
+        workspace_id="ws-1",
+        project_kind=ProjectKind.AUTOMATION,
+        project_id=project_id,
+        metadata={},
+    )
+
+
+def _automation_project(
+    *,
+    automation_project_id: str = _AUTOMATION_PROJECT_ID,
+    chat_id: str = _CHAT_ID,
+    trigger_id: str = _TRIGGER_ID,
+) -> AutomationProjectRecord:
+    return AutomationProjectRecord(
+        automation_project_id=automation_project_id,
+        name="daily-briefing",
+        display_name="Daily Briefing",
+        status=AutomationProjectStatus.ENABLED,
+        workspace_id="ws-1",
+        prompt="Summarize the day.",
+        schedule_mode=AutomationScheduleMode.CRON,
+        cron_expression="0 9 * * *",
+        timezone="UTC",
+        run_config=AutomationRunConfig(),
+        delivery_binding=AutomationFeishuBinding(
+            trigger_id=trigger_id,
+            tenant_key="tenant-1",
+            chat_id=chat_id,
+            chat_type="group",
+            source_label="Release Updates",
+        ),
+        trigger_id="schedule-trigger",
+    )
+
+
 def test_resolver_returns_feishu_tool_for_feishu_session() -> None:
     resolver = _build_context_resolver(
         sessions=_default_sessions(),
@@ -159,6 +230,35 @@ def test_resolver_returns_no_tool_without_feishu_context() -> None:
     resolver = _build_context_resolver(
         sessions={_SESSION_ID: _make_session(platform="other")},
         configs=_default_configs(),
+    )
+
+    resolved = resolver.resolve_implicit_tools(
+        ToolResolutionContext(session_id=_SESSION_ID)
+    )
+
+    assert resolved == ()
+
+
+def test_resolver_returns_feishu_tool_for_automation_session_binding() -> None:
+    resolver = _build_context_resolver(
+        sessions={_SESSION_ID: _automation_session()},
+        configs=_default_configs(),
+        projects={_AUTOMATION_PROJECT_ID: _automation_project()},
+    )
+
+    resolved = resolver.resolve_implicit_tools(
+        ToolResolutionContext(session_id=_SESSION_ID)
+    )
+
+    assert resolved == ("feishu_send",)
+
+
+def test_resolver_returns_no_tool_for_automation_session_without_binding() -> None:
+    project = _automation_project().model_copy(update={"delivery_binding": None})
+    resolver = _build_context_resolver(
+        sessions={_SESSION_ID: _automation_session()},
+        configs=_default_configs(),
+        projects={_AUTOMATION_PROJECT_ID: project},
     )
 
     resolved = resolver.resolve_implicit_tools(
@@ -202,6 +302,20 @@ def test_send_text_no_runtime_config() -> None:
     result = service.send_text(session_id=_SESSION_ID, text="hello")
     assert "not linked" in result
     assert len(client.sent_texts) == 0
+
+
+def test_send_text_success_for_automation_session_binding() -> None:
+    service, client = _build_service(
+        sessions={_SESSION_ID: _automation_session()},
+        configs=_default_configs(),
+        projects={_AUTOMATION_PROJECT_ID: _automation_project()},
+    )
+
+    result = service.send_text(session_id=_SESSION_ID, text="hello")
+
+    assert result == "Message sent."
+    assert len(client.sent_texts) == 1
+    assert client.sent_texts[0] == (_CHAT_ID, "hello")
 
 
 def test_send_file_success(tmp_path: Path) -> None:

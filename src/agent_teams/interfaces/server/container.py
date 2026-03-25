@@ -303,12 +303,14 @@ class ServerContainer:
         self.feishu_tool_service: FeishuToolService = FeishuToolService(
             session_repo=self.session_repo,
             runtime_config_lookup=self.feishu_trigger_config_service,
+            automation_project_repo=self.automation_repo,
             feishu_client=self.feishu_client,
         )
         self.tool_registry.register_implicit_resolver(
             FeishuToolContextResolver(
                 session_repo=self.session_repo,
                 runtime_config_lookup=self.feishu_trigger_config_service,
+                automation_project_repo=self.automation_repo,
             )
         )
         self.notification_service: NotificationService = NotificationService(
