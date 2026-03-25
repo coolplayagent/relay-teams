@@ -1,0 +1,11 @@
+Send a message or file to the Feishu chat that initiated this session.
+
+Use this tool to proactively push text messages or files (images, PDFs, PPTs, etc.) to the user's Feishu chat.
+
+Supported file types for upload:
+- Images: png, jpg, jpeg, gif, bmp, webp
+- Documents: pdf, doc, docx, xls, xlsx, ppt, pptx
+- Media: opus, mp4
+- Other: any file (sent as stream)
+
+You must provide at least one of `text` or `file_path`.

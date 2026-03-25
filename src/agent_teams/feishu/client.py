@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from json import dumps
+from pathlib import Path
 import time
 
 import httpx
@@ -10,6 +11,21 @@ import httpx
 from agent_teams.env.runtime_env import load_merged_env_vars
 from agent_teams.feishu.models import FeishuEnvironment
 from agent_teams.net import create_sync_http_client
+
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+)
+_FILE_TYPE_MAP: dict[str, str] = {
+    ".opus": "opus",
+    ".mp4": "mp4",
+    ".pdf": "pdf",
+    ".doc": "doc",
+    ".docx": "doc",
+    ".xls": "xls",
+    ".xlsx": "xls",
+    ".ppt": "ppt",
+    ".pptx": "ppt",
+}
 
 _TOKEN_REFRESH_SKEW_SECONDS = 60.0
 
@@ -179,6 +195,101 @@ class FeishuClient:
         self._user_name_cache[cache_key] = user_name
         return user_name
 
+    def upload_image(
+        self,
+        *,
+        image_path: Path,
+        environment: FeishuEnvironment | None = None,
+    ) -> str:
+        return self._upload_asset(
+            path="/open-apis/im/v1/images",
+            file_path=image_path,
+            form_data={"image_type": "message"},
+            file_field_name="image",
+            response_key="image_key",
+            error_context="upload image",
+            environment=environment,
+        )
+
+    def upload_file(
+        self,
+        *,
+        file_path: Path,
+        file_type: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str:
+        return self._upload_asset(
+            path="/open-apis/im/v1/files",
+            file_path=file_path,
+            form_data={"file_type": file_type, "file_name": file_path.name},
+            file_field_name="file",
+            response_key="file_key",
+            error_context="upload file",
+            environment=environment,
+        )
+
+    def send_image_message(
+        self,
+        *,
+        chat_id: str,
+        image_key: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self._send_message(
+            chat_id=chat_id,
+            msg_type="image",
+            content={"image_key": image_key},
+            environment=environment,
+        )
+
+    def send_file_message(
+        self,
+        *,
+        chat_id: str,
+        file_key: str,
+        file_name: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self._send_message(
+            chat_id=chat_id,
+            msg_type="file",
+            content={"file_key": file_key, "file_name": file_name},
+            environment=environment,
+        )
+
+    def send_file(
+        self,
+        *,
+        chat_id: str,
+        file_path: Path,
+        environment: FeishuEnvironment | None = None,
+    ) -> str:
+        resolved_environment = self.require_environment(environment)
+        suffix = file_path.suffix.lower()
+        if suffix in _IMAGE_EXTENSIONS:
+            image_key = self.upload_image(
+                image_path=file_path, environment=resolved_environment
+            )
+            self.send_image_message(
+                chat_id=chat_id,
+                image_key=image_key,
+                environment=resolved_environment,
+            )
+            return f"image sent ({file_path.name})"
+        file_type = _FILE_TYPE_MAP.get(suffix, "stream")
+        file_key = self.upload_file(
+            file_path=file_path,
+            file_type=file_type,
+            environment=resolved_environment,
+        )
+        self.send_file_message(
+            chat_id=chat_id,
+            file_key=file_key,
+            file_name=file_path.name,
+            environment=resolved_environment,
+        )
+        return f"file sent ({file_path.name})"
+
     def _send_message(
         self,
         *,
@@ -199,6 +310,37 @@ class FeishuClient:
             environment=self.require_environment(environment),
             error_context="send message",
         )
+
+    def _upload_asset(
+        self,
+        *,
+        path: str,
+        file_path: Path,
+        form_data: Mapping[str, str],
+        file_field_name: str,
+        response_key: str,
+        error_context: str,
+        environment: FeishuEnvironment | None,
+    ) -> str:
+        resolved_environment = self.require_environment(environment)
+        token = self._get_tenant_access_token(resolved_environment)
+        with file_path.open("rb") as fp:
+            response = self._client().post(
+                url=f"{self._base_url}{path}",
+                headers={"Authorization": f"Bearer {token}"},
+                data=dict(form_data.items()),
+                files={file_field_name: (file_path.name, fp)},
+            )
+        response_json = _parse_json_response(response, error_context=error_context)
+        response_data = _require_json_object(
+            response_json.get("data"), error_context=error_context
+        )
+        uploaded_key = str(response_data.get(response_key, "")).strip()
+        if not uploaded_key:
+            raise RuntimeError(
+                f"Feishu API failed to {error_context}: missing {response_key}"
+            )
+        return uploaded_key
 
     def _request_json(
         self,

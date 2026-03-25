@@ -12,12 +12,13 @@ def test_registry_rejects_unknown_tools() -> None:
         registry.validate_known(("read", "unknown_tool"))
 
 
-def test_registry_contains_only_role_mounted_tools() -> None:
+def test_registry_contains_registered_local_tools() -> None:
     registry = build_default_registry()
     assert registry.list_names() == (
         "create_tasks",
         "dispatch_task",
         "edit",
+        "feishu_send",
         "glob",
         "grep",
         "list_delegated_tasks",

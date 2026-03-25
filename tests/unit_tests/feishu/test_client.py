@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 import httpx
+import pytest
 
 from agent_teams.feishu.client import FeishuClient
 from agent_teams.feishu.models import FeishuEnvironment
@@ -22,6 +24,14 @@ class _FakeSyncHttpClient:
                 dict[str, object] | None,
             ]
         ] = []
+        self.posts: list[
+            tuple[
+                str,
+                dict[str, str],
+                dict[str, str],
+                tuple[str, str],
+            ]
+        ] = []
 
     def request(
         self,
@@ -34,6 +44,30 @@ class _FakeSyncHttpClient:
     ) -> httpx.Response:
         self.requests.append((method, url, dict(headers.items()), params, json))
         key = (method, url)
+        return self._responses[key].pop(0)
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        data: Mapping[str, str],
+        files: Mapping[str, tuple[str, object]],
+    ) -> httpx.Response:
+        file_entries = list(files.items())
+        if len(file_entries) != 1:
+            raise AssertionError("expected a single file entry")
+        file_field_name, file_tuple = file_entries[0]
+        uploaded_name = str(file_tuple[0])
+        self.posts.append(
+            (
+                url,
+                dict(headers.items()),
+                dict(data.items()),
+                (file_field_name, uploaded_name),
+            )
+        )
+        key = ("POST", url)
         return self._responses[key].pop(0)
 
 
@@ -241,3 +275,139 @@ def test_get_chat_name_raises_runtime_error_for_failed_response(monkeypatch) -> 
         assert "chat_error" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected RuntimeError")
+
+
+def test_send_file_uploads_image_and_sends_image_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "diagram.png"
+    image_path.write_bytes(b"png")
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/images"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {"image_key": "img-key-1"}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/images",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/messages"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {"message_id": "om_1"}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/messages",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    result = client.send_file(
+        chat_id="oc_group_1",
+        file_path=image_path,
+        environment=environment,
+    )
+
+    assert result == "image sent (diagram.png)"
+    assert fake_client.posts == [
+        (
+            f"{base_url}/open-apis/im/v1/images",
+            {"Authorization": "Bearer token-1"},
+            {"image_type": "message"},
+            ("image", "diagram.png"),
+        )
+    ]
+    assert fake_client.requests[-1][4] == {
+        "receive_id": "oc_group_1",
+        "msg_type": "image",
+        "content": '{"image_key": "img-key-1"}',
+    }
+
+
+def test_send_file_uploads_regular_file_and_sends_file_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"pdf")
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/files"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {"file_key": "file-key-1"}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/files",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/messages"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {"message_id": "om_1"}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/messages",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    result = client.send_file(
+        chat_id="oc_group_1",
+        file_path=file_path,
+        environment=environment,
+    )
+
+    assert result == "file sent (report.pdf)"
+    assert fake_client.posts == [
+        (
+            f"{base_url}/open-apis/im/v1/files",
+            {"Authorization": "Bearer token-1"},
+            {"file_type": "pdf", "file_name": "report.pdf"},
+            ("file", "report.pdf"),
+        )
+    ]
+    assert fake_client.requests[-1][4] == {
+        "receive_id": "oc_group_1",
+        "msg_type": "file",
+        "content": '{"file_key": "file-key-1", "file_name": "report.pdf"}',
+    }

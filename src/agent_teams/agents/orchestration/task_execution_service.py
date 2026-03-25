@@ -53,6 +53,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from agent_teams.tools.registry.registry import ToolResolutionContext
 
 if TYPE_CHECKING:
     from agent_teams.skills.skill_registry import SkillRegistry
@@ -489,7 +490,7 @@ class TaskExecutionService(BaseModel):
             task_id=task.task_id,
             paths=prompt_sections.local_instruction_paths,
         )
-        runtime_tools = await self._build_runtime_tools_snapshot(role)
+        runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
         return prompt_sections, json.dumps(
             runtime_tools.model_dump(mode="json"),
             ensure_ascii=False,
@@ -534,7 +535,9 @@ class TaskExecutionService(BaseModel):
 
     async def _build_runtime_tools_snapshot(
         self,
+        *,
         role: RoleDefinition,
+        task: TaskEnvelope,
     ) -> RuntimeToolsSnapshot:
         skill_registry = cast("SkillRegistry", self.skill_registry)
         tool_registry = cast("ToolRegistry", self.tool_registry)
@@ -550,7 +553,10 @@ class TaskExecutionService(BaseModel):
             base_url="https://example.invalid/v1",
             api_key="snapshot",
             system_prompt="runtime-tools-snapshot",
-            allowed_tools=role.tools,
+            allowed_tools=tool_registry.resolve_names(
+                role.tools,
+                context=ToolResolutionContext(session_id=task.session_id),
+            ),
             allowed_mcp_servers=(),
             allowed_skills=role.skills,
             tool_registry=tool_registry,

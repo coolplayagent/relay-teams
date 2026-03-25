@@ -100,6 +100,7 @@ from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
+from agent_teams.tools.feishu_tools import FeishuToolContextResolver, FeishuToolService
 from agent_teams.tools.registry import ToolRegistry, build_default_registry
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
@@ -272,6 +273,17 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
         )
         self.feishu_client = FeishuClient()
+        self.feishu_tool_service: FeishuToolService = FeishuToolService(
+            session_repo=self.session_repo,
+            runtime_config_lookup=self.feishu_trigger_config_service,
+            feishu_client=self.feishu_client,
+        )
+        self.tool_registry.register_implicit_resolver(
+            FeishuToolContextResolver(
+                session_repo=self.session_repo,
+                runtime_config_lookup=self.feishu_trigger_config_service,
+            )
+        )
         self.notification_service: NotificationService = NotificationService(
             run_event_hub=self.run_event_hub,
             get_config=self.notification_config_manager.get_notification_config,
@@ -464,6 +476,7 @@ class ServerContainer:
             get_task_execution_service=get_task_execution_service,
             token_usage_repo=self.token_usage_repo,
             metric_recorder=self.metric_recorder,
+            feishu_tool_service=self.feishu_tool_service,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,

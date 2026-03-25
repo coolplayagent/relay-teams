@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.orchestration.task_orchestration_service import (
@@ -36,6 +37,9 @@ from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceManager
 
+if TYPE_CHECKING:
+    from agent_teams.tools.feishu_tools import FeishuToolService
+
 
 def create_provider_factory(
     *,
@@ -65,6 +69,7 @@ def create_provider_factory(
     get_task_execution_service: Callable[[], TaskExecutionService],
     token_usage_repo: TokenUsageRepository | None = None,
     metric_recorder: MetricRecorder | None = None,
+    feishu_tool_service: FeishuToolService | None = None,
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
         config_to_use = resolve_model_profile_config(
@@ -106,6 +111,7 @@ def create_provider_factory(
                 token_usage_repo=token_usage_repo,
                 metric_recorder=metric_recorder,
                 retry_config=runtime.llm_retry,
+                feishu_tool_service=feishu_tool_service,
             ),
         )
         return provider_registry.create(config_to_use)

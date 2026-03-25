@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         ToolApprovalPolicy,
     )
     from agent_teams.workspace import WorkspaceManager
+    from agent_teams.tools.feishu_tools import FeishuToolService
 
 
 @final
@@ -82,6 +83,7 @@ class OpenAICompatibleProvider(LLMProvider):
         token_usage_repo: TokenUsageRepository | None = None,
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
+        feishu_tool_service: FeishuToolService | None = None,
     ) -> None:
         self._session = AgentLlmSession(
             config=config,
@@ -114,6 +116,7 @@ class OpenAICompatibleProvider(LLMProvider):
             token_usage_repo=token_usage_repo,
             metric_recorder=metric_recorder,
             retry_config=retry_config,
+            feishu_tool_service=feishu_tool_service,
         )
 
     @override

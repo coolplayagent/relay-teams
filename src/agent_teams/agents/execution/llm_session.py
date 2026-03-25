@@ -74,7 +74,7 @@ from agent_teams.agents.execution.coordination_agent_builder import (
 from agent_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
-from agent_teams.tools.registry import ToolRegistry
+from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
     ToolApprovalPolicy,
@@ -96,6 +96,7 @@ if TYPE_CHECKING:
         TaskExecutionService,
     )
     from agent_teams.roles.role_registry import RoleRegistry
+    from agent_teams.tools.feishu_tools import FeishuToolService
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
@@ -144,6 +145,7 @@ class AgentLlmSession:
         token_usage_repo: TokenUsageRepository | None = None,
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
+        feishu_tool_service: "FeishuToolService | None" = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -175,6 +177,7 @@ class AgentLlmSession:
         self._token_usage_repo = token_usage_repo
         self._metric_recorder = metric_recorder
         self._retry_config = retry_config or LlmRetryConfig()
+        self._feishu_tool_service = feishu_tool_service
 
     async def run(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
@@ -256,7 +259,10 @@ class AgentLlmSession:
             base_url=self._config.base_url,
             api_key=self._config.api_key,
             system_prompt=agent_system_prompt,
-            allowed_tools=self._allowed_tools,
+            allowed_tools=self._tool_registry.resolve_names(
+                self._allowed_tools,
+                context=ToolResolutionContext(session_id=request.session_id),
+            ),
             model_settings=model_settings,
             model_profile=resolve_openai_chat_model_profile(
                 base_url=self._config.base_url,
@@ -305,6 +311,7 @@ class AgentLlmSession:
             tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
             metric_recorder=self._metric_recorder,
             notification_service=self._notification_service,
+            feishu_tool_service=self._feishu_tool_service,
         )
         control_ctx = self._run_control_manager.context(
             run_id=request.run_id,

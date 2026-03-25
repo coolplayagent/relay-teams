@@ -6,8 +6,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_teams.tools.registry import (
+        ToolImplicitResolver,
         ToolRegister,
         ToolRegistry,
+        ToolResolutionContext,
         build_default_registry,
     )
     from agent_teams.tools.runtime import (
@@ -31,10 +33,12 @@ __all__ = [
     "ToolDeps",
     "ToolError",
     "ToolInternalRecord",
+    "ToolImplicitResolver",
     "ToolRegister",
     "ToolRegistry",
     "ToolResultEnvelope",
     "ToolResultProjection",
+    "ToolResolutionContext",
     "build_default_registry",
     "execute_tool",
 ]
@@ -56,6 +60,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolDeps": ("agent_teams.tools.runtime", "ToolDeps"),
     "ToolError": ("agent_teams.tools.runtime", "ToolError"),
     "ToolInternalRecord": ("agent_teams.tools.runtime", "ToolInternalRecord"),
+    "ToolImplicitResolver": (
+        "agent_teams.tools.registry",
+        "ToolImplicitResolver",
+    ),
     "ToolRegister": ("agent_teams.tools.registry", "ToolRegister"),
     "ToolRegistry": ("agent_teams.tools.registry", "ToolRegistry"),
     "ToolResultEnvelope": (
@@ -65,6 +73,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolResultProjection": (
         "agent_teams.tools.runtime",
         "ToolResultProjection",
+    ),
+    "ToolResolutionContext": (
+        "agent_teams.tools.registry",
+        "ToolResolutionContext",
     ),
     "build_default_registry": (
         "agent_teams.tools.registry",

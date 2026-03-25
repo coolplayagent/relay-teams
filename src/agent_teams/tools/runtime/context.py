@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, SkipValidation
+from collections.abc import Awaitable
+from pathlib import Path
+from typing import Protocol
+
+from pydantic import BaseModel, ConfigDict, JsonValue, SkipValidation
 from pydantic_ai import RunContext
 
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.agents.orchestration.task_orchestration_service import (
-    TaskOrchestrationService,
-)
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import MetricRecorder
@@ -26,6 +26,63 @@ from agent_teams.tools.runtime.approval_state import ToolApprovalManager
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceHandle
+
+
+class TaskOrchestrationServiceLike(Protocol):
+    async def create_tasks(
+        self,
+        *,
+        run_id: str,
+        tasks: list[object],
+    ) -> dict[str, JsonValue]: ...
+
+    def update_task(
+        self,
+        *,
+        run_id: str | None,
+        task_id: str,
+        update: object,
+    ) -> dict[str, JsonValue]: ...
+
+    def list_delegated_tasks(
+        self,
+        *,
+        run_id: str,
+        include_root: bool = False,
+    ) -> dict[str, JsonValue]: ...
+
+    def list_run_tasks(
+        self,
+        *,
+        run_id: str,
+        include_root: bool = False,
+    ) -> dict[str, JsonValue]: ...
+
+    def dispatch_task(
+        self,
+        *,
+        run_id: str | None,
+        task_id: str,
+        role_id: str,
+        prompt: str = "",
+    ) -> Awaitable[dict[str, JsonValue]]: ...
+
+
+class TaskExecutionServiceLike(Protocol):
+    async def execute(
+        self,
+        *,
+        instance_id: str,
+        role_id: str,
+        task: object,
+        user_prompt_override: str | None = None,
+    ) -> str: ...
+
+
+class FeishuToolServiceLike(Protocol):
+    def send_text(self, *, session_id: str, text: str) -> str: ...
+
+    def send_file(self, *, session_id: str, file_path: Path) -> str: ...
 
 
 class ToolDeps(BaseModel):
@@ -56,13 +113,14 @@ class ToolDeps(BaseModel):
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
     mcp_registry: SkipValidation[McpRegistry]
-    task_service: SkipValidation[TaskOrchestrationService]
-    task_execution_service: SkipValidation[TaskExecutionService]
+    task_service: SkipValidation[TaskOrchestrationServiceLike]
+    task_execution_service: SkipValidation[TaskExecutionServiceLike]
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
     tool_approval_policy: SkipValidation[ToolApprovalPolicy]
     metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
+    feishu_tool_service: SkipValidation[FeishuToolServiceLike | None] = None
 
 
 ToolContext = RunContext[ToolDeps]
