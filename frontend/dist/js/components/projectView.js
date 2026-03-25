@@ -97,11 +97,27 @@ function buildFeishuBindingOptions(bindings) {
         const sessionTitle = String(binding?.session_title || '').trim();
         options.push({
             value: bindingKey,
-            label: sourceLabel || sessionTitle || bindingKey,
+            label: sessionTitle || sourceLabel || bindingKey,
             description: [triggerName, chatType].filter(Boolean).join(' - '),
         });
     });
     return options;
+}
+
+function resolveFeishuBindingDisplayName(binding, bindings) {
+    const bindingKey = buildFeishuBindingKey(binding);
+    const candidate = (Array.isArray(bindings) ? bindings : []).find(
+        item => buildFeishuBindingKey(item) === bindingKey,
+    );
+    const sessionTitle = String(candidate?.session_title || '').trim();
+    if (sessionTitle) {
+        return sessionTitle;
+    }
+    const sourceLabel = String(binding?.source_label || '').trim();
+    if (sourceLabel) {
+        return sourceLabel;
+    }
+    return String(binding?.chat_id || '').trim();
 }
 
 async function requestAutomationProjectEditInput(project) {
@@ -348,16 +364,18 @@ export async function openAutomationProjectView(project) {
     renderAutomationLoadingState(project);
 
     try {
-        const [freshProject, sessions, workspaces] = await Promise.all([
+        const [freshProject, sessions, workspaces, feishuBindings] = await Promise.all([
             fetchAutomationProject(automationProjectId),
             fetchAutomationProjectSessions(automationProjectId),
             fetchWorkspaces(),
+            fetchAutomationFeishuBindings(),
         ]);
         currentAutomationProject = freshProject;
         renderAutomationProjectView(
             freshProject,
             Array.isArray(sessions) ? sessions : [],
             findWorkspaceById(workspaces, freshProject.workspace_id),
+            Array.isArray(feishuBindings) ? feishuBindings : [],
         );
     } catch (error) {
         renderAutomationErrorState(project, error);
@@ -594,7 +612,7 @@ function renderAutomationErrorState(project, error) {
     }
 }
 
-function renderAutomationProjectView(project, sessions, workspaceRecord = null) {
+function renderAutomationProjectView(project, sessions, workspaceRecord = null, feishuBindings = []) {
     const safeSessions = Array.isArray(sessions) ? sessions : [];
     const status = String(project?.status || '').trim() || 'unknown';
     const scheduleMode = String(project?.schedule_mode || '').trim() || 'cron';
@@ -613,6 +631,9 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null) 
     const deliveryBinding = project?.delivery_binding && typeof project.delivery_binding === 'object'
         ? project.delivery_binding
         : null;
+    const deliveryBindingName = deliveryBinding
+        ? resolveFeishuBindingDisplayName(deliveryBinding, feishuBindings)
+        : '';
     const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
     const deliveryEventsLabel = deliveryEvents.length > 0 ? deliveryEvents.join(', ') : 'none';
     const runButtonLabel = t('automation.action.run_now');
@@ -709,7 +730,7 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null) 
                             </div>
                             <div class="automation-binding-item">
                                 <span>Feishu chat</span>
-                                <strong>${escapeHtml(String(deliveryBinding.source_label || deliveryBinding.chat_id || ''))}</strong>
+                                <strong>${escapeHtml(deliveryBindingName)}</strong>
                             </div>
                             <div class="automation-binding-item">
                                 <span>Chat type</span>

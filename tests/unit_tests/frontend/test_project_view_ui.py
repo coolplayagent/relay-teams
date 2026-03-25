@@ -137,6 +137,7 @@ await flushTasks();
 await flushTasks();
 
 console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
     formOptions: globalThis.__showFormDialogCalls[0],
     updatePayload: globalThis.__updatedAutomationPayload,
 }));
@@ -161,8 +162,15 @@ export async function fetchAutomationProject() {
         schedule_mode: "cron",
         cron_expression: "0 9 * * *",
         timezone: "UTC",
-        delivery_binding: null,
-        delivery_events: [],
+        delivery_binding: {
+            provider: "feishu",
+            trigger_id: "trg_feishu",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            chat_type: "group",
+            source_label: "Release Updates",
+        },
+        delivery_events: ["started"],
         next_run_at: "2026-03-14T09:00:00Z",
     };
 }
@@ -236,8 +244,9 @@ export async function updateAutomationProject(_automationProjectId, payload) {
         for field in payload["formOptions"]["fields"]
         if field["id"] == "delivery_binding_key"
     )
-    assert bindingField["options"][1]["label"] == "Release Updates"
+    assert bindingField["options"][1]["label"] == "feishu_main - Release Updates"
     assert bindingField["options"][1]["description"] == "Feishu Main - group"
+    assert "feishu_main - Release Updates" in str(payload["contentHtml"])
 
 
 def _run_project_view_script(

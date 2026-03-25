@@ -411,7 +411,7 @@ export async function runAutomationProject(projectId) {
         for field in payload["formOptions"]["fields"]
         if field["id"] == "delivery_binding_key"
     )
-    assert bindingField["options"][1]["label"] == "Release Updates"
+    assert bindingField["options"][1]["label"] == "feishu_main - Release Updates"
     assert bindingField["options"][1]["description"] == "Feishu Main - group"
     assert payload["runCalls"] == ["aut_created"]
 

@@ -189,7 +189,7 @@ function buildFeishuBindingOptions(bindings) {
         const sessionTitle = String(binding?.session_title || '').trim();
         options.push({
             value: bindingKey,
-            label: sourceLabel || sessionTitle || bindingKey,
+            label: sessionTitle || sourceLabel || bindingKey,
             description: [triggerName, chatType].filter(Boolean).join(' - '),
         });
     });

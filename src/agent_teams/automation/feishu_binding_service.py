@@ -12,8 +12,6 @@ from agent_teams.feishu import (
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_PLATFORM,
     SESSION_METADATA_SOURCE_LABEL_KEY,
-    SESSION_METADATA_TITLE_SOURCE_KEY,
-    SESSION_TITLE_SOURCE_MANUAL,
 )
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.session_repository import SessionRepository
@@ -142,14 +140,11 @@ def _fallback_source_label(chat_id: str) -> str:
 
 def _resolve_session_title(*, metadata: Mapping[str, str], session_id: str) -> str:
     title = str(metadata.get("title", "")).strip()
-    title_source = str(metadata.get(SESSION_METADATA_TITLE_SOURCE_KEY, "")).strip()
-    source_label = str(metadata.get(SESSION_METADATA_SOURCE_LABEL_KEY, "")).strip()
-    if title_source == SESSION_TITLE_SOURCE_MANUAL and title:
-        return title
-    if source_label:
-        return source_label
     if title:
         return title
+    source_label = str(metadata.get(SESSION_METADATA_SOURCE_LABEL_KEY, "")).strip()
+    if source_label:
+        return source_label
     return session_id
 
 

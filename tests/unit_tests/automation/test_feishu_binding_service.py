@@ -30,7 +30,12 @@ class _FakeRuntimeConfigLookup:
 
 def _build_service(
     tmp_path: Path,
-) -> tuple[AutomationFeishuBindingService, TriggerService, SessionRepository, ExternalSessionBindingRepository]:
+) -> tuple[
+    AutomationFeishuBindingService,
+    TriggerService,
+    SessionRepository,
+    ExternalSessionBindingRepository,
+]:
     db_path = tmp_path / "automation-feishu.db"
     trigger_service = TriggerService(trigger_repo=TriggerRepository(db_path))
     session_repo = SessionRepository(db_path)
@@ -83,10 +88,10 @@ def test_list_candidates_returns_existing_feishu_chat_bindings(tmp_path: Path) -
     assert candidate.trigger_id == trigger.trigger_id
     assert candidate.chat_id == "oc_123"
     assert candidate.source_label == "Release Updates"
-    assert candidate.session_title == "Release Updates"
+    assert candidate.session_title == "feishu_main - Release Updates"
 
 
-def test_list_candidates_prefers_manual_session_title(tmp_path: Path) -> None:
+def test_list_candidates_preserves_manual_session_title(tmp_path: Path) -> None:
     service, trigger_service, session_repo, binding_repo = _build_service(tmp_path)
     trigger = trigger_service.create_trigger(
         TriggerCreateInput(
