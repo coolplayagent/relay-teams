@@ -52,7 +52,7 @@ def get_role_config_options(
             )
             for role in role_registry.list_normal_mode_roles()
         ),
-        tools=tool_registry.list_names(),
+        tools=tool_registry.list_configurable_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),
     )

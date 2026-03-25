@@ -8,6 +8,7 @@ from agent_teams.tools.web_tools import TOOLS as WEB_TOOLS
 from agent_teams.tools.workspace_tools import TOOLS as WORKSPACE_TOOLS
 
 FEISHU_TOOLS = {"feishu_send": register_feishu_send}
+HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("feishu_send",)
 
 
 def build_default_registry() -> ToolRegistry:
@@ -17,4 +18,4 @@ def build_default_registry() -> ToolRegistry:
         **WORKSPACE_TOOLS,
         **FEISHU_TOOLS,
     }
-    return ToolRegistry(tools)
+    return ToolRegistry(tools, hidden_from_config=HIDDEN_FROM_ROLE_CONFIG)

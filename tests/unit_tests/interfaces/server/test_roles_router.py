@@ -82,6 +82,9 @@ class _FakeToolRegistry:
     def list_names(self) -> tuple[str, ...]:
         return ("create_tasks", "dispatch_task")
 
+    def list_configurable_names(self) -> tuple[str, ...]:
+        return self.list_names()
+
 
 class _FakeMcpService:
     def list_servers(self) -> tuple[McpServerSummary, ...]:

@@ -34,6 +34,19 @@ def test_registry_require_raises_for_unknown_tool() -> None:
         registry.require(("alpha", "missing"))
 
 
+def test_registry_list_configurable_names_omits_hidden_tools() -> None:
+    registry = ToolRegistry(
+        {
+            "alpha": _register_alpha,
+            "beta": _register_beta,
+        },
+        hidden_from_config=("beta",),
+    )
+
+    assert registry.list_names() == ("alpha", "beta")
+    assert registry.list_configurable_names() == ("alpha",)
+
+
 class _ImplicitResolver:
     def resolve_implicit_tools(
         self,
