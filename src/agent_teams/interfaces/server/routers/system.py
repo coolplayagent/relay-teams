@@ -17,6 +17,13 @@ from agent_teams.env.github_connectivity import (
     GitHubConnectivityProbeRequest,
     GitHubConnectivityProbeResult,
 )
+from agent_teams.external_agents import (
+    ExternalAgentConfig,
+    ExternalAgentConfigService,
+    ExternalAgentSummary,
+    ExternalAgentTestResult,
+)
+from agent_teams.external_agents.acp_client import probe_acp_agent
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvInput
 from agent_teams.env.web_config_models import WebConfig
@@ -28,6 +35,7 @@ from agent_teams.env.web_connectivity import (
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
+    get_external_agent_config_service,
     get_github_config_service,
     get_mcp_config_reload_service,
     get_model_config_service,
@@ -309,6 +317,63 @@ def save_web_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/agents", response_model=list[ExternalAgentSummary])
+def list_external_agents(
+    service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+) -> tuple[ExternalAgentSummary, ...]:
+    return service.list_agents()
+
+
+@router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
+def get_external_agent(
+    agent_id: str,
+    service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+) -> ExternalAgentConfig:
+    try:
+        return service.get_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
+def save_external_agent(
+    agent_id: str,
+    req: ExternalAgentConfig,
+    service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+) -> ExternalAgentConfig:
+    try:
+        return service.save_agent(agent_id, req)
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/configs/agents/{agent_id}")
+def delete_external_agent(
+    agent_id: str,
+    service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+) -> dict[str, str]:
+    try:
+        service.delete_agent(agent_id)
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/configs/agents/{agent_id}:test", response_model=ExternalAgentTestResult)
+async def test_external_agent(
+    agent_id: str,
+    service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+) -> ExternalAgentTestResult:
+    try:
+        config = service.resolve_runtime_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    result = await probe_acp_agent(config)
+    if result.ok:
+        return result
+    raise HTTPException(status_code=400, detail=result.message)
 
 
 @router.get("/configs/github")

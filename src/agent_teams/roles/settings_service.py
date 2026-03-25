@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
@@ -25,6 +26,9 @@ from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.roles.memory_models import default_memory_profile
 
+if TYPE_CHECKING:
+    from agent_teams.external_agents import ExternalAgentConfigService
+
 
 class RoleSettingsService:
     def __init__(
@@ -35,6 +39,7 @@ class RoleSettingsService:
         get_tool_registry: Callable[[], ToolRegistry],
         get_mcp_registry: Callable[[], McpRegistry],
         get_skill_registry: Callable[[], SkillRegistry],
+        get_external_agent_service: Callable[[], ExternalAgentConfigService] | None,
         on_roles_reloaded: Callable[[RoleRegistry], None],
     ) -> None:
         self._roles_dir: Path = roles_dir
@@ -43,6 +48,7 @@ class RoleSettingsService:
         self._get_tool_registry: Callable[[], ToolRegistry] = get_tool_registry
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
         self._get_skill_registry: Callable[[], SkillRegistry] = get_skill_registry
+        self._get_external_agent_service = get_external_agent_service
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
 
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
@@ -144,6 +150,7 @@ class RoleSettingsService:
             description=definition.description,
             version=definition.version,
             model_profile=definition.model_profile,
+            bound_agent_id=definition.bound_agent_id,
             source=self._resolve_role_source(definition.role_id),
         )
 
@@ -166,6 +173,7 @@ class RoleSettingsService:
             mcp_servers=definition.mcp_servers,
             skills=definition.skills,
             model_profile=definition.model_profile,
+            bound_agent_id=definition.bound_agent_id,
             memory_profile=definition.memory_profile,
             system_prompt=definition.system_prompt,
             source=source,
@@ -181,6 +189,7 @@ class RoleSettingsService:
                 "description": draft.description.strip(),
                 "version": draft.version.strip(),
                 "model_profile": draft.model_profile.strip(),
+                "bound_agent_id": _normalize_optional_text(draft.bound_agent_id),
                 "system_prompt": draft.system_prompt.strip(),
                 "tools": tuple(item.strip() for item in draft.tools if item.strip()),
                 "mcp_servers": tuple(
@@ -199,6 +208,8 @@ class RoleSettingsService:
             "version": draft.version,
             "tools": list(draft.tools),
         }
+        if draft.bound_agent_id:
+            front_matter["bound_agent_id"] = draft.bound_agent_id
         if draft.mcp_servers:
             front_matter["mcp_servers"] = list(draft.mcp_servers)
         if draft.skills:
@@ -227,6 +238,17 @@ class RoleSettingsService:
         self._get_tool_registry().validate_known(definition.tools)
         self._get_mcp_registry().validate_known(definition.mcp_servers)
         self._get_skill_registry().validate_known(definition.skills)
+        if definition.bound_agent_id:
+            if self._get_external_agent_service is None:
+                raise ValueError(
+                    "External agent bindings are not available in this runtime"
+                )
+            try:
+                self._get_external_agent_service().get_agent(definition.bound_agent_id)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Unknown external agent binding: {definition.bound_agent_id}"
+                ) from exc
         if is_reserved_system_role_definition(definition):
             missing_tools = COORDINATOR_REQUIRED_TOOLS.difference(definition.tools)
             if missing_tools and is_coordinator_role_definition(definition):
@@ -275,3 +297,12 @@ class RoleSettingsService:
         if role_record is None:
             return RoleConfigSource.APP
         return role_record[1]
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized

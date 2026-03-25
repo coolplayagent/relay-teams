@@ -116,6 +116,7 @@ def _build_factory(
         notification_service=cast(NotificationService | None, None),
         get_task_execution_service=lambda: cast(TaskExecutionService, object()),
         token_usage_repo=cast(TokenUsageRepository | None, None),
+        external_agent_session_manager=None,
     )
 
 

@@ -19,7 +19,7 @@ state.currentSessionId = 'session-1';
 state.currentSessionMode = 'orchestration';
 state.coordinatorRoleId = 'Coordinator';
 
-handleModelStepStarted('writer-1', 'writer');
+handleModelStepStarted({}, 'writer-1', 'writer');
 
 await Promise.resolve();
 
@@ -102,6 +102,22 @@ export function getPrimaryRoleLabel(sessionMode = state.currentSessionMode) {
 export function isPrimaryRoleId(roleId, sessionMode = state.currentSessionMode) {
     const safeRoleId = String(roleId || '').trim();
     return !!safeRoleId && safeRoleId === getPrimaryRoleId(sessionMode);
+}
+
+export function getRunPrimaryRoleId() {
+    return getPrimaryRoleId();
+}
+
+export function getRunPrimaryRoleLabel() {
+    return getPrimaryRoleLabel();
+}
+
+export function isRunPrimaryRoleId(roleId) {
+    return isPrimaryRoleId(roleId);
+}
+
+export function clearRunPrimaryRole() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",

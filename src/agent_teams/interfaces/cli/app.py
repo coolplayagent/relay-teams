@@ -13,6 +13,7 @@ import typer
 
 from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from agent_teams.env.env_cli import env_app
+from agent_teams.external_agents.agent_cli import build_external_agents_app
 from agent_teams.gateway.gateway_cli import build_gateway_app
 from agent_teams.interfaces.cli.approvals_cli import build_approvals_app
 from agent_teams.interfaces.cli.metrics_cli import build_metrics_app
@@ -206,6 +207,11 @@ roles_app = build_roles_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+agents_app = build_external_agents_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 approvals_app = build_approvals_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
@@ -329,6 +335,7 @@ def _execute_prompt(
 
 app.add_typer(server_app, name="server")
 app.add_typer(roles_app, name="roles")
+app.add_typer(agents_app, name="agents")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")

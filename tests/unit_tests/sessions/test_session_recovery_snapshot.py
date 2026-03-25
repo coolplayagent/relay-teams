@@ -140,6 +140,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     assert active_run.get("should_show_recover") is True
     assert active_run.get("phase") == "awaiting_subagent_followup"
     assert active_run.get("pending_tool_approval_count") == 0
+    assert active_run.get("primary_role_id") == "coordinator_agent"
 
     paused_subagent = snapshot.get("paused_subagent")
     assert isinstance(paused_subagent, dict)
@@ -149,6 +150,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("run_id") == "run-active"
+    assert round_snapshot.get("primary_role_id") == "coordinator_agent"
 
 
 def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
@@ -448,6 +450,7 @@ def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("is_recoverable") is True
+    assert round_snapshot.get("primary_role_id") == "MainAgent"
 
 
 def test_get_recovery_snapshot_round_snapshot_keeps_task_summaries(

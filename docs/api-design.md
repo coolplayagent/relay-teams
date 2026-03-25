@@ -175,6 +175,60 @@ The request may include:
 - optional `token`
 - optional `timeout_ms`
 
+### `GET /system/configs/agents`
+
+Returns configured external ACP agents.
+
+Each item includes:
+- `agent_id`
+- `name`
+- `description`
+- `transport`: `stdio`, `streamable_http`, or `custom`
+
+### `GET /system/configs/agents/{agent_id}`
+
+Returns one saved external agent config.
+
+The `transport` field is a discriminated union:
+- `stdio`: `command`, `args[]`, optional `env[]`
+- `streamable_http`: `url`, optional `headers[]`, optional `ssl_verify`
+- `custom`: `adapter_id`, `config`
+
+Binding items under `env[]` or `headers[]` include:
+- `name`
+- `value`
+- `secret`
+- `configured`
+
+Notes:
+- Secret binding values are not returned on read. Instead, `configured=true` tells the UI that a keyring-backed secret exists.
+- Any ACP-compatible external agent may be configured here, including tools such as Claude Code, Codex, or OpenCode, as long as it speaks the expected transport.
+- `stdio` external agents always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in agent config.
+
+### `PUT /system/configs/agents/{agent_id}`
+
+Upserts one external ACP agent config.
+
+Rules:
+- Path `agent_id` must match body `agent_id`.
+- Secret env/header values are persisted only through the keyring-backed secret store.
+- Sending a secret binding with `configured=false` and no value removes the stored secret for that binding.
+
+### `DELETE /system/configs/agents/{agent_id}`
+
+Deletes one saved external ACP agent config and its stored keyring secrets.
+
+### `POST /system/configs/agents/{agent_id}:test`
+
+Tests connectivity against the saved runtime-resolved external ACP agent config.
+
+Response fields:
+- `ok`
+- `message`
+- optional `protocol_version`
+- optional `agent_name`
+- optional `agent_version`
+
 ### `POST /system/configs/proxy:reload`
 
 Reloads effective proxy env into runtime.
@@ -336,6 +390,7 @@ Response shape:
       "run_id": "run-1",
       "created_at": "2026-03-11T12:00:00Z",
       "intent": "Implement endpoint X",
+      "primary_role_id": "Coordinator",
       "coordinator_messages": [],
       "tasks": [
         {
@@ -387,6 +442,7 @@ Response shape:
 Notes:
 - `tasks` contains delegated task summaries only. The root coordinator task is omitted.
 - `task_instance_map` is the authoritative mapping when multiple tasks use the same `role_id`.
+- `primary_role_id` is the resolved root role for that round. It matches the session topology by default, or the one-run `target_role_id` override when the run was created through direct `@Role` chat.
 - `retry_events` reflects the current retry card for the run timeline. The array is empty when no retry state should be shown and contains at most one entry.
 - Active retry countdowns are anchored to the event `occurred_at` timestamp, not to the browser receive time.
 - `retry_events[].phase` is `scheduled` while backoff is pending and `failed` when retries have been exhausted.
@@ -406,8 +462,10 @@ Returns active run recovery state, pending tool approvals, paused subagent state
 - `checkpoint_event_id`
 - `stream_connected`
 - `should_show_recover`
+- `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
+`round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
 
 ### `GET /sessions/{session_id}/agents`
 
@@ -494,6 +552,7 @@ Request:
   "session_id": "session-1",
   "execution_mode": "ai",
   "yolo": false,
+  "target_role_id": "Architect",
   "thinking": {
     "enabled": false,
     "effort": null
@@ -509,12 +568,14 @@ Notes:
 - `thinking` is optional.
 - `thinking.enabled` enables model thinking streams for providers that emit thinking parts.
 - `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
+- `target_role_id` is optional. When set, that run starts from the specified role instead of the session-default root role, without mutating the saved session topology.
+- `target_role_id` may point to `Coordinator`, `MainAgent`, or any normal role known to the role registry.
 - The backend resolves the session mode at run creation time and snapshots the chosen root topology into the run intent for queued and recoverable resume flows.
 
 Response:
 
 ```json
-{"run_id": "run-1", "session_id": "session-1"}
+{"run_id": "run-1", "session_id": "session-1", "target_role_id": "Architect"}
 ```
 
 ### `GET /runs/{run_id}/events`
@@ -683,6 +744,10 @@ Response fields:
 - `tools`
 - `mcp_servers`
 - `skills`
+- `agents[]`
+  - `agent_id`
+  - `name`
+  - `transport`
 
 ### `GET /roles/configs`
 
@@ -694,6 +759,7 @@ Response fields:
 - `description`
 - `version`
 - `model_profile`
+- `bound_agent_id`
 - `source`
 
 ### `GET /roles/configs/{role_id}`
@@ -711,6 +777,7 @@ Response fields:
 - `skills`
 - `model_profile`
 - `memory_profile`
+- `bound_agent_id`
 - `source`
 - `system_prompt`
 - `file_name`
@@ -733,6 +800,7 @@ Request:
   "mcp_servers": [],
   "skills": [],
   "model_profile": "default",
+  "bound_agent_id": "codex_local",
   "memory_profile": {
     "enabled": true
   },
@@ -743,8 +811,10 @@ Request:
 Rules:
 - Path `role_id` must match body `role_id`.
 - Unknown tools, MCP servers, or skills are rejected.
+- Unknown `bound_agent_id` values are rejected.
 - When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
+- When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.
 - Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`) and fixed `system_prompt` through this API.
 
 ### `POST /roles:validate`

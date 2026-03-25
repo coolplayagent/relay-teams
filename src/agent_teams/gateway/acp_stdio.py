@@ -211,31 +211,11 @@ class AcpGatewayServer:
         for item in messages:
             role = str(item.get("role") or "")
             message = item.get("message")
-            text = _message_payload_to_text(message)
-            if not text:
-                continue
-            if role == "user":
+            for update in _message_payload_to_session_updates(role, message):
                 await self._publish_session_update(
                     gateway_session_id,
-                    {
-                        "sessionUpdate": "user_message_chunk",
-                        "content": {
-                            "type": "text",
-                            "text": text,
-                        },
-                    },
+                    update,
                 )
-                continue
-            await self._publish_session_update(
-                gateway_session_id,
-                {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": text,
-                    },
-                },
-            )
         return {"sessionId": gateway_session_id}
 
     async def _prompt_session(
@@ -770,22 +750,56 @@ def _prompt_blocks_to_text(prompt_blocks: list[JsonValue]) -> str:
     return "\n\n".join(collected).strip()
 
 
-def _message_payload_to_text(message: object) -> str:
+def _message_payload_to_session_updates(
+    role: str,
+    message: object,
+) -> tuple[dict[str, JsonValue], ...]:
     if not isinstance(message, dict):
-        return ""
+        return ()
     parts = message.get("parts")
     if not isinstance(parts, list):
-        return ""
-    collected: list[str] = []
+        return ()
+    updates: list[dict[str, JsonValue]] = []
     for part in parts:
         if not isinstance(part, dict):
             continue
         part_kind = str(part.get("part_kind") or "")
-        if part_kind in {"user-prompt", "text", "thinking", "system-prompt"}:
-            content = part.get("content")
-            if isinstance(content, str) and content.strip():
-                collected.append(content)
-    return "\n\n".join(collected)
+        content = part.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if role == "user" and part_kind == "user-prompt":
+            updates.append(
+                {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": content,
+                    },
+                }
+            )
+            continue
+        if role != "user" and part_kind == "thinking":
+            updates.append(
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": content,
+                    },
+                }
+            )
+            continue
+        if role != "user" and part_kind == "text":
+            updates.append(
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": content,
+                    },
+                }
+            )
+    return tuple(updates)
 
 
 def _load_payload(raw_payload: str) -> dict[str, JsonValue]:

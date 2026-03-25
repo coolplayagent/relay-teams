@@ -36,6 +36,11 @@ from agent_teams.env.github_config_service import GitHubConfigService
 from agent_teams.env.proxy_config_service import ProxyConfigService
 from agent_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from agent_teams.env.web_config_service import WebConfigService
+from agent_teams.external_agents import (
+    ExternalAgentConfigService,
+    ExternalAgentSessionRepository,
+)
+from agent_teams.external_agents.provider import ExternalAcpSessionManager
 from agent_teams.feishu import (
     FeishuClient,
     FeishuInboundRuntime,
@@ -164,6 +169,9 @@ class ServerContainer:
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=config_dir
         )
+        self.external_agent_config_service = ExternalAgentConfigService(
+            config_dir=config_dir
+        )
         self.environment_variable_service: EnvironmentVariableService = (
             EnvironmentVariableService()
         )
@@ -229,6 +237,9 @@ class ServerContainer:
         self.session_repo: SessionRepository = SessionRepository(runtime.paths.db_path)
         self.external_session_binding_repo: ExternalSessionBindingRepository = (
             ExternalSessionBindingRepository(runtime.paths.db_path)
+        )
+        self.external_agent_session_repo = ExternalAgentSessionRepository(
+            runtime.paths.db_path
         )
         self.orchestration_settings_service: OrchestrationSettingsService = (
             OrchestrationSettingsService(
@@ -329,6 +340,14 @@ class ServerContainer:
         self.gate_manager: GateManager = GateManager()
         self.tool_approval_manager: ToolApprovalManager = ToolApprovalManager()
         self.tool_approval_policy: ToolApprovalPolicy = ToolApprovalPolicy()
+        self.external_acp_session_manager = ExternalAcpSessionManager(
+            config_service=self.external_agent_config_service,
+            session_repo=self.external_agent_session_repo,
+            message_repo=self.message_repo,
+            run_event_hub=self.run_event_hub,
+            workspace_manager=self.workspace_manager,
+            mcp_registry=self.mcp_registry,
+        )
         self.run_control_manager.bind_runtime(
             run_event_hub=self.run_event_hub,
             injection_manager=self.injection_manager,
@@ -506,6 +525,7 @@ class ServerContainer:
             get_tool_registry=lambda: self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
             get_skill_registry=lambda: self.skill_registry,
+            get_external_agent_service=lambda: self.external_agent_config_service,
             on_roles_reloaded=self._on_roles_reloaded,
         )
         self.mcp_config_reload_service: McpConfigReloadService = McpConfigReloadService(
@@ -556,6 +576,7 @@ class ServerContainer:
             token_usage_repo=self.token_usage_repo,
             metric_recorder=self.metric_recorder,
             feishu_tool_service=self.feishu_tool_service,
+            external_agent_session_manager=self.external_acp_session_manager,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
@@ -620,6 +641,7 @@ class ServerContainer:
         self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
+        await self.external_acp_session_manager.close()
         return None
 
     def _refresh_coordinator_runtime(self) -> None:

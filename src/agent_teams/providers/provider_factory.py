@@ -4,6 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from agent_teams.external_agents.provider import (
+    ExternalAcpProvider,
+    ExternalAcpSessionManager,
+)
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
@@ -73,8 +77,20 @@ def create_provider_factory(
     token_usage_repo: TokenUsageRepository | None = None,
     metric_recorder: MetricRecorder | None = None,
     feishu_tool_service: FeishuToolService | None = None,
+    external_agent_session_manager: ExternalAcpSessionManager | None = None,
 ) -> Callable[[RoleDefinition], LLMProvider]:
     def provider_factory(role: RoleDefinition) -> LLMProvider:
+        if role.bound_agent_id:
+            if external_agent_session_manager is None:
+                return MisconfiguredProvider(
+                    "External ACP agent runtime is not available. "
+                    "Reload the server configuration and try again."
+                )
+            return ExternalAcpProvider(
+                role=role,
+                session_manager=external_agent_session_manager,
+            )
+
         config_to_use = resolve_model_profile_config(
             runtime=runtime,
             profile_name=role.model_profile,

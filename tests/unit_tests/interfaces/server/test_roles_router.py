@@ -4,7 +4,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
 from agent_teams.interfaces.server.deps import (
+    get_external_agent_config_service,
     get_mcp_service,
     get_role_registry,
     get_role_settings_service,
@@ -16,6 +18,7 @@ from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
 from agent_teams.roles import (
     NormalModeRoleOption,
     RoleConfigSource,
+    RoleAgentOption,
     RoleConfigOptions,
     RoleDefinition,
     RoleDocumentRecord,
@@ -102,6 +105,17 @@ class _FakeSkillRegistry:
         return ("diff", "time")
 
 
+class _FakeExternalAgentService:
+    def list_agent_options(self) -> tuple[ExternalAgentOption, ...]:
+        return (
+            ExternalAgentOption(
+                agent_id="codex",
+                name="Codex",
+                transport=ExternalAgentTransportType.STDIO,
+            ),
+        )
+
+
 def _create_test_client() -> TestClient:
     app = FastAPI()
     app.include_router(roles.router, prefix="/api")
@@ -146,6 +160,9 @@ def _create_test_client() -> TestClient:
     app.dependency_overrides[get_tool_registry] = lambda: _FakeToolRegistry()
     app.dependency_overrides[get_mcp_service] = lambda: _FakeMcpService()
     app.dependency_overrides[get_skill_registry] = lambda: _FakeSkillRegistry()
+    app.dependency_overrides[get_external_agent_config_service] = lambda: (
+        _FakeExternalAgentService()
+    )
     return TestClient(app)
 
 
@@ -228,4 +245,11 @@ def test_get_role_config_options() -> None:
         tools=("create_tasks", "dispatch_task"),
         mcp_servers=("docs",),
         skills=("diff", "time"),
+        agents=(
+            RoleAgentOption(
+                agent_id="codex",
+                name="Codex",
+                transport="stdio",
+            ),
+        ),
     ).model_dump(mode="json")

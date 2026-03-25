@@ -41,6 +41,42 @@ class AgentTeamsClient:
     def get_proxy_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/proxy")
 
+    def list_external_agents(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/system/configs/agents")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
+
+    def get_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+        )
+
+    def save_external_agent(
+        self,
+        agent_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PUT",
+            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+            payload,
+        )
+
+    def delete_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+        )
+
+    def test_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/system/configs/agents/{quote(agent_id, safe='')}:test",
+            {},
+        )
+
     def get_web_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/web")
 
@@ -187,12 +223,14 @@ class AgentTeamsClient:
         session_id: str,
         execution_mode: str = "ai",
         yolo: bool = False,
+        target_role_id: str | None = None,
     ) -> RunHandle:
         payload: dict[str, JsonValue] = {
             "session_id": session_id,
             "intent": intent,
             "execution_mode": execution_mode,
             "yolo": yolo,
+            "target_role_id": target_role_id,
         }
         data = self._request_json("POST", "/api/runs", payload)
         return RunHandle(

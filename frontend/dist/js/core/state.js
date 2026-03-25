@@ -16,6 +16,7 @@ export const state = {
     activeAgentRoleId: null,
     activeAgentInstanceId: null,
     activeRunId: null,
+    runPrimaryRoleMap: {},
     pausedSubagent: null,
     instanceRoleMap: {}, // instanceId -> roleId, built from model_step_started SSE events
     roleInstanceMap: {}, // roleId -> latest instanceId
@@ -106,6 +107,50 @@ export function isPrimaryRoleId(roleId, sessionMode = state.currentSessionMode) 
         return false;
     }
     return safeRoleId === getPrimaryRoleId(sessionMode);
+}
+
+export function setRunPrimaryRole(runId, roleId) {
+    const safeRunId = String(runId || '').trim();
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRunId) {
+        return;
+    }
+    if (!safeRoleId) {
+        delete state.runPrimaryRoleMap[safeRunId];
+        return;
+    }
+    state.runPrimaryRoleMap[safeRunId] = safeRoleId;
+}
+
+export function clearRunPrimaryRole(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    delete state.runPrimaryRoleMap[safeRunId];
+}
+
+export function getRunPrimaryRoleId(runId, sessionMode = state.currentSessionMode) {
+    const safeRunId = String(runId || '').trim();
+    const mappedRoleId = safeRunId ? normalizeRoleId(state.runPrimaryRoleMap[safeRunId]) : '';
+    if (mappedRoleId) {
+        return mappedRoleId;
+    }
+    return getPrimaryRoleId(sessionMode);
+}
+
+export function getRunPrimaryRoleLabel(runId, sessionMode = state.currentSessionMode) {
+    return getRoleDisplayName(getRunPrimaryRoleId(runId, sessionMode), {
+        fallback: getPrimaryRoleLabel(sessionMode),
+    });
+}
+
+export function isRunPrimaryRoleId(roleId, runId, sessionMode = state.currentSessionMode) {
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRoleId) {
+        return false;
+    }
+    return safeRoleId === getRunPrimaryRoleId(runId, sessionMode);
 }
 
 export function isPrimaryOrReservedRoleId(roleId, sessionMode = state.currentSessionMode) {

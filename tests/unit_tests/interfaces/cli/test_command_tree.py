@@ -399,6 +399,7 @@ def test_root_help_lists_env_module() -> None:
     assert "--orchestration" in result.output
     assert "env" in result.output
     assert "mcp" in result.output
+    assert "agents" in result.output
     assert "roles" in result.output
     assert "skills" in result.output
     assert "triggers" in result.output

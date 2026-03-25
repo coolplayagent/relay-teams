@@ -76,6 +76,7 @@ console.log(JSON.stringify({
     assert payload["notificationsPanelDisplay"] == "block"
     assert load_calls == {
         "model": 1,
+        "agents": 0,
         "roles": 0,
         "orchestration": 0,
         "triggers": 0,
@@ -102,6 +103,7 @@ openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
 const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
+const agentsTab = tabs.find(tab => tab.dataset.tab === "agents");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
 const webTab = tabs.find(tab => tab.dataset.tab === "web");
 const githubTab = tabs.find(tab => tab.dataset.tab === "github");
@@ -110,6 +112,8 @@ const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
 
 const modelAddDisplay = document.getElementById("add-profile-btn").style.display;
+await agentsTab.onclick();
+const agentAddDisplay = document.getElementById("add-agent-btn").style.display;
 await rolesTab.onclick();
 const roleAddDisplay = document.getElementById("add-role-btn").style.display;
 await notificationsTab.onclick();
@@ -127,6 +131,7 @@ const skillsReloadDisplay = document.getElementById("reload-skills-btn").style.d
 
 console.log(JSON.stringify({
     modelAddDisplay,
+    agentAddDisplay,
     roleAddDisplay,
     notificationsSaveDisplay,
     webSaveDisplay,
@@ -139,6 +144,7 @@ console.log(JSON.stringify({
     )
 
     assert payload["modelAddDisplay"] == "inline-flex"
+    assert payload["agentAddDisplay"] == "inline-flex"
     assert payload["roleAddDisplay"] == "inline-flex"
     assert payload["notificationsSaveDisplay"] == "inline-flex"
     assert payload["webSaveDisplay"] == "inline-flex"
@@ -160,7 +166,8 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
 
     assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="skills"')
     assert tabs_html.index('data-tab="skills"') < tabs_html.index('data-tab="mcp"')
-    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="roles"')
+    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="agents"')
+    assert tabs_html.index('data-tab="agents"') < tabs_html.index('data-tab="roles"')
     assert tabs_html.index('data-tab="roles"') < tabs_html.index(
         'data-tab="orchestration"'
     )
@@ -181,6 +188,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">Model</span>" in tabs_html
     assert ">Skills</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
+    assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
     assert ">GitHub</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
@@ -359,6 +367,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     )
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
+    mock_agents_settings_path = tmp_path / "mockAgentsSettings.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
     mock_orchestration_settings_path = tmp_path / "mockOrchestrationSettings.mjs"
@@ -392,6 +401,18 @@ export function bindEnvironmentVariableSettingsHandlers() {
 
 export async function loadEnvironmentVariablesPanel() {
     globalThis.__loadCalls.environment += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_agents_settings_path.write_text(
+        """
+export function bindAgentSettingsHandlers() {
+    globalThis.__bindCalls.agents += 1;
+}
+
+export async function loadAgentSettingsPanel() {
+    globalThis.__loadCalls.agents += 1;
 }
 """.strip(),
         encoding="utf-8",
@@ -506,6 +527,8 @@ export function t(key) {
         'settings.panel.skills.description': 'Check installed skills and refresh the server-side registry.',
         'settings.panel.mcp.title': 'MCP',
         'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
+        'settings.panel.agents.title': 'Agents',
+        'settings.panel.agents.description': 'Configure ACP-compatible external agents and make them available for role bindings.',
         'settings.panel.roles.title': 'Roles',
         'settings.panel.roles.description': 'Edit role metadata, allowed tools, memory profile, and prompt text.',
         'settings.panel.orchestration.title': 'Orchestration',
@@ -534,6 +557,7 @@ export function translateDocument() {
 
     source_text = (
         source_path.read_text(encoding="utf-8")
+        .replace("./agentsSettings.js", "./mockAgentsSettings.mjs")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
@@ -709,6 +733,7 @@ function createDocument() {{
 
 globalThis.__bindCalls = {{
     model: 0,
+    agents: 0,
     roles: 0,
     orchestration: 0,
     triggers: 0,
@@ -721,6 +746,7 @@ globalThis.__bindCalls = {{
 }};
 globalThis.__loadCalls = {{
     model: 0,
+    agents: 0,
     roles: 0,
     orchestration: 0,
     triggers: 0,

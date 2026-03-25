@@ -389,6 +389,83 @@ async def test_session_load_persists_host_provided_mcp_servers(
 
 
 @pytest.mark.asyncio
+async def test_session_load_replays_thinking_and_response_chunks_separately(
+    tmp_path: Path,
+) -> None:
+    server, session_service, _, notifications = _build_server(tmp_path)
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    created_result = _require_result_object(created)
+    session_id = _require_str(created_result, "sessionId")
+    session_service.messages_by_session["session-1"] = [
+        {
+            "role": "user",
+            "message": {
+                "parts": [
+                    {
+                        "part_kind": "user-prompt",
+                        "content": "hello",
+                    }
+                ]
+            },
+        },
+        {
+            "role": "assistant",
+            "message": {
+                "parts": [
+                    {
+                        "part_kind": "thinking",
+                        "content": "draft reasoning",
+                    },
+                    {
+                        "part_kind": "text",
+                        "content": "final answer",
+                    },
+                ]
+            },
+        },
+    ]
+
+    loaded = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "cwd": str(tmp_path),
+                "mcpServers": [],
+            },
+        }
+    )
+
+    assert _require_result_object(loaded) == {"sessionId": session_id}
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == [
+        "user_message_chunk",
+        "agent_thought_chunk",
+        "agent_message_chunk",
+    ]
+    thought_update = _session_update_payload(notifications[1])
+    assert thought_update["content"] == {
+        "type": "text",
+        "text": "draft reasoning",
+    }
+    message_update = _session_update_payload(notifications[2])
+    assert message_update["content"] == {
+        "type": "text",
+        "text": "final answer",
+    }
+
+
+@pytest.mark.asyncio
 async def test_session_prompt_preserves_whitespace_for_zed_chunks(
     tmp_path: Path,
 ) -> None:
@@ -660,3 +737,11 @@ def _session_update_name(message: dict[str, JsonValue]) -> str:
     session_update = update.get("sessionUpdate")
     assert isinstance(session_update, str)
     return session_update
+
+
+def _session_update_payload(message: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    params = message.get("params")
+    assert isinstance(params, dict)
+    update = params.get("update")
+    assert isinstance(update, dict)
+    return update

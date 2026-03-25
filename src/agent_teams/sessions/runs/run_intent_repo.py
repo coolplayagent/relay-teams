@@ -34,6 +34,7 @@ class RunIntentRepository:
                 yolo           TEXT NOT NULL DEFAULT 'false',
                 thinking_enabled TEXT NOT NULL DEFAULT 'false',
                 thinking_effort TEXT,
+                target_role_id TEXT,
                 session_mode TEXT NOT NULL DEFAULT 'normal',
                 topology_json TEXT,
                 created_at     TEXT NOT NULL,
@@ -71,6 +72,8 @@ class RunIntentRepository:
             self._conn.execute(
                 "ALTER TABLE run_intents ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
             )
+        if "target_role_id" not in columns:
+            self._conn.execute("ALTER TABLE run_intents ADD COLUMN target_role_id TEXT")
         if "topology_json" not in columns:
             self._conn.execute("ALTER TABLE run_intents ADD COLUMN topology_json TEXT")
         self._conn.execute(
@@ -90,12 +93,13 @@ class RunIntentRepository:
                 yolo,
                 thinking_enabled,
                 thinking_effort,
+                target_role_id,
                 session_mode,
                 topology_json,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
@@ -104,6 +108,7 @@ class RunIntentRepository:
                 yolo=excluded.yolo,
                 thinking_enabled=excluded.thinking_enabled,
                 thinking_effort=excluded.thinking_effort,
+                target_role_id=excluded.target_role_id,
                 session_mode=excluded.session_mode,
                 topology_json=excluded.topology_json,
                 updated_at=excluded.updated_at
@@ -116,6 +121,7 @@ class RunIntentRepository:
                 "true" if intent.yolo else "false",
                 "true" if intent.thinking.enabled else "false",
                 intent.thinking.effort,
+                intent.target_role_id,
                 intent.session_mode.value,
                 (
                     intent.topology.model_dump_json()
@@ -150,7 +156,7 @@ class RunIntentRepository:
     def get(self, run_id: str) -> IntentInput:
         row = self._conn.execute(
             """
-            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort, session_mode, topology_json
+            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort, target_role_id, session_mode, topology_json
             FROM run_intents
             WHERE run_id=?
             """,
@@ -166,6 +172,11 @@ class RunIntentRepository:
             thinking=RunThinkingConfig(
                 enabled=str(row["thinking_enabled"]).strip().lower() == "true",
                 effort=_coerce_thinking_effort(row["thinking_effort"]),
+            ),
+            target_role_id=(
+                str(row["target_role_id"])
+                if row["target_role_id"] is not None
+                else None
             ),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             topology=_coerce_topology(row["topology_json"]),

@@ -41,8 +41,11 @@ export {
 
 export {
     deleteEnvironmentVariable,
+    deleteExternalAgent,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchExternalAgent,
+    fetchExternalAgents,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
     fetchMcpServerTools,
@@ -62,6 +65,7 @@ export {
     reloadModelConfig,
     reloadProxyConfig,
     reloadSkillsConfig,
+    saveExternalAgent,
     saveEnvironmentVariable,
     saveModelConfig,
     saveModelProfile,
@@ -71,6 +75,7 @@ export {
     saveGitHubConfig,
     saveWebConfig,
     saveUiLanguageSettings,
+    testExternalAgent,
 } from './system.js';
 
 export {

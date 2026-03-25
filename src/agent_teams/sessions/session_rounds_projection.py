@@ -198,6 +198,7 @@ def build_session_rounds(
             "run_id": run_id,
             "created_at": created_at,
             "intent": _round_intent(root_task, run_messages),
+            "primary_role_id": coordinator_role_id,
             "coordinator_messages": coordinator_messages,
             "retry_events": retry_events_by_run.get(run_id, []),
             "has_user_messages": has_user_messages,
