@@ -452,6 +452,13 @@ class AgentTeamsClient:
             return []
         return [item for item in raw if isinstance(item, dict)]
 
+    def list_automation_feishu_bindings(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/automation/feishu-bindings")
+        raw = data.get("data")
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
+
     def get_automation_project(
         self, automation_project_id: str
     ) -> dict[str, JsonValue]:

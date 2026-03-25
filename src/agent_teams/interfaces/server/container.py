@@ -7,6 +7,10 @@ from pathlib import Path
 
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.automation import (
+    AutomationDeliveryRepository,
+    AutomationDeliveryService,
+    AutomationDeliveryWorker,
+    AutomationFeishuBindingService,
     AutomationProjectRepository,
     AutomationSchedulerService,
     AutomationService,
@@ -267,6 +271,9 @@ class ServerContainer:
         self.automation_repo: AutomationProjectRepository = AutomationProjectRepository(
             runtime.paths.db_path
         )
+        self.automation_delivery_repo: AutomationDeliveryRepository = (
+            AutomationDeliveryRepository(runtime.paths.db_path)
+        )
         self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
             runtime.paths.db_path
         )
@@ -425,6 +432,22 @@ class ServerContainer:
             ),
         )
         self.run_service._notification_service = self.notification_service
+        self.automation_feishu_binding_service = AutomationFeishuBindingService(
+            external_session_binding_repo=self.external_session_binding_repo,
+            session_repo=self.session_repo,
+            trigger_lookup=self.trigger_service,
+            runtime_config_lookup=self.feishu_trigger_config_service,
+        )
+        self.automation_delivery_service = AutomationDeliveryService(
+            repository=self.automation_delivery_repo,
+            runtime_config_lookup=self.feishu_trigger_config_service,
+            feishu_client=self.feishu_client,
+            run_runtime_repo=self.run_runtime_repo,
+            event_log=self.event_log,
+        )
+        self.automation_delivery_worker = AutomationDeliveryWorker(
+            delivery_service=self.automation_delivery_service
+        )
         self.feishu_trigger_handler = FeishuTriggerHandler(
             trigger_service=self.trigger_service,
             feishu_config_service=self.feishu_trigger_config_service,
@@ -444,6 +467,8 @@ class ServerContainer:
             trigger_service=self.trigger_service,
             session_service=self.session_service,
             run_service=self.run_service,
+            feishu_binding_service=self.automation_feishu_binding_service,
+            delivery_service=self.automation_delivery_service,
         )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)
@@ -578,11 +603,13 @@ class ServerContainer:
         self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
+        self.automation_delivery_worker.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
+        self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
         return None

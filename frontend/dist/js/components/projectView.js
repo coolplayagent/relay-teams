@@ -5,6 +5,7 @@
 import {
     disableAutomationProject,
     enableAutomationProject,
+    fetchAutomationFeishuBindings,
     fetchAutomationProject,
     fetchAutomationProjectSessions,
     fetchWorkspaceDiffFile,
@@ -66,16 +67,59 @@ const AUTOMATION_TIMEZONE_OPTIONS = [
     { value: 'Europe/London', label: 'Europe/London' },
 ];
 
+function buildFeishuBindingKey(binding) {
+    const triggerId = String(binding?.trigger_id || '').trim();
+    const tenantKey = String(binding?.tenant_key || '').trim();
+    const chatId = String(binding?.chat_id || '').trim();
+    if (!triggerId || !tenantKey || !chatId) {
+        return '';
+    }
+    return `${triggerId}::${tenantKey}::${chatId}`;
+}
+
+function buildFeishuBindingOptions(bindings) {
+    const safeBindings = Array.isArray(bindings) ? bindings : [];
+    const options = [
+        {
+            value: '',
+            label: 'No Feishu delivery',
+            description: 'Do not send automation updates to Feishu.',
+        },
+    ];
+    safeBindings.forEach(binding => {
+        const bindingKey = buildFeishuBindingKey(binding);
+        if (!bindingKey) {
+            return;
+        }
+        const triggerName = String(binding?.trigger_name || '').trim();
+        const sourceLabel = String(binding?.source_label || '').trim();
+        const chatType = String(binding?.chat_type || '').trim();
+        const sessionTitle = String(binding?.session_title || '').trim();
+        options.push({
+            value: bindingKey,
+            label: sourceLabel || sessionTitle || bindingKey,
+            description: [triggerName, chatType].filter(Boolean).join(' - '),
+        });
+    });
+    return options;
+}
+
 async function requestAutomationProjectEditInput(project) {
-    const workspaces = await fetchWorkspaces();
+    const [workspaces, feishuBindings] = await Promise.all([
+        fetchWorkspaces(),
+        fetchAutomationFeishuBindings(),
+    ]);
     const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
         value: String(workspace?.workspace_id || '').trim(),
         label: formatWorkspaceOptionLabel(workspace),
         description: formatWorkspaceOptionDescription(workspace),
     })).filter(option => option.value);
+    const bindingOptions = buildFeishuBindingOptions(feishuBindings);
     if (workspaceOptions.length === 0) {
         return null;
     }
+    const currentBindingKey = buildFeishuBindingKey(project?.delivery_binding);
+    const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
     const values = await showFormDialog({
         title: t('automation.edit.title'),
         message: t('automation.edit.message'),
@@ -123,6 +167,34 @@ async function requestAutomationProjectEditInput(project) {
                 value: String(project?.status || '').trim().toLowerCase() === 'enabled',
                 description: t('automation.field.enabled_help'),
             },
+            {
+                id: 'delivery_binding_key',
+                label: 'Feishu Chat',
+                type: 'select',
+                value: currentBindingKey,
+                options: bindingOptions,
+            },
+            {
+                id: 'delivery_event_started',
+                label: 'Notify on start',
+                type: 'checkbox',
+                value: deliveryEvents.includes('started'),
+                description: 'Send a start message to the selected Feishu chat.',
+            },
+            {
+                id: 'delivery_event_completed',
+                label: 'Notify on completion',
+                type: 'checkbox',
+                value: deliveryEvents.includes('completed'),
+                description: 'Send the final success result to Feishu.',
+            },
+            {
+                id: 'delivery_event_failed',
+                label: 'Notify on failure',
+                type: 'checkbox',
+                value: deliveryEvents.includes('failed'),
+                description: 'Send the failure reason to Feishu.',
+            },
         ],
     });
     if (!values || typeof values !== 'object') {
@@ -134,6 +206,13 @@ async function requestAutomationProjectEditInput(project) {
     const cronExpression = String(values.cron_expression || '').trim();
     const timezone = String(values.timezone || 'UTC').trim() || 'UTC';
     const enabled = values.enabled !== false;
+    const selectedBindingKey = String(values.delivery_binding_key || '').trim();
+    const selectedBinding = (Array.isArray(feishuBindings) ? feishuBindings : []).find(binding => buildFeishuBindingKey(binding) === selectedBindingKey) || null;
+    const nextDeliveryEvents = [
+        values.delivery_event_started === true ? 'started' : null,
+        values.delivery_event_completed === true ? 'completed' : null,
+        values.delivery_event_failed === true ? 'failed' : null,
+    ].filter(Boolean);
     if (!workspaceId || !displayName || !prompt || !cronExpression) {
         return null;
     }
@@ -147,6 +226,15 @@ async function requestAutomationProjectEditInput(project) {
         cron_expression: cronExpression,
         timezone,
         enabled,
+        delivery_binding: selectedBinding ? {
+            provider: 'feishu',
+            trigger_id: String(selectedBinding.trigger_id || '').trim(),
+            tenant_key: String(selectedBinding.tenant_key || '').trim(),
+            chat_id: String(selectedBinding.chat_id || '').trim(),
+            chat_type: String(selectedBinding.chat_type || '').trim(),
+            source_label: String(selectedBinding.source_label || '').trim(),
+        } : null,
+        delivery_events: selectedBinding ? nextDeliveryEvents : [],
     };
 }
 
@@ -522,6 +610,11 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null) 
     const nextRunAt = String(project?.next_run_at || '').trim() || t('automation.detail.not_scheduled');
     const lastRunAt = String(project?.last_run_started_at || '').trim() || t('automation.detail.never');
     const lastError = String(project?.last_error || '').trim() || t('automation.detail.none');
+    const deliveryBinding = project?.delivery_binding && typeof project.delivery_binding === 'object'
+        ? project.delivery_binding
+        : null;
+    const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
+    const deliveryEventsLabel = deliveryEvents.length > 0 ? deliveryEvents.join(', ') : 'none';
     const runButtonLabel = t('automation.action.run_now');
     const toggleButtonLabel = status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable');
     const statusLabel = t(`automation.status.${status}`);
@@ -593,8 +686,8 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null) 
                 </section>
                 <section class="workspace-view-panel automation-binding-panel">
                     <div class="workspace-view-panel-header">
-                        <h3>${escapeHtml(t('automation.workspace.title'))}</h3>
-                        <span class="workspace-view-panel-meta">${escapeHtml(workspaceId)}</span>
+                        <h3>Bindings</h3>
+                        <span class="workspace-view-panel-meta">${escapeHtml(deliveryBinding ? 'Feishu' : 'Disabled')}</span>
                     </div>
                     <div class="automation-binding-list">
                         <div class="automation-binding-item">
@@ -605,7 +698,25 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null) 
                             <span>${escapeHtml(t('automation.workspace.directory'))}</span>
                             <code>${escapeHtml(workspaceRootPath)}</code>
                         </div>
-                        <p class="automation-binding-help">${escapeHtml(t('automation.workspace.help'))}</p>
+                        <div class="automation-binding-item">
+                            <span>Delivery events</span>
+                            <strong>${escapeHtml(deliveryEventsLabel)}</strong>
+                        </div>
+                        ${deliveryBinding ? `
+                            <div class="automation-binding-item">
+                                <span>Feishu trigger</span>
+                                <strong>${escapeHtml(String(deliveryBinding.trigger_id || ''))}</strong>
+                            </div>
+                            <div class="automation-binding-item">
+                                <span>Feishu chat</span>
+                                <strong>${escapeHtml(String(deliveryBinding.source_label || deliveryBinding.chat_id || ''))}</strong>
+                            </div>
+                            <div class="automation-binding-item">
+                                <span>Chat type</span>
+                                <strong>${escapeHtml(String(deliveryBinding.chat_type || ''))}</strong>
+                            </div>
+                        ` : ''}
+                        <p class="automation-binding-help">${escapeHtml(deliveryBinding ? 'Automation updates will be pushed to the selected Feishu chat.' : t('automation.workspace.help'))}</p>
                     </div>
                 </section>
             </div>

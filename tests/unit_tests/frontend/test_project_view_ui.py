@@ -101,7 +101,150 @@ console.log(JSON.stringify({
     assert payload["treeRequests"] == ["src"]
 
 
-def _run_project_view_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def test_project_view_updates_automation_project_with_feishu_binding(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    display_name: "Daily Briefing",
+    workspace_id: "alpha-project",
+    prompt: "Summarize the latest project changes.",
+    cron_expression: "0 9 * * *",
+    timezone: "UTC",
+    enabled: true,
+    delivery_binding_key: "trg_feishu::tenant-1::oc_123",
+    delivery_event_started: true,
+    delivery_event_completed: true,
+    delivery_event_failed: true,
+};
+
+initializeProjectView();
+await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector("[data-automation-edit]");
+editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    formOptions: globalThis.__showFormDialogCalls[0],
+    updatePayload: globalThis.__updatedAutomationPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        delivery_binding: null,
+        delivery_events: [],
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [
+        {
+            provider: "feishu",
+            trigger_id: "trg_feishu",
+            trigger_name: "Feishu Main",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            chat_type: "group",
+            source_label: "Release Updates",
+            session_id: "session-im-1",
+            session_title: "feishu_main - Release Updates",
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [
+        {
+            workspace_id: "alpha-project",
+            root_path: "/work/alpha-project",
+        },
+    ];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["updatePayload"]["delivery_binding"]["trigger_id"] == "trg_feishu"
+    assert payload["updatePayload"]["delivery_binding"]["chat_id"] == "oc_123"
+    assert payload["updatePayload"]["delivery_events"] == [
+        "started",
+        "completed",
+        "failed",
+    ]
+    bindingField = next(
+        field
+        for field in payload["formOptions"]["fields"]
+        if field["id"] == "delivery_binding_key"
+    )
+    assert bindingField["options"][1]["label"] == "Release Updates"
+    assert bindingField["options"][1]["description"] == "Feishu Main - group"
+
+
+def _run_project_view_script(
+    tmp_path: Path,
+    runner_source: str,
+    mock_api_source: str | None = None,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
@@ -159,6 +302,14 @@ function createTreeNode(attributes = {}) {
     return {
         onclick: null,
         onkeydown: null,
+        addEventListener(name, handler) {
+            if (name === "click") {
+                this.onclick = handler;
+            }
+            if (name === "keydown") {
+                this.onkeydown = handler;
+            }
+        },
         setAttribute(name, value) {
             attributeStore.set(name, String(value));
         },
@@ -173,6 +324,7 @@ function parseNodes(source, selector) {
         ".workspace-tree-toggle": /class="workspace-tree-toggle"[\s\S]*?data-tree-toggle-path="([^"]+)"[\s\S]*?aria-expanded="([^"]+)"/g,
         ".workspace-tree-file": /class="([^"]*workspace-tree-file[^"]*)"[\s\S]*?data-tree-file-path="([^"]+)"[\s\S]*?aria-pressed="([^"]+)"/g,
         ".workspace-diff-card": /class="([^"]*workspace-diff-card[^"]*)"[\s\S]*?data-diff-path="([^"]*)"/g,
+        "[data-automation-edit]": /data-automation-edit/g,
     };
     const pattern = patterns[selector];
     const results = [];
@@ -198,6 +350,8 @@ function parseNodes(source, selector) {
                 class: match[1],
                 "data-diff-path": decodeHtmlAttribute(match[2]),
             }));
+        } else if (selector === "[data-automation-edit]") {
+            results.push(createTreeNode({}));
         }
         match = pattern.exec(source);
     }
@@ -236,6 +390,7 @@ export function createDomEnvironment() {
         ["project-view", createBasicElement()],
         ["project-view-title", createBasicElement()],
         ["project-view-summary", createBasicElement()],
+        ["project-view-toolbar-actions", createHtmlElement()],
         ["project-view-content", createHtmlElement()],
         ["project-view-reload", createBasicElement()],
         ["project-view-close", createBasicElement()],
@@ -255,6 +410,18 @@ export function createDomEnvironment() {
         addEventListener() {
             return undefined;
         },
+        dispatchEvent() {
+            return undefined;
+        },
+        querySelector(selector) {
+            const toolbar = elements.get("project-view-toolbar-actions");
+            const toolbarMatch = toolbar?.querySelector(selector);
+            if (toolbarMatch) {
+                return toolbarMatch;
+            }
+            const content = elements.get("project-view-content");
+            return content?.querySelector(selector) || null;
+        },
         getElementById(id) {
             const element = elements.get(id);
             if (!element) {
@@ -270,6 +437,7 @@ export function installGlobals(documentEnv) {
     els.projectView = documentEnv.getElementById("project-view");
     els.projectViewTitle = documentEnv.getElementById("project-view-title");
     els.projectViewSummary = documentEnv.getElementById("project-view-summary");
+    els.projectViewToolbarActions = documentEnv.getElementById("project-view-toolbar-actions");
     els.projectViewContent = documentEnv.getElementById("project-view-content");
     els.projectViewReloadBtn = documentEnv.getElementById("project-view-reload");
     els.projectViewCloseBtn = documentEnv.getElementById("project-view-close");
@@ -285,8 +453,7 @@ export async function flushTasks() {
         encoding="utf-8",
     )
 
-    mock_api_path.write_text(
-        """
+    default_mock_api_source = """
 export async function disableAutomationProject() {
     return { status: "disabled" };
 }
@@ -297,6 +464,10 @@ export async function enableAutomationProject() {
 
 export async function fetchAutomationProject() {
     return null;
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
 }
 
 export async function fetchAutomationProjectSessions() {
@@ -392,7 +563,9 @@ export async function runAutomationProject() {
 export async function updateAutomationProject() {
     return { status: "ok" };
 }
-""".strip(),
+""".strip()
+    mock_api_path.write_text(
+        mock_api_source or default_mock_api_source,
         encoding="utf-8",
     )
 
@@ -447,8 +620,9 @@ export function sysLog() {
     )
     mock_feedback_path.write_text(
         """
-export async function showFormDialog() {
-    return null;
+export async function showFormDialog(options = {}) {
+    globalThis.__showFormDialogCalls.push(options);
+    return globalThis.__showFormDialogResult ?? null;
 }
 """.strip(),
         encoding="utf-8",
@@ -500,6 +674,14 @@ globalThis.__snapshotRequests = [];
 globalThis.__diffRequests = [];
 globalThis.__diffFileRequests = [];
 globalThis.__treeRequests = [];
+globalThis.__showFormDialogResult = null;
+globalThis.__showFormDialogCalls = [];
+globalThis.CustomEvent = class CustomEvent {{
+    constructor(type, init = {{}}) {{
+        this.type = type;
+        this.detail = init.detail;
+    }}
+}};
 installGlobals(createDomEnvironment());
 
 {runner_source}

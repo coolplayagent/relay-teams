@@ -8,11 +8,18 @@ import uuid
 from pydantic import JsonValue
 
 from agent_teams.automation.automation_models import (
+    AutomationDeliveryEvent,
+    AutomationFeishuBinding,
+    AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
     AutomationScheduleMode,
+)
+from agent_teams.automation.automation_delivery_service import AutomationDeliveryService
+from agent_teams.automation.feishu_binding_service import (
+    AutomationFeishuBindingService,
 )
 from agent_teams.automation.automation_repository import (
     AutomationProjectNameConflictError,
@@ -46,17 +53,30 @@ class AutomationService:
         trigger_service: TriggerService,
         session_service: SessionService,
         run_service: RunManager,
+        feishu_binding_service: AutomationFeishuBindingService | None = None,
+        delivery_service: AutomationDeliveryService | None = None,
     ) -> None:
         self._repository = repository
         self._trigger_service = trigger_service
         self._session_service = session_service
         self._run_service = run_service
+        self._feishu_binding_service = feishu_binding_service
+        self._delivery_service = delivery_service
 
     def create_project(
         self,
         payload: AutomationProjectCreateInput,
     ) -> AutomationProjectRecord:
         timezone_name = _validate_timezone(payload.timezone)
+        delivery_binding = self._resolve_delivery_binding(
+            payload.delivery_binding,
+            existing_binding=None,
+        )
+        delivery_events = self._resolve_delivery_events(
+            binding=delivery_binding,
+            requested_events=payload.delivery_events,
+            existing_events=(),
+        )
         now = datetime.now(tz=UTC)
         automation_project_id = f"aut_{uuid.uuid4().hex[:12]}"
         trigger = self._trigger_service.create_trigger(
@@ -91,6 +111,8 @@ class AutomationService:
             run_at=payload.run_at,
             timezone=timezone_name,
             run_config=payload.run_config,
+            delivery_binding=delivery_binding,
+            delivery_events=delivery_events,
             trigger_id=trigger.trigger_id,
             next_run_at=(
                 _next_run_at(
@@ -114,6 +136,13 @@ class AutomationService:
     def get_project(self, automation_project_id: str) -> AutomationProjectRecord:
         return self._repository.get(automation_project_id)
 
+    def list_feishu_bindings(
+        self,
+    ) -> tuple[AutomationFeishuBindingCandidate, ...]:
+        if self._feishu_binding_service is None:
+            return ()
+        return self._feishu_binding_service.list_candidates()
+
     def update_project(
         self,
         automation_project_id: str,
@@ -131,6 +160,15 @@ class AutomationService:
             run_at = None
         if payload.schedule_mode == AutomationScheduleMode.ONE_SHOT:
             cron_expression = None
+        delivery_binding = self._resolve_delivery_binding(
+            payload.delivery_binding,
+            existing_binding=existing.delivery_binding,
+        )
+        delivery_events = self._resolve_delivery_events(
+            binding=delivery_binding,
+            requested_events=payload.delivery_events,
+            existing_events=existing.delivery_events,
+        )
         probe = AutomationProjectCreateInput(
             name=payload.name or existing.name,
             display_name=payload.display_name or existing.display_name,
@@ -141,6 +179,8 @@ class AutomationService:
             run_at=run_at,
             timezone=timezone_name,
             run_config=payload.run_config or existing.run_config,
+            delivery_binding=delivery_binding,
+            delivery_events=delivery_events,
             enabled=(
                 payload.enabled
                 if payload.enabled is not None
@@ -164,6 +204,8 @@ class AutomationService:
                 "run_at": probe.run_at,
                 "timezone": timezone_name,
                 "run_config": probe.run_config,
+                "delivery_binding": delivery_binding,
+                "delivery_events": delivery_events,
                 "next_run_at": (
                     _next_run_at(
                         schedule_mode=probe.schedule_mode,
@@ -211,6 +253,8 @@ class AutomationService:
     def delete_project(self, automation_project_id: str) -> None:
         existing = self._repository.get(automation_project_id)
         self._trigger_service.delete_trigger(existing.trigger_id)
+        if self._delivery_service is not None:
+            self._delivery_service.delete_project_deliveries(automation_project_id)
         self._repository.delete(automation_project_id)
 
     def run_now(self, automation_project_id: str) -> dict[str, JsonValue]:
@@ -279,6 +323,13 @@ class AutomationService:
                 )
             )
             self._run_service.ensure_run_started(run_id)
+            if self._delivery_service is not None:
+                _ = self._delivery_service.register_run(
+                    project=project,
+                    session_id=session.session_id,
+                    run_id=run_id,
+                    reason=reason,
+                )
             next_run_at = _next_run_at_after_fire(
                 project=project, fired_at=effective_now
             )
@@ -316,6 +367,38 @@ class AutomationService:
             if next_status != project.status:
                 self._sync_trigger(updated)
             raise
+
+    def _resolve_delivery_binding(
+        self,
+        candidate: AutomationFeishuBinding | None,
+        *,
+        existing_binding: AutomationFeishuBinding | None,
+    ) -> AutomationFeishuBinding | None:
+        binding = candidate if candidate is not None else existing_binding
+        if binding is None:
+            return None
+        if self._feishu_binding_service is None:
+            raise ValueError("Feishu delivery binding service is unavailable")
+        return self._feishu_binding_service.validate_binding(binding)
+
+    def _resolve_delivery_events(
+        self,
+        *,
+        binding: AutomationFeishuBinding | None,
+        requested_events: tuple[AutomationDeliveryEvent, ...] | None,
+        existing_events: tuple[AutomationDeliveryEvent, ...],
+    ) -> tuple[AutomationDeliveryEvent, ...]:
+        if binding is None:
+            return ()
+        if requested_events is not None:
+            return _dedupe_delivery_events(requested_events)
+        if existing_events:
+            return _dedupe_delivery_events(existing_events)
+        return (
+            AutomationDeliveryEvent.STARTED,
+            AutomationDeliveryEvent.COMPLETED,
+            AutomationDeliveryEvent.FAILED,
+        )
 
     def _sync_trigger(self, project: AutomationProjectRecord) -> TriggerDefinition:
         definition = self._trigger_service.update_trigger(
@@ -516,6 +599,19 @@ def _parse_cron_field(field: str, minimum: int, maximum: int) -> set[int]:
     if not values:
         raise ValueError(f"Invalid cron field: {field}")
     return values
+
+
+def _dedupe_delivery_events(
+    values: tuple[AutomationDeliveryEvent, ...],
+) -> tuple[AutomationDeliveryEvent, ...]:
+    ordered: list[AutomationDeliveryEvent] = []
+    seen: set[AutomationDeliveryEvent] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return tuple(ordered)
 
 
 __all__ = [

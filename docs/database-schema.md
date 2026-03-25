@@ -619,12 +619,15 @@ CREATE TABLE IF NOT EXISTS automation_projects (
     name TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     status TEXT NOT NULL,
+    workspace_id TEXT NOT NULL DEFAULT 'automation-system',
     prompt TEXT NOT NULL,
     schedule_mode TEXT NOT NULL,
     cron_expression TEXT,
     run_at TEXT,
     timezone TEXT NOT NULL,
     run_config_json TEXT NOT NULL,
+    delivery_binding_json TEXT,
+    delivery_events_json TEXT NOT NULL DEFAULT '[]',
     trigger_id TEXT NOT NULL UNIQUE,
     last_session_id TEXT,
     last_run_started_at TEXT,
@@ -643,11 +646,49 @@ Purpose: stores virtual automation projects shown in the sidebar, their schedule
 Notes:
 - `schedule_mode` is `cron` or `one_shot`.
 - `run_config_json` stores session mode, orchestration preset, execution mode, YOLO, and thinking configuration.
+- `delivery_binding_json` stores the selected Feishu chat target copied from an existing `external_session_bindings` row.
+- `delivery_events_json` stores which Feishu notifications are enabled for that automation project.
 - `trigger_id` points at the backing `triggers` row used as the schedule event ledger.
 - `last_session_id` points at the most recent generated session instance.
 - `next_run_at` is the scheduler cursor used to find due projects.
 
-### 2.1.3 `sessions` additions
+### 2.1.3 `automation_deliveries`
+
+```sql
+CREATE TABLE IF NOT EXISTS automation_deliveries (
+    automation_delivery_id TEXT PRIMARY KEY,
+    automation_project_id TEXT NOT NULL,
+    automation_project_name TEXT NOT NULL,
+    run_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    binding_json TEXT NOT NULL,
+    delivery_events_json TEXT NOT NULL,
+    started_status TEXT NOT NULL,
+    terminal_status TEXT NOT NULL,
+    terminal_event TEXT,
+    started_attempts INTEGER NOT NULL,
+    terminal_attempts INTEGER NOT NULL,
+    started_message TEXT,
+    terminal_message TEXT,
+    started_sent_at TEXT,
+    terminal_sent_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_project
+    ON automation_deliveries(automation_project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_started
+    ON automation_deliveries(started_status, updated_at ASC);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_terminal
+    ON automation_deliveries(terminal_status, updated_at ASC);
+```
+
+Purpose: persists Feishu delivery state for automation runs so started/completed/failed messages can be retried and resumed after process restart.
+
+### 2.1.4 `sessions` additions
 
 The `sessions` table now also stores:
 - `project_kind TEXT NOT NULL DEFAULT 'workspace'`

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import JsonValue
 
 from agent_teams.automation import (
+    AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
     AutomationProjectNameConflictError,
     AutomationProjectRecord,
@@ -15,10 +16,17 @@ from agent_teams.automation import (
 )
 from agent_teams.interfaces.server.deps import get_automation_service
 
-router = APIRouter(prefix="/automation/projects", tags=["Automation"])
+router = APIRouter(prefix="/automation", tags=["Automation"])
 
 
-@router.post("", response_model=AutomationProjectRecord)
+@router.get("/feishu-bindings", response_model=list[AutomationFeishuBindingCandidate])
+def list_feishu_bindings(
+    service: Annotated[AutomationService, Depends(get_automation_service)],
+) -> list[AutomationFeishuBindingCandidate]:
+    return list(service.list_feishu_bindings())
+
+
+@router.post("/projects", response_model=AutomationProjectRecord)
 def create_project(
     req: AutomationProjectCreateInput,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -31,14 +39,14 @@ def create_project(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.get("", response_model=list[AutomationProjectRecord])
+@router.get("/projects", response_model=list[AutomationProjectRecord])
 def list_projects(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationProjectRecord]:
     return list(service.list_projects())
 
 
-@router.get("/{automation_project_id}", response_model=AutomationProjectRecord)
+@router.get("/projects/{automation_project_id}", response_model=AutomationProjectRecord)
 def get_project(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -49,7 +57,9 @@ def get_project(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.patch("/{automation_project_id}", response_model=AutomationProjectRecord)
+@router.patch(
+    "/projects/{automation_project_id}", response_model=AutomationProjectRecord
+)
 def update_project(
     automation_project_id: str,
     req: AutomationProjectUpdateInput,
@@ -65,7 +75,7 @@ def update_project(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.delete("/{automation_project_id}")
+@router.delete("/projects/{automation_project_id}")
 def delete_project(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -77,7 +87,7 @@ def delete_project(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{automation_project_id}:run")
+@router.post("/projects/{automation_project_id}:run")
 async def run_project(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -90,7 +100,9 @@ async def run_project(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.post("/{automation_project_id}:enable", response_model=AutomationProjectRecord)
+@router.post(
+    "/projects/{automation_project_id}:enable", response_model=AutomationProjectRecord
+)
 def enable_project(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -104,7 +116,10 @@ def enable_project(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{automation_project_id}:disable", response_model=AutomationProjectRecord)
+@router.post(
+    "/projects/{automation_project_id}:disable",
+    response_model=AutomationProjectRecord,
+)
 def disable_project(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -118,7 +133,7 @@ def disable_project(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/{automation_project_id}/sessions")
+@router.get("/projects/{automation_project_id}/sessions")
 def list_project_sessions(
     automation_project_id: str,
     service: Annotated[AutomationService, Depends(get_automation_service)],

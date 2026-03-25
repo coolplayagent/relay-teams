@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,6 +22,20 @@ class AutomationScheduleMode(str, Enum):
     ONE_SHOT = "one_shot"
 
 
+class AutomationDeliveryEvent(str, Enum):
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AutomationDeliveryStatus(str, Enum):
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class AutomationRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -29,6 +44,32 @@ class AutomationRunConfig(BaseModel):
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+
+
+class AutomationFeishuBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["feishu"] = "feishu"
+    trigger_id: str = Field(min_length=1)
+    tenant_key: str = Field(min_length=1)
+    chat_id: str = Field(min_length=1)
+    chat_type: str = Field(min_length=1)
+    source_label: str = Field(min_length=1)
+
+
+class AutomationFeishuBindingCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["feishu"] = "feishu"
+    trigger_id: str = Field(min_length=1)
+    trigger_name: str = Field(min_length=1)
+    tenant_key: str = Field(min_length=1)
+    chat_id: str = Field(min_length=1)
+    chat_type: str = Field(min_length=1)
+    source_label: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    session_title: str = Field(min_length=1)
+    updated_at: datetime
 
 
 class AutomationProjectCreateInput(BaseModel):
@@ -43,6 +84,8 @@ class AutomationProjectCreateInput(BaseModel):
     run_at: datetime | None = None
     timezone: str = Field(default="UTC", min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
+    delivery_binding: AutomationFeishuBinding | None = None
+    delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -74,6 +117,8 @@ class AutomationProjectUpdateInput(BaseModel):
     run_at: datetime | None = None
     timezone: str | None = Field(default=None, min_length=1)
     run_config: AutomationRunConfig | None = None
+    delivery_binding: AutomationFeishuBinding | None = None
+    delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None
     enabled: bool | None = None
 
 
@@ -91,6 +136,8 @@ class AutomationProjectRecord(BaseModel):
     run_at: datetime | None = None
     timezone: str = Field(min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
+    delivery_binding: AutomationFeishuBinding | None = None
+    delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
     trigger_id: str = Field(min_length=1)
     last_session_id: str | None = None
     last_run_started_at: datetime | None = None
@@ -100,11 +147,41 @@ class AutomationProjectRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
+class AutomationRunDeliveryRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    automation_delivery_id: str = Field(min_length=1)
+    automation_project_id: str = Field(min_length=1)
+    automation_project_name: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    binding: AutomationFeishuBinding
+    delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
+    started_status: AutomationDeliveryStatus = AutomationDeliveryStatus.SKIPPED
+    terminal_status: AutomationDeliveryStatus = AutomationDeliveryStatus.SKIPPED
+    terminal_event: AutomationDeliveryEvent | None = None
+    started_attempts: int = Field(default=0, ge=0)
+    terminal_attempts: int = Field(default=0, ge=0)
+    started_message: str | None = None
+    terminal_message: str | None = None
+    started_sent_at: datetime | None = None
+    terminal_sent_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
 __all__ = [
+    "AutomationDeliveryEvent",
+    "AutomationDeliveryStatus",
+    "AutomationFeishuBinding",
+    "AutomationFeishuBindingCandidate",
     "AutomationProjectCreateInput",
     "AutomationProjectRecord",
     "AutomationProjectStatus",
     "AutomationProjectUpdateInput",
+    "AutomationRunDeliveryRecord",
     "AutomationRunConfig",
     "AutomationScheduleMode",
 ]

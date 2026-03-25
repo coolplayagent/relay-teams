@@ -4,6 +4,14 @@
  */
 import { requestJson } from './request.js';
 
+export async function fetchAutomationFeishuBindings() {
+    return requestJson(
+        '/api/automation/feishu-bindings',
+        undefined,
+        'Failed to fetch automation Feishu bindings',
+    );
+}
+
 export async function fetchAutomationProjects() {
     return requestJson('/api/automation/projects', undefined, 'Failed to fetch automation projects');
 }

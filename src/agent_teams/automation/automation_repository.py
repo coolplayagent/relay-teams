@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_teams.automation.automation_models import (
+    AutomationDeliveryEvent,
+    AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationRunConfig,
@@ -40,6 +42,8 @@ class AutomationProjectRepository:
                 run_at TEXT,
                 timezone TEXT NOT NULL,
                 run_config_json TEXT NOT NULL,
+                delivery_binding_json TEXT,
+                delivery_events_json TEXT NOT NULL DEFAULT '[]',
                 trigger_id TEXT NOT NULL UNIQUE,
                 last_session_id TEXT,
                 last_run_started_at TEXT,
@@ -61,6 +65,16 @@ class AutomationProjectRepository:
             "workspace_id",
             "TEXT NOT NULL DEFAULT 'automation-system'",
         )
+        self._ensure_column(
+            "automation_projects",
+            "delivery_binding_json",
+            "TEXT",
+        )
+        self._ensure_column(
+            "automation_projects",
+            "delivery_events_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
         self._conn.commit()
 
     def _ensure_column(self, table: str, column: str, ddl: str) -> None:
@@ -76,10 +90,11 @@ class AutomationProjectRepository:
                 INSERT INTO automation_projects(
                     automation_project_id, name, display_name, status, workspace_id, prompt,
                     schedule_mode, cron_expression, run_at, timezone,
-                    run_config_json, trigger_id, last_session_id, last_run_started_at,
+                    run_config_json, delivery_binding_json, delivery_events_json,
+                    trigger_id, last_session_id, last_run_started_at,
                     last_error, next_run_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(record),
             )
@@ -107,6 +122,8 @@ class AutomationProjectRepository:
                     run_at=?,
                     timezone=?,
                     run_config_json=?,
+                    delivery_binding_json=?,
+                    delivery_events_json=?,
                     trigger_id=?,
                     last_session_id=?,
                     last_run_started_at=?,
@@ -126,6 +143,8 @@ class AutomationProjectRepository:
                     _to_iso(record.run_at),
                     record.timezone,
                     json.dumps(record.run_config.model_dump(mode="json")),
+                    _binding_to_json(record.delivery_binding),
+                    _events_to_json(record.delivery_events),
                     record.trigger_id,
                     record.last_session_id,
                     _to_iso(record.last_run_started_at),
@@ -202,6 +221,8 @@ class AutomationProjectRepository:
             _to_iso(record.run_at),
             record.timezone,
             json.dumps(record.run_config.model_dump(mode="json")),
+            _binding_to_json(record.delivery_binding),
+            _events_to_json(record.delivery_events),
             record.trigger_id,
             record.last_session_id,
             _to_iso(record.last_run_started_at),
@@ -230,6 +251,8 @@ class AutomationProjectRepository:
             run_config=AutomationRunConfig.model_validate(
                 json.loads(str(row["run_config_json"]))
             ),
+            delivery_binding=_binding_from_json(row["delivery_binding_json"]),
+            delivery_events=_events_from_json(row["delivery_events_json"]),
             trigger_id=str(row["trigger_id"]),
             last_session_id=(
                 str(row["last_session_id"])
@@ -248,6 +271,33 @@ class AutomationProjectRepository:
 
 def _to_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _binding_to_json(binding: AutomationFeishuBinding | None) -> str | None:
+    if binding is None:
+        return None
+    return json.dumps(binding.model_dump(mode="json"))
+
+
+def _binding_from_json(value: object) -> AutomationFeishuBinding | None:
+    if value is None:
+        return None
+    payload = str(value).strip()
+    if not payload:
+        return None
+    return AutomationFeishuBinding.model_validate(json.loads(payload))
+
+
+def _events_to_json(events: tuple[AutomationDeliveryEvent, ...]) -> str:
+    return json.dumps([event.value for event in events])
+
+
+def _events_from_json(value: object) -> tuple[AutomationDeliveryEvent, ...]:
+    payload = str(value or "").strip() or "[]"
+    parsed = json.loads(payload)
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(AutomationDeliveryEvent(str(item)) for item in parsed)
 
 
 def _from_iso(value: object) -> datetime | None:

@@ -1085,6 +1085,23 @@ Returns tool-level breakdown rows for `scope=global|session|run`. Non-global sco
 
 ## Automation APIs
 
+### `GET /automation/feishu-bindings`
+
+Lists Feishu chat bindings that automation projects are allowed to target.
+Candidates come from existing inbound Feishu IM chat bindings already recorded by the backend.
+
+Each record includes:
+- `provider`: `feishu`
+- `trigger_id`
+- `trigger_name`
+- `tenant_key`
+- `chat_id`
+- `chat_type`
+- `source_label`
+- `session_id`
+- `session_title`
+- `updated_at`
+
 ### `GET /automation/projects`
 
 Returns all automation projects.
@@ -1099,6 +1116,8 @@ Each record includes:
 - `run_at`
 - `timezone`
 - `run_config`
+- `delivery_binding`
+- `delivery_events[]`: `started`, `completed`, `failed`
 - `trigger_id`
 - `last_session_id`
 - `last_run_started_at`
@@ -1117,7 +1136,19 @@ Request fields:
 - `run_at` for `one_shot`
 - `timezone`
 - `run_config`
+- `delivery_binding` optional
+  - `provider = "feishu"`
+  - `trigger_id`
+  - `tenant_key`
+  - `chat_id`
+  - `chat_type`
+  - `source_label`
+- `delivery_events[]` optional
 - `enabled`
+
+Notes:
+- `delivery_binding` must reference an existing Feishu IM chat binding returned by `GET /automation/feishu-bindings`.
+- When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
 
 ### `GET /automation/projects/{automation_project_id}`
 
@@ -1125,7 +1156,7 @@ Returns one automation project.
 
 ### `PATCH /automation/projects/{automation_project_id}`
 
-Updates automation project definition, schedule, and stored run config.
+Updates automation project definition, schedule, stored run config, and optional Feishu delivery binding.
 
 ### `DELETE /automation/projects/{automation_project_id}`
 

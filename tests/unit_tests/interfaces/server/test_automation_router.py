@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_teams.automation import (
+    AutomationDeliveryEvent,
+    AutomationFeishuBinding,
+    AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
     AutomationProjectNameConflictError,
     AutomationProjectRecord,
@@ -24,6 +27,7 @@ class _FakeAutomationService:
         self.run_calls: list[str] = []
         self.status_calls: list[tuple[str, AutomationProjectStatus]] = []
         self.deleted_project_ids: list[str] = []
+        self.list_feishu_bindings_calls = 0
 
     def create_project(
         self, req: AutomationProjectCreateInput
@@ -49,6 +53,8 @@ class _FakeAutomationService:
             run_at=req.run_at,
             timezone=req.timezone,
             run_config=req.run_config,
+            delivery_binding=req.delivery_binding,
+            delivery_events=req.delivery_events,
             trigger_id="trg_created",
             next_run_at=datetime(2026, 3, 24, 9, 0, tzinfo=UTC)
             if req.enabled
@@ -72,8 +78,36 @@ class _FakeAutomationService:
             cron_expression="0 9 * * *",
             timezone="UTC",
             run_config=AutomationRunConfig(),
+            delivery_binding=AutomationFeishuBinding(
+                trigger_id="trg_feishu",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                chat_type="group",
+                source_label="Release Updates",
+            ),
+            delivery_events=(
+                AutomationDeliveryEvent.STARTED,
+                AutomationDeliveryEvent.COMPLETED,
+                AutomationDeliveryEvent.FAILED,
+            ),
             trigger_id="trg_1",
             next_run_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
+        )
+
+    def list_feishu_bindings(self) -> tuple[AutomationFeishuBindingCandidate, ...]:
+        self.list_feishu_bindings_calls += 1
+        return (
+            AutomationFeishuBindingCandidate(
+                trigger_id="trg_feishu",
+                trigger_name="Feishu Main",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                chat_type="group",
+                source_label="Release Updates",
+                session_id="session-im-1",
+                session_title="feishu_main - Release Updates",
+                updated_at=datetime(2026, 3, 23, 8, 0, tzinfo=UTC),
+            ),
         )
 
     def update_project(
@@ -190,6 +224,21 @@ def test_list_projects_route_returns_records() -> None:
     payload = response.json()
     assert payload[0]["automation_project_id"] == "aut_1"
     assert payload[0]["schedule_mode"] == "cron"
+    assert payload[0]["delivery_binding"]["chat_id"] == "oc_123"
+    assert payload[0]["delivery_events"] == ["started", "completed", "failed"]
+
+
+def test_list_feishu_bindings_route_returns_candidates() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.get("/api/automation/feishu-bindings")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["trigger_id"] == "trg_feishu"
+    assert payload[0]["chat_id"] == "oc_123"
+    assert fake_service.list_feishu_bindings_calls == 1
 
 
 def test_get_project_route_returns_record() -> None:

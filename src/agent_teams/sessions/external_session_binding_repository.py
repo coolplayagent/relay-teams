@@ -154,6 +154,36 @@ class ExternalSessionBindingRepository:
             raise RuntimeError("Failed to load upserted external session binding")
         return binding
 
+    def list_by_platform(self, platform: str) -> tuple[ExternalSessionBinding, ...]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM external_session_bindings
+            WHERE platform=?
+            ORDER BY updated_at DESC
+            """,
+            (platform,),
+        ).fetchall()
+        return tuple(self._to_record(row) for row in rows)
+
+    def exists(
+        self,
+        *,
+        platform: str,
+        trigger_id: str,
+        tenant_key: str,
+        external_chat_id: str,
+    ) -> bool:
+        return (
+            self.get_binding(
+                platform=platform,
+                trigger_id=trigger_id,
+                tenant_key=tenant_key,
+                external_chat_id=external_chat_id,
+            )
+            is not None
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,

@@ -212,6 +212,10 @@ export async function fetchAutomationProjects() {
     return [];
 }
 
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
 export async function startNewSession() {
     throw new Error("not used");
 }
@@ -262,6 +266,154 @@ export async function runAutomationProject() {
     assert str(payload["firstSessionLabel"]).startswith("feishu_bot")
     assert str(payload["firstSessionLabel"]).endswith("Release Updates")
     assert payload["iconCount"] == 1
+
+
+def test_projects_sidebar_creates_automation_project_with_feishu_binding(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    handleNewAutomationProjectClick,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async () => {});
+globalThis.__showFormDialogResult = {
+    display_name: "Daily Briefing",
+    workspace_id: "alpha-project",
+    prompt: "Summarize the latest project changes.",
+    cron_expression: "0 9 * * *",
+    timezone: "UTC",
+    enabled: true,
+    delivery_binding_key: "trg_feishu::tenant-1::oc_123",
+    delivery_event_started: true,
+    delivery_event_completed: true,
+    delivery_event_failed: true,
+};
+
+await handleNewAutomationProjectClick();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    createPayload: globalThis.__createAutomationPayload,
+    formOptions: globalThis.__showFormDialogCalls[0],
+    runCalls: globalThis.__runAutomationProjectCalls,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [
+        {
+            provider: "feishu",
+            trigger_id: "trg_feishu",
+            trigger_name: "Feishu Main",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            chat_type: "group",
+            source_label: "Release Updates",
+            session_id: "session-im-1",
+            session_title: "feishu_main - Release Updates",
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+    ];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject(payload) {
+    globalThis.__createAutomationPayload = payload;
+    return {
+        automation_project_id: "aut_created",
+        workspace_id: "alpha-project",
+        status: "enabled",
+    };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject(projectId) {
+    globalThis.__runAutomationProjectCalls = [projectId];
+    return { session_id: "session-automation-1" };
+}
+""".strip(),
+    )
+
+    assert payload["createPayload"]["delivery_binding"]["trigger_id"] == "trg_feishu"
+    assert payload["createPayload"]["delivery_binding"]["chat_id"] == "oc_123"
+    assert payload["createPayload"]["delivery_events"] == [
+        "started",
+        "completed",
+        "failed",
+    ]
+    bindingField = next(
+        field
+        for field in payload["formOptions"]["fields"]
+        if field["id"] == "delivery_binding_key"
+    )
+    assert bindingField["options"][1]["label"] == "Release Updates"
+    assert bindingField["options"][1]["description"] == "Feishu Main - group"
+    assert payload["runCalls"] == ["aut_created"]
 
 
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
@@ -466,6 +618,10 @@ export async function fetchSessions() {
 }
 
 export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
     return [];
 }
 
@@ -785,8 +941,9 @@ export async function showConfirmDialog(options = {}) {
     return true;
 }
 
-export async function showFormDialog() {
-    return null;
+export async function showFormDialog(options = {}) {
+    globalThis.__showFormDialogCalls.push(options);
+    return globalThis.__showFormDialogResult ?? null;
 }
 
 export async function showTextInputDialog(options = {}) {
@@ -892,6 +1049,10 @@ export async function fetchSessions() {
 }
 
 export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
     return [];
 }
 
@@ -1052,6 +1213,8 @@ globalThis.__selectedSessionIds = [];
 globalThis.__openedWorkspaceIds = [];
 globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;
+globalThis.__showFormDialogResult = null;
+globalThis.__showFormDialogCalls = [];
 installGlobals(createDomEnvironment());
 
 {runner_source}

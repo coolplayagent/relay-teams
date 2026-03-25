@@ -107,6 +107,7 @@ export {
     deleteAutomationProject,
     disableAutomationProject,
     enableAutomationProject,
+    fetchAutomationFeishuBindings,
     fetchAutomationProject,
     fetchAutomationProjectSessions,
     fetchAutomationProjects,
