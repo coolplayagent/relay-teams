@@ -380,8 +380,7 @@ class FeishuTriggerHandler:
         if queue_summary.processing_item is not None:
             lines.append("")
             lines.append(
-                "Processing: "
-                + self._format_queue_item(queue_summary.processing_item)
+                "Processing: " + self._format_queue_item(queue_summary.processing_item)
             )
         if queue_summary.queued_items:
             lines.append("")

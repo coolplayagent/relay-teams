@@ -217,9 +217,14 @@ def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
     assert session_id == "session-1"
     assert run_id == "run-1"
     assert session_service.sessions["session-1"].workspace_id == "workspace-ops"
-    assert session_service.sessions["session-1"].metadata["title"] == "feishu_ops - Repo Ops"
     assert (
-        session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_PROVIDER_KEY]
+        session_service.sessions["session-1"].metadata["title"]
+        == "feishu_ops - Repo Ops"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_SOURCE_PROVIDER_KEY
+        ]
         == "feishu"
     )
     assert run_service.created[0].intent == "please summarize this repo"
@@ -255,9 +260,13 @@ def test_resolve_session_id_uses_user_name_for_p2p(tmp_path: Path) -> None:
     )
 
     assert session_id == "session-1"
-    assert session_service.sessions["session-1"].metadata["title"] == "feishu_dm - Alice"
     assert (
-        session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_LABEL_KEY]
+        session_service.sessions["session-1"].metadata["title"] == "feishu_dm - Alice"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_SOURCE_LABEL_KEY
+        ]
         == "Alice"
     )
 
@@ -305,8 +314,12 @@ def test_resolve_session_id_preserves_manual_title(tmp_path: Path) -> None:
     )
 
     assert session_id == "session-existing"
-    assert session_service.sessions["session-existing"].metadata["title"] == "Manual Name"
     assert (
-        session_service.sessions["session-existing"].metadata[SESSION_METADATA_TITLE_SOURCE_KEY]
+        session_service.sessions["session-existing"].metadata["title"] == "Manual Name"
+    )
+    assert (
+        session_service.sessions["session-existing"].metadata[
+            SESSION_METADATA_TITLE_SOURCE_KEY
+        ]
         == SESSION_TITLE_SOURCE_MANUAL
     )

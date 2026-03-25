@@ -631,7 +631,9 @@ class FeishuMessagePoolRepository:
             chat_type=str(row["chat_type"]),
             event_id=str(row["event_id"]),
             message_key=str(row["message_key"]),
-            message_id=str(row["message_id"]) if row["message_id"] is not None else None,
+            message_id=str(row["message_id"])
+            if row["message_id"] is not None
+            else None,
             command_name=str(row["command_name"])
             if row["command_name"] is not None
             else None,
@@ -653,13 +655,17 @@ class FeishuMessagePoolRepository:
             process_attempts=int(row["process_attempts"]),
             ack_attempts=int(row["ack_attempts"]),
             final_reply_attempts=int(row["final_reply_attempts"]),
-            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            session_id=str(row["session_id"])
+            if row["session_id"] is not None
+            else None,
             run_id=str(row["run_id"]) if row["run_id"] is not None else None,
             next_attempt_at=datetime.fromisoformat(str(row["next_attempt_at"])),
             last_claimed_at=datetime.fromisoformat(str(row["last_claimed_at"]))
             if row["last_claimed_at"] is not None
             else None,
-            last_error=str(row["last_error"]) if row["last_error"] is not None else None,
+            last_error=str(row["last_error"])
+            if row["last_error"] is not None
+            else None,
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
             completed_at=datetime.fromisoformat(str(row["completed_at"]))

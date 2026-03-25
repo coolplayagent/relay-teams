@@ -245,9 +245,7 @@ class FeishuMessagePoolService:
             active_total=len(active_records),
             queued_count=counts[FeishuMessageProcessingStatus.QUEUED],
             claimed_count=counts[FeishuMessageProcessingStatus.CLAIMED],
-            waiting_result_count=counts[
-                FeishuMessageProcessingStatus.WAITING_RESULT
-            ],
+            waiting_result_count=counts[FeishuMessageProcessingStatus.WAITING_RESULT],
             retryable_failed_count=counts[
                 FeishuMessageProcessingStatus.RETRYABLE_FAILED
             ],
@@ -351,7 +349,9 @@ class FeishuMessagePoolService:
 
     def _retry_pending_acknowledgements(self, *, limit: int = 20) -> bool:
         progress = False
-        for record in self._message_pool_repo.list_pending_acknowledgements(limit=limit):
+        for record in self._message_pool_repo.list_pending_acknowledgements(
+            limit=limit
+        ):
             if record.ack_status != FeishuMessageDeliveryStatus.PENDING:
                 continue
             if record.ack_attempts >= _ACK_MAX_ATTEMPTS:
@@ -378,8 +378,10 @@ class FeishuMessagePoolService:
                 last_claimed_at=datetime.now(tz=timezone.utc),
                 last_error=None,
             )
-            runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
-                claimed.trigger_id
+            runtime_config = (
+                self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+                    claimed.trigger_id
+                )
             )
             if runtime_config is None:
                 self._mark_retryable_failure(claimed, error="missing_runtime_config")

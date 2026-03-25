@@ -27,7 +27,11 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
-from agent_teams.triggers import TriggerEventStatus, TriggerIngestInput, TriggerIngestResult
+from agent_teams.triggers import (
+    TriggerEventStatus,
+    TriggerIngestInput,
+    TriggerIngestResult,
+)
 
 
 class _FakeTriggerService:
@@ -211,7 +215,9 @@ def _build_message(
     )
 
 
-def _build_service(tmp_path: Path) -> tuple[
+def _build_service(
+    tmp_path: Path,
+) -> tuple[
     FeishuMessagePoolService,
     FeishuMessagePoolRepository,
     _FakeFeishuClient,
