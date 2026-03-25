@@ -178,6 +178,12 @@ class _FakeSystemService:
                 base_url="https://example.com/v1",
             ),
             ProviderModelInfo(
+                profile="glm",
+                provider=ProviderType.BIGMODEL,
+                model="glm-4.5",
+                base_url="https://open.bigmodel.cn/api/paas/v4",
+            ),
+            ProviderModelInfo(
                 profile="echo",
                 provider=ProviderType.ECHO,
                 model="echo",
@@ -417,7 +423,7 @@ def test_get_provider_models() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 2
+    assert len(payload) == 3
     assert payload[0]["profile"] == "default"
 
 
@@ -651,6 +657,29 @@ def test_save_model_profile_allows_missing_api_key_for_edit() -> None:
     assert "api_key" not in saved_profile
     assert saved_profile["top_p"] == 0.95
     assert source_name is None
+
+
+def test_save_model_profile_accepts_bigmodel_provider() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/glm",
+        json={
+            "provider": ProviderType.BIGMODEL.value,
+            "model": "glm-4.5",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["provider"] == ProviderType.BIGMODEL.value
 
 
 def test_save_model_profile_accepts_source_name_for_rename() -> None:

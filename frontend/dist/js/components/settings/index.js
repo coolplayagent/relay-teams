@@ -142,10 +142,10 @@ function createModal() {
                                             </div>
                                             <div class="form-group">
                                                 <label for="profile-provider" data-i18n="settings.model.provider">Provider</label>
-                                                <input type="text" id="profile-provider" list="profile-provider-options" autocomplete="off" spellcheck="false">
-                                                <datalist id="profile-provider-options">
-                                                    <option value="openai_compatible"></option>
-                                                </datalist>
+                                                <select id="profile-provider">
+                                                    <option value="openai_compatible">openai_compatible</option>
+                                                    <option value="bigmodel">bigmodel</option>
+                                                </select>
                                             </div>
                                             <div class="form-group form-group-span-2">
                                                 <label for="profile-base-url" data-i18n="settings.model.base_url">Base URL</label>

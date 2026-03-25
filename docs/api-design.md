@@ -67,12 +67,14 @@ Returns raw `model.json`.
 
 Returns normalized model profiles.
 Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
+`provider` currently supports `openai_compatible`, `bigmodel`, and the internal/testing-only `echo`.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
+`provider` accepts `openai_compatible`, `bigmodel`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
@@ -98,7 +100,7 @@ Fetches the available model catalog for a saved profile and/or draft override.
 Draft overrides may omit `model`, but must provide `base_url` and `api_key` when `profile_name` is omitted.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
-OpenAI-compatible providers map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
+`openai_compatible` and `bigmodel` both map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
 
 ### `POST /system/configs/model:reload`
 

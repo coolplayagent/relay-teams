@@ -155,6 +155,27 @@ def test_load_llm_configs_reads_provider_field(tmp_path: Path) -> None:
     assert profiles["default"].provider.value == "openai_compatible"
 
 
+def test_load_llm_configs_reads_bigmodel_provider_field(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "bigmodel",
+                    "model": "glm-4.5",
+                    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+                    "api_key": "plain-text-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["default"].provider.value == "bigmodel"
+
+
 def test_load_runtime_config_reads_explicit_default_profile_name(
     tmp_path: Path,
 ) -> None:

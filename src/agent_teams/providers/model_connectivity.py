@@ -23,6 +23,13 @@ _INVALID_RESPONSE_PAYLOAD = object()
 _MAX_PROBE_TIMEOUT_MS = 300_000
 
 
+def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
+    return provider in (
+        ProviderType.OPENAI_COMPATIBLE,
+        ProviderType.BIGMODEL,
+    )
+
+
 class ModelConnectivityProbeOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,7 +131,7 @@ class ModelConnectivityProbeService:
         timeout_ms = self._resolve_timeout_ms(request=request, config=resolved_config)
         if resolved_config.provider == ProviderType.ECHO:
             return self._build_echo_result(resolved_config)
-        if resolved_config.provider == ProviderType.OPENAI_COMPATIBLE:
+        if _uses_openai_compatible_transport(resolved_config.provider):
             return self._probe_openai_compatible(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
@@ -156,7 +163,7 @@ class ModelConnectivityProbeService:
                 ),
                 models=("echo",),
             )
-        if resolved_config.provider == ProviderType.OPENAI_COMPATIBLE:
+        if _uses_openai_compatible_transport(resolved_config.provider):
             return self._discover_openai_compatible_models(
                 config=resolved_config,
                 timeout_ms=timeout_ms,

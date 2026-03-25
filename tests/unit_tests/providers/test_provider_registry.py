@@ -26,6 +26,23 @@ def test_provider_registry_creates_registered_provider() -> None:
     assert isinstance(provider, EchoProvider)
 
 
+def test_create_default_provider_registry_has_bigmodel_support() -> None:
+    registry = create_default_provider_registry(
+        openai_compatible_builder=lambda _config: EchoProvider()
+    )
+
+    provider = registry.create(
+        ModelEndpointConfig(
+            provider=ProviderType.BIGMODEL,
+            model="glm-4.5",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            api_key="unused",
+        )
+    )
+
+    assert isinstance(provider, EchoProvider)
+
+
 def test_create_default_provider_registry_has_echo_support() -> None:
     registry = create_default_provider_registry(
         openai_compatible_builder=lambda _config: EchoProvider()

@@ -261,6 +261,36 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     assert captured["timeout_seconds"] == pytest.approx(15.0)
 
 
+def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured, response=httpx.Response(200, json={"usage": {}})
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.BIGMODEL,
+                model="glm-4.5",
+                base_url="https://open.bigmodel.cn/api/paas/v4",
+                api_key="draft-api-key",
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.provider == ProviderType.BIGMODEL
+    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+
+
 def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
@@ -330,6 +360,37 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
     headers = cast(dict[str, str], captured["headers"])
     assert headers["Authorization"] == "Bearer saved-api-key"
     assert captured["timeout_seconds"] == pytest.approx(17.5)
+
+
+def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"data": [{"id": "glm-4.5"}]}),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.BIGMODEL,
+                base_url="https://open.bigmodel.cn/api/paas/v4",
+                api_key="draft-api-key",
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.provider == ProviderType.BIGMODEL
+    assert result.models == ("glm-4.5",)
+    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/models"
 
 
 def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:

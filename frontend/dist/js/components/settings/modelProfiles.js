@@ -23,6 +23,10 @@ let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftApiKeyState();
 let isModelMenuOpen = false;
 
+const PROVIDER_DEFAULT_BASE_URLS = {
+    bigmodel: 'https://open.bigmodel.cn/api/paas/v4',
+};
+
 export function bindModelProfileHandlers() {
     const addProfileBtn = document.getElementById('add-profile-btn');
     if (addProfileBtn) {
@@ -612,11 +616,30 @@ function renderDiscoveredModels() {
 }
 
 function handleDraftEndpointChanged() {
+    applyProviderDefaultBaseUrl();
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
     renderDiscoveredModels();
     renderDraftModelDiscoveryState();
     setModelMenuOpen(false);
+}
+
+function applyProviderDefaultBaseUrl() {
+    if (editingProfile) {
+        return;
+    }
+    const providerInput = document.getElementById('profile-provider');
+    const baseUrlInput = document.getElementById('profile-base-url');
+    if (!providerInput || !baseUrlInput) {
+        return;
+    }
+    const provider = String(providerInput.value || '').trim();
+    const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
+    const currentBaseUrl = String(baseUrlInput.value || '').trim();
+    if (!defaultBaseUrl || currentBaseUrl) {
+        return;
+    }
+    baseUrlInput.value = defaultBaseUrl;
 }
 
 function handleDraftApiKeyInput() {
