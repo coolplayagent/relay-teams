@@ -14,6 +14,8 @@ from lark_oapi.event.context import EventHeader
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from pydantic import JsonValue
 
+from agent_teams.providers.token_usage_repo import SessionTokenUsage
+
 from agent_teams.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
@@ -50,6 +52,7 @@ from agent_teams.triggers import (
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
 _AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
 _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
+_SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear"})
 logger = get_logger(__name__)
 
 
@@ -88,6 +91,12 @@ class SessionServiceLike(Protocol):
     def get_session(self, session_id: str) -> SessionRecord: ...
 
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None: ...
+
+    def get_session_messages(self, session_id: str) -> list[dict[str, object]]: ...
+
+    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage: ...
+
+    def clear_session_messages(self, session_id: str) -> int: ...
 
 
 class RunServiceLike(Protocol):
@@ -255,6 +264,14 @@ class FeishuTriggerHandler:
                 event_id=normalized.event_id,
                 ignored=True,
                 reason="empty_trigger_text",
+            )
+
+        command = normalized.trigger_text.strip().casefold()
+        if command in _SESSION_COMMANDS:
+            return self._handle_session_command(
+                command=command,
+                runtime_config=runtime_config,
+                normalized=normalized,
             )
 
         self._send_acknowledgement(
@@ -506,6 +523,164 @@ class FeishuTriggerHandler:
                     "chat_id": chat_id,
                     "error": str(exc),
                 },
+            )
+
+    # ------------------------------------------------------------------
+    # Session commands
+    # ------------------------------------------------------------------
+
+    def _handle_session_command(
+        self,
+        *,
+        command: str,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> TriggerProcessingResult:
+        if command == "help":
+            response_text = self._cmd_help()
+        elif command == "status":
+            response_text = self._cmd_status(
+                runtime_config=runtime_config,
+                message=normalized,
+            )
+        elif command == "clear":
+            response_text = self._cmd_clear(
+                runtime_config=runtime_config,
+                message=normalized,
+            )
+        else:
+            response_text = self._cmd_help()
+
+        self._send_command_response(
+            chat_id=normalized.chat_id,
+            text=response_text,
+            environment=runtime_config.environment,
+        )
+        return TriggerProcessingResult(
+            status="command",
+            trigger_id=runtime_config.trigger_id,
+            trigger_name=runtime_config.trigger_name,
+            event_id=normalized.event_id,
+            reason="session_command",
+        )
+
+    def _cmd_help(self) -> str:
+        lines = [
+            "[Session Commands]",
+            "",
+            "help   - Show this help message",
+            "status - Show current session info",
+            "clear  - Clear message history",
+        ]
+        return "\n".join(lines)
+
+    def _cmd_status(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> str:
+        session_id = self._resolve_existing_session_id(
+            runtime_config=runtime_config,
+            message=message,
+        )
+        if session_id is None:
+            return "[Status] No active session for this chat."
+
+        messages = self._session_service.get_session_messages(session_id)
+        usage = self._session_service.get_token_usage_by_session(session_id)
+
+        lines: list[str] = [
+            "[Session Status]",
+            "",
+            f"Session: {session_id}",
+            f"Messages: {len(messages)}",
+            f"Tokens: input={usage.total_input_tokens}"
+            f"  output={usage.total_output_tokens}"
+            f"  total={usage.total_tokens}",
+            f"Requests: {usage.total_requests}",
+        ]
+
+        recent = messages[-6:]
+        if recent:
+            lines.append("")
+            lines.append("Recent messages:")
+            for msg in recent:
+                role = str(msg.get("role", "unknown"))
+                preview = _extract_content_preview(msg)
+                lines.append(f"  [{role}] {preview}")
+
+        return "\n".join(lines)
+
+    def _cmd_clear(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> str:
+        session_id = self._resolve_existing_session_id(
+            runtime_config=runtime_config,
+            message=message,
+        )
+        if session_id is None:
+            return "[Clear] No active session. Nothing to clear."
+
+        try:
+            count = self._session_service.clear_session_messages(session_id)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.command.clear_failed",
+                message="Failed to clear session messages",
+                payload={"session_id": session_id, "error": str(exc)},
+            )
+            return "[Clear] Failed to clear messages."
+
+        return f"[Clear] Cleared {count} messages."
+
+    def _resolve_existing_session_id(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> str | None:
+        binding = self._external_session_binding_repo.get_binding(
+            platform=FEISHU_PLATFORM,
+            trigger_id=runtime_config.trigger_id,
+            tenant_key=message.tenant_key,
+            external_chat_id=message.chat_id,
+        )
+        if binding is None:
+            return None
+        try:
+            self._session_service.get_session(binding.session_id)
+        except KeyError:
+            return None
+        return binding.session_id
+
+    def _send_command_response(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment,
+    ) -> None:
+        if self._feishu_client is None:
+            return
+        try:
+            self._feishu_client.send_text_message(
+                chat_id=chat_id,
+                text=text,
+                environment=environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.command_response.send_failed",
+                message="Failed to send command response to Feishu chat",
+                payload={"chat_id": chat_id, "error": str(exc)},
             )
 
     def _merge_session_metadata(
@@ -762,3 +937,29 @@ def _feishu_event_key(message: FeishuNormalizedMessage) -> str:
     if normalized_message_id:
         return normalized_message_id
     return message.event_id
+
+
+def _extract_content_preview(
+    msg: dict[str, object],
+    *,
+    max_length: int = 60,
+) -> str:
+    message_payload = msg.get("message")
+    if not isinstance(message_payload, dict):
+        return "(no content)"
+    parts = message_payload.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return "(no content)"
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        kind = str(part.get("part_kind", ""))
+        if kind not in {"user-prompt", "text"}:
+            continue
+        content = part.get("content")
+        if isinstance(content, str) and content.strip():
+            text = content.strip().replace("\n", " ")
+            if len(text) > max_length:
+                return text[:max_length] + "..."
+            return text
+    return "(no content)"

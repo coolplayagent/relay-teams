@@ -571,6 +571,14 @@ class SessionService:
     def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
         return self._token_usage_repo.get_by_session(session_id)
 
+    def clear_session_messages(self, session_id: str) -> int:
+        _ = self._session_repo.get(session_id)
+        messages = self._message_repo.get_messages_by_session(session_id)
+        count = len(messages)
+        self._message_repo.delete_by_session(session_id)
+        self._token_usage_repo.delete_by_session(session_id)
+        return count
+
     def _select_active_run(
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord] | None:

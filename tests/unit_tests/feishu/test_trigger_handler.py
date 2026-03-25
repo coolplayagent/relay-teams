@@ -23,6 +23,9 @@ from agent_teams.feishu.models import (
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
 )
+from agent_teams.providers.token_usage_repo import (
+    SessionTokenUsage,
+)
 from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
@@ -85,6 +88,9 @@ class _FakeSessionService:
     def __init__(self) -> None:
         self.sessions: dict[str, SessionRecord] = {}
         self.created_count = 0
+        self.session_messages: dict[str, list[dict[str, object]]] = {}
+        self.session_token_usage: dict[str, SessionTokenUsage] = {}
+        self.cleared_sessions: list[str] = []
 
     def create_session(
         self,
@@ -120,6 +126,32 @@ class _FakeSessionService:
     def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
         record = self.get_session(session_id)
         self.sessions[session_id] = record.model_copy(update={"metadata": metadata})
+
+    def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
+        return list(self.session_messages.get(session_id, []))
+
+    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
+        if session_id in self.session_token_usage:
+            return self.session_token_usage[session_id]
+        return SessionTokenUsage(
+            session_id=session_id,
+            total_input_tokens=0,
+            total_cached_input_tokens=0,
+            total_output_tokens=0,
+            total_reasoning_output_tokens=0,
+            total_tokens=0,
+            total_requests=0,
+            total_tool_calls=0,
+            by_role={},
+        )
+
+    def clear_session_messages(self, session_id: str) -> int:
+        if session_id not in self.sessions:
+            raise KeyError(session_id)
+        count = len(self.session_messages.pop(session_id, []))
+        self.session_token_usage.pop(session_id, None)
+        self.cleared_sessions.append(session_id)
+        return count
 
 
 class _FakeRunService:
@@ -197,9 +229,7 @@ def _build_trigger(
         "workspace_id": workspace_id,
         "session_mode": session_mode.value,
         "yolo": yolo,
-        "thinking": (
-            (thinking or RunThinkingConfig()).model_dump(mode="json")
-        ),
+        "thinking": ((thinking or RunThinkingConfig()).model_dump(mode="json")),
     }
     if normal_root_role_id is not None:
         target_config["normal_root_role_id"] = normal_root_role_id
@@ -225,7 +255,9 @@ def _build_trigger(
     )
 
 
-def _build_runtime(trigger: TriggerDefinition, *, app_secret: str = "secret") -> FeishuTriggerRuntimeConfig:
+def _build_runtime(
+    trigger: TriggerDefinition, *, app_secret: str = "secret"
+) -> FeishuTriggerRuntimeConfig:
     return FeishuTriggerRuntimeConfig(
         trigger_id=trigger.trigger_id,
         trigger_name=trigger.name,
@@ -272,7 +304,14 @@ def _build_handler(
         external_session_binding_repo=bindings,
         feishu_client=feishu_client,
     )
-    return handler, trigger_service, session_service, run_service, bindings, feishu_client
+    return (
+        handler,
+        trigger_service,
+        session_service,
+        run_service,
+        bindings,
+        feishu_client,
+    )
 
 
 def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
@@ -339,7 +378,9 @@ def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
     assert result.session_id == "session-1"
     assert result.run_id == "run-1"
     assert session_service.sessions["session-1"].workspace_id == "workspace-ops"
-    assert session_service.sessions["session-1"].session_mode == SessionMode.ORCHESTRATION
+    assert (
+        session_service.sessions["session-1"].session_mode == SessionMode.ORCHESTRATION
+    )
     assert session_service.sessions["session-1"].orchestration_preset_id == "default"
     assert getattr(_trigger_service.last_event, "event_key", None) == "om_1"
     assert len(run_service.created) == 1
@@ -347,12 +388,36 @@ def test_handle_sdk_event_creates_isolated_session_and_run_with_bot_preset(
     assert run_service.created[0].yolo is False
     assert run_service.created[0].thinking.enabled is True
     assert run_service.created[0].thinking.effort == "high"
-    assert session_service.sessions["session-1"].metadata["title"] == "feishu_ops · Repo Ops"
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_KIND_KEY] == SESSION_SOURCE_KIND_IM
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_PROVIDER_KEY] == "feishu"
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Repo Ops"
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_ICON_KEY] == SESSION_SOURCE_ICON_IM
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_TITLE_SOURCE_KEY] == SESSION_TITLE_SOURCE_AUTO
+    assert (
+        session_service.sessions["session-1"].metadata["title"]
+        == "feishu_ops · Repo Ops"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_KIND_KEY]
+        == SESSION_SOURCE_KIND_IM
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_SOURCE_PROVIDER_KEY
+        ]
+        == "feishu"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_SOURCE_LABEL_KEY
+        ]
+        == "Repo Ops"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_ICON_KEY]
+        == SESSION_SOURCE_ICON_IM
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_TITLE_SOURCE_KEY
+        ]
+        == SESSION_TITLE_SOURCE_AUTO
+    )
     binding = bindings.get_binding(
         platform="feishu",
         trigger_id=trigger.trigger_id,
@@ -370,7 +435,14 @@ def test_handle_sdk_event_ignores_group_non_mentions(tmp_path: Path) -> None:
         app_id="cli_group",
         app_name="bot",
     )
-    handler, _trigger_service, _session_service, run_service, _bindings, _feishu_client = _build_handler(
+    (
+        handler,
+        _trigger_service,
+        _session_service,
+        run_service,
+        _bindings,
+        _feishu_client,
+    ) = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
     )
@@ -468,8 +540,15 @@ def test_handle_sdk_event_accepts_p2p_without_mention(tmp_path: Path) -> None:
     assert result.session_id == "session-1"
     assert run_service.created[0].intent == "hello from dm"
     assert session_service.sessions["session-1"].metadata["feishu_chat_type"] == "p2p"
-    assert session_service.sessions["session-1"].metadata["title"] == "feishu_dm · Alice"
-    assert session_service.sessions["session-1"].metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Alice"
+    assert (
+        session_service.sessions["session-1"].metadata["title"] == "feishu_dm · Alice"
+    )
+    assert (
+        session_service.sessions["session-1"].metadata[
+            SESSION_METADATA_SOURCE_LABEL_KEY
+        ]
+        == "Alice"
+    )
     binding = bindings.get_binding(
         platform="feishu",
         trigger_id=trigger.trigger_id,
@@ -555,18 +634,24 @@ def test_handle_sdk_event_isolates_same_chat_by_trigger_id(tmp_path: Path) -> No
     assert result_a.session_id == "session-1"
     assert result_b.session_id == "session-2"
     assert len(run_service.created) == 2
-    assert bindings.get_binding(
-        platform="feishu",
-        trigger_id=trigger_a.trigger_id,
-        tenant_key="tenant-1",
-        external_chat_id="oc_group_shared",
-    ) is not None
-    assert bindings.get_binding(
-        platform="feishu",
-        trigger_id=trigger_b.trigger_id,
-        tenant_key="tenant-1",
-        external_chat_id="oc_group_shared",
-    ) is not None
+    assert (
+        bindings.get_binding(
+            platform="feishu",
+            trigger_id=trigger_a.trigger_id,
+            tenant_key="tenant-1",
+            external_chat_id="oc_group_shared",
+        )
+        is not None
+    )
+    assert (
+        bindings.get_binding(
+            platform="feishu",
+            trigger_id=trigger_b.trigger_id,
+            tenant_key="tenant-1",
+            external_chat_id="oc_group_shared",
+        )
+        is not None
+    )
 
 
 def test_handle_sdk_event_ignores_trigger_without_credentials(tmp_path: Path) -> None:
@@ -576,7 +661,14 @@ def test_handle_sdk_event_ignores_trigger_without_credentials(tmp_path: Path) ->
         app_id="cli_missing",
         app_name="bot",
     )
-    handler, _trigger_service, _session_service, run_service, _bindings, _feishu_client = _build_handler(
+    (
+        handler,
+        _trigger_service,
+        _session_service,
+        run_service,
+        _bindings,
+        _feishu_client,
+    ) = _build_handler(
         tmp_path=tmp_path,
         triggers=(trigger,),
         runtime_configs={trigger.trigger_id: None},
@@ -843,3 +935,333 @@ def test_handle_sdk_event_continues_when_acknowledgement_fails(tmp_path: Path) -
     assert result.status == "accepted"
     assert len(run_service.created) == 1
     assert len(feishu_client.sent_messages) == 0
+
+
+# ------------------------------------------------------------------
+# Session command tests
+# ------------------------------------------------------------------
+
+
+def _build_p2p_event(*, message_id: str, chat_id: str, event_id: str, text: str) -> str:
+    return json.dumps(
+        {
+            "schema": "2.0",
+            "header": {
+                "event_id": event_id,
+                "event_type": "im.message.receive_v1",
+                "tenant_key": "tenant-1",
+            },
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
+                "message": {
+                    "message_id": message_id,
+                    "chat_id": chat_id,
+                    "chat_type": "p2p",
+                    "message_type": "text",
+                    "content": json.dumps({"text": text}),
+                },
+            },
+        }
+    )
+
+
+def test_help_command_returns_help_and_skips_run(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_cmd",
+        name="bot_cmd",
+        app_id="cli_cmd",
+        app_name="bot-cmd",
+    )
+    handler, _ts, _ss, run_service, _b, feishu_client = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    raw_body = _build_p2p_event(
+        message_id="om_help",
+        chat_id="oc_cmd",
+        event_id="evt-help",
+        text="help",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert result.reason == "session_command"
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "help" in text
+    assert "status" in text
+    assert "clear" in text
+
+
+def test_help_command_case_insensitive(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_cmd2",
+        name="bot_cmd2",
+        app_id="cli_cmd2",
+        app_name="bot-cmd2",
+    )
+    handler, _ts, _ss, run_service, _b, feishu_client = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    raw_body = _build_p2p_event(
+        message_id="om_help2",
+        chat_id="oc_cmd2",
+        event_id="evt-help2",
+        text="HELP",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+
+
+def test_status_command_with_existing_session(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_status",
+        name="bot_status",
+        app_id="cli_status",
+        app_name="bot-status",
+    )
+    handler, _ts, session_service, run_service, bindings, feishu_client = (
+        _build_handler(
+            tmp_path=tmp_path,
+            triggers=(trigger,),
+        )
+    )
+    session = session_service.create_session(
+        session_id="session-status",
+        workspace_id="default",
+        metadata={},
+    )
+    bindings.upsert_binding(
+        platform="feishu",
+        trigger_id=trigger.trigger_id,
+        tenant_key="tenant-1",
+        external_chat_id="oc_status",
+        session_id=session.session_id,
+    )
+    session_service.session_messages["session-status"] = [
+        {
+            "role": "user",
+            "message": {"parts": [{"part_kind": "user-prompt", "content": "hello"}]},
+        },
+        {
+            "role": "assistant",
+            "message": {"parts": [{"part_kind": "text", "content": "hi there"}]},
+        },
+    ]
+    session_service.session_token_usage["session-status"] = SessionTokenUsage(
+        session_id="session-status",
+        total_input_tokens=500,
+        total_cached_input_tokens=100,
+        total_output_tokens=200,
+        total_reasoning_output_tokens=0,
+        total_tokens=700,
+        total_requests=3,
+        total_tool_calls=1,
+        by_role={},
+    )
+
+    raw_body = _build_p2p_event(
+        message_id="om_status",
+        chat_id="oc_status",
+        event_id="evt-status",
+        text="status",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "session-status" in text
+    assert "Messages: 2" in text
+    assert "500" in text
+    assert "200" in text
+    assert "hello" in text
+    assert "hi there" in text
+
+
+def test_status_command_without_session(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_status_none",
+        name="bot_status_none",
+        app_id="cli_status_none",
+        app_name="bot-status-none",
+    )
+    handler, _ts, _ss, run_service, _b, feishu_client = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    raw_body = _build_p2p_event(
+        message_id="om_status2",
+        chat_id="oc_none",
+        event_id="evt-status2",
+        text="status",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "No active session" in text
+
+
+def test_clear_command_clears_messages(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_clear",
+        name="bot_clear",
+        app_id="cli_clear",
+        app_name="bot-clear",
+    )
+    handler, _ts, session_service, run_service, bindings, feishu_client = (
+        _build_handler(
+            tmp_path=tmp_path,
+            triggers=(trigger,),
+        )
+    )
+    session = session_service.create_session(
+        session_id="session-clear",
+        workspace_id="default",
+        metadata={},
+    )
+    bindings.upsert_binding(
+        platform="feishu",
+        trigger_id=trigger.trigger_id,
+        tenant_key="tenant-1",
+        external_chat_id="oc_clear",
+        session_id=session.session_id,
+    )
+    session_service.session_messages["session-clear"] = [
+        {
+            "role": "user",
+            "message": {"parts": [{"part_kind": "user-prompt", "content": "msg1"}]},
+        },
+        {
+            "role": "assistant",
+            "message": {"parts": [{"part_kind": "text", "content": "msg2"}]},
+        },
+        {
+            "role": "user",
+            "message": {"parts": [{"part_kind": "user-prompt", "content": "msg3"}]},
+        },
+    ]
+
+    raw_body = _build_p2p_event(
+        message_id="om_clear",
+        chat_id="oc_clear",
+        event_id="evt-clear",
+        text="clear",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert run_service.created == []
+    assert "session-clear" in session_service.cleared_sessions
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "Cleared 3 messages" in text
+
+
+def test_clear_command_without_session(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_clear_none",
+        name="bot_clear_none",
+        app_id="cli_clear_none",
+        app_name="bot-clear-none",
+    )
+    handler, _ts, _ss, run_service, _b, feishu_client = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    raw_body = _build_p2p_event(
+        message_id="om_clear2",
+        chat_id="oc_none",
+        event_id="evt-clear2",
+        text="clear",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "No active session" in text
+
+
+def test_command_does_not_send_acknowledgement(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_noack",
+        name="bot_noack",
+        app_id="cli_noack",
+        app_name="bot-noack",
+    )
+    handler, _ts, _ss, run_service, _b, feishu_client = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    raw_body = _build_p2p_event(
+        message_id="om_noack",
+        chat_id="oc_noack",
+        event_id="evt-noack",
+        text="help",
+    )
+
+    handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert run_service.created == []
+    assert len(feishu_client.sent_messages) == 1
+    _, text = feishu_client.sent_messages[0]
+    assert "收到" not in text
