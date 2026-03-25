@@ -84,6 +84,7 @@ from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 from agent_teams.sessions import (
     ExternalSessionBindingRepository,
+    SessionHistoryMarkerRepository,
     SessionService,
 )
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
@@ -192,7 +193,13 @@ class ServerContainer:
         self.agent_repo: AgentInstanceRepository = AgentInstanceRepository(
             runtime.paths.db_path
         )
-        self.message_repo: MessageRepository = MessageRepository(runtime.paths.db_path)
+        self.session_history_marker_repo: SessionHistoryMarkerRepository = (
+            SessionHistoryMarkerRepository(runtime.paths.db_path)
+        )
+        self.message_repo: MessageRepository = MessageRepository(
+            runtime.paths.db_path,
+            session_history_marker_repo=self.session_history_marker_repo,
+        )
         self.approval_ticket_repo: ApprovalTicketRepository = ApprovalTicketRepository(
             runtime.paths.db_path
         )
@@ -217,7 +224,8 @@ class ServerContainer:
             )
         )
         self.token_usage_repo: TokenUsageRepository = TokenUsageRepository(
-            runtime.paths.db_path
+            runtime.paths.db_path,
+            session_history_marker_repo=self.session_history_marker_repo,
         )
         self.metric_registry: MetricRegistry = MetricRegistry(DEFAULT_DEFINITIONS)
         self.metrics_store: SqliteMetricAggregateStore = SqliteMetricAggregateStore(
@@ -367,6 +375,7 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
             active_run_registry=self.active_run_registry,
             event_log=self.event_log,
+            session_history_marker_repo=self.session_history_marker_repo,
             shared_store=self.shared_store,
             metrics_store=self.metrics_store,
             workspace_manager=self.workspace_manager,

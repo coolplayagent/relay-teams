@@ -78,13 +78,9 @@ def run_single_prompt(
         raise typer.BadParameter(
             f"--orchestration must not be empty. {QUICK_PROMPT_OPTIONS_HINT}"
         )
-    if (
-        session_mode == SessionMode.ORCHESTRATION
-        and normalized_role_id is not None
-    ):
+    if session_mode == SessionMode.ORCHESTRATION and normalized_role_id is not None:
         raise typer.BadParameter(
-            "--role can only be used with --mode normal. "
-            + QUICK_PROMPT_OPTIONS_HINT
+            "--role can only be used with --mode normal. " + QUICK_PROMPT_OPTIONS_HINT
         )
     if (
         session_mode != SessionMode.ORCHESTRATION

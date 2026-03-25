@@ -999,6 +999,7 @@ def test_help_command_returns_help_and_skips_run(tmp_path: Path) -> None:
     assert "help" in text
     assert "status" in text
     assert "clear" in text
+    assert "Reset the current conversation context" in text
 
 
 def test_help_command_case_insensitive(tmp_path: Path) -> None:
@@ -1139,7 +1140,7 @@ def test_status_command_without_session(tmp_path: Path) -> None:
     assert "No active session" in text
 
 
-def test_clear_command_clears_messages(tmp_path: Path) -> None:
+def test_clear_command_resets_active_context(tmp_path: Path) -> None:
     trigger = _build_trigger(
         trigger_id="trg_clear",
         name="bot_clear",
@@ -1199,7 +1200,8 @@ def test_clear_command_clears_messages(tmp_path: Path) -> None:
     assert "session-clear" in session_service.cleared_sessions
     assert len(feishu_client.sent_messages) == 1
     _, text = feishu_client.sent_messages[0]
-    assert "Cleared 3 messages" in text
+    assert "Cleared 3 active messages" in text
+    assert "Earlier history remains available" in text
 
 
 def test_clear_command_without_session(tmp_path: Path) -> None:

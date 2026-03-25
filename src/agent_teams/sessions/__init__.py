@@ -11,6 +11,13 @@ if TYPE_CHECKING:
     from agent_teams.sessions.external_session_binding_repository import (
         ExternalSessionBindingRepository,
     )
+    from agent_teams.sessions.session_history_marker_models import (
+        SessionHistoryMarkerRecord,
+        SessionHistoryMarkerType,
+    )
+    from agent_teams.sessions.session_history_marker_repository import (
+        SessionHistoryMarkerRepository,
+    )
     from agent_teams.sessions.session_rounds_projection import (
         approvals_to_projection,
         build_session_rounds,
@@ -31,6 +38,9 @@ __all__ = [
     "SessionMode",
     "ExternalSessionBinding",
     "ExternalSessionBindingRepository",
+    "SessionHistoryMarkerRecord",
+    "SessionHistoryMarkerRepository",
+    "SessionHistoryMarkerType",
     "SessionRepository",
     "SessionService",
     "approvals_to_projection",
@@ -50,6 +60,18 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ExternalSessionBindingRepository": (
         "agent_teams.sessions.external_session_binding_repository",
         "ExternalSessionBindingRepository",
+    ),
+    "SessionHistoryMarkerRecord": (
+        "agent_teams.sessions.session_history_marker_models",
+        "SessionHistoryMarkerRecord",
+    ),
+    "SessionHistoryMarkerRepository": (
+        "agent_teams.sessions.session_history_marker_repository",
+        "SessionHistoryMarkerRepository",
+    ),
+    "SessionHistoryMarkerType": (
+        "agent_teams.sessions.session_history_marker_models",
+        "SessionHistoryMarkerType",
     ),
     "SessionRepository": (
         "agent_teams.sessions.session_repository",

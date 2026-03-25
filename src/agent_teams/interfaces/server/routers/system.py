@@ -314,6 +314,8 @@ class OrchestrationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: dict[str, JsonValue]
+
+
 @router.put("/configs/notifications")
 def save_notification_config(
     req: NotificationConfigRequest,

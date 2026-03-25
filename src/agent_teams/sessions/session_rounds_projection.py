@@ -9,6 +9,9 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.session_history_marker_models import (
+    SessionHistoryMarkerType,
+)
 from agent_teams.agents.tasks.task_repository import TaskRepository
 
 
@@ -20,11 +23,15 @@ def build_session_rounds(
     approval_tickets_by_run: dict[str, list[dict[str, object]]],
     run_runtime_repo: RunRuntimeRepository,
     get_session_messages: Callable[[str], list[dict[str, object]]],
+    get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
 ) -> list[dict[str, object]]:
     session_tasks = task_repo.list_by_session(session_id)
     session_agents = agent_repo.list_session_role_instances(session_id)
     session_messages = get_session_messages(session_id)
+    session_markers = (
+        get_session_history_markers(session_id) if get_session_history_markers else []
+    )
     session_events = get_session_events(session_id) if get_session_events else []
     run_runtime = {
         record.run_id: record for record in run_runtime_repo.list_by_session(session_id)
@@ -79,7 +86,9 @@ def build_session_rounds(
             continue
         instance_id = str(message.get("instance_id") or "")
         if instance_id and not message.get("role_id"):
-            role_id = instance_role_by_run.get(run_id, {}).get(instance_id)
+            role_id = str(message.get("agent_role_id") or "")
+            if not role_id:
+                role_id = instance_role_by_run.get(run_id, {}).get(instance_id)
             if not role_id:
                 role_id = instance_role_by_session.get(instance_id)
             if role_id:
@@ -87,6 +96,7 @@ def build_session_rounds(
         messages_by_run[run_id].append(message)
 
     retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    completed_output_by_run: dict[str, dict[str, str]] = {}
     retry_clear_events = {
         RunEventType.MODEL_STEP_STARTED.value,
         RunEventType.MODEL_STEP_FINISHED.value,
@@ -133,6 +143,14 @@ def build_session_rounds(
                 "error_message": payload.get("error_message", ""),
             }
             continue
+        if event_type == RunEventType.RUN_COMPLETED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            output = str(payload.get("output") or "").strip()
+            if output:
+                completed_output_by_run[run_id] = {
+                    "output": output,
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                }
         if event_type in retry_clear_events:
             active_retry_by_run.pop(run_id, None)
     for run_id, retry_event in active_retry_by_run.items():
@@ -141,6 +159,7 @@ def build_session_rounds(
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
     run_ids.update(retry_events_by_run.keys())
+    run_ids.update(completed_output_by_run.keys())
     run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
 
@@ -162,6 +181,16 @@ def build_session_rounds(
             for message in run_messages
             if _is_round_coordinator_message(message, coordinator_role_id)
         ]
+        if not coordinator_messages:
+            reconstructed = _reconstruct_completed_output_message(
+                run_id=run_id,
+                root_task=root_task,
+                coordinator_role_id=coordinator_role_id,
+                role_instance_map=role_instance_by_run.get(run_id, {}),
+                output_event=completed_output_by_run.get(run_id),
+            )
+            if reconstructed is not None:
+                coordinator_messages = [reconstructed]
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)
         pending_approvals = list(approval_tickets_by_run.get(run_id, []))
@@ -182,10 +211,13 @@ def build_session_rounds(
             "run_status": runtime.status.value if runtime is not None else None,
             "run_phase": runtime.phase.value if runtime is not None else None,
             "is_recoverable": runtime.is_recoverable if runtime is not None else False,
+            "clear_marker_before": None,
         }
         rounds.append(round_item)
 
-    rounds.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    rounds.sort(key=lambda item: str(item.get("created_at") or ""))
+    _attach_clear_markers(rounds, session_markers)
+    rounds.reverse()
     return rounds
 
 
@@ -340,3 +372,89 @@ def _parse_event_payload(payload_json: object) -> dict[str, object]:
     if not isinstance(decoded, dict):
         return {}
     return {str(key): value for key, value in decoded.items() if isinstance(key, str)}
+
+
+def _reconstruct_completed_output_message(
+    *,
+    run_id: str,
+    root_task: object,
+    coordinator_role_id: str | None,
+    role_instance_map: dict[str, str],
+    output_event: dict[str, str] | None,
+) -> dict[str, object] | None:
+    if output_event is None:
+        return None
+    output = str(output_event.get("output") or "").strip()
+    if not output:
+        return None
+    task_id = ""
+    if root_task is not None:
+        envelope = getattr(root_task, "envelope", None)
+        candidate_task_id = getattr(envelope, "task_id", None)
+        if isinstance(candidate_task_id, str):
+            task_id = candidate_task_id
+    instance_id = ""
+    if coordinator_role_id is not None:
+        instance_id = str(role_instance_map.get(coordinator_role_id) or "")
+    return {
+        "conversation_id": "",
+        "agent_role_id": coordinator_role_id or "",
+        "instance_id": instance_id,
+        "task_id": task_id,
+        "trace_id": run_id,
+        "role": "assistant",
+        "role_id": coordinator_role_id or "",
+        "created_at": str(output_event.get("occurred_at") or ""),
+        "reconstructed": True,
+        "message": {
+            "parts": [
+                {
+                    "part_kind": "text",
+                    "content": output,
+                }
+            ]
+        },
+    }
+
+
+def _attach_clear_markers(
+    rounds: list[dict[str, object]],
+    session_markers: list[dict[str, object]],
+) -> None:
+    if not rounds or not session_markers:
+        return
+    clear_markers = sorted(
+        (
+            marker
+            for marker in session_markers
+            if str(marker.get("marker_type") or "") == SessionHistoryMarkerType.CLEAR
+        ),
+        key=lambda item: str(item.get("created_at") or ""),
+    )
+    if not clear_markers:
+        return
+
+    marker_index = 0
+    pending_marker: dict[str, object] | None = None
+    for round_item in rounds:
+        created_at = str(round_item.get("created_at") or "")
+        while marker_index < len(clear_markers):
+            marker = clear_markers[marker_index]
+            marker_created_at = str(marker.get("created_at") or "")
+            if marker_created_at > created_at:
+                break
+            pending_marker = marker
+            marker_index += 1
+        if pending_marker is None:
+            continue
+        round_item["clear_marker_before"] = _project_clear_marker(pending_marker)
+        pending_marker = None
+
+
+def _project_clear_marker(marker: dict[str, object]) -> dict[str, object]:
+    return {
+        "marker_id": str(marker.get("marker_id") or ""),
+        "marker_type": str(marker.get("marker_type") or ""),
+        "created_at": str(marker.get("created_at") or ""),
+        "label": "History cleared",
+    }

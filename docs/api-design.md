@@ -335,7 +335,13 @@ Response shape:
       "pending_tool_approval_count": 0,
       "run_status": "running",
       "run_phase": "idle",
-      "is_recoverable": true
+      "is_recoverable": true,
+      "clear_marker_before": {
+        "marker_id": "marker-1",
+        "marker_type": "clear",
+        "created_at": "2026-03-11T11:59:30Z",
+        "label": "History cleared"
+      }
     }
   ],
   "has_more": false,
@@ -349,6 +355,8 @@ Notes:
 - `retry_events` reflects the current retry card for the run timeline. The array is empty when no retry state should be shown and contains at most one entry.
 - Active retry countdowns are anchored to the event `occurred_at` timestamp, not to the browser receive time.
 - `retry_events[].phase` is `scheduled` while backoff is pending and `failed` when retries have been exhausted.
+- `clear_marker_before` is present on the first round after a session history clear boundary. The frontend uses it to render a divider and collapse older segments by default.
+- When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted `run_completed.output`.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
 
@@ -387,11 +395,11 @@ Lists persisted business events in the session.
 
 ### `GET /sessions/{session_id}/messages`
 
-Lists persisted messages in the session.
+Lists persisted messages in the active session segment only. Rows before the latest logical `clear` marker are excluded from this endpoint.
 
 ### `GET /sessions/{session_id}/agents/{instance_id}/messages`
 
-Lists messages for one agent instance.
+Lists messages for one agent instance in the active session segment only.
 
 ### `GET /sessions/{session_id}/agents/{instance_id}/reflection`
 
@@ -431,7 +439,7 @@ Lists delegated tasks in the session.
 
 ### `GET /sessions/{session_id}/token-usage`
 
-Returns aggregated token usage for the entire session, grouped by `role_id`. The totals include the coordinator agent and every subagent run recorded under the same `session_id`. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
+Returns aggregated token usage for the active session segment, grouped by `role_id`. The totals include the coordinator agent and every subagent run recorded under the same `session_id` after the latest logical `clear` marker. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
 
@@ -986,6 +994,8 @@ Behavior:
 - Requires no public callback URL.
 - Runs one SDK long connection per enabled Feishu trigger whose credentials are ready.
 - Supports multiple Feishu bots at the same time.
+- Supports session commands `help`, `status`, and `clear`.
+- `clear` inserts a logical history divider instead of deleting persisted session rows.
 
 Recommended trigger contract:
 - `source_type = "im"`

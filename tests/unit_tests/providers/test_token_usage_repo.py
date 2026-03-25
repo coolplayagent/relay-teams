@@ -7,6 +7,9 @@ from pathlib import Path
 from threading import Barrier
 
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 
 
 def test_token_usage_repo_migrates_legacy_schema_before_recording(
@@ -245,3 +248,42 @@ def test_token_usage_repo_aggregates_cached_and_reasoning_tokens(
     assert session_usage.total_cached_input_tokens == 82
     assert session_usage.total_output_tokens == 31
     assert session_usage.total_reasoning_output_tokens == 13
+
+
+def test_token_usage_repo_filters_pre_clear_usage_from_session_totals(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "token_usage_markers.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    repo = TokenUsageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    repo.record(
+        session_id="session-1",
+        run_id="run-old",
+        instance_id="inst-1",
+        role_id="coordinator",
+        input_tokens=20,
+        output_tokens=5,
+    )
+    marker_repo.create_clear_marker("session-1")
+    repo.record(
+        session_id="session-1",
+        run_id="run-new",
+        instance_id="inst-1",
+        role_id="coordinator",
+        input_tokens=7,
+        output_tokens=3,
+    )
+
+    active_usage = repo.get_by_session("session-1")
+    historical_usage = repo.get_by_session("session-1", include_cleared=True)
+    old_run_usage = repo.get_by_run("run-old")
+
+    assert active_usage.total_input_tokens == 7
+    assert active_usage.total_output_tokens == 3
+    assert active_usage.total_tokens == 10
+    assert historical_usage.total_input_tokens == 27
+    assert historical_usage.total_output_tokens == 8
+    assert old_run_usage.total_tokens == 25

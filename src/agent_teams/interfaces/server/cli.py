@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 import typer
+from typer.models import OptionInfo
 
 from agent_teams.paths import get_project_config_dir
 
@@ -114,6 +115,12 @@ def wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
 _DAEMON_START_TIMEOUT_SECONDS = 20.0
 
 
+def _unwrap_option_default[T](value: T | OptionInfo) -> T:
+    if isinstance(value, OptionInfo):
+        return cast(T, value.default)
+    return value
+
+
 def start(
     host: str = typer.Option(
         DEFAULT_SERVER_HOST, "--host", help="Host to bind the server to"
@@ -128,6 +135,10 @@ def start(
         help="Run the server as a background process.",
     ),
 ) -> None:
+    host = _unwrap_option_default(host)
+    port = _unwrap_option_default(port)
+    daemon = _unwrap_option_default(daemon)
+
     if daemon:
         _start_daemon(host=host, port=port)
         return
@@ -191,6 +202,7 @@ def stop(
         help="Force kill the managed server process immediately.",
     ),
 ) -> None:
+    force = _unwrap_option_default(force)
     stopped_process = _stop_managed_server(force=force)
     if stopped_process is None:
         typer.echo("No managed Agent Teams server process found.")
@@ -213,18 +225,21 @@ def restart(
         help="Force kill the existing managed server before restart.",
     ),
 ) -> None:
-    existing_process = _load_managed_server(raise_on_invalid=False)
+    host = _unwrap_option_default(host)
+    port = _unwrap_option_default(port)
+    force = _unwrap_option_default(force)
+
+    stopped_process = _stop_managed_server(force=force)
     resolved_host = host or (
-        existing_process.host if existing_process is not None else DEFAULT_SERVER_HOST
+        stopped_process.host if stopped_process is not None else DEFAULT_SERVER_HOST
     )
     resolved_port = port or (
-        existing_process.port if existing_process is not None else DEFAULT_SERVER_PORT
+        stopped_process.port if stopped_process is not None else DEFAULT_SERVER_PORT
     )
     check_host = _health_check_host(resolved_host)
     check_url = f"http://{check_host}:{resolved_port}"
     display_url = f"http://{resolved_host}:{resolved_port}"
 
-    stopped_process = _stop_managed_server(force=force)
     if stopped_process is None and is_server_healthy(check_url):
         raise RuntimeError(
             f"Agent Teams server is already responding at {display_url}, "

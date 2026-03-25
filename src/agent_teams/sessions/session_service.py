@@ -49,6 +49,9 @@ from agent_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
 from agent_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -80,6 +83,7 @@ class SessionService:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
+        session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
         run_event_hub: RunEventHub | None = None,
         active_run_registry: ActiveSessionRunRegistry | None = None,
@@ -104,6 +108,7 @@ class SessionService:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
+        self._session_history_marker_repo = session_history_marker_repo
         self._run_state_repo = run_state_repo
         self._run_event_hub = run_event_hub
         self._active_run_registry = active_run_registry
@@ -299,6 +304,8 @@ class SessionService:
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
+        if self._session_history_marker_repo is not None:
+            self._session_history_marker_repo.delete_by_session(session_id)
         if self._external_session_binding_repo is not None:
             self._external_session_binding_repo.delete_by_session(session_id)
         self._session_repo.delete(session_id)
@@ -472,7 +479,14 @@ class SessionService:
                 self._approval_ticket_repo.list_open_by_session(session_id)
             ),
             run_runtime_repo=self._run_runtime_repo,
-            get_session_messages=self.get_session_messages,
+            get_session_messages=lambda current_session_id: cast(
+                list[dict[str, object]],
+                self._message_repo.get_messages_by_session(
+                    current_session_id,
+                    include_cleared=True,
+                ),
+            ),
+            get_session_history_markers=self._get_session_history_markers,
             get_session_events=self.get_global_events,
         )
         for round_item in rounds:
@@ -575,9 +589,21 @@ class SessionService:
         _ = self._session_repo.get(session_id)
         messages = self._message_repo.get_messages_by_session(session_id)
         count = len(messages)
-        self._message_repo.delete_by_session(session_id)
-        self._token_usage_repo.delete_by_session(session_id)
+        if self._session_history_marker_repo is not None:
+            self._session_history_marker_repo.create_clear_marker(session_id)
+        else:
+            self._message_repo.delete_by_session(session_id)
+            self._token_usage_repo.delete_by_session(session_id)
         return count
+
+    def _get_session_history_markers(
+        self,
+        session_id: str,
+    ) -> list[dict[str, object]]:
+        if self._session_history_marker_repo is None:
+            return []
+        markers = self._session_history_marker_repo.list_by_session(session_id)
+        return [marker.model_dump(mode="json") for marker in markers]
 
     def _select_active_run(
         self, session_id: str

@@ -113,6 +113,10 @@ def _run_project_view_script(tmp_path: Path, runner_source: str) -> dict[str, ob
     mock_state_path = tmp_path / "mockState.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
+    mock_feedback_path = tmp_path / "mockFeedback.mjs"
+    mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
+    mock_navigator_path = tmp_path / "mockNavigator.mjs"
+    mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -283,6 +287,26 @@ export async function flushTasks() {
 
     mock_api_path.write_text(
         """
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function fetchAutomationProject() {
+    return null;
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [];
+}
+
 export async function fetchWorkspaceSnapshot(workspaceId) {
     await new Promise(resolve => setTimeout(resolve, 0));
     globalThis.__snapshotRequests.push(workspaceId);
@@ -360,6 +384,14 @@ export async function fetchWorkspaceDiffFile(workspaceId, path) {
         is_binary: false,
     };
 }
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -413,6 +445,38 @@ export function sysLog() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_feedback_path.write_text(
+        """
+export async function showFormDialog() {
+    return null;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_agent_panel_path.write_text(
+        """
+export function clearAllPanels() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_navigator_path.write_text(
+        """
+export function hideRoundNavigator() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_subagent_rail_path.write_text(
+        """
+export function setSubagentRailExpanded() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -420,7 +484,11 @@ export function sysLog() {
         .replace("../core/state.js", "./mockState.mjs")
         .replace("../utils/dom.js", "./mockDom.mjs")
         .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./rounds/navigator.js", "./mockNavigator.mjs")
+        .replace("./subagentRail.js", "./mockSubagentRail.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 

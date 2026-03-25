@@ -254,6 +254,35 @@ Purpose: append-only LLM message history.
 - `assistant`
 - `unknown`
 
+Notes:
+- Session-level `clear` operations no longer delete rows from `messages`.
+- The active conversation context is derived by looking up the latest `session_history_markers.marker_type = 'clear'` entry for the same `session_id` and filtering rows with `created_at` after that marker.
+- Historical session round rendering may still read the full `messages` history for the same session.
+
+---
+
+### 2.6.1 `session_history_markers`
+
+```sql
+CREATE TABLE IF NOT EXISTS session_history_markers (
+    marker_id      TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    marker_type    TEXT NOT NULL,
+    metadata_json  TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_history_markers_session
+    ON session_history_markers(session_id, created_at DESC);
+```
+
+Purpose: append-only logical history boundaries for a session.
+
+Notes:
+- `marker_type` currently starts with `clear`.
+- A `clear` marker divides active context from earlier persisted history without deleting earlier `messages`, `events`, or `token_usage`.
+- Multiple markers may exist for the same session. Runtime context uses the latest matching marker.
+
 ---
 
 ### 2.7 `token_usage`
@@ -279,6 +308,11 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
 ```
 
 Purpose: one row per `agent.iter()` completion cycle (coordinator or subagent). Multiple rows may exist for the same `instance_id` within a run if injection-restarts occurred. The table stores both the billed prompt/completion counts and the provider-reported cached-input / reasoning-output sub-counts used by the session usage UI. Rows are deleted when the owning session is deleted.
+
+Notes:
+- Session-level `clear` operations do not delete `token_usage` rows.
+- Active session totals are filtered to rows whose `recorded_at` is after the latest `session_history_markers.marker_type = 'clear'` row for the same `session_id`.
+- Run-level totals are unchanged and always aggregate the full `run_id` history.
 
 ---
 
@@ -405,7 +439,7 @@ Notes:
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `tasks`, `agent_instances`, `events`, `messages`, `token_usage`.
+- `session_id`: session-level retrieval across `sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`.
 - `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
@@ -420,7 +454,7 @@ Primary query keys used by repositories:
 ## 3.1 Code Ownership
 
 - `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
-- `agent_teams.sessions`: `sessions`, `external_session_bindings`.
+- `agent_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
 - `agent_teams.workspace`: `workspaces`.
 - `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
 - `agent_teams.agents`: `agent_instances`.

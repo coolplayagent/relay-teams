@@ -535,9 +535,8 @@ class TaskExecutionService(BaseModel):
 
     async def _build_runtime_tools_snapshot(
         self,
-        *,
         role: RoleDefinition,
-        task: TaskEnvelope,
+        task: TaskEnvelope | None = None,
     ) -> RuntimeToolsSnapshot:
         skill_registry = cast("SkillRegistry", self.skill_registry)
         tool_registry = cast("ToolRegistry", self.tool_registry)
@@ -555,7 +554,9 @@ class TaskExecutionService(BaseModel):
             system_prompt="runtime-tools-snapshot",
             allowed_tools=tool_registry.resolve_names(
                 role.tools,
-                context=ToolResolutionContext(session_id=task.session_id),
+                context=ToolResolutionContext(
+                    session_id="" if task is None else task.session_id
+                ),
             ),
             allowed_mcp_servers=(),
             allowed_skills=role.skills,

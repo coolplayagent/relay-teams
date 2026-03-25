@@ -37,9 +37,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 )
                 results.append(result)
             if file_path is not None:
-                resolved_path = ctx.deps.workspace.resolve_path(
-                    file_path, write=False
-                )
+                resolved_path = ctx.deps.workspace.resolve_path(file_path, write=False)
                 result = service.send_file(
                     session_id=ctx.deps.session_id,
                     file_path=resolved_path,

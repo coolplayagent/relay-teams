@@ -10,7 +10,12 @@ from pydantic_ai import RunContext
 
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.agents.tasks.models import TaskEnvelope
 from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.agents.orchestration.task_orchestration_service import (
+    TaskDraft,
+    TaskUpdate,
+)
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import MetricRecorder
 from agent_teams.notifications import NotificationService
@@ -33,7 +38,7 @@ class TaskOrchestrationServiceLike(Protocol):
         self,
         *,
         run_id: str,
-        tasks: list[object],
+        tasks: list[TaskDraft],
     ) -> dict[str, JsonValue]: ...
 
     def update_task(
@@ -41,7 +46,7 @@ class TaskOrchestrationServiceLike(Protocol):
         *,
         run_id: str | None,
         task_id: str,
-        update: object,
+        update: TaskUpdate,
     ) -> dict[str, JsonValue]: ...
 
     def list_delegated_tasks(
@@ -74,7 +79,7 @@ class TaskExecutionServiceLike(Protocol):
         *,
         instance_id: str,
         role_id: str,
-        task: object,
+        task: TaskEnvelope,
         user_prompt_override: str | None = None,
     ) -> str: ...
 

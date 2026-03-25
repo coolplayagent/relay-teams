@@ -123,6 +123,19 @@ If a bot's runtime preset changes, Agent Teams clears that bot's external chat
 bindings. Existing sessions keep their history, but the next inbound message starts
 or rebinds to a new session using the new preset.
 
+## Session Commands
+
+Feishu chat sessions also support lightweight chat commands:
+
+- `help`: shows the command list
+- `status`: shows the active post-clear message count and active post-clear token totals
+- `clear`: inserts a logical history divider for that session
+
+`clear` no longer deletes persisted `messages` or `token_usage`. It resets only the
+active conversation context used for subsequent Feishu status output and future run
+continuity. Earlier rounds remain available in the web UI and are rendered behind a
+history-cleared divider.
+
 ## Notifications
 
 Notification rules support:

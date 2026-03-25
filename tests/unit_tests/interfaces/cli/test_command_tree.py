@@ -295,8 +295,16 @@ def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
                 "coordinator_role_id": "Coordinator",
                 "main_agent_role_id": "MainAgent",
                 "normal_mode_roles": [
-                    {"role_id": "MainAgent", "name": "Main Agent", "description": "Default"},
-                    {"role_id": "Crafter", "name": "Crafter", "description": "Implements"},
+                    {
+                        "role_id": "MainAgent",
+                        "name": "Main Agent",
+                        "description": "Default",
+                    },
+                    {
+                        "role_id": "Crafter",
+                        "name": "Crafter",
+                        "description": "Implements",
+                    },
                 ],
             }
         raise AssertionError(f"unexpected path: {path}")

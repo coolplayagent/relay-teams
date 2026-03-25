@@ -103,7 +103,6 @@ def test_update_session_raises_for_unknown_session(tmp_path: Path) -> None:
         service.update_session("missing-session", {"title": "Nope"})
 
 
-
 def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> None:
     db_path = tmp_path / "session_update_auto_title.db"
     service = _build_service(db_path)
@@ -129,7 +128,9 @@ def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> 
     }
 
 
-def test_update_session_clears_title_source_when_title_is_removed(tmp_path: Path) -> None:
+def test_update_session_clears_title_source_when_title_is_removed(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "session_update_clear_title.db"
     service = _build_service(db_path)
     _ = service.create_session(

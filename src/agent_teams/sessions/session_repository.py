@@ -209,9 +209,7 @@ class SessionRepository:
                 continue
             session_id = str(row["session_id"])
             session_mode = SessionMode(str(row["session_mode"] or "normal"))
-            normal_root_role_id = (
-                str(row["normal_root_role_id"] or "").strip() or None
-            )
+            normal_root_role_id = str(row["normal_root_role_id"] or "").strip() or None
             preset_id = str(row["orchestration_preset_id"] or "").strip() or None
             next_mode = session_mode
             next_normal_root_role_id = normal_root_role_id

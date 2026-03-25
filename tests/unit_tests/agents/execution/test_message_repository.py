@@ -8,6 +8,9 @@ from typing import cast
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.workspace import build_conversation_id
 
 
@@ -193,3 +196,97 @@ def test_message_repo_append_is_thread_safe_under_parallel_writes(
     row = repo._conn.execute("SELECT COUNT(*) AS c FROM messages").fetchone()
     assert row is not None
     assert int(row["c"]) == 200
+
+
+def test_message_repo_filters_active_segment_after_clear_marker(tmp_path: Path) -> None:
+    db_path = tmp_path / "message_repo_history_markers.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="before clear")])],
+    )
+    marker_repo.create_clear_marker("session-1")
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-2",
+        trace_id="run-2",
+        messages=[ModelRequest(parts=[UserPromptPart(content="after clear")])],
+    )
+
+    active_messages = repo.get_messages_by_session("session-1")
+    all_messages = repo.get_messages_by_session("session-1", include_cleared=True)
+    active_history = repo.get_history_for_conversation(conversation_id)
+
+    assert len(active_messages) == 1
+    active_payload = cast(dict[str, object], active_messages[0]["message"])
+    active_part = cast(list[dict[str, object]], active_payload["parts"])[0]
+    assert active_part["content"] == "after clear"
+    assert len(all_messages) == 2
+    assert len(active_history) == 1
+    active_history_part = active_history[0].parts[0]
+    assert isinstance(active_history_part, UserPromptPart)
+    assert active_history_part.content == "after clear"
+
+
+def test_compact_conversation_history_preserves_pre_clear_messages(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_compaction_markers.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="pre-clear")])],
+    )
+    marker_repo.create_clear_marker("session-1")
+    for index in range(3):
+        repo.append(
+            session_id="session-1",
+            workspace_id="default",
+            conversation_id=conversation_id,
+            agent_role_id="time",
+            instance_id="inst-1",
+            task_id=f"task-{index + 2}",
+            trace_id=f"run-{index + 2}",
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content=f"post-clear-{index + 1}")])
+            ],
+        )
+
+    repo.compact_conversation_history(conversation_id, keep_message_count=1)
+
+    all_messages = repo.get_messages_by_session("session-1", include_cleared=True)
+    active_history = repo.get_history_for_conversation(conversation_id)
+
+    assert len(all_messages) == 2
+    assert len(active_history) == 1
+    final_history_part = active_history[0].parts[0]
+    assert isinstance(final_history_part, UserPromptPart)
+    assert final_history_part.content == "post-clear-3"

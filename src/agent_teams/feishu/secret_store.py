@@ -19,7 +19,9 @@ _SECRETS_FILE_NAME = "feishu_trigger_secrets.json"
 
 
 class FeishuTriggerSecretStore:
-    def get_secret_config(self, config_dir: Path, trigger_id: str) -> FeishuTriggerSecretConfig:
+    def get_secret_config(
+        self, config_dir: Path, trigger_id: str
+    ) -> FeishuTriggerSecretConfig:
         if self._has_keyring_backend():
             return self._get_from_keyring(config_dir, trigger_id)
         return self._get_from_file(config_dir, trigger_id)
@@ -65,7 +67,9 @@ class FeishuTriggerSecretStore:
         try:
             return FeishuTriggerSecretConfig(
                 app_secret=_normalize_secret(
-                    keyring.get_password(_KEYRING_SERVICE_NAME, f"{account_name}:app_secret")
+                    keyring.get_password(
+                        _KEYRING_SERVICE_NAME, f"{account_name}:app_secret"
+                    )
                 ),
                 verification_token=_normalize_secret(
                     keyring.get_password(
@@ -74,7 +78,9 @@ class FeishuTriggerSecretStore:
                     )
                 ),
                 encrypt_key=_normalize_secret(
-                    keyring.get_password(_KEYRING_SERVICE_NAME, f"{account_name}:encrypt_key")
+                    keyring.get_password(
+                        _KEYRING_SERVICE_NAME, f"{account_name}:encrypt_key"
+                    )
                 ),
             )
         except Exception:
@@ -134,7 +140,9 @@ class FeishuTriggerSecretStore:
     def _secrets_file_path(self, config_dir: Path) -> Path:
         return config_dir.expanduser().resolve() / _SECRETS_FILE_NAME
 
-    def _load_all_file_secrets(self, config_dir: Path) -> dict[str, dict[str, str | None]]:
+    def _load_all_file_secrets(
+        self, config_dir: Path
+    ) -> dict[str, dict[str, str | None]]:
         path = self._secrets_file_path(config_dir)
         if not path.exists():
             return {}

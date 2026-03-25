@@ -22,6 +22,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 export let currentRounds = [];
 export let currentRound = null;
 let retryTimelineTimerId = 0;
+const expandedHistorySegments = new Set();
 
 export async function loadSessionRounds(sessionId) {
     try {
@@ -213,6 +214,7 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
 
 export function selectRound(round) {
     if (!round) return;
+    expandHistorySegmentForRun(round.run_id);
     const section = document.getElementById(roundSectionId(round.run_id));
     if (!section) return;
     roundsState.pendingScrollTargetRunId = round.run_id;
@@ -253,79 +255,36 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         return;
     }
 
-    rounds.forEach((round, index) => {
-        const section = document.createElement('section');
-        section.className = 'session-round-section';
-        section.dataset.runId = round.run_id;
-        section.id = roundSectionId(round.run_id);
+    const segments = splitRoundsByHistoryMarkers(rounds);
+    const segmentIds = new Set(segments.map(segment => segment.segmentId));
+    Array.from(expandedHistorySegments).forEach(segmentId => {
+        if (!segmentIds.has(segmentId)) {
+            expandedHistorySegments.delete(segmentId);
+        }
+    });
 
-        const time = new Date(round.created_at).toLocaleString();
-        const stateLabel = roundStateLabel(round);
-        const stateTone = roundStateTone(round);
-        const approvalCount = Number(round.pending_tool_approval_count || 0);
-        const header = document.createElement('div');
-        header.className = 'round-detail-header';
-        header.innerHTML = `
-            <div class="round-detail-topline">
-                <div class="round-detail-mainline">
-                    <div class="round-detail-label">Round ${index + 1}${round.run_status === 'running' ? ' <span class="live-badge">LIVE</span>' : ''}</div>
-                    <div class="round-detail-meta">
-                        <div class="round-detail-time">${time}</div>
-                        <div class="round-detail-token-host"></div>
-                    </div>
-                </div>
-                <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
-            </div>
-            <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
-        section.appendChild(header);
-        renderRoundRetryEvents(section, round.retry_events || []);
+    segments.forEach(segment => {
+        const segmentEl = document.createElement('div');
+        segmentEl.className = 'round-history-segment';
+        segmentEl.dataset.segmentId = segment.segmentId;
 
-        const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
-            const roleId = item?.role_id || '';
-            return roleId === '' || isPrimaryRoleId(roleId);
+        const body = document.createElement('div');
+        body.className = 'round-history-segment-body';
+        const isExpanded = segment.isLatest || expandedHistorySegments.has(segment.segmentId);
+        body.hidden = !isExpanded;
+        segmentEl.dataset.expanded = isExpanded ? 'true' : 'false';
+
+        segment.rounds.forEach(item => {
+            const section = renderRoundSection(item.round, item.index);
+            body.appendChild(section);
         });
-        const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
+        segmentEl.appendChild(body);
 
-        if (round.coordinator_messages?.length > 0) {
-            renderHistoricalMessageList(section, round.coordinator_messages, {
-                pendingToolApprovals: pendingCoordinatorApprovals,
-                runId: round.run_id,
-                streamOverlayEntry: coordinatorOverlay,
-            });
-        } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
-            renderHistoricalMessageList(section, [], {
-                pendingToolApprovals: pendingCoordinatorApprovals,
-                runId: round.run_id,
-                streamOverlayEntry: coordinatorOverlay,
-            });
-        } else if (!round.has_user_messages) {
-            const empty = document.createElement('div');
-            empty.className = 'panel-empty';
-            empty.textContent = `No ${getPrimaryRoleLabel().toLowerCase()} messages in this round.`;
-            section.appendChild(empty);
+        if (segment.clearMarker) {
+            segmentEl.appendChild(renderClearDivider(segment, isExpanded));
         }
 
-        container.appendChild(section);
-
-        if (state.currentSessionId) {
-            const headerEl = header;
-            void fetchRunTokenUsage(state.currentSessionId, round.run_id).then(usage => {
-                if (!usage || usage.total_tokens === 0) return;
-                const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-                const pill = document.createElement('div');
-                pill.className = 'round-token-summary';
-                pill.title = `Input: ${usage.total_input_tokens} | Output: ${usage.total_output_tokens} | Requests: ${usage.total_requests}`;
-                pill.innerHTML = `
-                    <span class="token-in">In ${fmt(usage.total_input_tokens)}</span>
-                    <span class="token-out">Out ${fmt(usage.total_output_tokens)}</span>
-                    ${usage.total_tool_calls > 0 ? `<span class="token-tools">Tools ${usage.total_tool_calls}</span>` : ''}
-                `;
-                const tokenHost = headerEl.querySelector('.round-detail-token-host');
-                if (tokenHost) {
-                    tokenHost.appendChild(pill);
-                }
-            });
-        }
+        container.appendChild(segmentEl);
     });
 
     renderRoundNavigator(rounds, selectRound);
@@ -352,7 +311,7 @@ function syncActiveRoundFromScroll() {
     const container = els.chatMessages;
     if (!container) return;
 
-    const sections = Array.from(container.querySelectorAll('.session-round-section'));
+    const sections = getVisibleRoundSections(container);
     if (sections.length === 0) return;
 
     if (syncPendingRoundSelection(container)) {
@@ -412,6 +371,179 @@ function activateRoundSection(section, visibleScore) {
     syncExportedState();
 
     setActiveRoundNav(runId);
+}
+
+function renderRoundSection(round, index) {
+    const section = document.createElement('section');
+    section.className = 'session-round-section';
+    section.dataset.runId = round.run_id;
+    section.id = roundSectionId(round.run_id);
+
+    const time = new Date(round.created_at).toLocaleString();
+    const stateLabel = roundStateLabel(round);
+    const stateTone = roundStateTone(round);
+    const approvalCount = Number(round.pending_tool_approval_count || 0);
+    const header = document.createElement('div');
+    header.className = 'round-detail-header';
+    header.innerHTML = `
+        <div class="round-detail-topline">
+            <div class="round-detail-mainline">
+                <div class="round-detail-label">Round ${index + 1}${round.run_status === 'running' ? ' <span class="live-badge">LIVE</span>' : ''}</div>
+                <div class="round-detail-meta">
+                    <div class="round-detail-time">${time}</div>
+                    <div class="round-detail-token-host"></div>
+                </div>
+            </div>
+            <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
+        </div>
+        <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
+    section.appendChild(header);
+    renderRoundRetryEvents(section, round.retry_events || []);
+
+    const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
+        const roleId = item?.role_id || '';
+        return roleId === '' || isPrimaryRoleId(roleId);
+    });
+    const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
+
+    if (round.coordinator_messages?.length > 0) {
+        renderHistoricalMessageList(section, round.coordinator_messages, {
+            pendingToolApprovals: pendingCoordinatorApprovals,
+            runId: round.run_id,
+            streamOverlayEntry: coordinatorOverlay,
+        });
+    } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
+        renderHistoricalMessageList(section, [], {
+            pendingToolApprovals: pendingCoordinatorApprovals,
+            runId: round.run_id,
+            streamOverlayEntry: coordinatorOverlay,
+        });
+    } else if (!round.has_user_messages) {
+        const empty = document.createElement('div');
+        empty.className = 'panel-empty';
+        empty.textContent = `No ${getPrimaryRoleLabel().toLowerCase()} messages in this round.`;
+        section.appendChild(empty);
+    }
+
+    if (state.currentSessionId) {
+        const headerEl = header;
+        void fetchRunTokenUsage(state.currentSessionId, round.run_id).then(usage => {
+            if (!usage || usage.total_tokens === 0) return;
+            const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+            const pill = document.createElement('div');
+            pill.className = 'round-token-summary';
+            pill.title = `Input: ${usage.total_input_tokens} | Output: ${usage.total_output_tokens} | Requests: ${usage.total_requests}`;
+            pill.innerHTML = `
+                <span class="token-in">In ${fmt(usage.total_input_tokens)}</span>
+                <span class="token-out">Out ${fmt(usage.total_output_tokens)}</span>
+                ${usage.total_tool_calls > 0 ? `<span class="token-tools">Tools ${usage.total_tool_calls}</span>` : ''}
+            `;
+            const tokenHost = headerEl.querySelector('.round-detail-token-host');
+            if (tokenHost) {
+                tokenHost.appendChild(pill);
+            }
+        });
+    }
+
+    return section;
+}
+
+function splitRoundsByHistoryMarkers(rounds) {
+    const items = Array.isArray(rounds) ? rounds : [];
+    if (items.length === 0) return [];
+
+    const segments = [];
+    let currentSegmentRounds = [];
+    items.forEach((round, index) => {
+        if (round?.clear_marker_before && currentSegmentRounds.length > 0) {
+            const marker = round.clear_marker_before;
+            segments.push({
+                segmentId: `segment-before-${String(marker.marker_id || segments.length)}`,
+                rounds: currentSegmentRounds,
+                clearMarker: marker,
+                isLatest: false,
+            });
+            currentSegmentRounds = [];
+        }
+        currentSegmentRounds.push({ round, index });
+    });
+
+    const latestSource = currentSegmentRounds[0]?.round?.clear_marker_before;
+    segments.push({
+        segmentId: latestSource
+            ? `segment-after-${String(latestSource.marker_id || segments.length)}`
+            : 'segment-current',
+        rounds: currentSegmentRounds,
+        clearMarker: null,
+        isLatest: true,
+    });
+    return segments;
+}
+
+function renderClearDivider(segment, isExpanded) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'round-clear-divider';
+    button.dataset.segmentId = segment.segmentId;
+    button.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    const markerLabel = String(segment.clearMarker?.label || 'History cleared');
+    const roundCount = segment.rounds.length;
+    const roundLabel = roundCount === 1 ? '1 round' : `${roundCount} rounds`;
+    button.innerHTML = `
+        <span class="round-clear-divider-line" aria-hidden="true"></span>
+        <span class="round-clear-divider-chip">
+            <span class="round-clear-divider-title">${esc(markerLabel)}</span>
+            <span class="round-clear-divider-copy">${isExpanded ? `Hide ${roundLabel}` : `Show ${roundLabel}`}</span>
+        </span>
+        <span class="round-clear-divider-line" aria-hidden="true"></span>
+    `;
+    button.addEventListener('click', () => {
+        toggleHistorySegment(segment.segmentId);
+    });
+    return button;
+}
+
+function toggleHistorySegment(segmentId, expanded) {
+    const segment = document.querySelector(`.round-history-segment[data-segment-id="${segmentId}"]`);
+    if (!segment) return;
+    const body = segment.querySelector('.round-history-segment-body');
+    const trigger = segment.querySelector('.round-clear-divider');
+    if (!body || !trigger) return;
+
+    const nextExpanded = typeof expanded === 'boolean'
+        ? expanded
+        : body.hidden;
+    body.hidden = !nextExpanded;
+    segment.dataset.expanded = nextExpanded ? 'true' : 'false';
+    trigger.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+
+    const copy = trigger.querySelector('.round-clear-divider-copy');
+    const roundCount = Number(segment.querySelectorAll('.session-round-section').length || 0);
+    const roundLabel = roundCount === 1 ? '1 round' : `${roundCount} rounds`;
+    if (copy) {
+        copy.textContent = nextExpanded ? `Hide ${roundLabel}` : `Show ${roundLabel}`;
+    }
+
+    if (nextExpanded) {
+        expandedHistorySegments.add(segmentId);
+    } else {
+        expandedHistorySegments.delete(segmentId);
+    }
+}
+
+function expandHistorySegmentForRun(runId) {
+    const section = document.getElementById(roundSectionId(runId));
+    if (!section) return;
+    const segment = section.closest('.round-history-segment');
+    if (!segment) return;
+    const segmentId = String(segment.dataset.segmentId || '').trim();
+    if (!segmentId || segment.dataset.expanded === 'true') return;
+    toggleHistorySegment(segmentId, true);
+}
+
+function getVisibleRoundSections(container) {
+    return Array.from(container.querySelectorAll('.session-round-section'))
+        .filter(section => section instanceof HTMLElement && section.offsetParent !== null);
 }
 
 function syncPendingRoundSelection(container) {
@@ -512,7 +644,7 @@ async function loadOlderRounds() {
         logError(
             'frontend.rounds.load_older_failed',
             'Failed loading older rounds',
-            errorToPayload(e, { session_id: sessionId }),
+            errorToPayload(e, { session_id: state.currentSessionId }),
         );
         roundsState.paging.loading = false;
     }

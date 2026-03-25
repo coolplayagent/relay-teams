@@ -111,6 +111,23 @@ class _AgentRunResult(Protocol):
     def usage(self) -> object: ...
 
 
+def _resolve_allowed_tools(
+    tool_registry: object,
+    allowed_tools: tuple[str, ...],
+    *,
+    session_id: str,
+) -> tuple[str, ...]:
+    if not allowed_tools:
+        return ()
+    try:
+        return cast(ToolRegistry, tool_registry).resolve_names(
+            allowed_tools,
+            context=ToolResolutionContext(session_id=session_id),
+        )
+    except AttributeError:
+        return allowed_tools
+
+
 class AgentLlmSession:
     def __init__(
         self,
@@ -259,9 +276,10 @@ class AgentLlmSession:
             base_url=self._config.base_url,
             api_key=self._config.api_key,
             system_prompt=agent_system_prompt,
-            allowed_tools=self._tool_registry.resolve_names(
+            allowed_tools=_resolve_allowed_tools(
+                self._tool_registry,
                 self._allowed_tools,
-                context=ToolResolutionContext(session_id=request.session_id),
+                session_id=request.session_id,
             ),
             model_settings=model_settings,
             model_profile=resolve_openai_chat_model_profile(

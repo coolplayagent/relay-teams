@@ -14,16 +14,26 @@ from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
+from agent_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 
 
 class MessageRepository:
     """Persists conversation-safe LLM message history."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
+    ) -> None:
         self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = RLock()
+        self._session_history_marker_repo = session_history_marker_repo
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -135,23 +145,30 @@ class MessageRepository:
 
     def get_history(self, instance_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT message_json FROM messages WHERE instance_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
     def get_history_for_conversation(self, conversation_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT message_json FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
         )
 
-    def get_messages_by_session(self, session_id: str) -> list[dict[str, JsonValue]]:
+    def get_messages_by_session(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+    ) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
                 "FROM messages WHERE session_id=? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
+        if not include_cleared:
+            rows = self._filter_rows_for_active_segments(rows)
         rows = _truncate_message_rows_to_safe_boundary(rows)
 
         results: list[dict[str, JsonValue]] = []
@@ -173,14 +190,20 @@ class MessageRepository:
         return _dedupe_duplicate_objective_messages(results)
 
     def get_messages_for_instance(
-        self, session_id: str, instance_id: str
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        include_cleared: bool = False,
     ) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
                 "FROM messages WHERE session_id=? AND instance_id=? ORDER BY id ASC",
                 (session_id, instance_id),
             ).fetchall()
+        if not include_cleared:
+            rows = self._filter_rows_for_active_segments(rows)
         rows = _truncate_message_rows_to_safe_boundary(rows)
 
         results: list[dict[str, JsonValue]] = []
@@ -215,13 +238,13 @@ class MessageRepository:
 
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
-            "SELECT id, message_json FROM messages WHERE instance_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
         self._prune_to_safe_boundary(
-            "SELECT id, message_json FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
         )
 
@@ -235,14 +258,15 @@ class MessageRepository:
 
         def operation() -> None:
             rows = self._conn.execute(
-                "SELECT id FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                "SELECT id, session_id, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
                 (conversation_id,),
             ).fetchall()
-            if len(rows) <= safe_keep_count:
+            active_rows = self._filter_rows_for_active_segments(rows)
+            if len(active_rows) <= safe_keep_count:
                 return
             stale_ids = [
                 int(row["id"])
-                for row in rows[:-safe_keep_count]
+                for row in active_rows[:-safe_keep_count]
                 if isinstance(row["id"], int)
             ]
             if not stale_ids:
@@ -289,13 +313,14 @@ class MessageRepository:
 
         def operation() -> bool:
             rows = self._conn.execute(
-                "SELECT id, message_json FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                "SELECT id, session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
                 (resolved_conversation_id,),
             ).fetchall()
-            allowed_ids = _safe_row_ids(rows)
+            active_rows = self._filter_rows_for_active_segments(rows)
+            allowed_ids = _safe_row_ids(active_rows)
             stale_ids = [
                 int(row["id"])
-                for row in rows
+                for row in active_rows
                 if isinstance(row["id"], int) and int(row["id"]) not in allowed_ids
             ]
             if stale_ids:
@@ -341,7 +366,7 @@ class MessageRepository:
         self, instance_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT message_json FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
             (instance_id, task_id),
         )
 
@@ -349,7 +374,7 @@ class MessageRepository:
         self, conversation_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT message_json FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
             (conversation_id, task_id),
         )
 
@@ -360,6 +385,7 @@ class MessageRepository:
     ) -> list[ModelMessage]:
         with self._lock:
             rows = self._conn.execute(query, params).fetchall()
+        rows = self._filter_rows_for_active_segments(rows)
         result: list[ModelMessage] = []
         for row in rows:
             msgs = ModelMessagesTypeAdapter.validate_json(
@@ -375,12 +401,13 @@ class MessageRepository:
     ) -> None:
         def operation() -> None:
             rows = self._conn.execute(query, params).fetchall()
-            if not rows:
+            active_rows = self._filter_rows_for_active_segments(rows)
+            if not active_rows:
                 return
-            allowed_ids = _safe_row_ids(rows)
+            allowed_ids = _safe_row_ids(active_rows)
             stale_ids = [
                 int(row["id"])
-                for row in rows
+                for row in active_rows
                 if isinstance(row["id"], int) and int(row["id"]) not in allowed_ids
             ]
             if not stale_ids:
@@ -399,6 +426,54 @@ class MessageRepository:
             repository_name="MessageRepository",
             operation_name="prune_to_safe_boundary",
         )
+
+    def _filter_rows_for_active_segments(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> list[sqlite3.Row]:
+        if self._session_history_marker_repo is None or not rows:
+            return list(rows)
+
+        cutoff_by_session = self._latest_clear_cutoff_by_session(rows)
+        if not cutoff_by_session:
+            return list(rows)
+
+        filtered: list[sqlite3.Row] = []
+        for row in rows:
+            session_id = str(row["session_id"] or "")
+            if not session_id:
+                filtered.append(row)
+                continue
+            cutoff = cutoff_by_session.get(session_id)
+            if cutoff is None:
+                filtered.append(row)
+                continue
+            created_at = str(row["created_at"] or "")
+            if created_at > cutoff:
+                filtered.append(row)
+        return filtered
+
+    def _latest_clear_cutoff_by_session(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> dict[str, str]:
+        if self._session_history_marker_repo is None:
+            return {}
+        session_ids = {
+            str(row["session_id"] or "") for row in rows if str(row["session_id"] or "")
+        }
+        if not session_ids:
+            return {}
+        cutoffs: dict[str, str] = {}
+        for session_id in session_ids:
+            latest_clear = self._session_history_marker_repo.get_latest(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is None:
+                continue
+            cutoffs[session_id] = latest_clear.created_at.isoformat()
+        return cutoffs
 
 
 def _role(msg: ModelMessage) -> str:

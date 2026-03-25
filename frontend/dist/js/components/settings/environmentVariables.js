@@ -437,13 +437,23 @@ function renderEnvironmentActionMode(isEditing) {
     }
 }
 
+function isTextareaLike(element) {
+    return Boolean(
+        element &&
+            typeof element === 'object' &&
+            typeof element.style === 'object' &&
+            typeof element.value === 'string',
+    );
+}
+
 function autosizeEnvironmentValueInput() {
     const valueInput = document.getElementById('env-value-input');
-    if (!(valueInput instanceof HTMLTextAreaElement)) {
+    if (!isTextareaLike(valueInput)) {
         return;
     }
+    const scrollHeight = Number(valueInput.scrollHeight);
     valueInput.style.height = 'auto';
-    valueInput.style.height = `${Math.max(valueInput.scrollHeight, 88)}px`;
+    valueInput.style.height = `${Math.max(Number.isFinite(scrollHeight) ? scrollHeight : 0, 88)}px`;
 }
 
 function focusEnvironmentEditorIfNeeded() {
@@ -452,7 +462,10 @@ function focusEnvironmentEditorIfNeeded() {
     }
     autosizeEnvironmentValueInput();
     const valueInput = document.getElementById('env-value-input');
-    if (valueInput instanceof HTMLTextAreaElement) {
+    if (
+        isTextareaLike(valueInput) &&
+        typeof valueInput.addEventListener === 'function'
+    ) {
         valueInput.addEventListener('input', autosizeEnvironmentValueInput);
     }
     const keyInput = document.getElementById('env-key-input');

@@ -570,7 +570,7 @@ class FeishuTriggerHandler:
             "",
             "help   - Show this help message",
             "status - Show current session info",
-            "clear  - Clear message history",
+            "clear  - Reset the current conversation context",
         ]
         return "\n".join(lines)
 
@@ -637,7 +637,10 @@ class FeishuTriggerHandler:
             )
             return "[Clear] Failed to clear messages."
 
-        return f"[Clear] Cleared {count} messages."
+        return (
+            f"[Clear] Cleared {count} active messages. "
+            "Earlier history remains available."
+        )
 
     def _resolve_existing_session_id(
         self,

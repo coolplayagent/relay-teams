@@ -1658,6 +1658,62 @@
     scroll-margin-top: 0.75rem;
 }
 
+.round-history-segment {
+    display: flex;
+    flex-direction: column;
+}
+
+.round-history-segment-body[hidden] {
+    display: none;
+}
+
+.round-clear-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    width: 100%;
+    margin: 0.15rem 0 1.9rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.round-clear-divider:hover .round-clear-divider-chip {
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border-color));
+    color: var(--text-primary);
+}
+
+.round-clear-divider-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.round-clear-divider-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 78%, transparent);
+    transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.round-clear-divider-title {
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.round-clear-divider-copy {
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
 .session-round-section.round-section-emphasis .round-detail-header {
     border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
     background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);
@@ -5065,6 +5121,7 @@ body.light-theme .session-item,
 body.light-theme .round-item,
 body.light-theme .project-card,
 body.light-theme .round-detail-header,
+body.light-theme .round-clear-divider-chip,
 body.light-theme .system-intro,
 body.light-theme .human-dispatch-panel,
 body.light-theme .gate-card,
@@ -5107,6 +5164,10 @@ body.light-theme .round-nav-item.active {
 
 body.light-theme .session-item.active {
     background: color-mix(in srgb, var(--primary) 7%, var(--bg-surface-muted) 93%);
+}
+
+body.light-theme .round-clear-divider-line {
+    background: color-mix(in srgb, var(--border-color) 78%, transparent);
 }
 
 body.light-theme .project-path,

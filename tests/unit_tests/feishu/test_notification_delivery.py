@@ -49,7 +49,9 @@ class _FakeRuntimeConfigLookup:
     def __init__(self, runtime_config: FeishuTriggerRuntimeConfig | None) -> None:
         self.runtime_config = runtime_config
 
-    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> FeishuTriggerRuntimeConfig | None:
+    def get_runtime_config_by_trigger_id(
+        self, trigger_id: str
+    ) -> FeishuTriggerRuntimeConfig | None:
         if self.runtime_config is None:
             return None
         if self.runtime_config.trigger_id != trigger_id:

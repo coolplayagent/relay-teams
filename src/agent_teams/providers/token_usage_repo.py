@@ -9,6 +9,10 @@ from threading import RLock
 from pydantic import BaseModel, ConfigDict
 
 from agent_teams.persistence.db import open_sqlite
+from agent_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 
 
 class TokenUsageRecord(BaseModel):
@@ -79,10 +83,16 @@ class TokenUsageRepository:
         "tool_calls",
     )
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
+    ) -> None:
         self._conn = open_sqlite(db_path)
         self._conn.row_factory = sqlite3.Row
         self._lock = RLock()
+        self._session_history_marker_repo = session_history_marker_repo
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -245,11 +255,24 @@ class TokenUsageRepository:
             by_agent=agents,
         )
 
-    def get_by_session(self, session_id: str) -> SessionTokenUsage:
+    def get_by_session(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+    ) -> SessionTokenUsage:
+        query = "SELECT * FROM token_usage WHERE session_id=?"
+        params: tuple[str, ...] = (session_id,)
+        if not include_cleared:
+            cutoff = self._latest_clear_cutoff(session_id)
+            if cutoff is not None:
+                query += " AND recorded_at>?"
+                params = (session_id, cutoff)
+        query += " ORDER BY id ASC"
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM token_usage WHERE session_id=? ORDER BY id ASC",
-                (session_id,),
+                query,
+                params,
             ).fetchall()
 
         by_role: dict[str, AgentTokenSummary] = {}
@@ -314,6 +337,17 @@ class TokenUsageRepository:
                 "DELETE FROM token_usage WHERE session_id=?", (session_id,)
             )
             self._conn.commit()
+
+    def _latest_clear_cutoff(self, session_id: str) -> str | None:
+        if self._session_history_marker_repo is None:
+            return None
+        latest_clear = self._session_history_marker_repo.get_latest(
+            session_id,
+            marker_type=SessionHistoryMarkerType.CLEAR,
+        )
+        if latest_clear is None:
+            return None
+        return latest_clear.created_at.isoformat()
 
     def _sanitize_numeric_columns(self) -> None:
         assignments = ", ".join(

@@ -11,12 +11,14 @@ def test_upsert_and_get_binding(tmp_path: Path) -> None:
 
     created = repo.upsert_binding(
         platform="feishu",
+        trigger_id="trigger-1",
         tenant_key="tenant-1",
         external_chat_id="chat-1",
         session_id="session-1",
     )
     loaded = repo.get_binding(
         platform="feishu",
+        trigger_id="trigger-1",
         tenant_key="tenant-1",
         external_chat_id="chat-1",
     )
@@ -30,6 +32,7 @@ def test_upsert_updates_existing_binding(tmp_path: Path) -> None:
     repo = ExternalSessionBindingRepository(tmp_path / "bindings.db")
     _ = repo.upsert_binding(
         platform="feishu",
+        trigger_id="trigger-1",
         tenant_key="tenant-1",
         external_chat_id="chat-1",
         session_id="session-1",
@@ -37,6 +40,7 @@ def test_upsert_updates_existing_binding(tmp_path: Path) -> None:
 
     updated = repo.upsert_binding(
         platform="feishu",
+        trigger_id="trigger-1",
         tenant_key="tenant-1",
         external_chat_id="chat-1",
         session_id="session-2",

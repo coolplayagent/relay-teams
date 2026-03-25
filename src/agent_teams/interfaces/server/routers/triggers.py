@@ -103,7 +103,9 @@ def get_trigger(
     ],
 ) -> TriggerDefinition:
     try:
-        return feishu_config_service.attach_secret_status(service.get_trigger(trigger_id))
+        return feishu_config_service.attach_secret_status(
+            service.get_trigger(trigger_id)
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -125,9 +127,11 @@ def update_trigger(
         reload_required = False
         feishu_config_service.validate_update_request(existing=existing, request=req)
         if _is_feishu_im_trigger(existing):
-            reload_required = feishu_config_service.subscription_runtime_changed_for_update(
-                existing=existing,
-                request=req,
+            reload_required = (
+                feishu_config_service.subscription_runtime_changed_for_update(
+                    existing=existing,
+                    request=req,
+                )
             )
         updated = service.update_trigger(trigger_id, req)
         if _is_feishu_im_trigger(updated):
