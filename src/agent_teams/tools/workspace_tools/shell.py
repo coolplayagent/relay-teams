@@ -26,6 +26,7 @@ from agent_teams.workspace import WorkspaceHandle
 MAX_OUTPUT_CHARS = 64_000
 MAX_METADATA_LENGTH = 30_000
 DESCRIPTION = load_tool_description(__file__)
+CURRENT_ROLE_ENV_KEY = "AGENT_TEAMS_CURRENT_ROLE_ID"
 
 
 def _format_timeout_metadata(timeout_ms: int) -> str:
@@ -120,6 +121,7 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
                     command=command,
                     cwd=cwd,
                     timeout_ms=timeout,
+                    env={CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
                 ):
                     if stream_type == "stdout":
                         stdout_parts.append(data)

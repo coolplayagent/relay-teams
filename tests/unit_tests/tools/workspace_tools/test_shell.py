@@ -338,6 +338,48 @@ async def test_spawn_shell_creates_process_group(monkeypatch) -> None:
         assert captured_kwargs.get("start_new_session") is True
 
 
+@pytest.mark.asyncio
+async def test_spawn_shell_passes_role_env_to_subprocess(monkeypatch) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_kwargs: dict[str, object] = {}
+    proc = _FakeProcess()
+
+    async def capturing_factory(*args: object, **kwargs: object) -> _FakeProcess:
+        captured_kwargs.update(kwargs)
+
+        async def _feed() -> None:
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+            await asyncio.sleep(0.01)
+            proc.returncode = 0
+            proc._wait_event.set()
+
+        asyncio.create_task(_feed())
+        return proc
+
+    monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
+    monkeypatch.setattr(
+        shell_executor.asyncio,
+        "create_subprocess_exec",
+        capturing_factory,
+    )
+
+    _ = [
+        item
+        async for item in shell_executor.spawn_shell(
+            command="true",
+            cwd=Path("."),
+            timeout_ms=100,
+            env={"AGENT_TEAMS_CURRENT_ROLE_ID": "Crafter"},
+        )
+    ]
+
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env["AGENT_TEAMS_CURRENT_ROLE_ID"] == "Crafter"
+
+
 # ---------------------------------------------------------------------------
 # shell_policy: command length
 # ---------------------------------------------------------------------------

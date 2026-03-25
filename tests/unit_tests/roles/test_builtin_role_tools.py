@@ -20,6 +20,7 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "websearch" in crafter.tools
     assert "webfetch" in main_agent.tools
     assert "websearch" in main_agent.tools
+    assert "skill-installer" in main_agent.skills
     assert "write_tmp" in designer.tools
     assert "write" not in designer.tools
     assert "write_tmp" in explorer.tools

@@ -4,6 +4,8 @@ name: Main Agent
 description: Executes the full user request directly in normal mode.
 model_profile: default
 version: 1.0.0
+skills:
+  - skill-installer
 tools:
   - grep
   - glob

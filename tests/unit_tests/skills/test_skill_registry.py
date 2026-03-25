@@ -8,6 +8,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
+from agent_teams.builtin import get_builtin_skills_dir
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.skill_models import SkillScope
@@ -181,6 +182,22 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
 
     assert (app_config_dir / "skills").is_dir()
     assert registry.list_skill_definitions() == ()
+
+
+def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> None:
+    registry = SkillRegistry.from_skill_dirs(
+        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        builtin_skills_dir=get_builtin_skills_dir(),
+    )
+
+    skill = registry.get_skill_definition("skill-installer")
+
+    assert skill is not None
+    assert skill.scope == SkillScope.BUILTIN
+    assert tuple(sorted(skill.metadata.scripts.keys())) == (
+        "install-skill-from-github",
+        "list-skills",
+    )
 
 
 def test_load_skill_returns_manifest_and_absolute_file_paths(tmp_path: Path) -> None:
