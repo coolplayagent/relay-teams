@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cool-play-agent-teams"
-version = "0.0.1"
+version = "0.0.2"
 description = "Role-driven multi-agent framework with strong typing and tool-based collaboration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -58,6 +58,7 @@ where = ["src"]
 "agent_teams.tools.task_tools" = ["*.txt"]
 "agent_teams.tools.web_tools" = ["*.txt"]
 "agent_teams.tools.workspace_tools" = ["*.txt"]
+"agent_teams.tools.feishu_tools" = ["*.txt"]
 
 [dependency-groups]
 evals = [
