@@ -34,6 +34,7 @@ def test_workspace_manager_uses_worktree_root_for_git_worktree_workspace(
     )
     manager = WorkspaceManager(
         project_root=tmp_path,
+        app_config_dir=tmp_path / ".agent-teams",
         workspace_repo=WorkspaceRepository(db_path),
     )
 
@@ -56,7 +57,9 @@ def test_workspace_manager_uses_worktree_root_for_git_worktree_workspace(
             workspace_id="alpha-project-fork",
             session_id="session-1",
         )
-        == worktree_root.resolve() / ".agent_teams" / "sessions" / "session-1"
+        == (
+            tmp_path / ".agent-teams" / "sessions" / "alpha-project-fork" / "session-1"
+        ).resolve()
     )
 
 
@@ -66,7 +69,7 @@ def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
     db_path = tmp_path / "workspace.db"
     project_root = tmp_path / "project"
     builtin_skills_dir = tmp_path / "builtin" / "skills"
-    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
+    app_skills_dir = tmp_path / ".agent-teams" / "skills"
     project_root.mkdir(parents=True)
     builtin_skills_dir.mkdir(parents=True)
     app_skills_dir.mkdir(parents=True)
@@ -78,6 +81,7 @@ def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
     )
     manager = WorkspaceManager(
         project_root=project_root,
+        app_config_dir=tmp_path / ".agent-teams",
         workspace_repo=WorkspaceRepository(db_path),
         builtin_skills_dir=builtin_skills_dir,
         app_skills_dir=app_skills_dir,

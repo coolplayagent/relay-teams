@@ -20,7 +20,7 @@ mcp_app = typer.Typer(
     help=(
         "Inspect MCP servers from the app config directory.\n\n"
         "Config file:\n"
-        "1. ~/.config/agent-teams/mcp.json (app scope)\n\n"
+        "1. ~/.agent-teams/mcp.json (app scope)\n\n"
         "Common usage:\n"
         "- agent-teams mcp list\n"
         "- agent-teams mcp list --format json\n"

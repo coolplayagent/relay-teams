@@ -8,7 +8,7 @@ from agent_teams.env import runtime_env
 
 def test_load_merged_env_vars_reads_app_env_file(tmp_path: Path) -> None:
     user_home = tmp_path / "home"
-    app_env_dir = user_home / ".config" / "agent-teams"
+    app_env_dir = user_home / ".agent-teams"
     app_env_dir.mkdir(parents=True)
     (app_env_dir / ".env").write_text(
         "APP_ONLY=one\nSHARED_KEY=app\n", encoding="utf-8"
@@ -28,7 +28,7 @@ def test_get_env_var_process_env_has_highest_priority(
     monkeypatch,
 ) -> None:
     user_home = tmp_path / "home"
-    app_env_dir = user_home / ".config" / "agent-teams"
+    app_env_dir = user_home / ".agent-teams"
     app_env_dir.mkdir(parents=True)
     (app_env_dir / ".env").write_text("ENV_KEY=app\n", encoding="utf-8")
     monkeypatch.setenv("ENV_KEY", "process")
@@ -67,7 +67,7 @@ def test_get_env_var_returns_default_when_missing(tmp_path: Path) -> None:
 
 
 def test_get_app_env_file_path_uses_app_config_dir(monkeypatch, tmp_path: Path) -> None:
-    config_dir = tmp_path.resolve() / ".config" / "agent-teams"
+    config_dir = tmp_path.resolve() / ".agent-teams"
     monkeypatch.setattr(runtime_env, "get_app_config_dir", lambda **kwargs: config_dir)
 
     env_file_path = runtime_env.get_app_env_file_path()
@@ -79,7 +79,7 @@ def test_sync_app_env_to_process_env_applies_and_removes_managed_keys(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    env_file = tmp_path / ".config" / "agent-teams" / ".env"
+    env_file = tmp_path / ".agent-teams" / ".env"
     env_file.parent.mkdir(parents=True)
     env_file.write_text("SYNCED_KEY=from-file\n", encoding="utf-8")
     monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
@@ -101,7 +101,7 @@ def test_sync_app_env_to_process_env_restores_baseline_values(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    env_file = tmp_path / ".config" / "agent-teams" / ".env"
+    env_file = tmp_path / ".agent-teams" / ".env"
     env_file.parent.mkdir(parents=True)
     env_file.write_text("RESTORE_KEY=overlay\n", encoding="utf-8")
     monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {"RESTORE_KEY": "base"})

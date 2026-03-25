@@ -113,7 +113,7 @@ class ArtifactCollector:
     def _collect_container_db(
         self, artifact_dir: Path, workspace: PreparedWorkspace
     ) -> None:
-        db_src = "/root/.config/agent-teams/agent_teams.db"
+        db_src = "/root/.agent-teams/agent_teams.db"
         db_dest = artifact_dir / "agent_teams.db"
         try:
             container_id = workspace.container_id or ""

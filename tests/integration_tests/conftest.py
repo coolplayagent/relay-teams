@@ -56,7 +56,7 @@ def integration_env(
 ) -> Iterator[IntegrationEnvironment]:
     repo_root = Path(__file__).resolve().parent.parent.parent
     runtime_root = tmp_path_factory.mktemp("agent-teams-integration")
-    config_dir = runtime_root / ".config" / "agent-teams"
+    config_dir = runtime_root / ".agent-teams"
 
     fake_llm_port = find_free_port()
     backend_port = find_free_port()

@@ -16,7 +16,7 @@ class AgentTeamsConfig(AgentConfig):
     session_mode: Literal["normal", "orchestration"] = "normal"
     orchestration_preset_id: str | None = None
     yolo: bool = True
-    # Docker mode: mount this directory as ~/.config/agent-teams inside the container.
+    # Docker mode: mount this directory as ~/.agent-teams inside the container.
     # Controls which model, role and system prompt the agent uses.
     # None = use whatever config is already present in the container.
     config_dir: Path | None = None

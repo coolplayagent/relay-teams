@@ -1,6 +1,6 @@
 ---
 name: skill-installer
-description: Install Agent Teams skills into ~/.config/agent-teams/skills from a curated list, a GitHub repo/path, or a SkillsMP skill page URL. Use when a user asks what skills are available, wants to install a curated or experimental skill, provides a GitHub skill path, or shares a https://skillsmp.com/zh skill page.
+description: Install Agent Teams skills into ~/.agent-teams/skills from a curated list, a GitHub repo/path, or a SkillsMP skill page URL. Use when a user asks what skills are available, wants to install a curated or experimental skill, provides a GitHub skill path, or shares a https://skillsmp.com/zh skill page.
 ---
 Install skills with the helper scripts in this skill directory.
 
@@ -55,7 +55,7 @@ Communication rules:
 
 Behavior:
 
-- Default install destination is `~/.config/agent-teams/skills/<skill-name>`.
+- Default install destination is `~/.agent-teams/skills/<skill-name>`.
 - Binding defaults to the current running role.
 - If no runtime role context is available during binding, fall back to `MainAgent`.
 - Listing annotates already-installed skills from the current effective Agent Teams skill registry.

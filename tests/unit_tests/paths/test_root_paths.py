@@ -212,7 +212,7 @@ def test_get_project_config_dir_uses_project_root_when_available(
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".config" / "agent-teams"
+    assert config_dir == user_home_dir / ".agent-teams"
 
 
 def test_get_project_config_dir_falls_back_to_cwd_when_git_root_is_missing(
@@ -224,7 +224,7 @@ def test_get_project_config_dir_falls_back_to_cwd_when_git_root_is_missing(
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".config" / "agent-teams"
+    assert config_dir == user_home_dir / ".agent-teams"
 
 
 def test_get_project_config_dir_prefers_cwd_local_config_over_git_root(
@@ -236,7 +236,7 @@ def test_get_project_config_dir_prefers_cwd_local_config_over_git_root(
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".config" / "agent-teams"
+    assert config_dir == user_home_dir / ".agent-teams"
 
 
 def test_get_project_config_dir_uses_project_root_override() -> None:
@@ -244,7 +244,7 @@ def test_get_project_config_dir_uses_project_root_override() -> None:
 
     config_dir = root_paths.get_project_config_dir(project_root=user_home_dir)
 
-    assert config_dir == Path.home().resolve() / ".config" / "agent-teams"
+    assert config_dir == Path.home().resolve() / ".agent-teams"
 
 
 def test_get_user_home_dir_returns_resolved_home() -> None:
@@ -257,7 +257,7 @@ def test_get_user_config_dir_uses_resolved_home(monkeypatch, tmp_path: Path) -> 
 
     config_dir = root_paths.get_user_config_dir()
 
-    assert config_dir == user_home_dir / ".config" / "agent-teams"
+    assert config_dir == user_home_dir / ".agent-teams"
 
 
 def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
@@ -265,7 +265,7 @@ def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
 
     config_dir = root_paths.get_user_config_dir(user_home_dir=user_home_dir)
 
-    assert config_dir == user_home_dir.resolve() / ".config" / "agent-teams"
+    assert config_dir == user_home_dir.resolve() / ".agent-teams"
 
 
 def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> None:
@@ -274,7 +274,7 @@ def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> N
 
     config_dir = root_paths.get_project_config_dir(project_root=unresolved_project_root)
 
-    assert config_dir == Path.home().resolve() / ".config" / "agent-teams"
+    assert config_dir == Path.home().resolve() / ".agent-teams"
 
 
 def test_resolve_start_dir_defaults_to_cwd(monkeypatch, tmp_path: Path) -> None:

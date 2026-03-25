@@ -14,7 +14,7 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -47,7 +47,7 @@ def test_load_runtime_config_ignores_roles_dir_env_override(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -76,7 +76,7 @@ def test_load_runtime_config_reports_missing_model_config_without_raising(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     monkeypatch.setattr(runtime_config, "load_merged_env_vars", lambda **kwargs: {})
 
@@ -89,7 +89,7 @@ def test_load_runtime_config_reports_missing_model_config_without_raising(
 
 
 def test_load_runtime_config_reads_prompt_instructions(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -114,7 +114,7 @@ def test_load_runtime_config_reads_prompt_instructions(tmp_path: Path) -> None:
 
 
 def test_load_runtime_config_rejects_invalid_prompts_config(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "prompts.json").write_text(
         json.dumps({"instructions": [1]}),
@@ -179,7 +179,7 @@ def test_load_llm_configs_reads_bigmodel_provider_field(tmp_path: Path) -> None:
 def test_load_runtime_config_reads_explicit_default_profile_name(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -208,7 +208,7 @@ def test_load_runtime_config_reads_explicit_default_profile_name(
 def test_load_runtime_config_uses_first_profile_when_no_default_is_marked(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(
@@ -236,7 +236,7 @@ def test_load_runtime_config_uses_first_profile_when_no_default_is_marked(
 def test_load_runtime_config_rejects_multiple_explicit_default_profiles(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / "model.json").write_text(
         json.dumps(

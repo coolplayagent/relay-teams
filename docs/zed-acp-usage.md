@@ -39,11 +39,11 @@ uv sync --extra dev
 
 At minimum, complete the normal Agent Teams runtime setup first:
 
-- `~/.config/agent-teams/model.json`
-- optionally `~/.config/agent-teams/.env`
-- optionally `~/.config/agent-teams/prompts.json`
+- `~/.agent-teams/model.json`
+- optionally `~/.agent-teams/.env`
+- optionally `~/.agent-teams/prompts.json`
 - optionally one global instruction file:
-  - `~/.config/agent-teams/AGENTS.md`
+  - `~/.agent-teams/AGENTS.md`
   - otherwise `~/.claude/CLAUDE.md`
   - otherwise `~/.gemini/GEMINI.md`
 

@@ -22,7 +22,7 @@ from agent_teams.trace import bind_trace_context, trace_span
 def test_configure_logging_creates_backend_debug_and_frontend_logs(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -39,7 +39,7 @@ def test_configure_logging_uses_app_log_dir_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     log_dir = config_dir / "log"
     snapshot = _RootLoggerSnapshot.take()
     monkeypatch.setattr(logger_module, "get_app_config_dir", lambda: config_dir)
@@ -58,7 +58,7 @@ def test_configure_logging_uses_app_log_dir_by_default(
 def test_log_event_writes_human_readable_backend_log_with_trace_context(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -98,7 +98,7 @@ def test_log_event_writes_human_readable_backend_log_with_trace_context(
 
 
 def test_frontend_logger_writes_only_frontend_file(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -125,7 +125,7 @@ def test_frontend_logger_writes_only_frontend_file(tmp_path: Path) -> None:
 
 
 def test_debug_events_write_only_to_debug_log(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -148,7 +148,7 @@ def test_debug_events_write_only_to_debug_log(tmp_path: Path) -> None:
 
 
 def test_uvicorn_access_logs_are_excluded_from_backend_log(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -169,7 +169,7 @@ def test_log_level_filters_lower_priority_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     monkeypatch.setenv("AGENT_TEAMS_LOG_LEVEL", "WARNING")
     try:
@@ -203,7 +203,7 @@ def test_log_level_filters_lower_priority_events(
 
 
 def test_shutdown_logging_flushes_pending_events(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)
@@ -226,7 +226,7 @@ def test_shutdown_logging_flushes_pending_events(tmp_path: Path) -> None:
 def test_backend_logger_handles_concurrent_writes_without_losing_lines(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     snapshot = _RootLoggerSnapshot.take()
     try:
         configure_logging(config_dir=config_dir)

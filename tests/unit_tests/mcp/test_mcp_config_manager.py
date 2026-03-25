@@ -32,7 +32,7 @@ def _set_test_app_config_dir(monkeypatch, config_dir: Path) -> None:
 
 
 def test_load_registry_reads_app_scope_only(tmp_path: Path) -> None:
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
     (app_config_dir / "mcp.json").write_text(
         json.dumps(
@@ -64,7 +64,7 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
     monkeypatch,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
     _set_test_app_config_dir(monkeypatch, app_config_dir)
 
@@ -118,7 +118,7 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
     monkeypatch,
 ) -> None:
     _clear_proxy_env(monkeypatch)
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
     _set_test_app_config_dir(monkeypatch, app_config_dir)
     (app_config_dir / ".env").write_text(
@@ -155,7 +155,7 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
 
 
 def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
     content = json.dumps(
         {
@@ -180,7 +180,7 @@ def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
 def test_get_mcp_file_paths_follow_scope_conventions(
     monkeypatch,
 ) -> None:
-    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
+    app_config_dir = Path("D:/home/.agent-teams").resolve()
     monkeypatch.setattr(
         config_manager,
         "get_app_config_dir",

@@ -26,6 +26,7 @@ class WorkspaceManager(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     project_root: Path
+    app_config_dir: Path | None = None
     workspace_repo: WorkspaceRepository | None = None
     shared_store: object | None = None
     builtin_skills_dir: Path | None = None
@@ -65,7 +66,7 @@ class WorkspaceManager(BaseModel):
 
     def locations_for(self, workspace_id: str) -> WorkspaceLocations:
         record = self._resolve_record(workspace_id, None)
-        config_dir = get_project_config_dir(project_root=record.root_path)
+        config_dir = self._resolve_app_config_dir(project_root=record.root_path)
         return WorkspaceLocations(
             workspace_dir=config_dir / "workspaces" / workspace_id,
             execution_root=record.root_path,
@@ -80,8 +81,8 @@ class WorkspaceManager(BaseModel):
 
     def session_artifact_dir(self, *, workspace_id: str, session_id: str) -> Path:
         record = self._resolve_record(workspace_id, None)
-        filesystem_root = self._filesystem_root_for_record(record)
-        return filesystem_root / ".agent_teams" / "sessions" / session_id
+        config_dir = self._resolve_app_config_dir(project_root=record.root_path)
+        return config_dir / "sessions" / workspace_id / session_id
 
     def _resolve_locations(
         self,
@@ -191,7 +192,7 @@ class WorkspaceManager(BaseModel):
             profile=profile or default_workspace_profile(),
         )
 
-    def _filesystem_root_for_record(self, record: WorkspaceRecord) -> Path:
-        if record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE:
-            return record.root_path
-        return record.root_path
+    def _resolve_app_config_dir(self, *, project_root: Path) -> Path:
+        if self.app_config_dir is not None:
+            return self.app_config_dir.expanduser().resolve()
+        return get_project_config_dir(project_root=project_root)

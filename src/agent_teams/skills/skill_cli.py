@@ -23,7 +23,7 @@ skills_app = typer.Typer(
         "Inspect skills discovered from built-in defaults and the app directory.\n\n"
         "Load order:\n"
         "1. built-in skills (builtin scope)\n"
-        "2. ~/.config/agent-teams/skills (app scope, overrides builtin skills with the same name)\n\n"
+        "2. ~/.agent-teams/skills (app scope, overrides builtin skills with the same name)\n\n"
         "Common usage:\n"
         "- agent-teams skills list\n"
         "- agent-teams skills list --source app --format json\n"

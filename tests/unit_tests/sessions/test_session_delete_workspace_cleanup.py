@@ -30,7 +30,12 @@ from agent_teams.workspace import (
 )
 
 
-def _build_service(db_path: Path, project_root: Path) -> SessionService:
+def _build_service(
+    db_path: Path,
+    project_root: Path,
+    *,
+    app_config_dir: Path,
+) -> SessionService:
     shared_store = SharedStateRepository(db_path)
     workspace_repo = WorkspaceRepository(db_path)
     workspace_service = WorkspaceService(repository=workspace_repo)
@@ -51,6 +56,7 @@ def _build_service(db_path: Path, project_root: Path) -> SessionService:
         shared_store=shared_store,
         workspace_manager=WorkspaceManager(
             project_root=project_root,
+            app_config_dir=app_config_dir,
             shared_store=shared_store,
             workspace_repo=workspace_repo,
         ),
@@ -62,7 +68,11 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
     db_path = tmp_path / "session_cleanup.db"
-    service = _build_service(db_path, project_root)
+    service = _build_service(
+        db_path,
+        project_root,
+        app_config_dir=tmp_path / ".agent-teams",
+    )
     session = service.create_session(session_id="session-1", workspace_id="default")
     conversation_id = build_conversation_id("session-1", "time")
     workspace_id = "default"
@@ -87,6 +97,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     shared_store = SharedStateRepository(db_path)
     workspace_manager = WorkspaceManager(
         project_root=project_root,
+        app_config_dir=tmp_path / ".agent-teams",
         shared_store=shared_store,
         workspace_repo=WorkspaceRepository(db_path),
     )

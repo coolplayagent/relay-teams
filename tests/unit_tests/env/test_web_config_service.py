@@ -37,7 +37,7 @@ class _FakeWebSecretStore(WebSecretStore):
 
 
 def test_get_web_config_defaults_to_exa_without_api_key(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     service = WebConfigService(
         config_dir=config_dir,
@@ -54,7 +54,7 @@ def test_save_web_config_persists_provider_and_keyring_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     secret_store = _FakeWebSecretStore()
     monkeypatch.setattr(
@@ -83,7 +83,7 @@ def test_save_web_config_removes_plaintext_api_key_from_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "AGENT_TEAMS_WEB_PROVIDER=exa\nAGENT_TEAMS_WEB_API_KEY=old\n",

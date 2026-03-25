@@ -54,7 +54,7 @@ def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
     tmp_path: Path,
 ) -> None:
     builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
-    app_skill_dir = tmp_path / ".config" / "agent-teams" / "skills" / "time"
+    app_skill_dir = tmp_path / ".agent-teams" / "skills" / "time"
     builtin_skill_dir.mkdir(parents=True)
     app_skill_dir.mkdir(parents=True)
 
@@ -76,7 +76,7 @@ def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
     )
 
     registry = SkillRegistry.from_skill_dirs(
-        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
         builtin_skills_dir=tmp_path / "builtin" / "skills",
     )
 
@@ -104,7 +104,7 @@ def test_registry_from_skill_dirs_loads_user_skill_when_project_skill_missing(
     )
 
     registry = SkillRegistry.from_skill_dirs(
-        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
         builtin_skills_dir=tmp_path / "builtin" / "skills",
     )
 
@@ -119,7 +119,7 @@ def test_registry_from_config_dirs_merges_builtin_and_app_skills(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     builtin_skills_dir = tmp_path / "builtin" / "skills"
     monkeypatch.setattr(
         "agent_teams.skills.discovery.get_builtin_skills_dir_path",
@@ -172,7 +172,7 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     monkeypatch.setattr(
         "agent_teams.skills.discovery.get_builtin_skills_dir_path",
         lambda: (tmp_path / "builtin" / "skills").resolve(),
@@ -186,7 +186,7 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
 
 def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> None:
     registry = SkillRegistry.from_skill_dirs(
-        app_skills_dir=tmp_path / ".config" / "agent-teams" / "skills",
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
         builtin_skills_dir=get_builtin_skills_dir(),
     )
 

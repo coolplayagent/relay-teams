@@ -73,7 +73,7 @@ class _FakeEnvironmentVariableBackend:
 
 def test_list_environment_variables_sorts_each_scope(tmp_path: Path) -> None:
     backend = _FakeEnvironmentVariableBackend()
-    app_env_file_path = tmp_path / ".config" / "agent-teams" / ".env"
+    app_env_file_path = tmp_path / ".agent-teams" / ".env"
     app_env_file_path.parent.mkdir(parents=True)
     app_env_file_path.write_text("BETA=2\nALPHA=1\n", encoding="utf-8")
     service = EnvironmentVariableService(
@@ -93,7 +93,7 @@ def test_save_environment_variable_rejects_system_scope_mutation(
     backend = _FakeEnvironmentVariableBackend()
     service = EnvironmentVariableService(
         backend=backend,
-        app_env_file_path=tmp_path / ".config" / "agent-teams" / ".env",
+        app_env_file_path=tmp_path / ".agent-teams" / ".env",
     )
 
     with pytest.raises(ValueError, match="read-only"):
@@ -111,7 +111,7 @@ def test_save_environment_variable_renames_and_preserves_value_kind(
     tmp_path: Path,
 ) -> None:
     backend = _FakeEnvironmentVariableBackend()
-    app_env_file_path = tmp_path / ".config" / "agent-teams" / ".env"
+    app_env_file_path = tmp_path / ".agent-teams" / ".env"
     app_env_file_path.parent.mkdir(parents=True)
     app_env_file_path.write_text(
         "Path=%SystemRoot%\\\\system32\\\\cmd.exe\n", encoding="utf-8"
@@ -147,7 +147,7 @@ def test_delete_environment_variable_requires_existing_key(tmp_path: Path) -> No
     backend = _FakeEnvironmentVariableBackend()
     service = EnvironmentVariableService(
         backend=backend,
-        app_env_file_path=tmp_path / ".config" / "agent-teams" / ".env",
+        app_env_file_path=tmp_path / ".agent-teams" / ".env",
     )
 
     with pytest.raises(ValueError, match="not found"):
@@ -161,7 +161,7 @@ def test_delete_environment_variable_rejects_system_scope(tmp_path: Path) -> Non
     backend = _FakeEnvironmentVariableBackend()
     service = EnvironmentVariableService(
         backend=backend,
-        app_env_file_path=tmp_path / ".config" / "agent-teams" / ".env",
+        app_env_file_path=tmp_path / ".agent-teams" / ".env",
     )
 
     with pytest.raises(ValueError, match="read-only"):
@@ -175,7 +175,7 @@ def test_save_environment_variable_rejects_rename_to_existing_key(
     tmp_path: Path,
 ) -> None:
     backend = _FakeEnvironmentVariableBackend()
-    app_env_file_path = tmp_path / ".config" / "agent-teams" / ".env"
+    app_env_file_path = tmp_path / ".agent-teams" / ".env"
     app_env_file_path.parent.mkdir(parents=True)
     app_env_file_path.write_text("BETA=2\nALPHA=1\n", encoding="utf-8")
     service = EnvironmentVariableService(

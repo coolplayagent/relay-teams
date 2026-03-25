@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 
 
-_APP_CONFIG_DIR_RELATIVE = Path(".config") / "agent-teams"
+_APP_CONFIG_DIR_NAME = ".agent-teams"
 _GIT_TOPLEVEL_CMD: tuple[str, str, str] = ("git", "rev-parse", "--show-toplevel")
 _GIT_TIMEOUT_SECONDS = 5.0
 
@@ -20,7 +20,7 @@ def get_app_config_dir(user_home_dir: Path | None = None) -> Path:
         if user_home_dir is None
         else user_home_dir.expanduser().resolve()
     )
-    return resolved_home_dir / _APP_CONFIG_DIR_RELATIVE
+    return resolved_home_dir / _APP_CONFIG_DIR_NAME
 
 
 def get_user_config_dir(user_home_dir: Path | None = None) -> Path:

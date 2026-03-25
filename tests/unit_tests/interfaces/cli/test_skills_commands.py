@@ -29,7 +29,7 @@ def test_skills_list_prefers_app_skill_in_json_output(
         {
             "name": "app_only",
             "source": "app",
-            "directory": (tmp_path / ".config" / "agent-teams" / "skills" / "app_only")
+            "directory": (tmp_path / ".agent-teams" / "skills" / "app_only")
             .resolve()
             .as_posix(),
             "description": "app only skill",
@@ -45,7 +45,7 @@ def test_skills_list_prefers_app_skill_in_json_output(
         {
             "name": "shared",
             "source": "app",
-            "directory": (tmp_path / ".config" / "agent-teams" / "skills" / "shared")
+            "directory": (tmp_path / ".agent-teams" / "skills" / "shared")
             .resolve()
             .as_posix(),
             "description": "app shared skill",
@@ -72,13 +72,13 @@ def test_skills_show_returns_effective_skill_details(
     assert payload["description"] == "app shared skill"
     assert (
         payload["manifest_path"]
-        == (tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md")
+        == (tmp_path / ".agent-teams" / "skills" / "shared" / "SKILL.md")
         .resolve()
         .as_posix()
     )
     assert payload["instructions"] == "App instructions."
     assert payload["files"] == [
-        (tmp_path / ".config" / "agent-teams" / "skills" / "shared" / "SKILL.md")
+        (tmp_path / ".agent-teams" / "skills" / "shared" / "SKILL.md")
         .resolve()
         .as_posix()
     ]
@@ -107,7 +107,7 @@ def test_skills_help_explains_merge_order() -> None:
         "Inspect skills discovered from built-in defaults and the app directory."
         in result.output
     )
-    assert "~/.config/agent-teams/skills" in result.output
+    assert "~/.agent-teams/skills" in result.output
     assert "app scope, overrides builtin skills" in result.output
     assert "agent-teams skills show time" in result.output
 
@@ -139,7 +139,7 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:
     builtin_skills_dir = tmp_path / "builtin" / "skills"
-    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
+    app_skills_dir = tmp_path / ".agent-teams" / "skills"
 
     _write_skill(
         builtin_skills_dir / "shared",

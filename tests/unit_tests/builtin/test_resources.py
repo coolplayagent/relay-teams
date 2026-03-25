@@ -10,7 +10,7 @@ from agent_teams.builtin.resources import ensure_app_config_bootstrap
 def test_ensure_app_config_bootstrap_seeds_empty_model_config(
     tmp_path: Path,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
 
     ensure_app_config_bootstrap(config_dir)
 

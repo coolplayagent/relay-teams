@@ -19,13 +19,13 @@ def test_write_test_runtime_config_rejects_non_local_fake_llm_url(
         ValueError, match="fake_llm_v1_base_url must use fake LLM on 127.0.0.1"
     ):
         write_test_runtime_config(
-            config_dir=tmp_path / ".config" / "agent-teams",
+            config_dir=tmp_path / ".agent-teams",
             fake_llm_v1_base_url="https://api.example.com/v1",
         )
 
 
 def test_validate_model_config_accepts_fake_llm_profiles(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     write_test_runtime_config(
         config_dir=config_dir,
         fake_llm_v1_base_url="http://127.0.0.1:18911/v1",
@@ -46,7 +46,7 @@ def test_validate_model_config_accepts_fake_llm_profiles(tmp_path: Path) -> None
 
 
 def test_validate_model_config_rejects_external_base_url(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "model.json").write_text(
         json.dumps(

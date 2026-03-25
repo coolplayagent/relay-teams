@@ -108,7 +108,7 @@ Reloads model config into runtime.
 
 ### `GET /system/configs/proxy`
 
-Returns the proxy values currently saved in app `~/.config/agent-teams/.env`.
+Returns the proxy values currently saved in app `~/.agent-teams/.env`.
 Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, `ssl_verify`.
 Saved proxy URLs are returned without embedded credentials when the configured proxy URLs share the same username/password pair.
 If the password was persisted through the system keyring, the API rehydrates it into `proxy_password` for editing.
@@ -116,7 +116,7 @@ If a user manually forces `user:password@host` into `.env`, runtime loading stil
 
 ### `PUT /system/configs/proxy`
 
-Saves proxy values into app `~/.config/agent-teams/.env` and reloads runtime proxy state immediately.
+Saves proxy values into app `~/.agent-teams/.env` and reloads runtime proxy state immediately.
 Blank values remove the corresponding proxy key.
 `proxy_username` and `proxy_password` are optional shared credentials.
 `ssl_verify` controls the default TLS certificate verification policy for Agent Teams outbound HTTP clients.
@@ -133,7 +133,7 @@ Fields:
 - `provider`: currently only `exa`
 - `api_key`: optional value rehydrated from the system keyring when available
 
-The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint, fetch size limit, and temp file location under `~/.config/agent-teams/.../tmp`.
+The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint, fetch size limit, and temp file location under `~/.agent-teams/.../tmp`.
 
 ### `PUT /system/configs/web`
 
@@ -230,7 +230,7 @@ Rules:
 
 Returns environment variables grouped by `system` and `app` scope.
 `system` is read-only and reflects the effective runtime environment currently visible to the Agent Teams server and newly spawned child processes.
-`app` is editable and stored in `~/.config/agent-teams/.env`.
+`app` is editable and stored in `~/.agent-teams/.env`.
 Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
 
 ### `PUT /system/configs/environment-variables/{scope}/{key}`
@@ -945,7 +945,7 @@ Notes:
 - `objective` is optional.
 - `workspace_id` is optional.
 - When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
-- `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `~/.config/agent-teams/prompts.json`.
+- `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `~/.agent-teams/prompts.json`.
 - When `workspace_id` does not exist, the endpoint returns `404`.
 - When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
 

@@ -37,7 +37,7 @@ class _FakeGitHubSecretStore(GitHubSecretStore):
 
 
 def test_get_github_config_defaults_to_empty_token(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     service = GitHubConfigService(
         config_dir=config_dir,
@@ -51,7 +51,7 @@ def test_save_github_config_persists_keyring_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     secret_store = _FakeGitHubSecretStore()
     monkeypatch.setattr(
@@ -73,7 +73,7 @@ def test_save_github_config_removes_plaintext_env_tokens(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "GH_TOKEN=old\nGITHUB_TOKEN=older\nHTTP_PROXY=http://proxy.example:8080\n",
@@ -99,7 +99,7 @@ def test_save_github_config_falls_back_to_env_when_keyring_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config_dir = tmp_path / ".config" / "agent-teams"
+    config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text(
         "GITHUB_TOKEN=legacy\nHTTP_PROXY=http://proxy.example:8080\n",

@@ -10,7 +10,7 @@ from agent_teams.skills.discovery import SkillsDirectory
 def test_get_user_skills_dir_uses_user_config_dir_when_home_not_provided(
     monkeypatch,
 ) -> None:
-    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
+    app_config_dir = Path("D:/home/.agent-teams").resolve()
     monkeypatch.setattr(
         discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
@@ -25,19 +25,19 @@ def test_get_user_skills_dir_uses_user_home_override(monkeypatch) -> None:
 
     def fake_get_app_config_dir(*, user_home_dir: Path | None = None) -> Path:
         assert user_home_dir is not None
-        return user_home_dir / ".config" / "agent-teams"
+        return user_home_dir / ".agent-teams"
 
     monkeypatch.setattr(discovery, "get_app_config_dir", fake_get_app_config_dir)
 
     skills_dir = discovery.get_user_skills_dir(user_home_dir=user_home_dir)
 
-    assert skills_dir == user_home_dir / ".config" / "agent-teams" / "skills"
+    assert skills_dir == user_home_dir / ".agent-teams" / "skills"
 
 
 def test_get_project_skills_dir_uses_app_config_dir_when_root_not_provided(
     monkeypatch,
 ) -> None:
-    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
+    app_config_dir = Path("D:/home/.agent-teams").resolve()
     monkeypatch.setattr(
         discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
@@ -50,7 +50,7 @@ def test_get_project_skills_dir_uses_app_config_dir_when_root_not_provided(
 def test_get_project_skills_dir_ignores_project_root_and_uses_app_dir(
     monkeypatch,
 ) -> None:
-    app_config_dir = Path("D:/home/.config/agent-teams").resolve()
+    app_config_dir = Path("D:/home/.agent-teams").resolve()
     monkeypatch.setattr(
         discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
     )
@@ -63,7 +63,7 @@ def test_get_project_skills_dir_ignores_project_root_and_uses_app_dir(
 def test_skills_directory_from_skill_dirs_creates_app_directory(
     tmp_path: Path,
 ) -> None:
-    app_skills_dir = tmp_path / ".config" / "agent-teams" / "skills"
+    app_skills_dir = tmp_path / ".agent-teams" / "skills"
     builtin_skills_dir = tmp_path / "builtin" / "skills"
 
     directory = SkillsDirectory.from_skill_dirs(
@@ -80,7 +80,7 @@ def test_skills_directory_from_config_dirs_uses_app_and_builtin_scopes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    app_config_dir = tmp_path / ".config" / "agent-teams"
+    app_config_dir = tmp_path / ".agent-teams"
     builtin_skills_dir = tmp_path / "builtin" / "skills"
     monkeypatch.setattr(
         discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
@@ -96,7 +96,7 @@ def test_skills_directory_from_default_scopes_uses_resolved_scope_dirs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    app_skills_dir = tmp_path / "home" / ".config" / "agent-teams" / "skills"
+    app_skills_dir = tmp_path / "home" / ".agent-teams" / "skills"
     builtin_skills_dir = tmp_path / "agent-teams" / "builtin" / "skills"
     monkeypatch.setattr(
         discovery, "get_app_skills_dir", lambda **kwargs: app_skills_dir

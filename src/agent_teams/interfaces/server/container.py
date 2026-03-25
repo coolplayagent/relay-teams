@@ -198,6 +198,7 @@ class ServerContainer:
         )
         self.workspace_manager: WorkspaceManager = WorkspaceManager(
             project_root=Path.cwd(),
+            app_config_dir=config_dir,
             workspace_repo=self.workspace_repo,
             builtin_skills_dir=get_builtin_skills_dir(),
             app_skills_dir=config_dir / "skills",
