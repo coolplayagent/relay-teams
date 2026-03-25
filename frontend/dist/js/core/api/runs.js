@@ -4,7 +4,13 @@
  */
 import { requestJson } from './request.js';
 
-export async function sendUserPrompt(sessionId, prompt, yolo = false, thinking = null) {
+export async function sendUserPrompt(
+    sessionId,
+    prompt,
+    yolo = false,
+    thinking = null,
+    targetRoleId = null,
+) {
     return requestJson(
         '/api/runs',
         {
@@ -16,6 +22,7 @@ export async function sendUserPrompt(sessionId, prompt, yolo = false, thinking =
                 execution_mode: 'ai',
                 yolo: yolo === true,
                 thinking: thinking || { enabled: false, effort: null },
+                target_role_id: targetRoleId || null,
             }),
         },
         'Failed to create run',

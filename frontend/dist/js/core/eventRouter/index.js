@@ -66,7 +66,7 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'run_resumed') {
         handleRunStarted(eventMeta);
     } else if (evType === 'model_step_started') {
-        handleModelStepStarted(instanceId, roleId);
+        handleModelStepStarted(eventMeta, instanceId, roleId);
     } else if (evType === 'llm_retry_scheduled') {
         handleLlmRetryScheduled(payload, eventMeta);
     } else if (evType === 'llm_retry_exhausted') {
@@ -80,13 +80,13 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'thinking_finished') {
         handleThinkingFinished(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'model_step_finished') {
-        handleModelStepFinished(instanceId);
+        handleModelStepFinished(eventMeta, instanceId);
     } else if (evType === 'run_completed') {
-        handleRunCompleted();
+        handleRunCompleted(eventMeta);
     } else if (evType === 'run_stopped') {
-        handleRunStopped(payload);
+        handleRunStopped(eventMeta, payload);
     } else if (evType === 'run_failed') {
-        handleRunFailed(payload);
+        handleRunFailed(eventMeta, payload);
     } else if (evType === 'tool_call') {
         handleToolCall(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'tool_input_validation_failed') {

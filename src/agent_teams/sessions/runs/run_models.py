@@ -40,6 +40,7 @@ class IntentInput(BaseModel):
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    target_role_id: str | None = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
 

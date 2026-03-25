@@ -21,23 +21,23 @@ import {
     openAgentPanel,
 } from '../../components/agentPanel.js';
 import {
-    getPrimaryRoleId,
-    getPrimaryRoleLabel,
-    isPrimaryRoleId,
+    getRunPrimaryRoleId,
+    getRunPrimaryRoleLabel,
+    isRunPrimaryRoleId,
 } from '../state.js';
 import { coordinatorContainerFor } from './utils.js';
 
 export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     markLlmRetrySucceeded();
-    const primaryRoleId = getPrimaryRoleId();
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     if (!isPrimary && !getActiveInstanceId()) {
         openAgentPanel(instanceId, roleId);
     }
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
-    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
-    const label = isPrimary ? getPrimaryRoleLabel() : (roleId || 'Agent');
+    const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     appendToolCallBlock(
         container,
         streamKey,
@@ -52,7 +52,8 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
 export function handleToolInputValidationFailed(payload, instanceId, eventMeta = null, roleId = '') {
     markLlmRetrySucceeded();
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const bound = markToolInputValidationFailed(streamKey, payload, {
         runId: eventMeta?.run_id || eventMeta?.trace_id || '',
@@ -70,7 +71,8 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
 export function handleToolResult(payload, instanceId, eventMeta = null, roleId = '') {
     markLlmRetrySucceeded();
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const resultEnvelope = payload.result || {};
     const isError = typeof resultEnvelope === 'object'
@@ -93,9 +95,9 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
 export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
     const roleId = payload?.role_id || '';
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
-    const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
+    const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     markToolApprovalRequested(payload);
     if (runId && payload?.tool_call_id) {
         document.dispatchEvent(
@@ -119,7 +121,8 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
 
 export function handleToolApprovalResolved(payload, instanceId, eventMeta = null, roleId = '') {
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     markRecoveryToolApprovalResolved(payload?.tool_call_id || '');
     markToolApprovalResolved(streamKey, payload, {
@@ -130,7 +133,8 @@ export function handleToolApprovalResolved(payload, instanceId, eventMeta = null
 }
 
 function resolveToolEventTarget(instanceId, roleId, eventMeta) {
-    const isCoordinator = !roleId || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const isCoordinator = !roleId || isRunPrimaryRoleId(roleId, runId);
     return {
         isCoordinator,
         container: isCoordinator

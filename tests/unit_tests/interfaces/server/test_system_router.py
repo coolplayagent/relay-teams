@@ -5,6 +5,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agent_teams.env.proxy_env import ProxyEnvInput
+from agent_teams.external_agents import (
+    ExternalAgentConfig,
+    ExternalAgentSummary,
+    ExternalAgentTestResult,
+    StdioTransportConfig,
+)
 from agent_teams.env.github_config_models import GitHubConfig
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
@@ -13,6 +19,7 @@ from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
+    get_external_agent_config_service,
     get_github_config_service,
     get_mcp_config_reload_service,
     get_model_config_service,
@@ -48,6 +55,14 @@ class _FakeSystemService:
         self.saved_github_config: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
+        self.external_agents: dict[str, ExternalAgentConfig] = {
+            "codex_local": ExternalAgentConfig(
+                agent_id="codex_local",
+                name="Codex Local",
+                description="Runs Codex via stdio",
+                transport=StdioTransportConfig(command="codex", args=("--serve",)),
+            )
+        }
 
     def get_config_status(self) -> dict[str, object]:
         return {"model": {"loaded": True}}
@@ -117,6 +132,34 @@ class _FakeSystemService:
 
     def get_web_config(self) -> WebConfig:
         return WebConfig(provider=WebProvider.EXA, api_key=None)
+
+    def list_agents(self) -> tuple[ExternalAgentSummary, ...]:
+        return tuple(
+            ExternalAgentSummary(
+                agent_id=agent.agent_id,
+                name=agent.name,
+                description=agent.description,
+                transport=agent.transport.transport,
+            )
+            for agent in self.external_agents.values()
+        )
+
+    def get_agent(self, agent_id: str) -> ExternalAgentConfig:
+        return self.external_agents[agent_id]
+
+    def save_agent(
+        self,
+        agent_id: str,
+        config: ExternalAgentConfig,
+    ) -> ExternalAgentConfig:
+        self.external_agents[agent_id] = config
+        return config
+
+    def delete_agent(self, agent_id: str) -> None:
+        self.external_agents.pop(agent_id)
+
+    def resolve_runtime_agent(self, agent_id: str) -> ExternalAgentConfig:
+        return self.external_agents[agent_id]
 
     def save_web_config(self, config: WebConfig) -> None:
         self.saved_web_config = config.model_dump(mode="json")
@@ -310,6 +353,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
+    app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -636,6 +680,92 @@ def test_save_web_config() -> None:
     assert service.saved_web_config == {
         "provider": "exa",
         "api_key": "secret",
+    }
+
+
+def test_list_external_agents() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/agents")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "agent_id": "codex_local",
+            "name": "Codex Local",
+            "description": "Runs Codex via stdio",
+            "transport": "stdio",
+        }
+    ]
+
+
+def test_get_external_agent_omits_stdio_working_directory() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/agents/codex_local")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "agent_id": "codex_local",
+        "name": "Codex Local",
+        "description": "Runs Codex via stdio",
+        "transport": {
+            "transport": "stdio",
+            "command": "codex",
+            "args": ["--serve"],
+            "env": [],
+        },
+    }
+
+
+def test_save_external_agent() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/agents/claude_http",
+        json={
+            "agent_id": "claude_http",
+            "name": "Claude HTTP",
+            "description": "Runs Claude over HTTP",
+            "transport": {
+                "transport": "streamable_http",
+                "url": "http://127.0.0.1:4100/acp",
+                "headers": [],
+                "ssl_verify": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["agent_id"] == "claude_http"
+    assert (
+        service.external_agents["claude_http"].transport.transport == "streamable_http"
+    )
+
+
+def test_test_external_agent(monkeypatch) -> None:
+    async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
+        return ExternalAgentTestResult(
+            ok=True,
+            message="Connected",
+            agent_name="Codex",
+            agent_version="1.0.0",
+            protocol_version=1,
+        )
+
+    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post("/api/system/configs/agents/codex_local:test")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "message": "Connected",
+        "agent_name": "Codex",
+        "agent_version": "1.0.0",
+        "protocol_version": 1,
     }
 
 

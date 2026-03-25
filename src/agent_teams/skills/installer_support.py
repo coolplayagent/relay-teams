@@ -672,6 +672,7 @@ def mount_skills_to_roles(
         get_tool_registry=build_default_registry,
         get_mcp_registry=McpRegistry,
         get_skill_registry=lambda: SkillRegistry.from_default_scopes(),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,
     )
     known_skills = frozenset(SkillRegistry.from_default_scopes().list_names())

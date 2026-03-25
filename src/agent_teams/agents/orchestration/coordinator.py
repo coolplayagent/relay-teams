@@ -579,6 +579,8 @@ class CoordinatorGraph(BaseModel):
         return instance.instance_id
 
     def _root_role_id(self, intent: IntentInput) -> str:
+        if intent.target_role_id:
+            return intent.target_role_id
         topology = intent.topology
         if topology is None:
             return self.role_registry.get_coordinator_role_id()

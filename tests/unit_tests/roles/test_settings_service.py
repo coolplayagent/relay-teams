@@ -39,6 +39,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
             app_skills_dir=skills_dir
         ),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: captured_registry.append(registry),
     )
 
@@ -79,6 +80,7 @@ def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
             app_skills_dir=skills_dir
         ),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,
     )
 
@@ -126,6 +128,7 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
             app_skills_dir=skills_dir
         ),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,
     )
 
@@ -151,6 +154,7 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
             app_skills_dir=skills_dir
         ),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: captured_registry.append(registry),
     )
 
@@ -199,6 +203,7 @@ def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) 
         get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
             app_skills_dir=skills_dir
         ),
+        get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,
     )
 

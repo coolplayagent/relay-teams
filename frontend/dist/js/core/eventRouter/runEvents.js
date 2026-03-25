@@ -3,9 +3,11 @@
  * Handlers for run lifecycle and model-step events.
  */
 import {
+    clearRunPrimaryRole,
     getPrimaryRoleId,
-    getPrimaryRoleLabel,
-    isPrimaryRoleId,
+    getRunPrimaryRoleId,
+    getRunPrimaryRoleLabel,
+    isRunPrimaryRoleId,
     state,
 } from '../state.js';
 import {
@@ -49,19 +51,20 @@ export function handleRunStarted(eventMeta) {
     if (runId) {
         markRunStreamConnected(runId, { phase: 'running' });
     }
-    state.activeAgentRoleId = getPrimaryRoleId() || null;
+    state.activeAgentRoleId = getRunPrimaryRoleId(runId) || getPrimaryRoleId() || null;
     state.activeAgentInstanceId = null;
 }
 
-export function handleModelStepStarted(instanceId, roleId) {
+export function handleModelStepStarted(eventMeta, instanceId, roleId) {
     beginLlmRetryAttempt();
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (instanceId && roleId) {
         if (!state.instanceRoleMap) state.instanceRoleMap = {};
         if (!state.roleInstanceMap) state.roleInstanceMap = {};
         if (!state.autoSwitchedSubagentInstances) state.autoSwitchedSubagentInstances = {};
         state.instanceRoleMap[instanceId] = roleId;
         state.roleInstanceMap[roleId] = instanceId;
-        if (!isPrimaryRoleId(roleId)) {
+        if (!isRunPrimaryRoleId(roleId, runId)) {
             rememberLiveSubagent(instanceId, roleId);
             void refreshSubagentRail(state.currentSessionId, {
                 preserveSelection: true,
@@ -79,12 +82,12 @@ export function handleModelStepStarted(instanceId, roleId) {
 
 export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
     markLlmRetrySucceeded();
-    const primaryRoleId = getPrimaryRoleId();
-    const primaryLabel = getPrimaryRoleLabel();
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
+    const primaryLabel = getRunPrimaryRoleLabel(runId);
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const label = isPrimary ? primaryLabel : (roleId || 'Agent');
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
-    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
 
     if (isPrimary) {
         const container = coordinatorContainerFor(eventMeta);
@@ -103,10 +106,10 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 
 export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
     markLlmRetrySucceeded();
-    const primaryRoleId = getPrimaryRoleId();
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
-    const label = isPrimary ? getPrimaryRoleLabel() : (roleId || 'Agent');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
+    const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     const partIndex = payload?.part_index ?? 0;
 
     if (isPrimary) {
@@ -136,10 +139,10 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
-    const primaryRoleId = getPrimaryRoleId();
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
-    const label = isPrimary ? getPrimaryRoleLabel() : (roleId || 'Agent');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
+    const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     const partIndex = payload?.part_index ?? 0;
     const text = payload?.text || '';
 
@@ -170,9 +173,9 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
-    const primaryRoleId = getPrimaryRoleId();
-    const isPrimary = !roleId || isPrimaryRoleId(roleId);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
+    const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const partIndex = payload?.part_index ?? 0;
 
     const streamKey = isPrimary ? 'primary' : instanceId;
@@ -182,11 +185,12 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
     });
 }
 
-export function handleModelStepFinished(instanceId) {
+export function handleModelStepFinished(eventMeta, instanceId) {
     const roleId = state.instanceRoleMap?.[instanceId] || '';
-    const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isPrimaryRoleId(roleId);
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isRunPrimaryRoleId(roleId, runId);
     const key = isPrimary ? 'primary' : instanceId;
-    finalizeStream(key, isPrimary ? getPrimaryRoleId() : roleId);
+    finalizeStream(key, isPrimary ? getRunPrimaryRoleId(runId) : roleId);
     if (instanceId && !isPrimary) {
         markSubagentStatus(instanceId, 'completed');
     }
@@ -196,9 +200,10 @@ export function handleModelStepFinished(instanceId) {
     }
 }
 
-export function handleRunCompleted() {
+export function handleRunCompleted(eventMeta) {
     sysLog('Run completed.');
     markLlmRetrySucceeded();
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (state.activeRunId) {
         markRunTerminalState(state.activeRunId, {
             status: 'completed',
@@ -218,12 +223,14 @@ export function handleRunCompleted() {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
-    finalizeStream('primary', getPrimaryRoleId());
+    finalizeStream('primary', getRunPrimaryRoleId(runId));
+    clearRunPrimaryRole(runId);
 }
 
-export function handleRunStopped(payload) {
+export function handleRunStopped(eventMeta, payload) {
     sysLog(`Run stopped: ${payload?.reason || 'stopped_by_user'}`, 'log-info');
     clearLlmRetryStatus();
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'stopped');
     }
@@ -247,12 +254,14 @@ export function handleRunStopped(payload) {
         els.promptInput.disabled = false;
         els.promptInput.focus();
     }
-    finalizeStream('primary', getPrimaryRoleId());
+    finalizeStream('primary', getRunPrimaryRoleId(runId));
+    clearRunPrimaryRole(runId);
 }
 
-export function handleRunFailed(payload) {
+export function handleRunFailed(eventMeta, payload) {
     sysLog(`Run failed: ${payload?.error || ''}`, 'log-error');
     markLlmRetryFailed(payload?.error || '');
+    const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'failed');
     }
@@ -272,6 +281,7 @@ export function handleRunFailed(payload) {
         els.stopBtn.style.display = 'none';
     }
     if (els.promptInput) els.promptInput.disabled = false;
+    clearRunPrimaryRole(runId);
 }
 
 export function handleLlmRetryScheduled(payload, eventMeta) {

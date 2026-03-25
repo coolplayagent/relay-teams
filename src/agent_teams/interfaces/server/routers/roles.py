@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import (
+    get_external_agent_config_service,
     get_mcp_service,
     get_role_registry,
     get_role_settings_service,
@@ -13,6 +14,7 @@ from agent_teams.interfaces.server.deps import (
 from agent_teams.mcp.mcp_service import McpService
 from agent_teams.roles import (
     NormalModeRoleOption,
+    RoleAgentOption,
     RoleConfigOptions,
     RoleDocumentDraft,
     RoleDocumentRecord,
@@ -20,6 +22,7 @@ from agent_teams.roles import (
     RoleRegistry,
     RoleValidationResult,
 )
+from agent_teams.external_agents import ExternalAgentConfigService
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
@@ -40,6 +43,9 @@ def get_role_config_options(
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     mcp_service: McpService = Depends(get_mcp_service),
     skill_registry: SkillRegistry = Depends(get_skill_registry),
+    external_agent_service: ExternalAgentConfigService = Depends(
+        get_external_agent_config_service
+    ),
 ) -> RoleConfigOptions:
     return RoleConfigOptions(
         coordinator_role_id=role_registry.get_coordinator_role_id(),
@@ -55,17 +61,33 @@ def get_role_config_options(
         tools=tool_registry.list_configurable_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
         skills=skill_registry.list_names(),
+        agents=tuple(
+            RoleAgentOption(
+                agent_id=agent.agent_id,
+                name=agent.name,
+                transport=agent.transport.value,
+            )
+            for agent in external_agent_service.list_agent_options()
+        ),
     )
 
 
-@router.get("/configs", response_model=list[RoleDocumentSummary])
+@router.get(
+    "/configs",
+    response_model=list[RoleDocumentSummary],
+    response_model_exclude_none=True,
+)
 def list_role_configs(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> tuple[RoleDocumentSummary, ...]:
     return service.list_role_documents()
 
 
-@router.get("/configs/{role_id}", response_model=RoleDocumentRecord)
+@router.get(
+    "/configs/{role_id}",
+    response_model=RoleDocumentRecord,
+    response_model_exclude_none=True,
+)
 def get_role_config(
     role_id: str,
     service: RoleSettingsService = Depends(get_role_settings_service),
@@ -76,7 +98,11 @@ def get_role_config(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("/configs/{role_id}", response_model=RoleDocumentRecord)
+@router.put(
+    "/configs/{role_id}",
+    response_model=RoleDocumentRecord,
+    response_model_exclude_none=True,
+)
 def save_role_config(
     role_id: str,
     draft: RoleDocumentDraft,
@@ -98,7 +124,11 @@ def validate_roles(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post(":validate-config", response_model=RoleValidationResult)
+@router.post(
+    ":validate-config",
+    response_model=RoleValidationResult,
+    response_model_exclude_none=True,
+)
 def validate_role_config(
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),

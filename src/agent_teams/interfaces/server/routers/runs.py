@@ -28,6 +28,7 @@ class CreateRunRequest(BaseModel):
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    target_role_id: str | None = None
 
 
 class CreateRunResponse(BaseModel):
@@ -35,6 +36,7 @@ class CreateRunResponse(BaseModel):
 
     run_id: str
     session_id: str
+    target_role_id: str | None = None
 
 
 class InjectMessageRequest(BaseModel):
@@ -64,7 +66,11 @@ class InjectSubagentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
-@router.post("", response_model=CreateRunResponse)
+@router.post(
+    "",
+    response_model=CreateRunResponse,
+    response_model_exclude_none=True,
+)
 async def create_run(
     req: CreateRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -78,6 +84,7 @@ async def create_run(
                 execution_mode=req.execution_mode,
                 yolo=req.yolo,
                 thinking=req.thinking,
+                target_role_id=req.target_role_id,
             )
         )
         service.ensure_run_started(run_id)
@@ -94,7 +101,11 @@ async def create_run(
                     "yolo": req.yolo,
                 },
             )
-        return CreateRunResponse(run_id=run_id, session_id=session_id)
+        return CreateRunResponse(
+            run_id=run_id,
+            session_id=session_id,
+            target_role_id=req.target_role_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:

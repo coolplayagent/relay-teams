@@ -3,7 +3,12 @@
  * Session timeline rendering, scroll-sync, and paging orchestration.
  */
 import { els } from '../../utils/dom.js';
-import { getPrimaryRoleId, getPrimaryRoleLabel, isPrimaryRoleId, state } from '../../core/state.js';
+import {
+    getRunPrimaryRoleId,
+    getRunPrimaryRoleLabel,
+    isRunPrimaryRoleId,
+    state,
+} from '../../core/state.js';
 import { fetchRunTokenUsage } from '../../core/api.js';
 import { setRoundPendingApprovals } from '../agentPanel.js';
 import {
@@ -51,6 +56,7 @@ export function createLiveRound(runId, intentText) {
                 run_id: safeRunId,
                 created_at: new Date().toISOString(),
                 intent: intentText,
+                primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
                 coordinator_messages: [],
                 instance_role_map: {},
                 role_instance_map: {},
@@ -65,6 +71,7 @@ export function createLiveRound(runId, intentText) {
             round.run_id === safeRunId
                 ? {
                     ...round,
+                    primary_role_id: round.primary_role_id || getRunPrimaryRoleId(safeRunId) || null,
                     run_status: round.run_status || 'running',
                     run_phase: round.run_phase || 'running',
                     is_recoverable: round.is_recoverable !== false,
@@ -101,8 +108,8 @@ export function appendRoundUserMessage(runId, text) {
     const empty = section.querySelector('.panel-empty');
     if (empty) empty.remove();
 
-    const primaryRoleId = getPrimaryRoleId();
-    const primaryRoleLabel = getPrimaryRoleLabel();
+    const primaryRoleId = getRunPrimaryRoleId(safeRunId);
+    const primaryRoleLabel = getRunPrimaryRoleLabel(safeRunId);
     getOrCreateStreamBlock(section, 'primary', primaryRoleId, primaryRoleLabel, safeRunId);
     appendStreamChunk('primary', '', safeRunId, primaryRoleId, primaryRoleLabel);
 
@@ -402,26 +409,29 @@ function renderRoundSection(round, index) {
 
     const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
         const roleId = item?.role_id || '';
-        return roleId === '' || isPrimaryRoleId(roleId);
+        return roleId === '' || isRunPrimaryRoleId(roleId, round.run_id);
     });
     const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
+    const primaryRoleLabel = getRunPrimaryRoleLabel(round.run_id);
 
     if (round.coordinator_messages?.length > 0) {
         renderHistoricalMessageList(section, round.coordinator_messages, {
             pendingToolApprovals: pendingCoordinatorApprovals,
+            primaryRoleLabel,
             runId: round.run_id,
             streamOverlayEntry: coordinatorOverlay,
         });
     } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
         renderHistoricalMessageList(section, [], {
             pendingToolApprovals: pendingCoordinatorApprovals,
+            primaryRoleLabel,
             runId: round.run_id,
             streamOverlayEntry: coordinatorOverlay,
         });
     } else if (!round.has_user_messages) {
         const empty = document.createElement('div');
         empty.className = 'panel-empty';
-        empty.textContent = `No ${getPrimaryRoleLabel().toLowerCase()} messages in this round.`;
+        empty.textContent = `No ${primaryRoleLabel.toLowerCase()} messages in this round.`;
         section.appendChild(empty);
     }
 

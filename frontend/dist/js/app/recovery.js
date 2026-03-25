@@ -15,6 +15,7 @@ import {
     humanizeRoleId,
     isPrimaryRoleId,
     isReservedSystemRoleId,
+    setRunPrimaryRole,
     state,
 } from '../core/state.js';
 import { resumeRunStream } from '../core/stream.js';
@@ -144,6 +145,14 @@ export function clearSessionRecovery() {
 
 export function applyRecoverySnapshot(snapshot) {
     const normalized = normalizeRecoverySnapshot(snapshot);
+    const primaryRoleId = String(
+        normalized.activeRun?.primary_role_id
+        || normalized.roundSnapshot?.primary_role_id
+        || '',
+    ).trim();
+    if (normalized.activeRun?.run_id) {
+        setRunPrimaryRole(normalized.activeRun.run_id, primaryRoleId || null);
+    }
     const previous = state.currentRecoverySnapshot;
     if (areRecoverySnapshotsEquivalent(previous, normalized)) {
         if (normalized.activeRun?.run_id) {

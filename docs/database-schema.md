@@ -84,6 +84,32 @@ Notes:
 
 ---
 
+### 2.1.3 `external_agent_sessions`
+
+```sql
+CREATE TABLE IF NOT EXISTS external_agent_sessions (
+    session_id          TEXT NOT NULL,
+    role_id             TEXT NOT NULL,
+    agent_id            TEXT NOT NULL,
+    transport           TEXT NOT NULL,
+    external_session_id TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY(session_id, role_id, agent_id)
+);
+```
+
+Purpose: persistent mapping between one internal `session_id + role_id` pair and the reused remote ACP session created for the bound external agent.
+
+Notes:
+- `agent_id` references one configured entry in `~/.agent-teams/agents.json`.
+- `transport` stores the outbound ACP transport type used by that saved agent config.
+- `external_session_id` is the remote ACP session identifier returned by the external agent and reused for later turns in the same internal session.
+- `status` stores the last-known remote session health, currently `ready` or `failed`.
+
+---
+
 ### 2.2 `agent_instances`
 
 ```sql
@@ -513,7 +539,7 @@ Notes:
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`.
+- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`.
 - `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
@@ -529,6 +555,7 @@ Primary query keys used by repositories:
 
 - `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
 - `agent_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
+- `agent_teams.external_agents`: `external_agent_sessions`.
 - `agent_teams.workspace`: `workspaces`.
 - `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
 - `agent_teams.agents`: `agent_instances`.
@@ -554,6 +581,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
     yolo           TEXT NOT NULL DEFAULT 'false',
     thinking_enabled TEXT NOT NULL DEFAULT 'false',
     thinking_effort TEXT,
+    target_role_id TEXT,
     topology_json  TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
@@ -562,7 +590,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 
 ---
 
