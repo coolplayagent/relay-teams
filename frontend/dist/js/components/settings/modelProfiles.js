@@ -25,6 +25,7 @@ let isModelMenuOpen = false;
 
 const PROVIDER_DEFAULT_BASE_URLS = {
     bigmodel: 'https://open.bigmodel.cn/api/paas/v4',
+    minimax: 'https://api.minimaxi.com/v1',
 };
 
 export function bindModelProfileHandlers() {

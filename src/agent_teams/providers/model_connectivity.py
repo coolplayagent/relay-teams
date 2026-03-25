@@ -27,6 +27,7 @@ def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
     return provider in (
         ProviderType.OPENAI_COMPATIBLE,
         ProviderType.BIGMODEL,
+        ProviderType.MINIMAX,
     )
 
 

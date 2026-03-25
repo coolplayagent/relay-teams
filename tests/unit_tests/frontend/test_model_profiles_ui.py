@@ -309,6 +309,59 @@ console.log(JSON.stringify({
     assert payload["baseUrlValue"] == "https://custom.example/v1"
 
 
+def test_selecting_minimax_prefills_default_base_url(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "minimax";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "minimax"
+    assert payload["baseUrlValue"] == "https://api.minimaxi.com/v1"
+
+
+def test_selecting_minimax_does_not_override_existing_base_url(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-base-url").value = "https://custom.example/v1";
+document.getElementById("profile-provider").value = "minimax";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["baseUrlValue"] == "https://custom.example/v1"
+
+
 def test_fetching_models_keeps_full_browser_list_when_model_input_is_partial(
     tmp_path: Path,
 ) -> None:
