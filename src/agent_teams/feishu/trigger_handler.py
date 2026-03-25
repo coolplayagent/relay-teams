@@ -111,6 +111,14 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str | None: ...
 
+    def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
+
 
 class FeishuTriggerHandler:
     def __init__(
@@ -248,6 +256,11 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="empty_trigger_text",
             )
+
+        self._send_acknowledgement(
+            chat_id=normalized.chat_id,
+            environment=runtime_config.environment,
+        )
 
         ingest_result = self._trigger_service.ingest_event(
             TriggerIngestInput(
@@ -468,6 +481,32 @@ class FeishuTriggerHandler:
             return None
         normalized = str(resolved or "").strip()
         return normalized or None
+
+    def _send_acknowledgement(
+        self,
+        *,
+        chat_id: str,
+        environment: FeishuEnvironment,
+    ) -> None:
+        if self._feishu_client is None:
+            return
+        try:
+            self._feishu_client.send_text_message(
+                chat_id=chat_id,
+                text="收到，正在处理",
+                environment=environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.acknowledgement.send_failed",
+                message="Failed to send acknowledgement to Feishu chat",
+                payload={
+                    "chat_id": chat_id,
+                    "error": str(exc),
+                },
+            )
 
     def _merge_session_metadata(
         self,

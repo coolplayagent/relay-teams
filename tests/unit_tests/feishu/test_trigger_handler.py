@@ -141,6 +141,8 @@ class _FakeFeishuClient:
         self.user_names: dict[str, str] = {}
         self.chat_failures: set[str] = set()
         self.user_failures: set[str] = set()
+        self.sent_messages: list[tuple[str, str]] = []
+        self.send_failures: set[str] = set()
 
     def get_chat_name(
         self,
@@ -163,6 +165,18 @@ class _FakeFeishuClient:
         if open_id in self.user_failures:
             raise RuntimeError("user lookup failed")
         return self.user_names.get(open_id)
+
+    def send_text_message(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        _ = environment
+        if chat_id in self.send_failures:
+            raise RuntimeError("send message failed")
+        self.sent_messages.append((chat_id, text))
 
 
 def _build_trigger(
@@ -727,3 +741,105 @@ def test_handle_sdk_event_preserves_manual_session_title_on_existing_binding(
         == SESSION_TITLE_SOURCE_MANUAL
     )
     assert updated_session.metadata[SESSION_METADATA_SOURCE_LABEL_KEY] == "Operations"
+
+
+def test_handle_sdk_event_sends_acknowledgement_before_run(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_ack",
+        name="bot_ack",
+        app_id="cli_ack",
+        app_name="bot-ack",
+    )
+    (
+        handler,
+        _trigger_service,
+        _session_service,
+        run_service,
+        _bindings,
+        feishu_client,
+    ) = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {"event_id": "evt-ack", "event_type": "im.message.receive_v1", "tenant_key": "tenant-1"},
+      "event": {
+        "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
+        "message": {
+          "message_id": "om_ack",
+          "chat_id": "oc_p2p_ack",
+          "chat_type": "p2p",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"do something\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert len(run_service.created) == 1
+    assert len(feishu_client.sent_messages) == 1
+    chat_id, text = feishu_client.sent_messages[0]
+    assert chat_id == "oc_p2p_ack"
+    assert text == "收到，正在处理"
+
+
+def test_handle_sdk_event_continues_when_acknowledgement_fails(tmp_path: Path) -> None:
+    trigger = _build_trigger(
+        trigger_id="trg_ack_fail",
+        name="bot_ack_fail",
+        app_id="cli_ack_fail",
+        app_name="bot-ack-fail",
+    )
+    (
+        handler,
+        _trigger_service,
+        _session_service,
+        run_service,
+        _bindings,
+        feishu_client,
+    ) = _build_handler(
+        tmp_path=tmp_path,
+        triggers=(trigger,),
+    )
+    feishu_client.send_failures.add("oc_p2p_fail")
+
+    raw_body = """
+    {
+      "schema": "2.0",
+      "header": {"event_id": "evt-ack-fail", "event_type": "im.message.receive_v1", "tenant_key": "tenant-1"},
+      "event": {
+        "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
+        "message": {
+          "message_id": "om_ack_fail",
+          "chat_id": "oc_p2p_fail",
+          "chat_type": "p2p",
+          "message_type": "text",
+          "content": "{\\"text\\":\\"do something\\"}"
+        }
+      }
+    }
+    """
+
+    result = handler.handle_sdk_event(
+        trigger_id=trigger.trigger_id,
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "accepted"
+    assert len(run_service.created) == 1
+    assert len(feishu_client.sent_messages) == 0
