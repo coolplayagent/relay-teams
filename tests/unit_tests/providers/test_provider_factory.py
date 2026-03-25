@@ -13,7 +13,11 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
-from agent_teams.providers.provider_contracts import EchoProvider
+from agent_teams.providers.provider_contracts import (
+    EchoProvider,
+    LLMRequest,
+    MisconfiguredProvider,
+)
 from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from agent_teams.providers.provider_factory import create_provider_factory
 from agent_teams.roles.role_models import RoleDefinition
@@ -206,3 +210,37 @@ def test_create_provider_factory_resolves_default_alias_to_explicit_default_prof
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is kimi_config
+
+
+@pytest.mark.asyncio
+async def test_create_provider_factory_returns_misconfigured_provider_when_no_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_registry = _CapturingProviderRegistry()
+    factory = _build_factory(
+        monkeypatch=monkeypatch,
+        runtime=_build_runtime(profiles={}, default_model_profile=None),
+        provider_registry=provider_registry,
+    )
+
+    provider = factory(_build_role(model_profile="default"))
+
+    assert isinstance(provider, MisconfiguredProvider)
+    with pytest.raises(
+        RuntimeError,
+        match=r"No model profile is configured",
+    ):
+        await provider.generate(
+            LLMRequest(
+                run_id="run-1",
+                trace_id="run-1",
+                task_id="task-1",
+                session_id="session-1",
+                workspace_id="workspace-1",
+                conversation_id="conversation-1",
+                instance_id="instance-1",
+                role_id="spec_coder",
+                system_prompt="system",
+                user_prompt="hello",
+            )
+        )

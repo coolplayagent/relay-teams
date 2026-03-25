@@ -60,6 +60,7 @@ class FakeRunManager:
         self._counter = 0
         self.events_by_run: dict[str, tuple[RunEvent, ...]] = {}
         self.create_calls: list[IntentInput] = []
+        self.ensure_started_calls: list[str] = []
         self.stop_calls: list[str] = []
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
@@ -71,6 +72,9 @@ class FakeRunManager:
     async def stream_run_events(self, run_id: str) -> AsyncIterator[RunEvent]:
         for event in self.events_by_run.get(run_id, ()):
             yield event
+
+    def ensure_run_started(self, run_id: str) -> None:
+        self.ensure_started_calls.append(run_id)
 
     def stop_run(self, run_id: str) -> None:
         self.stop_calls.append(run_id)
@@ -203,6 +207,7 @@ async def test_session_prompt_streams_updates_and_usage(
         intent="Summarize README",
         yolo=True,
     )
+    assert run_manager.ensure_started_calls == ["run-1"]
 
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == [

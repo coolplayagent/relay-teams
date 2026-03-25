@@ -32,3 +32,12 @@ class EchoProvider(LLMProvider):
     @override
     async def generate(self, request: LLMRequest) -> str:
         return f"ECHO: {request.user_prompt or ''}"
+
+
+class MisconfiguredProvider(LLMProvider):
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    @override
+    async def generate(self, _request: LLMRequest) -> str:
+        raise RuntimeError(self._message)

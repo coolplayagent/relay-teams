@@ -259,6 +259,7 @@ class AcpGatewayServer:
                     yolo=True,
                 )
             )
+            self._run_service.ensure_run_started(run_id)
             self._active_runs[gateway_session_id] = run_id
             _ = self._gateway_session_service.bind_active_run(
                 gateway_session_id, run_id

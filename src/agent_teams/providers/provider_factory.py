@@ -11,7 +11,10 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import MetricRecorder
 from agent_teams.notifications import NotificationService
-from agent_teams.providers.provider_contracts import EchoProvider, LLMProvider
+from agent_teams.providers.provider_contracts import (
+    LLMProvider,
+    MisconfiguredProvider,
+)
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.provider_registry import create_default_provider_registry
@@ -77,7 +80,11 @@ def create_provider_factory(
             profile_name=role.model_profile,
         )
         if config_to_use is None:
-            return EchoProvider()
+            config_dir = runtime.paths.config_dir / "model.json"
+            return MisconfiguredProvider(
+                "No model profile is configured. "
+                f"Configure at least one profile in {config_dir}."
+            )
 
         provider_registry = create_default_provider_registry(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(
