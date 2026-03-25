@@ -1,12 +1,1 @@
-{
-  "default": {
-    "provider": "openai_compatible",
-    "model": "gpt-4o-mini",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "${OPENAI_API_KEY}",
-    "temperature": 0.2,
-    "top_p": 1.0,
-    "max_tokens": 4096,
-    "connect_timeout_seconds": 15.0
-  }
-}
+{}

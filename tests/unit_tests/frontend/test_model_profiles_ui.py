@@ -8,6 +8,71 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+DEFAULT_MOCK_API_SOURCE = """
+export async function fetchModelProfiles() {
+    return {
+        default: {
+            provider: "openai_compatible",
+            model: "fake-chat-model",
+            base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
+            has_api_key: true,
+            is_default: true,
+            temperature: 0.3,
+            top_p: 0.8,
+            max_tokens: 512,
+            context_window: 128000,
+            connect_timeout_seconds: 15,
+        },
+        "ui-regression-profile": {
+            provider: "openai_compatible",
+            model: "fake-chat-model",
+            base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
+            has_api_key: true,
+            is_default: false,
+            temperature: 0.3,
+            top_p: 0.8,
+            max_tokens: 512,
+            context_window: 64000,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return {
+        ok: true,
+        latency_ms: 42,
+        token_usage: {
+            total_tokens: 9,
+        },
+    };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        models: ["fake-chat-model", "reasoning-model"],
+    };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip()
+
 
 def test_saving_model_profile_restores_profile_list_visibility(
     tmp_path: Path,
@@ -572,6 +637,66 @@ console.log(JSON.stringify({
     assert "Connect Timeout" not in rendered_html
 
 
+def test_model_profiles_panel_renders_empty_state_when_no_profiles_exist(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+await loadModelProfilesPanel();
+
+console.log(JSON.stringify({
+    renderedHtml: document.getElementById("profiles-list").innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: [] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    rendered_html = cast(str, payload["renderedHtml"])
+    assert "No profiles configured" in rendered_html
+    assert (
+        "Create a profile to define the model endpoint, request limits, and sampling defaults."
+        in rendered_html
+    )
+    assert "profile-records" not in rendered_html
+    assert "OpenAI Compatible" not in rendered_html
+    assert "fake-chat-model" not in rendered_html
+    assert "http://127.0.0.1:8001/v1" not in rendered_html
+    assert "Default" not in rendered_html
+
+
 def test_deleting_profile_uses_custom_confirm_and_success_notification(
     tmp_path: Path,
 ) -> None:
@@ -618,7 +743,11 @@ console.log(JSON.stringify({
     ]
 
 
-def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def _run_model_profiles_script(
+    tmp_path: Path,
+    runner_source: str,
+    mock_api_source: str = DEFAULT_MOCK_API_SOURCE,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root
@@ -637,73 +766,7 @@ def _run_model_profiles_script(tmp_path: Path, runner_source: str) -> dict[str, 
     module_under_test_path = tmp_path / "modelProfiles.mjs"
     runner_path = tmp_path / "runner.mjs"
 
-    mock_api_path.write_text(
-        """
-export async function fetchModelProfiles() {
-    return {
-        default: {
-            provider: "openai_compatible",
-            model: "fake-chat-model",
-            base_url: "http://127.0.0.1:8001/v1",
-            api_key: "saved-secret-key",
-            has_api_key: true,
-            is_default: true,
-            temperature: 0.3,
-            top_p: 0.8,
-            max_tokens: 512,
-            context_window: 128000,
-            connect_timeout_seconds: 15,
-        },
-        "ui-regression-profile": {
-            provider: "openai_compatible",
-            model: "fake-chat-model",
-            base_url: "http://127.0.0.1:8001/v1",
-            api_key: "saved-secret-key",
-            has_api_key: true,
-            is_default: false,
-            temperature: 0.3,
-            top_p: 0.8,
-            max_tokens: 512,
-            context_window: 64000,
-            connect_timeout_seconds: 15,
-        },
-    };
-}
-
-export async function probeModelConnection(payload) {
-    globalThis.__probePayload = payload;
-    return {
-        ok: true,
-        latency_ms: 42,
-        token_usage: {
-            total_tokens: 9,
-        },
-    };
-}
-
-export async function discoverModelCatalog(payload) {
-    globalThis.__discoverPayload = payload;
-    return {
-        ok: true,
-        latency_ms: 37,
-        models: ["fake-chat-model", "reasoning-model"],
-    };
-}
-
-export async function saveModelProfile(name, profile) {
-    globalThis.__savedProfile = { name, profile };
-}
-
-export async function reloadModelConfig() {
-    globalThis.__reloadCalled = true;
-}
-
-export async function deleteModelProfile(name) {
-    globalThis.__deletedProfileName = name;
-}
-""".strip(),
-        encoding="utf-8",
-    )
+    mock_api_path.write_text(mock_api_source, encoding="utf-8")
     mock_logger_path.write_text(
         """
 export function errorToPayload(error, extra = {}) {
