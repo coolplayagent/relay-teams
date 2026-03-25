@@ -16,6 +16,7 @@ DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER = 2.0
 class ProviderType(StrEnum):
     OPENAI_COMPATIBLE = "openai_compatible"
     BIGMODEL = "bigmodel"
+    MINIMAX = "minimax"
     ECHO = "echo"
 
 

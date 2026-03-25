@@ -54,5 +54,6 @@ def create_default_provider_registry(
     registry = ProviderRegistry()
     registry.register(ProviderType.OPENAI_COMPATIBLE, openai_compatible_builder)
     registry.register(ProviderType.BIGMODEL, openai_compatible_builder)
+    registry.register(ProviderType.MINIMAX, openai_compatible_builder)
     registry.register(ProviderType.ECHO, lambda _config: EchoProvider())
     return registry

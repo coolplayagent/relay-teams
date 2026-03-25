@@ -43,6 +43,23 @@ def test_create_default_provider_registry_has_bigmodel_support() -> None:
     assert isinstance(provider, EchoProvider)
 
 
+def test_create_default_provider_registry_has_minimax_support() -> None:
+    registry = create_default_provider_registry(
+        openai_compatible_builder=lambda _config: EchoProvider()
+    )
+
+    provider = registry.create(
+        ModelEndpointConfig(
+            provider=ProviderType.MINIMAX,
+            model="MiniMax-M1-80k",
+            base_url="https://api.minimaxi.com/v1",
+            api_key="unused",
+        )
+    )
+
+    assert isinstance(provider, EchoProvider)
+
+
 def test_create_default_provider_registry_has_echo_support() -> None:
     registry = create_default_provider_registry(
         openai_compatible_builder=lambda _config: EchoProvider()

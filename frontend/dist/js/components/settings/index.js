@@ -153,6 +153,7 @@ function createModal() {
                                                 <select id="profile-provider">
                                                     <option value="openai_compatible">openai_compatible</option>
                                                     <option value="bigmodel">bigmodel</option>
+                                                    <option value="minimax">minimax</option>
                                                 </select>
                                             </div>
                                             <div class="form-group form-group-span-2">

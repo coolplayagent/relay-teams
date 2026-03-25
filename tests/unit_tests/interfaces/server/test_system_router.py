@@ -744,6 +744,29 @@ def test_save_model_profile_accepts_bigmodel_provider() -> None:
     assert saved_profile["provider"] == ProviderType.BIGMODEL.value
 
 
+def test_save_model_profile_accepts_minimax_provider() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/minimax",
+        json={
+            "provider": ProviderType.MINIMAX.value,
+            "model": "MiniMax-M1-80k",
+            "base_url": "https://api.minimaxi.com/v1",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["provider"] == ProviderType.MINIMAX.value
+
+
 def test_save_model_profile_accepts_source_name_for_rename() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)

@@ -283,6 +283,7 @@ console.log(JSON.stringify({
     assert '<select id="profile-provider">' in modal_html
     assert 'value="openai_compatible"' in modal_html
     assert 'value="bigmodel"' in modal_html
+    assert 'value="minimax"' in modal_html
     assert 'value="echo"' not in modal_html
     assert (
         '<input type="text" id="profile-model" autocomplete="off" spellcheck="false">'
