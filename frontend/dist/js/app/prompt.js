@@ -42,6 +42,7 @@ let topologyControlsBound = false;
 let promptMentionAutocompleteBound = false;
 let promptMentionOptions = [];
 let activePromptMentionIndex = -1;
+let promptMentionQuery = "";
 let promptMentionRange = {
   start: 0,
   end: 0,
@@ -597,6 +598,7 @@ function refreshPromptMentionAutocomplete() {
   const previousRoleId =
     promptMentionOptions[activePromptMentionIndex]?.roleId || "";
   promptMentionOptions = nextOptions;
+  promptMentionQuery = mentionContext.query;
   promptMentionRange = {
     start: mentionContext.start,
     end: mentionContext.end,
@@ -836,28 +838,54 @@ function renderPromptMentionAutocomplete() {
   }
   menu.hidden = false;
   menu.style.display = "flex";
-  menu.innerHTML = promptMentionOptions
-    .map((option, index) => {
-      const isActive = index === activePromptMentionIndex;
-      const roleIdMeta =
-        option.displayName.toLowerCase() === option.roleId.toLowerCase()
-          ? ""
-          : `<span class="prompt-mention-item-id">${escapeHtml(option.roleId)}</span>`;
-      return `
-            <button
-                type="button"
-                class="prompt-mention-item${isActive ? " active" : ""}"
-                data-index="${index}"
-                data-role-id="${escapeHtml(option.roleId)}"
-            >
-                <span class="prompt-mention-item-main">
-                    <span class="prompt-mention-item-name">${escapeHtml(option.displayName)}</span>
-                    ${roleIdMeta}
-                </span>
-            </button>
-        `;
-    })
-    .join("");
+  menu.innerHTML = `
+        <div class="prompt-mention-menu-header">
+            <span class="prompt-mention-menu-title">@agent</span>
+            <span class="prompt-mention-menu-summary">${escapeHtml(
+              t("composer.mention_keys"),
+            )}</span>
+        </div>
+        <div class="prompt-mention-menu-list">
+            ${promptMentionOptions
+              .map((option, index) => {
+                const isActive = index === activePromptMentionIndex;
+                const roleIdMeta =
+                  option.displayName.toLowerCase() === option.roleId.toLowerCase()
+                    ? ""
+                    : `<span class="prompt-mention-item-id">@${highlightPromptMentionText(option.roleId, promptMentionQuery)}</span>`;
+                return `
+                    <button
+                        type="button"
+                        class="prompt-mention-item${isActive ? " active" : ""}"
+                        data-index="${index}"
+                        data-role-id="${escapeHtml(option.roleId)}"
+                        role="option"
+                        aria-selected="${isActive ? "true" : "false"}"
+                    >
+                        <span class="prompt-mention-item-accent" aria-hidden="true">${escapeHtml(
+                          getPromptMentionMonogram(option.displayName),
+                        )}</span>
+                        <span class="prompt-mention-item-main">
+                            <span class="prompt-mention-item-row">
+                                <span class="prompt-mention-item-name">${highlightPromptMentionText(
+                                  option.displayName,
+                                  promptMentionQuery,
+                                )}</span>
+                                <span class="prompt-mention-item-enter" aria-hidden="true">Enter</span>
+                            </span>
+                            ${roleIdMeta}
+                        </span>
+                    </button>
+                `;
+              })
+              .join("")}
+        </div>
+        <div class="prompt-mention-menu-footer" aria-hidden="true">
+            <span class="prompt-mention-menu-key">↑↓</span>
+            <span class="prompt-mention-menu-key">Tab</span>
+            <span class="prompt-mention-menu-key">Esc</span>
+        </div>
+    `;
 }
 
 function movePromptMentionSelection(direction) {
@@ -911,6 +939,7 @@ function selectPromptMentionOption(index) {
 function dismissPromptMentionAutocomplete() {
   promptMentionOptions = [];
   activePromptMentionIndex = -1;
+  promptMentionQuery = "";
   promptMentionRange = {
     start: 0,
     end: 0,
@@ -951,6 +980,43 @@ function containsNode(node, target) {
     return true;
   }
   return typeof node.contains === "function" ? node.contains(target) : false;
+}
+
+function getPromptMentionMonogram(value) {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) {
+    return "@";
+  }
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return `${words[0].charAt(0)}${words[1].charAt(0)}`.toUpperCase();
+}
+
+function highlightPromptMentionText(text, query) {
+  const safeText = String(text || "");
+  const safeQuery = String(query || "").trim();
+  if (!safeText) {
+    return "";
+  }
+  if (!safeQuery) {
+    return escapeHtml(safeText);
+  }
+  const normalizedText = safeText.toLowerCase();
+  const normalizedQuery = safeQuery.toLowerCase();
+  const matchIndex = normalizedText.indexOf(normalizedQuery);
+  if (matchIndex < 0) {
+    return escapeHtml(safeText);
+  }
+  const before = safeText.slice(0, matchIndex);
+  const match = safeText.slice(matchIndex, matchIndex + safeQuery.length);
+  const after = safeText.slice(matchIndex + safeQuery.length);
+  return `${escapeHtml(before)}<mark class="prompt-mention-match">${escapeHtml(
+    match,
+  )}</mark>${escapeHtml(after)}`;
 }
 
 function escapeHtml(value) {

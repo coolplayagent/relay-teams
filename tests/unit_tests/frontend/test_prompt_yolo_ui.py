@@ -953,9 +953,14 @@ console.log(JSON.stringify({
     )
 
     payload = json.loads(result.stdout)
+    rendered_text = re.sub(r"<[^>]+>", "", payload["beforeSelect"]["menuHtml"])
     assert payload["beforeSelect"]["menuHidden"] is False
-    assert "Main Agent" in payload["beforeSelect"]["menuHtml"]
-    assert "MainAgent" in payload["beforeSelect"]["menuHtml"]
+    assert "prompt-mention-menu-header" in payload["beforeSelect"]["menuHtml"]
+    assert "prompt-mention-item-accent" in payload["beforeSelect"]["menuHtml"]
+    assert "prompt-mention-menu-footer" in payload["beforeSelect"]["menuHtml"]
+    assert "prompt-mention-match" in payload["beforeSelect"]["menuHtml"]
+    assert "Main Agent" in rendered_text
+    assert "MainAgent" in rendered_text
     assert payload["enterHandled"] is True
     assert payload["value"] == "@Main Agent "
     assert payload["selectionStart"] == 12
