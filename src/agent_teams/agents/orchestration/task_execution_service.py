@@ -623,7 +623,11 @@ class TaskExecutionService(BaseModel):
                 local_tools.append(entry)
 
         mcp_tools: list[RuntimeToolSnapshotEntry] = []
-        for server_name in self.mcp_registry.resolve_server_names(role.mcp_servers):
+        for server_name in self.mcp_registry.resolve_server_names(
+            role.mcp_servers,
+            strict=False,
+            consumer="agents.orchestration.task_execution_service.build_runtime_tools_snapshot",
+        ):
             for tool in await self.mcp_registry.list_tool_schemas(server_name):
                 mcp_tools.append(
                     self._tool_entry_from_definition(

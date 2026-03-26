@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 from typing import TYPE_CHECKING, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Agent
+
+from agent_teams.logger import get_logger, log_event
 
 if TYPE_CHECKING:
     from agent_teams.tools.runtime import ToolDeps
@@ -13,6 +16,9 @@ if TYPE_CHECKING:
     ToolRegister: TypeAlias = Callable[[Agent[ToolDeps, str]], None]
 else:
     ToolRegister = Callable[[Agent], None]
+
+
+LOGGER = get_logger(__name__)
 
 
 class ToolResolutionContext(BaseModel):
@@ -48,22 +54,48 @@ class ToolRegistry:
         *,
         context: ToolResolutionContext | None = None,
     ) -> tuple[ToolRegister, ...]:
-        resolved_names = self.resolve_names(names, context=context)
-        missing = [name for name in resolved_names if name not in self._tools]
-        if missing:
-            raise ValueError(f"Unknown tools: {missing}")
-
+        resolved_names = self.resolve_known(names, context=context)
         resolved: list[ToolRegister] = []
-        seen: set[str] = set()
         for name in resolved_names:
-            if name in seen:
-                continue
-            seen.add(name)
             resolved.append(self._tools[name])
         return tuple(resolved)
 
     def validate_known(self, names: tuple[str, ...]) -> None:
-        self.require(names)
+        _ = self.resolve_known(names)
+
+    def resolve_known(
+        self,
+        names: tuple[str, ...],
+        *,
+        context: ToolResolutionContext | None = None,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        resolved_names = self.resolve_names(names, context=context)
+        known_names = tuple(name for name in resolved_names if name in self._tools)
+        missing_names = tuple(
+            name for name in resolved_names if name not in self._tools
+        )
+        if missing_names and strict:
+            raise ValueError(f"Unknown tools: {list(missing_names)}")
+        if missing_names:
+            payload: dict[str, JsonValue] = {
+                "requested_tool_names": list(names),
+                "resolved_tool_names": list(known_names),
+                "ignored_tool_names": list(missing_names),
+            }
+            if context is not None:
+                payload["context"] = context.model_dump(mode="json")
+            if consumer is not None:
+                payload["consumer"] = consumer
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="tools.registry.unknown_ignored",
+                message="Ignoring unknown tools from existing configuration",
+                payload=payload,
+            )
+        return known_names
 
     def resolve_names(
         self,

@@ -12,6 +12,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.media import MediaAssetService
+from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.provider_contracts import (
@@ -36,6 +37,7 @@ from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
@@ -49,6 +51,22 @@ class _CapturingProviderRegistry:
     def create(self, config: ModelEndpointConfig) -> EchoProvider:
         self.created_config = config
         return EchoProvider()
+
+
+class _BuilderCallingProviderRegistry:
+    def __init__(self, builder) -> None:
+        self._builder = builder
+        self.created_config: ModelEndpointConfig | None = None
+
+    def create(self, config: ModelEndpointConfig):
+        self.created_config = config
+        return self._builder(config)
+
+
+class _CapturingOpenAICompatibleProvider:
+    def __init__(self, config: ModelEndpointConfig, **kwargs: object) -> None:
+        self.config = config
+        self.kwargs = kwargs
 
 
 def _build_runtime(
@@ -307,3 +325,101 @@ async def test_create_provider_factory_returns_misconfigured_provider_when_no_pr
                 user_prompt="hello",
             )
         )
+
+
+def test_create_provider_factory_filters_unknown_runtime_capabilities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    default_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="default-model",
+        base_url="https://default.example/v1",
+        api_key="default-key",
+    )
+    tool_registry = ToolRegistry({"read": lambda _agent: None})
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="docs",
+                config={"mcpServers": {"docs": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    skill_dir = tmp_path / "skills" / "time"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: time\n"
+        "description: timezone helper\n"
+        "---\n"
+        "Use UTC for all timestamps.\n",
+        encoding="utf-8",
+    )
+    skill_registry = SkillRegistry(
+        directory=SkillsDirectory(base_dir=tmp_path / "skills")
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "OpenAICompatibleProvider",
+        _CapturingOpenAICompatibleProvider,
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "create_default_provider_registry",
+        lambda **kwargs: _BuilderCallingProviderRegistry(
+            kwargs["openai_compatible_builder"]
+        ),
+    )
+    factory = create_provider_factory(
+        runtime=_build_runtime(
+            profiles={"default": default_config},
+            default_model_profile="default",
+        ),
+        task_repo=cast(TaskRepository, object()),
+        shared_store=cast(SharedStateRepository, object()),
+        event_log=cast(EventLog, object()),
+        injection_manager=cast(RunInjectionManager, object()),
+        run_event_hub=cast(RunEventHub, object()),
+        agent_repo=cast(AgentInstanceRepository, object()),
+        approval_ticket_repo=cast(ApprovalTicketRepository, object()),
+        run_runtime_repo=cast(RunRuntimeRepository, object()),
+        run_intent_repo=cast(RunIntentRepository, object()),
+        workspace_manager=cast(WorkspaceManager, object()),
+        media_asset_service=cast(MediaAssetService, object()),
+        tool_registry=tool_registry,
+        mcp_registry=mcp_registry,
+        skill_registry=skill_registry,
+        message_repo=cast(MessageRepository, object()),
+        role_registry=cast(RoleRegistry, object()),
+        get_task_service=lambda: cast(TaskOrchestrationService, object()),
+        run_control_manager=cast(RunControlManager, object()),
+        tool_approval_manager=cast(ToolApprovalManager, object()),
+        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        notification_service=cast(NotificationService | None, None),
+        get_task_execution_service=lambda: cast(TaskExecutionService, object()),
+        token_usage_repo=cast(TokenUsageRepository | None, None),
+        external_agent_session_manager=None,
+    )
+
+    provider = factory(
+        RoleDefinition(
+            role_id="spec_coder",
+            name="Spec Coder",
+            description="Implements requested changes.",
+            version="1.0.0",
+            tools=("read", "missing_tool"),
+            mcp_servers=("docs", "missing_server"),
+            skills=("time", "missing_skill"),
+            model_profile="default",
+            system_prompt="Implement code.",
+        ),
+        None,
+    )
+
+    assert isinstance(provider, _CapturingOpenAICompatibleProvider)
+    assert provider.kwargs["allowed_tools"] == ("read",)
+    assert provider.kwargs["allowed_mcp_servers"] == ("docs",)
+    assert provider.kwargs["allowed_skills"] == ("time",)

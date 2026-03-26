@@ -50,6 +50,9 @@
 - For outbound network changes, evaluate proxy requirements first and reuse the existing proxy module when needed.
 - CLI modules should provide their own subcommands. List/query output must support default table output and `--format json`.
 - Database schema and API changes do not need backward compatibility, but matching `docs/` updates must be included in the same task.
+- Persisted capability references may contain dirty data. Runtime paths that consume existing role state from the database or already-saved config must tolerate missing `tools`, `mcp_servers`, and `skills` by filtering unknown entries and logging a warning with enough context to diagnose the source.
+- Keep strict validation for explicit user mutations and validation endpoints. Creating or editing a role should still reject unknown `tools`, `mcp_servers`, and `skills` instead of silently accepting them.
+- Do not let startup, config reload, prompt building, provider construction, or task execution fail only because persisted capability references point at missing registry entries.
 
 ## Development
 - Initial setup:

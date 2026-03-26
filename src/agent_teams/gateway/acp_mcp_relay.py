@@ -62,7 +62,14 @@ class GatewayAwareMcpRegistry(McpRegistry):
         if missing:
             raise ValueError(f"Unknown MCP servers: {missing}")
 
-    def resolve_server_names(self, names: tuple[str, ...]) -> tuple[str, ...]:
+    def resolve_server_names(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        _ = consumer
         resolved: list[str] = []
         for name in names:
             if name not in resolved:
@@ -70,7 +77,10 @@ class GatewayAwareMcpRegistry(McpRegistry):
         for name in self._relay.current_session_server_names():
             if name not in resolved:
                 resolved.append(name)
-        self.validate_known(tuple(resolved))
+        if strict:
+            self.validate_known(tuple(resolved))
+        else:
+            resolved = [name for name in resolved if name in self.list_names()]
         return tuple(resolved)
 
     def list_names(self) -> tuple[str, ...]:

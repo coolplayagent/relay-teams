@@ -38,7 +38,12 @@ def build_coordination_agent(
     """
     toolsets = []
     if mcp_registry and allowed_mcp_servers:
-        toolsets.extend(mcp_registry.get_toolsets(allowed_mcp_servers))
+        resolved_mcp_servers = mcp_registry.resolve_server_names(
+            allowed_mcp_servers,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+        toolsets.extend(mcp_registry.get_toolsets(resolved_mcp_servers))
 
     skill_tools = []
     if skill_registry and allowed_skills:
@@ -72,7 +77,13 @@ def build_coordination_agent(
         tools=skill_tools,
         retries=5,
     )
-    tool_registers = tool_registry.require(allowed_tools)
+    tool_registers = tool_registry.require(
+        tool_registry.resolve_known(
+            allowed_tools,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+    )
     for register in tool_registers:
         register(agent)
 

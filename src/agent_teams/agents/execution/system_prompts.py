@@ -396,7 +396,11 @@ async def _list_role_mcp_tools(
     role: RoleDefinition,
     mcp_registry: McpRegistry,
 ) -> tuple[str, ...]:
-    resolved_server_names = mcp_registry.resolve_server_names(role.mcp_servers)
+    resolved_server_names = mcp_registry.resolve_server_names(
+        role.mcp_servers,
+        strict=False,
+        consumer=f"agents.execution.system_prompts.role:{role.role_id}",
+    )
     if not resolved_server_names:
         return ()
     summaries = await asyncio.gather(

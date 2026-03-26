@@ -72,3 +72,22 @@ def test_registry_require_appends_implicit_tools_from_context() -> None:
     )
 
     assert resolved == (_register_beta, _register_alpha)
+
+
+def test_registry_resolve_known_ignores_unknown_tools_when_strict_is_false() -> None:
+    registry = ToolRegistry(
+        {
+            "alpha": _register_alpha,
+            "beta": _register_beta,
+        }
+    )
+    registry.register_implicit_resolver(_ImplicitResolver())
+
+    resolved = registry.resolve_known(
+        ("missing", "beta"),
+        context=ToolResolutionContext(session_id="session-1"),
+        strict=False,
+        consumer="tests.unit_tests.tools.registry.test_registry",
+    )
+
+    assert resolved == ("beta", "alpha")

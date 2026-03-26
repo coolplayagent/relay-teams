@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import logging
 from typing import Protocol, cast
 
 from pydantic import JsonValue
@@ -12,7 +13,7 @@ from pydantic_ai.mcp import (
     MCPServerStreamableHTTP,
 )
 
-from agent_teams.logger import get_logger
+from agent_teams.logger import get_logger, log_event
 from agent_teams.mcp.mcp_models import McpServerSpec, McpToolInfo, McpToolSchema
 from agent_teams.trace import trace_span
 
@@ -49,20 +50,42 @@ class McpRegistry:
             operation="get_toolsets",
             attributes={"server_names": list(names)},
         ):
-            self.validate_known(names)
+            resolved_names = self.resolve_server_names(names)
             toolsets: list[MCPServer] = []
-            for name in names:
+            for name in resolved_names:
                 toolsets.append(self._get_or_create_toolset(name))
             return tuple(toolsets)
 
     def validate_known(self, names: tuple[str, ...]) -> None:
-        missing = [name for name in names if name not in self._specs]
-        if missing:
-            raise ValueError(f"Unknown MCP servers: {missing}")
+        _ = self.resolve_server_names(names)
 
-    def resolve_server_names(self, names: tuple[str, ...]) -> tuple[str, ...]:
-        self.validate_known(names)
-        return names
+    def resolve_server_names(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        resolved_names = tuple(name for name in names if name in self._specs)
+        missing_names = tuple(name for name in names if name not in self._specs)
+        if missing_names and strict:
+            raise ValueError(f"Unknown MCP servers: {list(missing_names)}")
+        if missing_names:
+            payload: dict[str, JsonValue] = {
+                "requested_server_names": list(names),
+                "resolved_server_names": list(resolved_names),
+                "ignored_server_names": list(missing_names),
+            }
+            if consumer is not None:
+                payload["consumer"] = consumer
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="mcp.registry.unknown_ignored",
+                message="Ignoring unknown MCP servers from existing configuration",
+                payload=payload,
+            )
+        return resolved_names
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs.keys()))

@@ -170,6 +170,59 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "Deliver weekly summary" not in prompt
 
 
+def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="coordinator_agent",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            system_prompt="You are a focused agent.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="writer_agent",
+            name="Writer",
+            description="Drafts release notes.",
+            version="1",
+            tools=("read", "write"),
+            mcp_servers=("docs", "missing_server"),
+            skills=("time",),
+            model_profile="default",
+            system_prompt="You are a writer.",
+        )
+    )
+
+    prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=_role("coordinator_agent"),
+                task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
+                    coordinator_role_id="coordinator_agent",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
+                shared_state_snapshot=(),
+            ),
+            role_registry=registry,
+            mcp_registry=_FakeMcpRegistry(),
+        )
+    )
+
+    assert "- MCP Tools: docs_search" in prompt
+
+
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     working_directory = Path("/tmp/workspace-root")
     prompt = asyncio.run(

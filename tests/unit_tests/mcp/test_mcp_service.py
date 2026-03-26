@@ -195,3 +195,26 @@ def test_build_mcp_server_allows_stdio_timeout_override() -> None:
     assert server.tool_prefix == "context7"
     assert server.timeout == 42.0
     assert server.read_timeout == 123.0
+
+
+def test_registry_resolve_server_names_ignores_unknown_servers_when_not_strict() -> (
+    None
+):
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(
+        ("filesystem", "missing"),
+        strict=False,
+        consumer="tests.unit_tests.mcp.test_mcp_service",
+    )
+
+    assert resolved == ("filesystem",)

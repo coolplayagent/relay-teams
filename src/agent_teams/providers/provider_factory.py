@@ -41,7 +41,7 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.registry import ToolRegistry
+from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 from agent_teams.workspace import WorkspaceManager
 
@@ -135,9 +135,22 @@ def create_provider_factory(
                 tool_registry=tool_registry,
                 mcp_registry=mcp_registry,
                 skill_registry=skill_registry,
-                allowed_tools=role.tools,
-                allowed_mcp_servers=mcp_registry.resolve_server_names(role.mcp_servers),
-                allowed_skills=role.skills,
+                allowed_tools=tool_registry.resolve_known(
+                    role.tools,
+                    context=ToolResolutionContext(session_id=session_id or ""),
+                    strict=False,
+                    consumer=f"providers.provider_factory.role:{role.role_id}",
+                ),
+                allowed_mcp_servers=mcp_registry.resolve_server_names(
+                    role.mcp_servers,
+                    strict=False,
+                    consumer=f"providers.provider_factory.role:{role.role_id}",
+                ),
+                allowed_skills=skill_registry.resolve_known(
+                    role.skills,
+                    strict=False,
+                    consumer=f"providers.provider_factory.role:{role.role_id}",
+                ),
                 message_repo=message_repo,
                 role_registry=role_registry,
                 task_execution_service=get_task_execution_service(),

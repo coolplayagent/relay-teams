@@ -1332,7 +1332,12 @@ def _build_mcp_servers_for_role(
     host_server: dict[str, JsonValue] | None = None,
 ) -> list[dict[str, JsonValue]]:
     result: list[dict[str, JsonValue]] = []
-    for server_name in role.mcp_servers:
+    resolved_server_names = mcp_registry.resolve_server_names(
+        role.mcp_servers,
+        strict=False,
+        consumer=f"external_agents.provider.role:{role.role_id}",
+    )
+    for server_name in resolved_server_names:
         if server_name == HOST_TOOL_SERVER_ID:
             raise RuntimeError(
                 f"MCP server id {HOST_TOOL_SERVER_ID} is reserved for Agent Teams "

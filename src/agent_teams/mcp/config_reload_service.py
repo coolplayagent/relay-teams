@@ -32,5 +32,9 @@ class McpConfigReloadService:
         ):
             mcp_registry = self._mcp_config_manager.load_registry()
             for role in self._role_registry.list_roles():
-                mcp_registry.validate_known(role.mcp_servers)
+                mcp_registry.resolve_server_names(
+                    role.mcp_servers,
+                    strict=False,
+                    consumer=f"mcp.config_reload.role:{role.role_id}",
+                )
             self._on_mcp_reloaded(mcp_registry)

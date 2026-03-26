@@ -39,6 +39,7 @@ from agent_teams.external_agents.provider import (
 from agent_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
+from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -481,7 +482,7 @@ def _build_manager(
         run_intent_repo=cast(RunIntentRepository, object()),
         role_memory_service=cast(RoleMemoryService | None, None),
         tool_registry=cast(ToolRegistry, object()),
-        get_mcp_registry=lambda: cast(McpRegistry, object()),
+        get_mcp_registry=lambda: McpRegistry(),
         get_skill_registry=lambda: cast(SkillRegistry, object()),
         get_role_registry=lambda: cast(RoleRegistry, object()),
         get_task_execution_service=lambda: cast(TaskExecutionService, object()),
@@ -518,6 +519,37 @@ def _install_transport_builder(
         "build_acp_transport",
         fake_build_acp_transport,
     )
+
+
+def test_build_mcp_servers_for_role_ignores_unknown_servers() -> None:
+    role = RoleDefinition(
+        role_id="writer",
+        name="Writer",
+        description="Writes documents.",
+        version="1.0.0",
+        tools=(),
+        mcp_servers=("docs", "missing_server"),
+        skills=(),
+        model_profile="default",
+        system_prompt="Write clearly.",
+    )
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="docs",
+                config={"mcpServers": {"docs": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    servers = provider_module._build_mcp_servers_for_role(
+        role=role,
+        mcp_registry=mcp_registry,
+    )
+
+    assert servers == [{"command": "npx", "id": "docs", "name": "docs"}]
 
 
 def _cast_bridge(bridge: _FakeHostToolBridge) -> ExternalAcpHostToolBridge:

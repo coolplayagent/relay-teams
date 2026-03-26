@@ -131,7 +131,11 @@ from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.registry import ToolRegistry, build_default_registry
+from agent_teams.tools.registry import (
+    ToolRegistry,
+    ToolResolutionContext,
+    build_default_registry,
+)
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
     ToolApprovalPolicy,
@@ -214,8 +218,17 @@ class ServerContainer:
         )
 
         for role in self.role_registry.list_roles():
-            self.tool_registry.validate_known(role.tools)
-            self.mcp_registry.validate_known(role.mcp_servers)
+            self.tool_registry.resolve_known(
+                role.tools,
+                context=ToolResolutionContext(session_id=""),
+                strict=False,
+                consumer=f"interfaces.server.container.role:{role.role_id}",
+            )
+            self.mcp_registry.resolve_server_names(
+                role.mcp_servers,
+                strict=False,
+                consumer=f"interfaces.server.container.role:{role.role_id}",
+            )
             self.skill_registry.resolve_known(
                 role.skills,
                 strict=False,
