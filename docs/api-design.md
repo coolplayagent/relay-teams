@@ -543,6 +543,31 @@ Returns aggregated token usage for the active session segment, grouped by `role_
 
 Returns token usage for a single run, grouped by agent instance. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
 
+### `GET /sessions/{session_id}/media`
+
+Lists session-scoped media assets as normalized `media_ref` content parts.
+
+### `POST /sessions/{session_id}/media`
+
+Uploads one image, audio, or video file into the session media store.
+
+Response fields mirror a typed content part:
+- `kind = "media_ref"`
+- `asset_id`
+- `session_id`
+- `modality = "image" | "audio" | "video"`
+- `mime_type`
+- `url`
+- optional metadata such as `size_bytes`, `width`, `height`, and `duration_ms`
+
+### `GET /sessions/{session_id}/media/{asset_id}`
+
+Returns media metadata as the same normalized `media_ref` content part used by runs, ACP, and the frontend.
+
+### `GET /sessions/{session_id}/media/{asset_id}/file`
+
+Streams a locally stored session media file or redirects to the saved remote URL for remote references.
+
 ## Run APIs
 
 ### `POST /runs`
@@ -553,8 +578,15 @@ Request:
 
 ```json
 {
-  "intent": "Implement endpoint X",
   "session_id": "session-1",
+  "input": [
+    {
+      "kind": "text",
+      "text": "Implement endpoint X"
+    }
+  ],
+  "run_kind": "conversation",
+  "generation_config": null,
   "execution_mode": "ai",
   "yolo": false,
   "target_role_id": "Architect",
@@ -567,6 +599,20 @@ Request:
 
 Notes:
 
+- `input` is now the canonical run payload. It is an ordered array of typed content parts:
+  - `{"kind":"text","text":"..."}`
+  - `{"kind":"media_ref", ...}`
+  - `{"kind":"inline_media", ...}` for small ingress-only image/audio payloads that are normalized immediately into stored `media_ref` assets
+- `run_kind` supports:
+  - `conversation`
+  - `generate_image`
+  - `generate_audio`
+  - `generate_video`
+- Native media generation also enters through `/api/runs`; the backend chooses the provider-native generation branch from `run_kind`.
+- `generation_config` is optional and modality-specific:
+  - image: `kind`, `count`, `size`, `seed`
+  - audio: `kind`, `count`, `voice`, `format`, `duration_ms`, `seed`
+  - video: `kind`, `count`, `resolution`, `duration_ms`, `seed`
 - `yolo` is optional.
 - `yolo: false` preserves the existing tool approval flow.
 - `yolo: true` skips tool approval for all tools in that run, including resumed recoverable runs.
@@ -586,6 +632,10 @@ Response:
 ### `GET /runs/{run_id}/events`
 
 Streams run events via SSE.
+
+Multimodal events:
+- `output_delta`: payload includes `output`, an array of typed content parts. Text streaming may still emit `text_delta`; media outputs are emitted through `output_delta`.
+- `generation_progress`: payload includes `run_kind`, `phase`, `progress`, and optional `preview_asset_id` for provider-native image/audio/video generation runs.
 
 Thinking events:
 - `thinking_started`: payload includes `part_index`, `role_id`, `instance_id`.

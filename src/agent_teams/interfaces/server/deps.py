@@ -27,6 +27,7 @@ from agent_teams.gateway.feishu import (
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.mcp.mcp_service import McpService
+from agent_teams.media import MediaAssetService
 from agent_teams.metrics import MetricsService
 from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
@@ -155,6 +156,10 @@ def get_workspace_service(request: Request) -> WorkspaceService:
 
 def get_workspace_manager(request: Request) -> WorkspaceManager:
     return get_container(request).workspace_manager
+
+
+def get_media_asset_service(request: Request) -> MediaAssetService:
+    return get_container(request).media_asset_service
 
 
 def get_tool_registry(request: Request) -> ToolRegistry:

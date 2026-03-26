@@ -30,6 +30,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
 from agent_teams.providers.provider_contracts import LLMRequest
@@ -620,6 +621,7 @@ def _build_provider(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
+        media_asset_service=cast(MediaAssetService, object()),
         role_memory_service=cast(RoleMemoryService | None, None),
         subagent_reflection_service=None,
         tool_registry=cast(ToolRegistry, object()),

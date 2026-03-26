@@ -316,6 +316,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
         gateway_session_service=gateway_session_service,
         session_service=container.session_service,
         run_service=container.run_service,
+        media_asset_service=container.media_asset_service,
         notify=_noop_notify,
         mcp_relay=mcp_relay,
     )

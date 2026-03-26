@@ -5,15 +5,25 @@ import logging
 import time
 from typing import Annotated, ClassVar, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import (
+    ContentPart,
+    InlineMediaContentPart,
+    content_parts_from_text,
+)
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    MediaGenerationConfig,
+    RunKind,
+    RunThinkingConfig,
+)
 from agent_teams.trace import bind_trace_context
 
 logger = get_logger(__name__)
@@ -23,12 +33,27 @@ router = APIRouter(prefix="/runs", tags=["Runs"])
 class CreateRunRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    intent: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
+    input: tuple[ContentPart, ...] = Field(default_factory=tuple)
+    run_kind: RunKind = RunKind.CONVERSATION
+    generation_config: MediaGenerationConfig | None = None
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_intent(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "input" in payload:
+            return payload
+        legacy_intent = payload.pop("intent", None)
+        if isinstance(legacy_intent, str):
+            payload["input"] = content_parts_from_text(legacy_intent)
+        return payload
 
 
 class CreateRunResponse(BaseModel):
@@ -72,15 +97,34 @@ class InjectSubagentRequest(BaseModel):
     response_model_exclude_none=True,
 )
 async def create_run(
+    request: Request,
     req: CreateRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> CreateRunResponse:
     started = time.perf_counter()
     try:
+        normalized_input = req.input
+        if any(isinstance(part, InlineMediaContentPart) for part in req.input):
+            container = getattr(request.app.state, "container", None)
+            if container is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Media uploads require the server container to be initialized",
+                )
+            session = container.session_service.get_session(req.session_id)
+            normalized_input = container.media_asset_service.normalize_content_parts(
+                session_id=req.session_id,
+                workspace_id=session.workspace_id,
+                parts=req.input,
+            )
+        if not normalized_input:
+            raise HTTPException(status_code=400, detail="Run input cannot be empty")
         run_id, session_id = service.create_run(
             IntentInput(
                 session_id=req.session_id,
-                intent=req.intent,
+                input=normalized_input,
+                run_kind=req.run_kind,
+                generation_config=req.generation_config,
                 execution_mode=req.execution_mode,
                 yolo=req.yolo,
                 thinking=req.thinking,

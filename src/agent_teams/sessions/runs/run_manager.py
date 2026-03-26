@@ -7,11 +7,22 @@ from concurrent.futures import Future as ThreadFuture
 from json import dumps
 from typing import Awaitable, Callable, TypeVar, cast
 
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    FilePart,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
+from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import MediaAssetService, MediaRefContentPart, TextContentPart
+from agent_teams.media import content_parts_to_text
 from agent_teams.notifications import (
     NotificationContext,
     NotificationService,
@@ -20,13 +31,25 @@ from agent_teams.notifications import (
 from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
+from agent_teams.providers.provider_contracts import (
+    EchoProvider,
+    LLMProvider,
+    LLMRequest,
+)
+from agent_teams.roles.role_models import RoleDefinition
+from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunEvent,
+    RunKind,
+    RunResult,
+)
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
@@ -47,6 +70,10 @@ from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
 from agent_teams.trace import bind_trace_context
 from agent_teams.agents.tasks.models import TaskRecord
+from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.ids import new_task_id
+from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from agent_teams.workspace import build_conversation_id
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
@@ -57,6 +84,9 @@ class RunManager:
         self,
         *,
         meta_agent: MetaAgent,
+        provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
+        | None = None,
+        role_registry: RoleRegistry | None = None,
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
         run_control_manager: RunControlManager,
@@ -73,8 +103,13 @@ class RunManager:
         run_state_repo: RunStateRepository | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
+        media_asset_service: MediaAssetService | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
+        self._provider_factory = provider_factory or (
+            lambda _role, _session_id: EchoProvider()
+        )
+        self._role_registry = role_registry
         self._injection_manager: RunInjectionManager = injection_manager
         self._run_event_hub: RunEventHub = run_event_hub
         self._run_control_manager: RunControlManager = run_control_manager
@@ -93,6 +128,7 @@ class RunManager:
         self._run_state_repo: RunStateRepository | None = run_state_repo
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
+        self._media_asset_service = media_asset_service
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -182,7 +218,11 @@ class RunManager:
             self._injection_manager.activate(run_id)
             self._running_run_ids.add(run_id)
             try:
-                result = await self._meta_agent.handle_intent(intent, trace_id=run_id)
+                result = (
+                    await self._run_media_generation(run_id=run_id, intent=intent)
+                    if intent.run_kind != RunKind.CONVERSATION
+                    else await self._meta_agent.handle_intent(intent, trace_id=run_id)
+                )
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
                         run_id,
@@ -238,6 +278,10 @@ class RunManager:
         existing = self._active_recoverable_run(session_id)
         if existing is not None:
             active_run_id, runtime = existing
+            if not self._run_accepts_followups(active_run_id, next_intent=intent):
+                raise RuntimeError(
+                    f"Run {active_run_id} is active and does not accept follow-up input"
+                )
             self._assert_auto_attach_allowed(active_run_id, runtime)
             if (
                 active_run_id in self._pending_runs
@@ -392,11 +436,16 @@ class RunManager:
                 payload_json=dumps({"session_id": session_id}),
             )
         )
+        runner = (
+            (lambda: self._run_media_generation(run_id=run_id, intent=intent))
+            if intent.run_kind != RunKind.CONVERSATION
+            else (lambda: self._meta_agent.handle_intent(intent, trace_id=run_id))
+        )
         task = asyncio.create_task(
             self._worker(
                 run_id=run_id,
                 session_id=session_id,
-                runner=lambda: self._meta_agent.handle_intent(intent, trace_id=run_id),
+                runner=runner,
             )
         )
         self._run_control_manager.register_run_task(
@@ -464,6 +513,227 @@ class RunManager:
             return await self._meta_agent.handle_intent(intent, trace_id=run_id)
         return await self._meta_agent.resume_run(trace_id=run_id)
 
+    async def _run_media_generation(
+        self,
+        *,
+        run_id: str,
+        intent: IntentInput,
+    ) -> RunResult:
+        session = self._session_repo.get(intent.session_id)
+        role_id = self._resolve_generation_role_id(intent)
+        role_registry = self._role_registry
+        if role_registry is None:
+            raise RuntimeError("RunManager requires role_registry for media generation")
+        role = role_registry.get(role_id)
+        provider = self._provider_factory(role, intent.session_id)
+        conversation_id = build_conversation_id(intent.session_id, role_id)
+        instance = create_subagent_instance(
+            role_id,
+            workspace_id=session.workspace_id,
+            session_id=intent.session_id,
+            conversation_id=conversation_id,
+        )
+        root_task = TaskEnvelope(
+            task_id=new_task_id().value,
+            session_id=intent.session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id=role_id,
+            objective=intent.intent or intent.run_kind.value,
+            verification=VerificationPlan(checklist=("generated_media",)),
+        )
+        agent_repo = self._require_agent_repo()
+        task_repo = self._require_task_repo()
+        agent_repo.upsert_instance(
+            run_id=run_id,
+            trace_id=run_id,
+            session_id=intent.session_id,
+            instance_id=instance.instance_id,
+            role_id=role_id,
+            workspace_id=session.workspace_id,
+            conversation_id=conversation_id,
+            status=InstanceStatus.RUNNING,
+        )
+        _ = task_repo.create(root_task)
+        task_repo.update_status(
+            root_task.task_id,
+            TaskStatus.RUNNING,
+            assigned_instance_id=instance.instance_id,
+        )
+        self._safe_runtime_update(
+            run_id,
+            root_task_id=root_task.task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+            active_instance_id=instance.instance_id,
+            active_task_id=root_task.task_id,
+            active_role_id=role_id,
+            active_subagent_instance_id=None,
+            last_error=None,
+        )
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=intent.session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                event_type=RunEventType.MODEL_STEP_STARTED,
+                payload_json=dumps(
+                    {"role_id": role_id, "instance_id": instance.instance_id}
+                ),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+        self._publish_generation_progress(
+            run_id=run_id,
+            session_id=intent.session_id,
+            task_id=root_task.task_id,
+            instance_id=instance.instance_id,
+            role_id=role_id,
+            run_kind=intent.run_kind.value,
+            phase="started",
+            progress=0.0,
+            preview_asset_id=None,
+        )
+        request = LLMRequest(
+            run_id=run_id,
+            trace_id=run_id,
+            task_id=root_task.task_id,
+            session_id=intent.session_id,
+            workspace_id=session.workspace_id,
+            conversation_id=conversation_id,
+            instance_id=instance.instance_id,
+            role_id=role_id,
+            system_prompt="",
+            user_prompt=intent.intent or None,
+            input=intent.input,
+            run_kind=intent.run_kind,
+            generation_config=intent.generation_config,
+            thinking=intent.thinking,
+        )
+        try:
+            output = await self._execute_native_generation(
+                provider=provider,
+                request=request,
+            )
+            if not output:
+                raise RuntimeError("Provider returned no media output")
+            self._append_media_output_message(
+                request=request,
+                output=output,
+            )
+            self._publish_output_delta(
+                run_id=run_id,
+                session_id=intent.session_id,
+                task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                output=output,
+            )
+            preview_asset_id = next(
+                (
+                    part.asset_id
+                    for part in output
+                    if isinstance(part, MediaRefContentPart)
+                ),
+                None,
+            )
+            self._publish_generation_progress(
+                run_id=run_id,
+                session_id=intent.session_id,
+                task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                run_kind=intent.run_kind.value,
+                phase="completed",
+                progress=1.0,
+                preview_asset_id=preview_asset_id,
+            )
+            self._safe_publish_run_event(
+                RunEvent(
+                    session_id=intent.session_id,
+                    run_id=run_id,
+                    trace_id=run_id,
+                    task_id=root_task.task_id,
+                    instance_id=instance.instance_id,
+                    role_id=role_id,
+                    event_type=RunEventType.MODEL_STEP_FINISHED,
+                    payload_json=dumps(
+                        {"role_id": role_id, "instance_id": instance.instance_id}
+                    ),
+                ),
+                failure_event="run.event.publish_failed",
+            )
+            task_repo.update_status(
+                root_task.task_id,
+                TaskStatus.COMPLETED,
+                assigned_instance_id=instance.instance_id,
+                result=content_parts_to_text(output),
+            )
+            agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
+            return RunResult(
+                trace_id=run_id,
+                root_task_id=root_task.task_id,
+                status="completed",
+                output=output,
+            )
+        except Exception:
+            task_repo.update_status(
+                root_task.task_id,
+                TaskStatus.FAILED,
+                assigned_instance_id=instance.instance_id,
+                error_message="native_generation_failed",
+            )
+            agent_repo.mark_status(instance.instance_id, InstanceStatus.FAILED)
+            self._publish_generation_progress(
+                run_id=run_id,
+                session_id=intent.session_id,
+                task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                run_kind=intent.run_kind.value,
+                phase="failed",
+                progress=1.0,
+                preview_asset_id=None,
+            )
+            raise
+
+    async def _execute_native_generation(
+        self,
+        *,
+        provider: LLMProvider,
+        request: LLMRequest,
+    ) -> tuple[TextContentPart | MediaRefContentPart, ...]:
+        if request.run_kind == RunKind.GENERATE_IMAGE:
+            return cast(
+                tuple[TextContentPart | MediaRefContentPart, ...],
+                await provider.generate_image(request),
+            )
+        if request.run_kind == RunKind.GENERATE_AUDIO:
+            return cast(
+                tuple[TextContentPart | MediaRefContentPart, ...],
+                await provider.generate_audio(request),
+            )
+        if request.run_kind == RunKind.GENERATE_VIDEO:
+            return cast(
+                tuple[TextContentPart | MediaRefContentPart, ...],
+                await provider.generate_video(request),
+            )
+        raise RuntimeError(
+            f"Unsupported native generation run kind: {request.run_kind.value}"
+        )
+
+    def _resolve_generation_role_id(self, intent: IntentInput) -> str:
+        if intent.target_role_id is not None and intent.target_role_id.strip():
+            return intent.target_role_id
+        if self._role_registry is None:
+            raise RuntimeError("RunManager requires role_registry for media generation")
+        if intent.topology is not None and intent.topology.normal_root_role_id.strip():
+            return intent.topology.normal_root_role_id
+        return self._role_registry.get_main_agent_role_id()
+
     async def _worker(
         self,
         *,
@@ -504,14 +774,15 @@ class RunManager:
             notification_title = (
                 "Run Completed" if result.status == "completed" else "Run Failed"
             )
+            output_text = result.output_text
             notification_body = (
-                result.output.strip()
-                if result.status == "completed" and result.output.strip()
+                output_text
+                if result.status == "completed" and output_text
                 else f"Run {run_id} completed successfully."
                 if result.status == "completed"
                 else (
-                    f"Run {run_id} failed: {result.output}"
-                    if result.output
+                    f"Run {run_id} failed: {output_text}"
+                    if output_text
                     else f"Run {run_id} failed."
                 )
             )
@@ -524,7 +795,7 @@ class RunManager:
                 active_task_id=None,
                 active_role_id=None,
                 active_subagent_instance_id=None,
-                last_error=result.output
+                last_error=output_text
                 if terminal_status == RunRuntimeStatus.FAILED
                 else None,
             )
@@ -1148,6 +1419,127 @@ class RunManager:
             )
         )
 
+    def _publish_generation_progress(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        run_kind: str,
+        phase: str,
+        progress: float,
+        preview_asset_id: str | None,
+    ) -> None:
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                event_type=RunEventType.GENERATION_PROGRESS,
+                payload_json=dumps(
+                    {
+                        "run_kind": run_kind,
+                        "phase": phase,
+                        "progress": progress,
+                        "preview_asset_id": preview_asset_id,
+                    }
+                ),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+
+    def _publish_output_delta(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        output: tuple[TextContentPart | MediaRefContentPart, ...],
+    ) -> None:
+        payload = {
+            "output": [part.model_dump(mode="json") for part in output],
+            "role_id": role_id,
+            "instance_id": instance_id,
+        }
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                event_type=RunEventType.OUTPUT_DELTA,
+                payload_json=dumps(payload),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+
+    def _append_media_output_message(
+        self,
+        *,
+        request: LLMRequest,
+        output: tuple[TextContentPart | MediaRefContentPart, ...],
+    ) -> None:
+        message_repo = self._require_message_repo()
+        media_asset_service = self._require_media_asset_service()
+        response_parts: list[TextPart | FilePart] = []
+        for part in output:
+            if isinstance(part, TextContentPart):
+                response_parts.append(TextPart(content=part.text))
+                continue
+            record = media_asset_service.get_asset(part.asset_id)
+            try:
+                file_path, _media_type = media_asset_service.get_asset_file(
+                    session_id=record.session_id,
+                    asset_id=record.asset_id,
+                )
+            except FileNotFoundError:
+                response_parts.append(TextPart(content=part.url))
+                continue
+            response_parts.append(
+                FilePart(
+                    content=BinaryContent(
+                        data=file_path.read_bytes(),
+                        media_type=record.mime_type,
+                    )
+                )
+            )
+        if not response_parts:
+            return
+        message_repo.append(
+            session_id=request.session_id,
+            workspace_id=request.workspace_id,
+            conversation_id=request.conversation_id,
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            messages=[
+                ModelResponse(parts=response_parts, model_name="media_generation")
+            ],
+        )
+
+    def _run_accepts_followups(self, run_id: str, next_intent: IntentInput) -> bool:
+        if next_intent.run_kind != RunKind.CONVERSATION:
+            return False
+        current_intent = self._pending_runs.get(run_id)
+        if current_intent is None and self._run_intent_repo is not None:
+            try:
+                current_intent = self._run_intent_repo.get(run_id)
+            except KeyError:
+                current_intent = None
+        if current_intent is None:
+            return True
+        return current_intent.run_kind == RunKind.CONVERSATION
+
     def _require_task_repo(self) -> TaskRepository:
         if self._task_repo is None:
             raise RuntimeError("RunManager requires task_repo for recovery")
@@ -1162,6 +1554,11 @@ class RunManager:
         if self._agent_repo is None:
             raise RuntimeError("RunManager requires agent_repo for recovery")
         return self._agent_repo
+
+    def _require_media_asset_service(self) -> MediaAssetService:
+        if self._media_asset_service is None:
+            raise RuntimeError("RunManager requires media_asset_service for media runs")
+        return self._media_asset_service
 
     def _emit_notification(
         self,

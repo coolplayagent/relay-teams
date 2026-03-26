@@ -202,6 +202,10 @@ export function appendStreamChunk() {
     return undefined;
 }
 
+export function appendStreamOutputParts() {
+    return undefined;
+}
+
 export function finalizeThinking() {
     return undefined;
 }

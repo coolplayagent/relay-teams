@@ -11,6 +11,7 @@ from agent_teams.agents.execution.subagent_reflection import SubagentReflectionS
 from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import SqliteMetricAggregateStore
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -99,6 +100,7 @@ class SessionService:
         skill_registry: SkillRegistry | None = None,
         mcp_registry: McpRegistry | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
+        media_asset_service: MediaAssetService | None = None,
         get_runtime: Callable[[], RuntimeConfig] | None = None,
     ) -> None:
         self._session_repo = session_repo
@@ -124,6 +126,7 @@ class SessionService:
         self._skill_registry = skill_registry
         self._mcp_registry = mcp_registry
         self._orchestration_settings_service = orchestration_settings_service
+        self._media_asset_service = media_asset_service
         self._get_runtime = get_runtime
 
     def create_session(
@@ -308,6 +311,8 @@ class SessionService:
             self._session_history_marker_repo.delete_by_session(session_id)
         if self._external_session_binding_repo is not None:
             self._external_session_binding_repo.delete_by_session(session_id)
+        if self._media_asset_service is not None:
+            self._media_asset_service.delete_session_assets(session_id)
         self._session_repo.delete(session_id)
         self._token_usage_repo.delete_by_session(session_id)
         if self._metrics_store is not None:

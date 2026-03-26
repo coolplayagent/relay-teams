@@ -12,6 +12,7 @@ from agent_teams.agents.orchestration.task_execution_service import TaskExecutio
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import MetricRecorder
 from agent_teams.notifications import NotificationService
@@ -61,6 +62,7 @@ def create_provider_factory(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
+    media_asset_service: MediaAssetService,
     role_memory_service: RoleMemoryService | None = None,
     subagent_reflection_service: SubagentReflectionService | None = None,
     tool_registry: ToolRegistry,
@@ -127,6 +129,7 @@ def create_provider_factory(
                 run_runtime_repo=run_runtime_repo,
                 run_intent_repo=run_intent_repo,
                 workspace_manager=workspace_manager,
+                media_asset_service=media_asset_service,
                 role_memory_service=role_memory_service,
                 subagent_reflection_service=subagent_reflection_service,
                 tool_registry=tool_registry,

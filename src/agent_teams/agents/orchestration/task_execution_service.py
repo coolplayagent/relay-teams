@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
 from agent_teams.agents.execution.prompt_instruction_state import (
@@ -33,6 +34,7 @@ from agent_teams.agents.tasks.models import TaskEnvelope
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -87,6 +89,7 @@ class TaskExecutionService(BaseModel):
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
     run_intent_repo: RunIntentRepository | None = None
+    media_asset_service: MediaAssetService | None = None
 
     async def execute(
         self,
@@ -716,6 +719,37 @@ class TaskExecutionService(BaseModel):
         )
         if task_history:
             return
+        if (
+            task.parent_task_id is None
+            and self.run_intent_repo is not None
+            and self.media_asset_service is not None
+        ):
+            try:
+                run_intent = self.run_intent_repo.get(task.trace_id)
+            except KeyError:
+                run_intent = None
+            if run_intent is not None and run_intent.input:
+                provider_content = (
+                    self.media_asset_service.to_provider_user_prompt_content(
+                        parts=run_intent.input
+                    )
+                )
+                self.message_repo.prune_conversation_history_to_safe_boundary(
+                    conversation_id
+                )
+                self.message_repo.append(
+                    session_id=task.session_id,
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    agent_role_id=role_id,
+                    instance_id=instance_id,
+                    task_id=task.task_id,
+                    trace_id=task.trace_id,
+                    messages=[
+                        ModelRequest(parts=[UserPromptPart(content=provider_content)])
+                    ],
+                )
+                return
         self.message_repo.append_user_prompt_if_missing(
             session_id=task.session_id,
             workspace_id=workspace_id,

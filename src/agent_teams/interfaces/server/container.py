@@ -77,17 +77,22 @@ from agent_teams.metrics import (
     PrettyLogSink,
     SqliteMetricAggregateStore,
 )
+from agent_teams.media import MediaAssetRepository, MediaAssetService
 from agent_teams.notifications import NotificationConfigManager, NotificationService
 from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
-from agent_teams.providers.provider_contracts import LLMProvider
+from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.net.llm_client import clear_llm_http_client_cache
-from agent_teams.providers.provider_factory import create_provider_factory
+from agent_teams.providers.provider_factory import (
+    apply_default_model_profile_override,
+    create_provider_factory,
+    resolve_model_profile_config,
+)
 from agent_teams.agents.orchestration.task_execution_service_factory import (
     create_task_execution_service,
 )
@@ -227,6 +232,13 @@ class ServerContainer:
             workspace_repo=self.workspace_repo,
             builtin_skills_dir=get_builtin_skills_dir(),
             app_skills_dir=config_dir / "skills",
+        )
+        self.media_asset_repo: MediaAssetRepository = MediaAssetRepository(
+            runtime.paths.db_path
+        )
+        self.media_asset_service: MediaAssetService = MediaAssetService(
+            repository=self.media_asset_repo,
+            workspace_manager=self.workspace_manager,
         )
         self.event_log: EventLog = EventLog(runtime.paths.db_path)
         self.agent_repo: AgentInstanceRepository = AgentInstanceRepository(
@@ -394,6 +406,7 @@ class ServerContainer:
             tool_approval_manager=self.tool_approval_manager,
             tool_approval_policy=self.tool_approval_policy,
             get_notification_service=lambda: self.notification_service,
+            resolve_model_config=self._resolve_external_agent_model_config,
             metric_recorder=self.metric_recorder,
             im_tool_service=self.im_tool_service,
         )
@@ -437,6 +450,8 @@ class ServerContainer:
         self.meta_agent: MetaAgent = MetaAgent(coordinator=coordinator)
         self.run_service: RunManager = RunManager(
             meta_agent=self.meta_agent,
+            provider_factory=self._provider_factory,
+            role_registry=self.role_registry,
             injection_manager=self.injection_manager,
             run_event_hub=self.run_event_hub,
             run_control_manager=self.run_control_manager,
@@ -453,6 +468,7 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
+            media_asset_service=self.media_asset_service,
         )
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
@@ -478,6 +494,7 @@ class ServerContainer:
             skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
             orchestration_settings_service=self.orchestration_settings_service,
+            media_asset_service=self.media_asset_service,
             get_runtime=lambda: self.runtime,
         )
         self.gateway_session_service = GatewaySessionService(
@@ -630,6 +647,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
+            media_asset_service=self.media_asset_service,
             role_memory_service=self.role_memory_service,
             subagent_reflection_service=self.subagent_reflection_service,
             tool_registry=self.tool_registry,
@@ -660,6 +678,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
+            media_asset_service=self.media_asset_service,
             app_config_dir=self.runtime.paths.config_dir,
             prompt_instructions=self.runtime.prompt_instructions.instructions,
             provider_factory=self._provider_factory,
@@ -685,6 +704,26 @@ class ServerContainer:
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
+
+    def _resolve_external_agent_model_config(
+        self,
+        role: RoleDefinition,
+        request: LLMRequest,
+    ) -> ModelEndpointConfig | None:
+        runtime_to_use = self.runtime
+        if (
+            self._session_model_profile_lookup is not None
+            and (override := self._session_model_profile_lookup(request.session_id))
+            is not None
+        ):
+            runtime_to_use = apply_default_model_profile_override(
+                runtime=runtime_to_use,
+                override=override,
+            )
+        return resolve_model_profile_config(
+            runtime=runtime_to_use,
+            profile_name=role.model_profile,
+        )
 
     def _build_subagent_reflection_service(
         self,

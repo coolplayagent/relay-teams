@@ -42,6 +42,11 @@ from agent_teams.external_agents.session_repository import (
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
+from agent_teams.providers.model_config import (
+    ModelEndpointConfig,
+    ProviderType,
+    SamplingConfig,
+)
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
@@ -137,6 +142,7 @@ class _RequestCapturingTransport:
         self.requests: list[tuple[str, dict[str, JsonValue]]] = []
         self.notifications: list[tuple[str, dict[str, JsonValue]]] = []
         self.on_message: _TransportMessageHandler | None = None
+        self.close_calls = 0
 
     async def start(self) -> None:
         return None
@@ -177,6 +183,7 @@ class _RequestCapturingTransport:
         self.notifications.append((method, params))
 
     async def close(self) -> None:
+        self.close_calls += 1
         return None
 
 
@@ -241,6 +248,60 @@ class _SequencedPromptTransport:
         params: dict[str, JsonValue],
     ) -> None:
         self.notifications.append((method, params))
+
+    async def close(self) -> None:
+        return None
+
+
+class _DeferredPromptTransport:
+    def __init__(self, *, response_text: str) -> None:
+        self.response_text = response_text
+        self.on_message: _TransportMessageHandler | None = None
+
+    async def start(self) -> None:
+        return None
+
+    async def send_request(
+        self,
+        method: str,
+        params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        if method == "initialize":
+            return {"protocolVersion": 1}
+        if method in {"session/new", "session/load"}:
+            return {"sessionId": "remote-1"}
+        if method != "session/prompt":
+            raise AssertionError(f"Unexpected request: {method}")
+        _ = params
+        if self.on_message is not None:
+            handler = self.on_message
+            loop = asyncio.get_running_loop()
+            update_params = cast(
+                dict[str, JsonValue],
+                {
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {
+                            "type": "text",
+                            "text": self.response_text,
+                        },
+                    }
+                },
+            )
+
+            async def _publish_update() -> None:
+                await handler("session/update", update_params, None)
+
+            loop.call_soon(asyncio.create_task, _publish_update())
+        return {"stopReason": "end_turn"}
+
+    async def send_notification(
+        self,
+        method: str,
+        params: dict[str, JsonValue],
+    ) -> None:
+        _ = method
+        _ = params
 
     async def close(self) -> None:
         return None
@@ -358,12 +419,35 @@ def _build_request() -> LLMRequest:
     )
 
 
-def _build_agent() -> ExternalAgentConfig:
+def _build_agent(
+    *,
+    command: str = "acp-agent",
+    args: tuple[str, ...] = (),
+) -> ExternalAgentConfig:
     return ExternalAgentConfig(
         agent_id="agent-1",
         name="ACP Agent",
         description="External ACP agent.",
-        transport=StdioTransportConfig(command="acp-agent"),
+        transport=StdioTransportConfig(command=command, args=args),
+    )
+
+
+def _build_model_config(
+    *,
+    provider: ProviderType = ProviderType.BIGMODEL,
+    model: str = "glm-4.6v",
+    base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+    api_key: str = "sk-test",
+    context_window: int | None = 128000,
+    max_tokens: int = 4096,
+) -> ModelEndpointConfig:
+    return ModelEndpointConfig(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        context_window=context_window,
+        sampling=SamplingConfig(max_tokens=max_tokens),
     )
 
 
@@ -373,11 +457,15 @@ def _build_manager(
     workdir: Path,
     config_dir: Path,
     tool_approval_policy: ToolApprovalPolicy | None = None,
+    agent: ExternalAgentConfig | None = None,
+    resolve_model_config: (
+        Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
+    ) = None,
 ) -> ExternalAcpSessionManager:
     return ExternalAcpSessionManager(
         config_dir=config_dir,
         config_service=cast(
-            ExternalAgentConfigService, _FakeConfigService(_build_agent())
+            ExternalAgentConfigService, _FakeConfigService(agent or _build_agent())
         ),
         session_repo=cast(ExternalAgentSessionRepository, _FakeSessionRepo()),
         message_repo=cast(MessageRepository, _FakeMessageRepo(prompt_text)),
@@ -402,6 +490,7 @@ def _build_manager(
         tool_approval_manager=cast(ToolApprovalManager, object()),
         tool_approval_policy=tool_approval_policy or ToolApprovalPolicy(),
         get_notification_service=lambda: cast(NotificationService | None, None),
+        resolve_model_config=resolve_model_config,
         im_tool_service=cast(ImToolService | None, None),
     )
 
@@ -409,7 +498,7 @@ def _build_manager(
 def _install_transport_builder(
     *,
     monkeypatch: pytest.MonkeyPatch,
-    transport: _RequestCapturingTransport,
+    transport: _RequestCapturingTransport | _DeferredPromptTransport,
     captured: dict[str, object],
 ) -> None:
     def fake_build_acp_transport(
@@ -417,7 +506,7 @@ def _install_transport_builder(
         config: ExternalAgentConfig,
         on_message: _TransportMessageHandler,
         runtime_cwd: str | None = None,
-    ) -> _RequestCapturingTransport:
+    ) -> _RequestCapturingTransport | _DeferredPromptTransport:
         captured["config"] = config
         captured["on_message"] = on_message
         captured["runtime_cwd"] = runtime_cwd
@@ -548,6 +637,296 @@ async def test_external_acp_refreshes_remote_session_when_prompt_scoped_mcp_sign
     env = cast(list[dict[str, str]], mcp_servers[0]["env"])
     assert {"name": "AGENT_TEAMS_HOST_TOOL_RUN_ID", "value": "run-2"} in env
     assert {"name": "AGENT_TEAMS_HOST_TOOL_TASK_ID", "value": "task-2"} in env
+
+
+@pytest.mark.asyncio
+async def test_external_acp_injects_runtime_model_profile_into_opencode_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Inspect the image.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("--print-logs", "acp")),
+        resolve_model_config=lambda _role, _request: _build_model_config(
+            model="glm-4v-flash"
+        ),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    runtime_agent = cast(ExternalAgentConfig, captured["config"])
+    runtime_transport = runtime_agent.transport
+    assert isinstance(runtime_transport, StdioTransportConfig)
+    assert runtime_transport.args == ("--print-logs", "acp")
+    env_by_name = {binding.name: binding.value for binding in runtime_transport.env}
+    assert "OPENCODE_CONFIG_CONTENT" in env_by_name
+    assert env_by_name["ZHIPU_API_KEY"] == "sk-test"
+    config_content = json.loads(cast(str, env_by_name["OPENCODE_CONFIG_CONTENT"]))
+    assert config_content["model"] == "zai/glm-4v-flash"
+    provider_config = config_content["provider"]["zai"]
+    assert provider_config["npm"] == "@ai-sdk/openai-compatible"
+    assert provider_config["api"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert provider_config["env"] == ["ZHIPU_API_KEY"]
+    model_entry = provider_config["models"]["glm-4v-flash"]
+    assert model_entry["attachment"] is True
+    assert model_entry["tool_call"] is False
+    assert model_entry["modalities"]["input"] == ["text", "image", "video"]
+    assert model_entry["limit"] == {"context": 128000, "output": 4096}
+
+
+@pytest.mark.asyncio
+async def test_external_acp_waits_for_trailing_message_chunks_after_prompt_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _DeferredPromptTransport(response_text="Deferred output.")
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Answer briefly.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    output = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    assert output == "Deferred output."
+
+
+@pytest.mark.asyncio
+async def test_external_acp_synthesizes_opencode_zai_limit_when_context_window_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Inspect the image.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("--print-logs", "acp")),
+        resolve_model_config=lambda _role, _request: _build_model_config(
+            context_window=None
+        ),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    runtime_agent = cast(ExternalAgentConfig, captured["config"])
+    runtime_transport = runtime_agent.transport
+    assert isinstance(runtime_transport, StdioTransportConfig)
+    env_by_name = {binding.name: binding.value for binding in runtime_transport.env}
+    config_content = json.loads(cast(str, env_by_name["OPENCODE_CONFIG_CONTENT"]))
+    model_entry = config_content["provider"]["zai"]["models"]["glm-4.6v"]
+    assert model_entry["limit"] == {"context": 128000, "output": 4096}
+
+
+@pytest.mark.asyncio
+async def test_external_acp_falls_back_to_custom_provider_for_generic_openai_compatible_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Answer briefly.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("acp",)),
+        resolve_model_config=lambda _role, _request: _build_model_config(
+            provider=ProviderType.OPENAI_COMPATIBLE,
+            model="gpt-4o-mini",
+            base_url="https://example.test/v1",
+        ),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    runtime_agent = cast(ExternalAgentConfig, captured["config"])
+    runtime_transport = runtime_agent.transport
+    assert isinstance(runtime_transport, StdioTransportConfig)
+    env_by_name = {binding.name: binding.value for binding in runtime_transport.env}
+    assert env_by_name["AGENT_TEAMS_OPENCODE_API_KEY"] == "sk-test"
+    config_content = json.loads(cast(str, env_by_name["OPENCODE_CONFIG_CONTENT"]))
+    assert config_content["model"] == "agent_teams/gpt-4o-mini"
+    provider_config = config_content["provider"]["agent_teams"]
+    assert provider_config["api"] == "https://example.test/v1"
+    assert provider_config["env"] == ["AGENT_TEAMS_OPENCODE_API_KEY"]
+    assert provider_config["npm"] == "@ai-sdk/openai-compatible"
+    assert provider_config["models"]["gpt-4o-mini"]["name"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_external_acp_omits_custom_provider_limit_when_context_window_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Answer briefly.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("acp",)),
+        resolve_model_config=lambda _role, _request: _build_model_config(
+            provider=ProviderType.OPENAI_COMPATIBLE,
+            model="gpt-4o-mini",
+            base_url="https://example.test/v1",
+            context_window=None,
+        ),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    runtime_agent = cast(ExternalAgentConfig, captured["config"])
+    runtime_transport = runtime_agent.transport
+    assert isinstance(runtime_transport, StdioTransportConfig)
+    env_by_name = {binding.name: binding.value for binding in runtime_transport.env}
+    config_content = json.loads(cast(str, env_by_name["OPENCODE_CONFIG_CONTENT"]))
+    model_entry = config_content["provider"]["agent_teams"]["models"]["gpt-4o-mini"]
+    assert "limit" not in model_entry
+
+
+@pytest.mark.asyncio
+async def test_external_acp_recreates_opencode_transport_when_model_profile_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transports = [_RequestCapturingTransport(), _RequestCapturingTransport()]
+    captured_configs: list[ExternalAgentConfig] = []
+    model_state = {"config": _build_model_config(model="glm-4.6v")}
+    manager = _build_manager(
+        prompt_text="Inspect the image.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("acp",)),
+        resolve_model_config=lambda _role, _request: model_state["config"],
+    )
+
+    def fake_build_acp_transport(
+        *,
+        config: ExternalAgentConfig,
+        on_message: _TransportMessageHandler,
+        runtime_cwd: str | None = None,
+    ) -> _RequestCapturingTransport:
+        _ = on_message
+        _ = runtime_cwd
+        captured_configs.append(config)
+        transport = transports[len(captured_configs) - 1]
+        transport.on_message = on_message
+        return transport
+
+    monkeypatch.setattr(
+        provider_module,
+        "build_acp_transport",
+        fake_build_acp_transport,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    model_state["config"] = _build_model_config(model="glm-5")
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request().model_copy(
+            update={"run_id": "run-2", "task_id": "task-2"}
+        ),
+    )
+
+    assert len(captured_configs) == 2
+    first_transport = cast(StdioTransportConfig, captured_configs[0].transport)
+    second_transport = cast(StdioTransportConfig, captured_configs[1].transport)
+    assert first_transport.args == ("acp",)
+    assert second_transport.args == ("acp",)
+    first_env = {binding.name: binding.value for binding in first_transport.env}
+    second_env = {binding.name: binding.value for binding in second_transport.env}
+    first_config = json.loads(cast(str, first_env["OPENCODE_CONFIG_CONTENT"]))
+    second_config = json.loads(cast(str, second_env["OPENCODE_CONFIG_CONTENT"]))
+    assert first_config["model"] == "zai/glm-4.6v"
+    assert second_config["model"] == "zai/glm-5"
+    assert transports[0].close_calls == 1
 
 
 @pytest.mark.asyncio

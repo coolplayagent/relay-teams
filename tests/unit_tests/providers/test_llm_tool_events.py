@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
 from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from agent_teams.media import MediaAssetService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.providers.model_config import ModelEndpointConfig
 from agent_teams.providers.provider_contracts import LLMRequest
@@ -105,6 +106,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             project_root=Path("."),
             shared_store=shared_store,
         ),
+        media_asset_service=cast(MediaAssetService, object()),
         role_memory_service=cast(RoleMemoryService | None, None),
         subagent_reflection_service=None,
         tool_registry=cast(ToolRegistry, object()),

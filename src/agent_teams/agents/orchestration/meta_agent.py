@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from agent_teams.media import content_parts_from_text
 from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
 from agent_teams.sessions.runs.run_models import IntentInput, RunResult
 
@@ -24,7 +25,7 @@ class MetaAgent(BaseModel):
             trace_id=next_trace_id,
             root_task_id=task_id,
             status=status,
-            output=output,
+            output=content_parts_from_text(output),
         )
 
     async def resume_run(self, *, trace_id: str) -> RunResult:
@@ -35,5 +36,5 @@ class MetaAgent(BaseModel):
             trace_id=next_trace_id,
             root_task_id=task_id,
             status=status,
-            output=output,
+            output=content_parts_from_text(output),
         )

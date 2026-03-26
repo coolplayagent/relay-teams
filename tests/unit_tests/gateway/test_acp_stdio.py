@@ -18,6 +18,7 @@ from agent_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
 )
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.media import MediaAssetService, content_parts_from_text
 from agent_teams.providers.token_usage_repo import RunTokenUsage
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionRecord
@@ -29,6 +30,7 @@ from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
 class FakeSessionService:
     def __init__(self) -> None:
         self._counter = 0
+        self._sessions: dict[str, SessionRecord] = {}
         self.messages_by_session: dict[str, list[dict[str, object]]] = {}
         self.usage_by_run: dict[str, RunTokenUsage] = {}
 
@@ -48,8 +50,12 @@ class FakeSessionService:
             created_at=datetime.now(tz=timezone.utc),
             updated_at=datetime.now(tz=timezone.utc),
         )
+        self._sessions[record.session_id] = record
         self.messages_by_session.setdefault(record.session_id, [])
         return record
+
+    def get_session(self, session_id: str) -> SessionRecord:
+        return self._sessions[session_id]
 
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
         return list(self.messages_by_session.get(session_id, []))
@@ -104,9 +110,9 @@ async def test_initialize_returns_gateway_capabilities(tmp_path: Path) -> None:
             "agentCapabilities": {
                 "loadSession": True,
                 "promptCapabilities": {
-                    "audio": False,
+                    "audio": True,
                     "embeddedContext": False,
-                    "image": False,
+                    "image": True,
                 },
                 "mcpCapabilities": {
                     "acp": True,
@@ -207,7 +213,7 @@ async def test_session_prompt_streams_updates_and_usage(
     assert len(run_manager.create_calls) == 1
     assert run_manager.create_calls[0] == IntentInput(
         session_id="session-1",
-        intent="Summarize README",
+        input=content_parts_from_text("Summarize README"),
         yolo=True,
     )
     assert run_manager.ensure_started_calls == ["run-1"]
@@ -648,6 +654,7 @@ async def test_session_new_stores_model_profile_override_without_persisting_api_
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
         run_service=cast(RunManager, FakeRunManager()),
+        media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
     )
 
@@ -765,6 +772,7 @@ def _build_server(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
         run_service=cast(RunManager, run_manager),
+        media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
     )
     server.set_mcp_relay_outbound(send_request=send_request, send_notification=notify)

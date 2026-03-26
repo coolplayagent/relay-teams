@@ -16,6 +16,11 @@ export {
 } from './helpers/block.js';
 
 export {
+    renderRichContent,
+    appendStructuredContentPart,
+} from './helpers/content.js';
+
+export {
     buildToolBlock,
     findToolBlock,
     setToolValidationFailureState,

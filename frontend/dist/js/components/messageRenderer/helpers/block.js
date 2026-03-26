@@ -11,7 +11,7 @@ import {
     resolvePendingToolBlock,
     setToolValidationFailureState,
 } from './toolBlocks.js';
-import { renderRichContent } from './content.js';
+import { appendStructuredContentPart, renderRichContent } from './content.js';
 
 const STREAMING_CURSOR_CLASS = 'streaming-cursor';
 
@@ -58,11 +58,29 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
     parts.forEach(part => {
         const kind = part.part_kind;
 
-        if (kind === 'text' || kind === 'user-prompt') {
+        if (kind === 'text') {
+            combinedText += (part.content || '') + '\n\n';
+        } else if (kind === 'user-prompt') {
+            if (Array.isArray(part.content)) {
+                flushText();
+                part.content
+                    .map(userPromptItemToStructuredPart)
+                    .filter(Boolean)
+                    .forEach(structuredPart => {
+                        appendStructuredContentPart(contentEl, structuredPart);
+                    });
+                return;
+            }
             combinedText += (part.content || '') + '\n\n';
         } else if (kind === 'thinking') {
             flushText();
             appendThinkingText(contentEl, part.content || '', { streaming: false });
+        } else if (kind === 'file') {
+            flushText();
+            const structuredPart = binaryPayloadToStructuredPart(part.content);
+            if (structuredPart) {
+                appendStructuredContentPart(contentEl, structuredPart);
+            }
         } else if (kind === 'tool-call' || (part.tool_name && part.args !== undefined)) {
             flushText();
             const tb = buildToolBlock(part.tool_name, part.args, part.tool_call_id);
@@ -99,6 +117,75 @@ export function renderParts(contentEl, parts, pendingToolBlocks) {
     });
 
     flushText();
+}
+
+function userPromptItemToStructuredPart(item) {
+    if (typeof item === 'string') {
+        return { kind: 'text', text: item };
+    }
+    if (!item || typeof item !== 'object') {
+        return null;
+    }
+    const kind = String(item.kind || '');
+    if (kind === 'image-url') {
+        return {
+            kind: 'media_ref',
+            modality: 'image',
+            mime_type: String(item.media_type || 'image/*'),
+            url: String(item.url || ''),
+            name: '',
+        };
+    }
+    if (kind === 'audio-url') {
+        return {
+            kind: 'media_ref',
+            modality: 'audio',
+            mime_type: String(item.media_type || 'audio/*'),
+            url: String(item.url || ''),
+            name: '',
+        };
+    }
+    if (kind === 'video-url') {
+        return {
+            kind: 'media_ref',
+            modality: 'video',
+            mime_type: String(item.media_type || 'video/*'),
+            url: String(item.url || ''),
+            name: '',
+        };
+    }
+    if (kind === 'binary') {
+        return binaryPayloadToStructuredPart(item);
+    }
+    return null;
+}
+
+function binaryPayloadToStructuredPart(content) {
+    if (!content || typeof content !== 'object') {
+        return null;
+    }
+    const mediaType = String(content.media_type || '').trim();
+    const base64Data = String(content.data || '').trim();
+    if (!mediaType || !base64Data) {
+        return null;
+    }
+    const modality = mediaType.startsWith('image/')
+        ? 'image'
+        : mediaType.startsWith('audio/')
+            ? 'audio'
+            : mediaType.startsWith('video/')
+                ? 'video'
+                : '';
+    if (!modality) {
+        return null;
+    }
+    return {
+        kind: 'media_ref',
+        modality,
+        mime_type: mediaType,
+        url: `data:${mediaType};base64,${base64Data}`,
+        name: '',
+    };
 }
 
 export function labelFromRole(role, roleId, instanceId) {

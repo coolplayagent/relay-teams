@@ -22,6 +22,7 @@ import qrcode.image.svg
 from agent_teams.gateway.gateway_models import GatewayChannelType
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import content_parts_from_text
 from agent_teams.roles import RoleRegistry
 from agent_teams.sessions.runs import RunEventHub
 from agent_teams.sessions.runs.enums import RunEventType
@@ -527,7 +528,7 @@ class WeChatGatewayService:
         run_id, _ = self._run_service.create_run(
             IntentInput(
                 session_id=gateway_session.internal_session_id,
-                intent=text,
+                input=content_parts_from_text(text),
                 yolo=account.yolo,
                 thinking=account.thinking,
             )

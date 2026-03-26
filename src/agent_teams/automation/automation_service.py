@@ -29,6 +29,7 @@ from agent_teams.automation.automation_repository import (
     AutomationProjectNameConflictError,
     AutomationProjectRepository,
 )
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions import ProjectKind
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput
@@ -288,7 +289,7 @@ class AutomationService:
             run_id, _ = self._run_service.create_run(
                 IntentInput(
                     session_id=session.session_id,
-                    intent=project.prompt,
+                    input=content_parts_from_text(project.prompt),
                     execution_mode=project.run_config.execution_mode,
                     yolo=project.run_config.yolo,
                     thinking=project.run_config.thinking,

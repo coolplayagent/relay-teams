@@ -7,6 +7,7 @@ export {
     renderHistoricalMessageList,
     getOrCreateStreamBlock,
     appendStreamChunk,
+    appendStreamOutputParts,
     finalizeStream,
     clearStreamState,
     clearRunStreamState,

@@ -28,6 +28,7 @@ from agent_teams.gateway.feishu.models import (
     SESSION_TITLE_SOURCE_MANUAL,
 )
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import content_parts_from_text
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
 from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
 from agent_teams.sessions import ExternalSessionBindingRepository
@@ -113,7 +114,9 @@ class FeishuInboundRuntime:
         run_id, _session_id = self._run_service.create_run(
             IntentInput(
                 session_id=session_id,
-                intent=self._build_run_intent_text(message=message),
+                input=content_parts_from_text(
+                    self._build_run_intent_text(message=message)
+                ),
                 execution_mode=ExecutionMode.AI,
                 yolo=runtime_config.target.yolo,
                 thinking=runtime_config.target.thinking,

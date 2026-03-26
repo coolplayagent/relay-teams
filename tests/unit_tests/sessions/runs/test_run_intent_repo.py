@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
@@ -23,7 +24,7 @@ def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:
         session_id="session-1",
         intent=IntentInput(
             session_id="session-1",
-            intent="ship it",
+            input=content_parts_from_text("ship it"),
             execution_mode=ExecutionMode.AI,
             yolo=True,
         ),
@@ -79,7 +80,7 @@ def test_run_intent_repo_round_trips_thinking_config(tmp_path: Path) -> None:
         session_id="session-1",
         intent=IntentInput(
             session_id="session-1",
-            intent="ship it",
+            input=content_parts_from_text("ship it"),
             execution_mode=ExecutionMode.AI,
             yolo=False,
             thinking=RunThinkingConfig(enabled=True, effort="medium"),
@@ -101,7 +102,7 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
         session_id="session-1",
         intent=IntentInput(
             session_id="session-1",
-            intent="ship it",
+            input=content_parts_from_text("ship it"),
             execution_mode=ExecutionMode.AI,
             session_mode=SessionMode.ORCHESTRATION,
             topology=RunTopologySnapshot(

@@ -5,8 +5,9 @@ import asyncio
 import base64
 import binascii
 import json
-from collections.abc import Callable, Sequence
 import logging
+import re
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,14 +29,17 @@ from agent_teams.external_agents.host_tool_bridge import (
 )
 from agent_teams.external_agents.models import (
     ExternalAgentConfig,
+    ExternalAgentSecretBinding,
     ExternalAgentSessionRecord,
     ExternalAgentSessionStatus,
+    StdioTransportConfig,
 )
 from agent_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
 from agent_teams.logger import get_logger, log_event
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.sessions.runs.enums import RunEventType
@@ -73,11 +77,18 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger(__name__)
 _EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS = 60.0
+_EXTERNAL_ACP_PROMPT_TRAILING_ACTIVITY_GRACE_SECONDS = 0.2
+_EXTERNAL_ACP_PROMPT_TRAILING_ACTIVITY_MAX_WAIT_SECONDS = 1.0
 _EXTERNAL_ACP_EMPTY_RESPONSE_REPROMPT = (
     "Your previous reply was empty. Answer the user's last request with a non-empty "
     "assistant message now. If you need to return an image, reply with a single "
     "data:image/...;base64,... URL. Do not return an empty response."
 )
+_OPENCODE_CUSTOM_PROVIDER_ID = "agent_teams"
+_OPENCODE_CUSTOM_API_KEY_ENV = "AGENT_TEAMS_OPENCODE_API_KEY"
+_OPENCODE_ZAI_PROVIDER_ID = "zai"
+_OPENCODE_ZAI_API_KEY_ENV = "ZHIPU_API_KEY"
+_OPENCODE_ZAI_DEFAULT_CONTEXT_WINDOW = 128000
 
 
 class ExternalAcpProvider(LLMProvider):
@@ -131,6 +142,9 @@ class ExternalAcpSessionManager:
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        resolve_model_config: (
+            Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
+        ) = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
     ) -> None:
@@ -159,6 +173,7 @@ class ExternalAcpSessionManager:
         self._tool_approval_manager = tool_approval_manager
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
+        self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
         self._conversations: dict[str, _ConversationHandle] = {}
@@ -368,6 +383,7 @@ class ExternalAcpSessionManager:
                 activity_task.cancel()
             if request_task in done:
                 _ = await request_task
+                await self._drain_trailing_prompt_activity(state)
                 return
             if activity_task in done:
                 with suppress(asyncio.CancelledError):
@@ -381,6 +397,27 @@ class ExternalAcpSessionManager:
                 timeout_seconds=timeout_seconds,
             )
             return
+
+    async def _drain_trailing_prompt_activity(
+        self,
+        state: _ActivePromptState,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _EXTERNAL_ACP_PROMPT_TRAILING_ACTIVITY_MAX_WAIT_SECONDS
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            try:
+                await asyncio.wait_for(
+                    state.wait_for_activity(),
+                    timeout=min(
+                        _EXTERNAL_ACP_PROMPT_TRAILING_ACTIVITY_GRACE_SECONDS,
+                        remaining,
+                    ),
+                )
+            except asyncio.TimeoutError:
+                return
 
     async def _handle_prompt_timeout(
         self,
@@ -452,7 +489,21 @@ class ExternalAcpSessionManager:
         role: RoleDefinition,
         request: LLMRequest,
     ) -> _ConversationHandle:
+        runtime_agent = self._resolve_transport_agent_config(
+            agent=agent,
+            role=role,
+            request=request,
+        )
+        transport_signature = _transport_signature(runtime_agent)
         existing = self._conversations.get(key)
+        if (
+            existing is not None
+            and existing.transport_signature
+            and existing.transport_signature != transport_signature
+        ):
+            await existing.close()
+            self._conversations.pop(key, None)
+            existing = None
         if existing is not None:
             await existing.transport.start()
             await self._refresh_remote_session_if_needed(
@@ -477,7 +528,7 @@ class ExternalAcpSessionManager:
 
         workspace = self._resolve_workspace(request)
         transport = build_acp_transport(
-            config=agent,
+            config=runtime_agent,
             on_message=on_message,
             runtime_cwd=str(workspace.resolve_workdir()),
         )
@@ -487,6 +538,7 @@ class ExternalAcpSessionManager:
             transport=transport,
             external_session_id="",
             host_tool_bridge=self._create_host_tool_bridge(),
+            transport_signature=transport_signature,
         )
         self._conversations[key] = handle
         persisted = self._session_repo.get(
@@ -514,7 +566,7 @@ class ExternalAcpSessionManager:
         )
         self._persist_session_record(
             request=request,
-            agent=agent,
+            agent=runtime_agent,
             external_session_id=handle.external_session_id,
         )
         return handle
@@ -873,6 +925,25 @@ class ExternalAcpSessionManager:
             im_tool_service=self._im_tool_service,
         )
 
+    def _resolve_transport_agent_config(
+        self,
+        *,
+        agent: ExternalAgentConfig,
+        role: RoleDefinition,
+        request: LLMRequest,
+    ) -> ExternalAgentConfig:
+        if not _is_opencode_agent(agent):
+            return agent
+        if self._resolve_model_config is None:
+            return agent
+        model_config = self._resolve_model_config(role, request)
+        if model_config is None:
+            return agent
+        return _apply_opencode_model_config(
+            agent=agent,
+            model_config=model_config,
+        )
+
     async def _cancel_prompt(self, handle: _ConversationHandle) -> None:
         await handle.transport.send_notification(
             "session/cancel",
@@ -930,10 +1001,12 @@ class _ConversationHandle:
         transport: AcpTransportClient,
         external_session_id: str,
         host_tool_bridge: ExternalAcpHostToolBridge,
+        transport_signature: str = "",
     ) -> None:
         self.transport = transport
         self.external_session_id = external_session_id
         self.host_tool_bridge = host_tool_bridge
+        self.transport_signature = transport_signature
         self.session_signature = ""
         self.active_prompt: _ActivePromptState | None = None
 
@@ -982,6 +1055,274 @@ class _ActivePromptState:
 
 def _conversation_key(*, session_id: str, role_id: str, agent_id: str) -> str:
     return f"{session_id}:{role_id}:{agent_id}"
+
+
+def _is_opencode_agent(agent: ExternalAgentConfig) -> bool:
+    transport = agent.transport
+    if not isinstance(transport, StdioTransportConfig):
+        return False
+    tokens = [transport.command, *transport.args]
+    return any(_is_opencode_command_token(token) for token in tokens)
+
+
+def _is_opencode_command_token(token: str) -> bool:
+    normalized = Path(token).name.lower()
+    return (
+        normalized == "opencode"
+        or normalized.startswith("opencode@")
+        or normalized == "opencode-ai"
+        or normalized.startswith("opencode-ai@")
+    )
+
+
+def _apply_opencode_model_config(
+    *,
+    agent: ExternalAgentConfig,
+    model_config: ModelEndpointConfig,
+) -> ExternalAgentConfig:
+    transport = agent.transport
+    if not isinstance(transport, StdioTransportConfig):
+        return agent
+    runtime_config, runtime_env = _build_opencode_runtime_config(model_config)
+    env = _upsert_env_binding(
+        transport.env,
+        name="OPENCODE_CONFIG_CONTENT",
+        value=runtime_config,
+    )
+    for name, value in runtime_env:
+        env = _upsert_env_binding(
+            env,
+            name=name,
+            value=value,
+        )
+    if model_config.ssl_verify is False:
+        env = _upsert_env_binding(
+            env,
+            name="NODE_TLS_REJECT_UNAUTHORIZED",
+            value="0",
+        )
+    next_transport = transport.model_copy(
+        update={
+            "args": (
+                transport.args
+                if _is_opencode_acp_invocation(transport.args)
+                else _inject_opencode_model_args(
+                    transport.args,
+                    _opencode_runtime_model_name(model_config),
+                )
+            ),
+            "env": env,
+        }
+    )
+    return agent.model_copy(update={"transport": next_transport})
+
+
+def _opencode_runtime_model_name(model_config: ModelEndpointConfig) -> str:
+    return f"{_opencode_runtime_provider_id(model_config)}/{model_config.model}"
+
+
+def _opencode_runtime_provider_id(model_config: ModelEndpointConfig) -> str:
+    if _should_use_opencode_zai_provider(model_config):
+        return _OPENCODE_ZAI_PROVIDER_ID
+    return _OPENCODE_CUSTOM_PROVIDER_ID
+
+
+def _inject_opencode_model_args(
+    args: tuple[str, ...],
+    runtime_model: str,
+) -> tuple[str, ...]:
+    filtered_args: list[str] = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in {"-m", "--model"}:
+            skip_next = True
+            continue
+        if arg.startswith("--model="):
+            continue
+        filtered_args.append(arg)
+    return ("--model", runtime_model, *filtered_args)
+
+
+def _is_opencode_acp_invocation(args: tuple[str, ...]) -> bool:
+    return any(arg == "acp" for arg in args)
+
+
+def _upsert_env_binding(
+    bindings: tuple[ExternalAgentSecretBinding, ...],
+    *,
+    name: str,
+    value: str,
+) -> tuple[ExternalAgentSecretBinding, ...]:
+    normalized_name = name.strip()
+    next_bindings: list[ExternalAgentSecretBinding] = []
+    replaced = False
+    for binding in bindings:
+        if binding.name == normalized_name:
+            next_bindings.append(
+                binding.model_copy(
+                    update={
+                        "value": value,
+                        "secret": True,
+                        "configured": True,
+                    }
+                )
+            )
+            replaced = True
+            continue
+        next_bindings.append(binding)
+    if not replaced:
+        next_bindings.append(
+            ExternalAgentSecretBinding(
+                name=normalized_name,
+                value=value,
+                secret=True,
+                configured=True,
+            )
+        )
+    return tuple(next_bindings)
+
+
+def _build_opencode_runtime_config(
+    model_config: ModelEndpointConfig,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    if _should_use_opencode_zai_provider(model_config):
+        return (
+            _build_opencode_zai_config_content(model_config),
+            ((_OPENCODE_ZAI_API_KEY_ENV, model_config.api_key),),
+        )
+    return (
+        _build_opencode_custom_config_content(model_config),
+        ((_OPENCODE_CUSTOM_API_KEY_ENV, model_config.api_key),),
+    )
+
+
+def _should_use_opencode_zai_provider(model_config: ModelEndpointConfig) -> bool:
+    if model_config.provider == ProviderType.BIGMODEL:
+        return True
+    normalized_base_url = model_config.base_url.strip().lower()
+    return "bigmodel.cn" in normalized_base_url or "z.ai" in normalized_base_url
+
+
+def _build_opencode_custom_config_content(model_config: ModelEndpointConfig) -> str:
+    model_entry = _build_opencode_model_entry(model_config)
+    payload = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": _opencode_runtime_model_name(model_config),
+        "provider": {
+            _OPENCODE_CUSTOM_PROVIDER_ID: {
+                "api": model_config.base_url,
+                "env": [_OPENCODE_CUSTOM_API_KEY_ENV],
+                "npm": "@ai-sdk/openai-compatible",
+                "models": {
+                    model_config.model: model_entry,
+                },
+            }
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_opencode_zai_config_content(model_config: ModelEndpointConfig) -> str:
+    model_entry = _build_opencode_zai_model_entry(model_config)
+    payload = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": _opencode_runtime_model_name(model_config),
+        "provider": {
+            _OPENCODE_ZAI_PROVIDER_ID: {
+                "api": model_config.base_url,
+                "env": [_OPENCODE_ZAI_API_KEY_ENV],
+                "npm": "@ai-sdk/openai-compatible",
+                "models": {
+                    model_config.model: model_entry,
+                },
+            }
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_opencode_model_entry(model_config: ModelEndpointConfig) -> dict[str, object]:
+    model_entry: dict[str, object] = {
+        "name": model_config.model,
+    }
+    limit = _build_opencode_limit(model_config)
+    if limit is not None:
+        model_entry["limit"] = limit
+    return model_entry
+
+
+def _build_opencode_zai_model_entry(
+    model_config: ModelEndpointConfig,
+) -> dict[str, object]:
+    model_entry = _build_opencode_model_entry(model_config)
+    supports_attachments = _opencode_model_supports_attachments(model_config.model)
+    input_modalities = ["text"]
+    if supports_attachments:
+        input_modalities.extend(["image", "video"])
+    model_entry.update(
+        {
+            "attachment": supports_attachments,
+            "tool_call": not _opencode_model_disables_tool_calls(model_config.model),
+            "modalities": {
+                "input": input_modalities,
+                "output": ["text"],
+            },
+        }
+    )
+    if "limit" not in model_entry:
+        model_entry["limit"] = _build_opencode_limit(
+            model_config,
+            fallback_context_window=_OPENCODE_ZAI_DEFAULT_CONTEXT_WINDOW,
+        )
+    return model_entry
+
+
+def _build_opencode_limit(
+    model_config: ModelEndpointConfig,
+    *,
+    fallback_context_window: int | None = None,
+) -> dict[str, int] | None:
+    context_window = model_config.context_window
+    if context_window is None:
+        context_window = fallback_context_window
+    if context_window is None or model_config.sampling.max_tokens <= 0:
+        return None
+    return {
+        "context": context_window,
+        "output": model_config.sampling.max_tokens,
+    }
+
+
+def _opencode_model_supports_attachments(model_name: str) -> bool:
+    return (
+        re.search(
+            r"(?:^|[-.])[0-9]+(?:\.[0-9]+)?v(?:[-.]|$)",
+            model_name.strip().lower(),
+        )
+        is not None
+    )
+
+
+def _opencode_model_disables_tool_calls(model_name: str) -> bool:
+    normalized = model_name.strip().lower()
+    return _opencode_model_supports_attachments(normalized) and "flash" in normalized
+
+
+def _build_opencode_config_content(model_config: ModelEndpointConfig) -> str:
+    payload, _ = _build_opencode_runtime_config(model_config)
+    return payload
+
+
+def _transport_signature(agent: ExternalAgentConfig) -> str:
+    return json.dumps(
+        agent.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
 
 
 def _build_mcp_servers_for_role(

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.media import content_parts_from_text
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
@@ -393,7 +394,10 @@ async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
     )
 
     trace_id, root_task_id, status, result = await coordinator.run(
-        IntentInput(session_id="session-1", intent="hello"),
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        ),
         trace_id="run-dynamic",
     )
 

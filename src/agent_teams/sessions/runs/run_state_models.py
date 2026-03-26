@@ -166,6 +166,8 @@ def apply_run_event_to_state(
         RunEventType.LLM_RETRY_SCHEDULED,
         RunEventType.MODEL_STEP_STARTED,
         RunEventType.TEXT_DELTA,
+        RunEventType.OUTPUT_DELTA,
+        RunEventType.GENERATION_PROGRESS,
         RunEventType.THINKING_STARTED,
         RunEventType.THINKING_DELTA,
         RunEventType.THINKING_FINISHED,

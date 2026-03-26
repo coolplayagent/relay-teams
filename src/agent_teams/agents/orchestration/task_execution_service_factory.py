@@ -7,6 +7,7 @@ from pathlib import Path
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.providers.provider_contracts import LLMProvider
 from agent_teams.roles.memory_service import RoleMemoryService
@@ -39,6 +40,7 @@ def create_task_execution_service(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
+    media_asset_service: MediaAssetService | None,
     app_config_dir: Path | None,
     prompt_instructions: tuple[str, ...] = (),
     provider_factory: Callable[[RoleDefinition, str | None], LLMProvider],
@@ -75,4 +77,5 @@ def create_task_execution_service(
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,
         run_intent_repo=run_intent_repo,
+        media_asset_service=media_asset_service,
     )

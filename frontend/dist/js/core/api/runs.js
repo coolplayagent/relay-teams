@@ -17,8 +17,9 @@ export async function sendUserPrompt(
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                intent: prompt,
                 session_id: sessionId,
+                input: [{ kind: 'text', text: prompt }],
+                run_kind: 'conversation',
                 execution_mode: 'ai',
                 yolo: yolo === true,
                 thinking: thinking || { enabled: false, effort: null },

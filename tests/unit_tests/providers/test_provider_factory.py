@@ -11,6 +11,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.provider_contracts import (
@@ -104,6 +105,7 @@ def _build_factory(
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         run_intent_repo=cast(RunIntentRepository, object()),
         workspace_manager=cast(WorkspaceManager, object()),
+        media_asset_service=cast(MediaAssetService, object()),
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),
@@ -249,6 +251,7 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         run_intent_repo=cast(RunIntentRepository, object()),
         workspace_manager=cast(WorkspaceManager, object()),
+        media_asset_service=cast(MediaAssetService, object()),
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),

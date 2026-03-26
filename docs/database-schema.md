@@ -596,6 +596,9 @@ CREATE TABLE IF NOT EXISTS run_intents (
     run_id         TEXT PRIMARY KEY,
     session_id     TEXT NOT NULL,
     intent         TEXT NOT NULL,
+    input_json     TEXT,
+    run_kind       TEXT NOT NULL DEFAULT 'conversation',
+    generation_config_json TEXT,
     execution_mode TEXT NOT NULL,
     session_mode   TEXT NOT NULL DEFAULT 'normal',
     yolo           TEXT NOT NULL DEFAULT 'false',
@@ -611,7 +614,55 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later. `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly.
+Purpose: stores the run input and per-run execution settings needed for queued runs and recoverable resume paths.
+
+Notes:
+- `intent` remains a text summary used for previews, logs, and legacy fallbacks.
+- `input_json` stores the canonical typed run input array, including text and media references.
+- `run_kind` distinguishes `conversation`, `generate_image`, `generate_audio`, and `generate_video`.
+- `generation_config_json` stores the typed native media-generation config for provider-native image/audio/video runs.
+- `yolo` controls whether tool approvals are skipped entirely for that run.
+- `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
+- `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
+- `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
+- `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly.
+
+---
+
+### 2.9.1 `media_assets`
+
+```sql
+CREATE TABLE IF NOT EXISTS media_assets (
+    asset_id            TEXT PRIMARY KEY,
+    session_id          TEXT NOT NULL,
+    workspace_id        TEXT NOT NULL,
+    storage_kind        TEXT NOT NULL,
+    modality            TEXT NOT NULL,
+    mime_type           TEXT NOT NULL,
+    name                TEXT NOT NULL DEFAULT '',
+    relative_path       TEXT,
+    external_url        TEXT,
+    size_bytes          INTEGER,
+    width               INTEGER,
+    height              INTEGER,
+    duration_ms         INTEGER,
+    thumbnail_asset_id  TEXT,
+    source              TEXT NOT NULL DEFAULT '',
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_session
+    ON media_assets(session_id, created_at ASC);
+```
+
+Purpose: session-scoped media asset registry used by typed run input/output, ACP transport, and frontend rendering.
+
+Notes:
+- `storage_kind` is `local` or `remote`.
+- Local assets are stored under the session artifact directory inside the owning workspace.
+- Remote assets keep their external URL and are still projected as normalized `media_ref` content parts.
+- Session deletion removes both the DB rows and the session artifact subtree.
 
 ---
 

@@ -7,6 +7,7 @@ export { renderHistoricalMessageList } from './history.js';
 export {
     getOrCreateStreamBlock,
     appendStreamChunk,
+    appendStreamOutputParts,
     finalizeStream,
     clearStreamState,
     clearRunStreamState,

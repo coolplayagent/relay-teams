@@ -9,6 +9,7 @@ import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
@@ -163,7 +164,10 @@ def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
     manager._injection_manager.activate("run-existing")
 
     run_id, session_id = manager.create_run(
-        IntentInput(session_id="session-1", intent="follow up")
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("follow up"),
+        )
     )
 
     assert run_id == "run-existing"
@@ -194,7 +198,10 @@ def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:
     )
 
     run_id, session_id = manager.create_run(
-        IntentInput(session_id="session-1", intent="continue from checkpoint")
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("continue from checkpoint"),
+        )
     )
 
     assert run_id == "run-existing"
@@ -207,7 +214,7 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
     manager = _build_manager(db_path)
     pending_intent = IntentInput(
         session_id="session-1",
-        intent="initial",
+        input=content_parts_from_text("initial"),
         yolo=False,
     )
     manager._pending_runs["run-existing"] = pending_intent
@@ -230,7 +237,7 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
     run_id, _ = manager.create_run(
         IntentInput(
             session_id="session-1",
-            intent="follow up",
+            input=content_parts_from_text("follow up"),
             yolo=True,
         )
     )
@@ -248,7 +255,7 @@ def test_create_run_updates_recoverable_run_yolo(tmp_path: Path) -> None:
     _create_root_task(TaskRepository(db_path))
     existing_intent = IntentInput(
         session_id="session-1",
-        intent="existing",
+        input=content_parts_from_text("existing"),
         yolo=False,
     )
     RunRuntimeRepository(db_path).ensure(
@@ -274,7 +281,7 @@ def test_create_run_updates_recoverable_run_yolo(tmp_path: Path) -> None:
     run_id, _ = manager.create_run(
         IntentInput(
             session_id="session-1",
-            intent="resume with yolo",
+            input=content_parts_from_text("resume with yolo"),
             yolo=True,
         )
     )
@@ -310,7 +317,12 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="waiting for tool approval"):
-        manager.create_run(IntentInput(session_id="session-1", intent="continue"))
+        manager.create_run(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("continue"),
+            )
+        )
 
 
 def test_manager_hydrates_recoverable_run_from_runtime_repo(tmp_path: Path) -> None:
@@ -485,7 +497,9 @@ async def test_worker_terminal_status_matches_run_result(
             trace_id="run-existing",
             root_task_id="task-root-1",
             status=cast(Literal["completed", "failed"], result_status),
-            output="Task not completed yet" if result_status == "failed" else "done",
+            output=content_parts_from_text(
+                "Task not completed yet" if result_status == "failed" else "done"
+            ),
         )
 
     await manager._worker(
@@ -597,7 +611,7 @@ async def test_stream_run_events_does_not_start_pending_run_worker(
     manager = _build_manager(db_path)
     manager._pending_runs["run-existing"] = IntentInput(
         session_id="session-1",
-        intent="hello",
+        input=content_parts_from_text("hello"),
     )
     RunRuntimeRepository(db_path).ensure(
         run_id="run-existing",

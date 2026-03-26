@@ -5,6 +5,7 @@
 import { isPrimaryRoleId } from '../../core/state.js';
 import {
     applyToolReturn,
+    appendStructuredContentPart,
     appendThinkingText,
     findToolBlock,
     findToolBlockInContainer,
@@ -66,6 +67,46 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
     updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, text);
     scrollBottom(st.container);
+}
+
+export function appendStreamOutputParts(
+    instanceId,
+    outputParts,
+    options = {},
+) {
+    const runId = String(options.runId || '');
+    const roleId = String(options.roleId || '');
+    const label = String(options.label || '');
+    const container = options.container || null;
+    const streamKey = resolveStreamKey(instanceId, roleId);
+    let st = streamState.get(streamKey);
+    if (!st && container) {
+        st = createStreamState({
+            container,
+            instanceId,
+            roleId,
+            label: label || 'Agent',
+            runId,
+        });
+        streamState.set(streamKey, st);
+    }
+    if (!st || !Array.isArray(outputParts)) return;
+    outputParts.forEach(part => {
+        if (!part || typeof part !== 'object') return;
+        if (part.kind === 'text') {
+            appendStreamChunk(
+                instanceId,
+                String(part.text || ''),
+                runId || st.runId,
+                roleId || st.roleId,
+                label || st.label,
+            );
+            return;
+        }
+        endActiveText(st);
+        appendStructuredContentPart(st.contentEl, part);
+    });
+    scrollBottom(st.container || container);
 }
 
 export function finalizeStream(instanceId, roleId = '') {

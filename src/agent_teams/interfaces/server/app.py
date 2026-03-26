@@ -30,6 +30,7 @@ from agent_teams.interfaces.server.routers import (
     prompts,
     roles,
     runs,
+    session_media,
     sessions,
     system,
     tasks,
@@ -105,6 +106,7 @@ app.include_router(gateway.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
 app.include_router(observability.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
+app.include_router(session_media.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+from agent_teams.media import content_parts_from_text
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
@@ -433,7 +434,7 @@ async def test_execute_passes_run_thinking_config_to_provider(tmp_path: Path) ->
         session_id=task.session_id,
         intent=IntentInput(
             session_id=task.session_id,
-            intent="query time",
+            input=content_parts_from_text("query time"),
             thinking=RunThinkingConfig(enabled=True, effort="high"),
         ),
     )

@@ -22,6 +22,8 @@ class RunEventType(str, Enum):
     MODEL_STEP_STARTED = "model_step_started"
     MODEL_STEP_FINISHED = "model_step_finished"
     TEXT_DELTA = "text_delta"
+    OUTPUT_DELTA = "output_delta"
+    GENERATION_PROGRESS = "generation_progress"
     THINKING_STARTED = "thinking_started"
     THINKING_DELTA = "thinking_delta"
     THINKING_FINISHED = "thinking_finished"

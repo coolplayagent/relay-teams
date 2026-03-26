@@ -207,6 +207,22 @@ Critical process rule:
 
 This implies a runtime mode or logger configuration path separate from the current HTTP server defaults.
 
+### 6.1 Multimodal ACP Transport
+
+ACP stdio must project the same visible multimodal payloads used by the model and frontend.
+
+Rules:
+
+- advertise `promptCapabilities.image = true`
+- advertise `promptCapabilities.audio = true`
+- ACP does not expose a first-class video prompt capability; video input and output must use `resource` / `resource_link`
+- inbound ACP `image` and `audio` blocks are normalized into session-scoped media assets before entering the run layer
+- inbound ACP `resource` / `resource_link` blocks may represent image, audio, or video references; video stays reference-only
+- outbound text remains `agent_message_chunk`
+- outbound image and audio payloads should be emitted as ACP content blocks
+- outbound video payloads should be emitted as `resource_link`
+- native media-generation progress should be bridged as ACP-compatible progress/tool updates so ACP hosts can render long-running generation without custom extensions
+
 ## 7. Gateway Session Model
 
 Gateway needs its own typed session state instead of overloading `SessionRecord.metadata`.

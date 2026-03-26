@@ -11,6 +11,8 @@ import {
     handleLlmRetryScheduled,
     handleModelStepFinished,
     handleModelStepStarted,
+    handleOutputDelta,
+    handleGenerationProgress,
     handleRunCompleted,
     handleRunFailed,
     handleRunStopped,
@@ -73,6 +75,10 @@ export function routeEvent(evType, payload, eventMeta) {
         handleLlmRetryExhausted(payload, eventMeta);
     } else if (evType === 'text_delta') {
         handleTextDelta(payload, eventMeta, instanceId, roleId);
+    } else if (evType === 'output_delta') {
+        handleOutputDelta(payload, eventMeta, instanceId, roleId);
+    } else if (evType === 'generation_progress') {
+        handleGenerationProgress(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'thinking_started') {
         handleThinkingStarted(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'thinking_delta') {
@@ -148,6 +154,8 @@ function scheduleContinuityRefreshForEvent(evType) {
         evType === 'llm_retry_scheduled'
         || evType === 'llm_retry_exhausted'
         || evType === 'tool_result'
+        || evType === 'output_delta'
+        || evType === 'generation_progress'
         || evType === 'tool_approval_requested'
         || evType === 'tool_approval_resolved'
         || evType === 'subagent_stopped'

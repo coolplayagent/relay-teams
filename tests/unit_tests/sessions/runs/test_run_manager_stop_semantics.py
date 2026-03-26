@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
@@ -158,7 +159,12 @@ def test_create_run_blocked_when_paused_subagent_exists() -> None:
     manager = _make_run_manager(control)
 
     with pytest.raises(RuntimeError):
-        manager.create_run(IntentInput(session_id="session-1", intent="hello"))
+        manager.create_run(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
 
 
 def test_stop_pending_run_emits_run_stopped_event() -> None:
@@ -193,7 +199,12 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         ),
     )
 
-    run_id, _ = manager.create_run(IntentInput(session_id="session-1", intent="hello"))
+    run_id, _ = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        )
+    )
     queue = hub.subscribe(run_id)
     manager.stop_run(run_id)
 
@@ -274,7 +285,7 @@ def test_completed_notification_uses_final_run_output() -> None:
             trace_id=run_id,
             root_task_id="task-1",
             status="completed",
-            output="好",
+            output=content_parts_from_text("好"),
         )
 
     asyncio.run(

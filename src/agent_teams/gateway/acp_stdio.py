@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import BinaryIO
 from uuid import uuid4
 
@@ -18,6 +19,15 @@ from agent_teams.gateway.gateway_model_profile_override import (
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import (
+    ContentPart,
+    ContentPartAdapter,
+    MediaAssetService,
+    MediaModality,
+    MediaRefContentPart,
+    TextContentPart,
+    infer_media_modality,
+)
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
@@ -46,12 +56,14 @@ class AcpGatewayServer:
         gateway_session_service: GatewaySessionService,
         session_service: SessionService,
         run_service: RunManager,
+        media_asset_service: MediaAssetService,
         notify: AcpNotifier,
         mcp_relay: AcpMcpRelay | None = None,
     ) -> None:
         self._gateway_session_service = gateway_session_service
         self._session_service = session_service
         self._run_service = run_service
+        self._media_asset_service = media_asset_service
         self._notify = notify
         self._active_runs: dict[str, str] = {}
         self._zed_compat_mode = False
@@ -163,9 +175,9 @@ class AcpGatewayServer:
             "agentCapabilities": {
                 "loadSession": True,
                 "promptCapabilities": {
-                    "audio": False,
+                    "audio": True,
                     "embeddedContext": False,
-                    "image": False,
+                    "image": True,
                 },
                 "mcpCapabilities": {
                     "acp": True,
@@ -240,17 +252,22 @@ class AcpGatewayServer:
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         prompt_blocks = _required_list(params, "prompt")
-        prompt_text = _prompt_blocks_to_text(prompt_blocks)
-        if not prompt_text:
-            raise AcpProtocolError(
-                -32602, "prompt must contain at least one text block"
-            )
         record = self._gateway_session_service.get_session(gateway_session_id)
+        session = self._session_service.get_session(record.internal_session_id)
+        prompt_input = self._prompt_blocks_to_content_parts(
+            prompt_blocks=prompt_blocks,
+            session_id=record.internal_session_id,
+            workspace_id=session.workspace_id,
+        )
+        if not prompt_input:
+            raise AcpProtocolError(
+                -32602, "prompt must contain at least one supported content block"
+            )
         with self._mcp_relay.session_scope(gateway_session_id):
             run_id, _ = self._run_service.create_run(
                 IntentInput(
                     session_id=record.internal_session_id,
-                    intent=prompt_text,
+                    input=prompt_input,
                     yolo=True,
                 )
             )
@@ -260,16 +277,17 @@ class AcpGatewayServer:
                 gateway_session_id, run_id
             )
             if not self._zed_compat_mode:
-                await self._publish_session_update(
-                    gateway_session_id,
-                    {
-                        "sessionUpdate": "user_message_chunk",
-                        "content": {
-                            "type": "text",
-                            "text": prompt_text,
+                for part in prompt_input:
+                    content = _content_part_to_acp_content(part)
+                    if content is None:
+                        continue
+                    await self._publish_session_update(
+                        gateway_session_id,
+                        {
+                            "sessionUpdate": "user_message_chunk",
+                            "content": content,
                         },
-                    },
-                )
+                    )
 
             stop_reason = "end_turn"
             terminal_error: str | None = None
@@ -311,6 +329,48 @@ class AcpGatewayServer:
                     },
                 )
             return None, None
+        if event.event_type == RunEventType.OUTPUT_DELTA:
+            for content in _typed_output_payload_to_acp_content(payload):
+                await self._publish_session_update(
+                    gateway_session_id,
+                    {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": content,
+                    },
+                )
+            return None, None
+        if event.event_type == RunEventType.GENERATION_PROGRESS:
+            tool_call_id = f"generation_{event.run_id}"
+            run_kind = _optional_str(payload, "run_kind") or "generation"
+            phase = _optional_str(payload, "phase") or "running"
+            status = (
+                "failed"
+                if phase == "failed"
+                else "completed"
+                if phase == "completed"
+                else "in_progress"
+            )
+            if phase == "started":
+                await self._publish_session_update(
+                    gateway_session_id,
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": tool_call_id,
+                        "title": run_kind,
+                        "status": "in_progress",
+                    },
+                )
+                return None, None
+            update_payload: dict[str, JsonValue] = {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "status": status,
+            }
+            preview_asset_id = _optional_str(payload, "preview_asset_id")
+            if preview_asset_id is not None:
+                update_payload["rawInput"] = preview_asset_id
+            await self._publish_session_update(gateway_session_id, update_payload)
+            return None, None
         if event.event_type == RunEventType.THINKING_DELTA:
             text = _optional_text(payload, "text")
             if text:
@@ -344,25 +404,15 @@ class AcpGatewayServer:
             tool_call_id = (
                 _optional_str(payload, "tool_call_id") or f"tool_{uuid4().hex[:12]}"
             )
-            result_text = json.dumps(
-                payload.get("result"), ensure_ascii=False, default=str
-            )
             status = "failed" if payload.get("error") is True else "completed"
+            content = _tool_result_payload_to_acp_content(payload)
             await self._publish_session_update(
                 gateway_session_id,
                 {
                     "sessionUpdate": "tool_call_update",
                     "toolCallId": tool_call_id,
                     "status": status,
-                    "content": [
-                        {
-                            "type": "content",
-                            "content": {
-                                "type": "text",
-                                "text": result_text,
-                            },
-                        }
-                    ],
+                    "content": content,
                 },
             )
             return None, None
@@ -473,6 +523,50 @@ class AcpGatewayServer:
                 },
             }
         )
+
+    def _prompt_blocks_to_content_parts(
+        self,
+        *,
+        prompt_blocks: list[JsonValue],
+        session_id: str,
+        workspace_id: str,
+    ) -> tuple[ContentPart, ...]:
+        parts: list[ContentPart] = []
+        for item in prompt_blocks:
+            if not isinstance(item, dict):
+                continue
+            block_type = str(item.get("type") or "").strip()
+            if block_type == "text":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(TextContentPart(text=text))
+                continue
+            if block_type in {"image", "audio"}:
+                media_part = _acp_media_block_to_content_part(
+                    item=item,
+                    media_asset_service=self._media_asset_service,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    forced_modality=(
+                        MediaModality.IMAGE
+                        if block_type == "image"
+                        else MediaModality.AUDIO
+                    ),
+                )
+                if media_part is not None:
+                    parts.append(media_part)
+                continue
+            if block_type in {"resource", "resource_link"}:
+                media_part = _acp_media_block_to_content_part(
+                    item=item,
+                    media_asset_service=self._media_asset_service,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    forced_modality=None,
+                )
+                if media_part is not None:
+                    parts.append(media_part)
+        return tuple(parts)
 
 
 class AcpStdioRuntime:
@@ -645,7 +739,7 @@ def _params_object(message: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 def _required_str(
-    payload: dict[str, JsonValue],
+    payload: Mapping[str, object],
     key: str,
     *,
     fallback_key: str | None = None,
@@ -658,7 +752,7 @@ def _required_str(
     raise AcpProtocolError(-32602, f"{key} must be a non-empty string")
 
 
-def _optional_str(payload: dict[str, JsonValue], key: str) -> str | None:
+def _optional_str(payload: Mapping[str, object], key: str) -> str | None:
     value = payload.get(key)
     if isinstance(value, str):
         stripped = value.strip()
@@ -666,23 +760,23 @@ def _optional_str(payload: dict[str, JsonValue], key: str) -> str | None:
     return None
 
 
-def _optional_text(payload: dict[str, JsonValue], key: str) -> str | None:
+def _optional_text(payload: Mapping[str, object], key: str) -> str | None:
     value = payload.get(key)
     if isinstance(value, str) and value.strip():
         return value
     return None
 
 
-def _optional_object(payload: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
+def _optional_object(payload: Mapping[str, object], key: str) -> dict[str, JsonValue]:
     value = payload.get(key)
     if value is None:
         return {}
     if isinstance(value, dict):
-        return value
+        return {str(inner_key): inner_value for inner_key, inner_value in value.items()}
     raise AcpProtocolError(-32602, f"{key} must be an object")
 
 
-def _required_list(payload: dict[str, JsonValue], key: str) -> list[JsonValue]:
+def _required_list(payload: Mapping[str, object], key: str) -> list[JsonValue]:
     value = payload.get(key)
     if isinstance(value, list):
         return value
@@ -778,6 +872,43 @@ def _prompt_blocks_to_text(prompt_blocks: list[JsonValue]) -> str:
     return "\n\n".join(collected).strip()
 
 
+def _typed_output_payload_to_acp_content(
+    payload: dict[str, JsonValue],
+) -> tuple[dict[str, JsonValue], ...]:
+    raw_output = payload.get("output")
+    if not isinstance(raw_output, list):
+        return ()
+    content: list[dict[str, JsonValue]] = []
+    for item in raw_output:
+        if not isinstance(item, dict):
+            continue
+        part = ContentPartAdapter.validate_python(item)
+        block = _content_part_to_acp_content(part)
+        if block is not None:
+            content.append(block)
+    return tuple(content)
+
+
+def _tool_result_payload_to_acp_content(
+    payload: dict[str, JsonValue],
+) -> list[JsonValue]:
+    raw_content = payload.get("content")
+    if isinstance(raw_content, list):
+        blocks: list[JsonValue] = []
+        for item in raw_content:
+            if not isinstance(item, dict):
+                continue
+            part = ContentPartAdapter.validate_python(item)
+            block = _content_part_to_acp_content(part)
+            if block is None:
+                continue
+            blocks.append({"type": "content", "content": block})
+        if blocks:
+            return blocks
+    result_text = json.dumps(payload.get("result"), ensure_ascii=False, default=str)
+    return [{"type": "content", "content": {"type": "text", "text": result_text}}]
+
+
 def _message_payload_to_session_updates(
     role: str,
     message: object,
@@ -793,20 +924,12 @@ def _message_payload_to_session_updates(
             continue
         part_kind = str(part.get("part_kind") or "")
         content = part.get("content")
-        if not isinstance(content, str) or not content.strip():
-            continue
         if role == "user" and part_kind == "user-prompt":
-            updates.append(
-                {
-                    "sessionUpdate": "user_message_chunk",
-                    "content": {
-                        "type": "text",
-                        "text": content,
-                    },
-                }
-            )
+            updates.extend(_user_prompt_payload_to_updates(content))
             continue
         if role != "user" and part_kind == "thinking":
+            if not isinstance(content, str) or not content.strip():
+                continue
             updates.append(
                 {
                     "sessionUpdate": "agent_thought_chunk",
@@ -818,6 +941,8 @@ def _message_payload_to_session_updates(
             )
             continue
         if role != "user" and part_kind == "text":
+            if not isinstance(content, str) or not content.strip():
+                continue
             updates.append(
                 {
                     "sessionUpdate": "agent_message_chunk",
@@ -827,7 +952,218 @@ def _message_payload_to_session_updates(
                     },
                 }
             )
+            continue
+        if role != "user" and part_kind == "file" and isinstance(content, dict):
+            block = _binary_payload_to_acp_content(content)
+            if block is None:
+                continue
+            updates.append(
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": block,
+                }
+            )
     return tuple(updates)
+
+
+def _user_prompt_payload_to_updates(
+    content: object,
+) -> tuple[dict[str, JsonValue], ...]:
+    updates: list[dict[str, JsonValue]] = []
+    if isinstance(content, str) and content.strip():
+        updates.append(
+            {
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": content},
+            }
+        )
+        return tuple(updates)
+    if not isinstance(content, list):
+        return ()
+    for item in content:
+        block = _user_content_item_to_acp_content(item)
+        if block is None:
+            continue
+        updates.append(
+            {
+                "sessionUpdate": "user_message_chunk",
+                "content": block,
+            }
+        )
+    return tuple(updates)
+
+
+def _user_content_item_to_acp_content(
+    item: object,
+) -> dict[str, JsonValue] | None:
+    if isinstance(item, str) and item.strip():
+        return {"type": "text", "text": item}
+    if not isinstance(item, dict):
+        return None
+    item_kind = str(item.get("kind") or "").strip()
+    if item_kind == "image-url":
+        url = _optional_str(item, "url")
+        if url is not None:
+            return {
+                "type": "image",
+                "uri": url,
+                "mimeType": _optional_str(item, "media_type") or "image/*",
+            }
+        return None
+    if item_kind == "audio-url":
+        url = _optional_str(item, "url")
+        if url is not None:
+            return {
+                "type": "audio",
+                "uri": url,
+                "mimeType": _optional_str(item, "media_type") or "audio/*",
+            }
+        return None
+    if item_kind == "video-url":
+        url = _optional_str(item, "url")
+        if url is not None:
+            return {
+                "type": "resource_link",
+                "uri": url,
+                "mimeType": _optional_str(item, "media_type") or "video/*",
+            }
+        return None
+    if item_kind == "binary":
+        return _binary_payload_to_acp_content(item)
+    return None
+
+
+def _binary_payload_to_acp_content(
+    payload: dict[str, object],
+) -> dict[str, JsonValue] | None:
+    media_type = _optional_str(payload, "media_type")
+    data = _optional_str(payload, "data")
+    if media_type is None or data is None:
+        return None
+    data_uri = f"data:{media_type};base64,{data}"
+    try:
+        modality = infer_media_modality(media_type)
+    except ValueError:
+        return None
+    if modality == MediaModality.IMAGE:
+        return {"type": "image", "uri": data_uri, "mimeType": media_type}
+    if modality == MediaModality.AUDIO:
+        return {"type": "audio", "uri": data_uri, "mimeType": media_type}
+    return {"type": "resource_link", "uri": data_uri, "mimeType": media_type}
+
+
+def _content_part_to_acp_content(
+    part: ContentPart,
+) -> dict[str, JsonValue] | None:
+    if isinstance(part, TextContentPart):
+        return {"type": "text", "text": part.text}
+    if isinstance(part, MediaRefContentPart):
+        if part.modality == MediaModality.IMAGE:
+            return {
+                "type": "image",
+                "uri": part.url,
+                "mimeType": part.mime_type,
+            }
+        if part.modality == MediaModality.AUDIO:
+            return {
+                "type": "audio",
+                "uri": part.url,
+                "mimeType": part.mime_type,
+            }
+        return {
+            "type": "resource_link",
+            "uri": part.url,
+            "mimeType": part.mime_type,
+            "title": part.name or "video",
+        }
+    return None
+
+
+def _acp_media_block_to_content_part(
+    *,
+    item: dict[str, JsonValue],
+    media_asset_service: MediaAssetService,
+    session_id: str,
+    workspace_id: str,
+    forced_modality: MediaModality | None,
+) -> MediaRefContentPart | None:
+    uri = _optional_str(item, "uri") or _optional_str(item, "url")
+    name = _optional_str(item, "name") or _name_from_uri(uri)
+    mime_type = (
+        _optional_str(item, "mimeType")
+        or _optional_str(item, "mediaType")
+        or _mime_type_from_data_uri(uri)
+    )
+    if uri is None:
+        raw_data = _optional_str(item, "data")
+        if raw_data is None or mime_type is None:
+            return None
+        uri = f"data:{mime_type};base64,{raw_data}"
+    try:
+        modality = forced_modality or infer_media_modality(
+            mime_type or "",
+            filename=name or "",
+        )
+    except ValueError:
+        return None
+    parsed = _parse_data_uri(uri)
+    if parsed is not None:
+        data_mime_type, raw = parsed
+        record = media_asset_service.store_bytes(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            modality=modality,
+            mime_type=mime_type or data_mime_type,
+            data=raw,
+            name=name or "",
+            size_bytes=len(raw),
+            source="acp_prompt",
+        )
+        return media_asset_service.to_content_part(record)
+    record = media_asset_service.store_remote_reference(
+        session_id=session_id,
+        workspace_id=workspace_id,
+        modality=modality,
+        mime_type=mime_type or _default_mime_type_for_modality(modality),
+        url=uri,
+        name=name or "",
+        source="acp_prompt",
+    )
+    return media_asset_service.to_content_part(record)
+
+
+def _parse_data_uri(value: str | None) -> tuple[str, bytes] | None:
+    if value is None or not value.startswith("data:") or "," not in value:
+        return None
+    header, encoded = value.split(",", 1)
+    media_type = header[5:].split(";", 1)[0].strip() or "application/octet-stream"
+    try:
+        return media_type, base64.b64decode(encoded)
+    except ValueError:
+        return None
+
+
+def _mime_type_from_data_uri(value: str | None) -> str | None:
+    parsed = _parse_data_uri(value)
+    if parsed is None:
+        return None
+    return parsed[0]
+
+
+def _name_from_uri(uri: str | None) -> str | None:
+    if uri is None:
+        return None
+    if "/" not in uri:
+        return None
+    return uri.rsplit("/", 1)[-1] or None
+
+
+def _default_mime_type_for_modality(modality: MediaModality) -> str:
+    if modality == MediaModality.IMAGE:
+        return "image/png"
+    if modality == MediaModality.AUDIO:
+        return "audio/mpeg"
+    return "video/mp4"
 
 
 def _load_payload(raw_payload: str) -> dict[str, JsonValue]:

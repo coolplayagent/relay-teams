@@ -134,6 +134,22 @@ Rules:
 
 The exported names are fully namespaced so they do not collide with native tools provided by the external ACP agent itself.
 
+### 6.3 Runtime Model Profile Propagation
+
+Bound external agents still inherit the effective Agent Teams model selection for the current role and session.
+
+Rules:
+
+- Agent Teams resolves the effective `model_profile` using the role setting plus any session-scoped default-model override
+- for OpenCode stdio ACP agents, Agent Teams injects that resolved model through `OPENCODE_CONFIG_CONTENT`, not through `--model`
+- BigModel and other Z.AI-compatible profiles are projected onto OpenCode's built-in `zai` provider with the runtime API key injected through `ZHIPU_API_KEY`, so OpenCode keeps its provider-specific request shaping instead of falling back to a generic OpenAI-compatible transport
+- when a Z.AI-compatible profile does not declare `context_window`, Agent Teams synthesizes a conservative OpenCode `limit.context` so custom injected model entries remain callable
+- other OpenAI-compatible profiles still use an ephemeral custom provider with provider-level `api` and env-backed API key injection, instead of relying on the user's persisted OpenCode default
+- outside the Z.AI special case above, Agent Teams only emits OpenCode `limit` values when both `context` and `output` are available, because ACP startup rejects partial limit objects
+- when the resolved model runtime changes between prompts, Agent Teams recreates the external OpenCode transport instead of reusing the old process
+
+This keeps a bound OpenCode role aligned with the current Agent Teams profile selection, rather than silently falling back to OpenCode's local default model.
+
 ## 7. Direct `@Role` Chat
 
 The web composer supports a leading `@Role` mention.

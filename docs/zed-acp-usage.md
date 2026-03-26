@@ -203,6 +203,8 @@ During a normal prompt turn, Zed should display:
 
 - streamed assistant output as it arrives
 - intermediate progress updates before the final answer text
+- image and audio outputs inline when the agent returns typed media content
+- video outputs as linked resources rather than inline ACP video blocks
 - tool call progress updates
 - raw tool input when the tool call includes arguments, including shell-style string arguments
 - MCP tools provided by Zed as normal tool calls when the model decides to use them
