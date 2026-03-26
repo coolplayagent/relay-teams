@@ -21,7 +21,10 @@ from agent_teams.roles.role_registry import (
     is_coordinator_role_definition,
     is_main_agent_role_definition,
 )
-from agent_teams.sessions.runs.run_models import RunTopologySnapshot
+from agent_teams.sessions.runs.run_models import (
+    RuntimePromptConversationContext,
+    RunTopologySnapshot,
+)
 
 COMMON_MODE_PROMPT = (
     "## Runtime Rules\n"
@@ -47,6 +50,10 @@ SKILL_USAGE_PROMPT = (
     "It returns the complete skill manifest, instructions, and absolute file paths for the skill directory. "
     "After loading a skill, use the normal `read` tool for skill files when you need more detail."
 )
+FEISHU_GROUP_CONTEXT_PROMPT = (
+    "## Feishu Group Chat Rules\n"
+    "当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。"
+)
 AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
 ROLE_BLOCK_HEADING_PREFIX = "### "
@@ -68,6 +75,7 @@ class RuntimePromptBuildInput(BaseModel):
     shared_state_snapshot: tuple[tuple[str, str], ...]
     working_directory: Path | None = None
     worktree_root: Path | None = None
+    conversation_context: RuntimePromptConversationContext | None = None
 
 
 class PromptSkillInstruction(BaseModel):
@@ -218,6 +226,8 @@ async def build_runtime_system_prompt_result(
         worktree_root=data.worktree_root,
     )
     workspace_context_sections.extend(loaded_instructions.sections)
+    if _is_feishu_group_conversation(data.conversation_context):
+        workspace_context_sections.append(FEISHU_GROUP_CONTEXT_PROMPT)
 
     if is_main_agent_role_definition(data.role):
         return _build_runtime_prompt_sections(
@@ -438,6 +448,16 @@ def _build_runtime_prompt_sections(
 
 def _join_prompt_sections(sections: Sequence[str]) -> str:
     return "\n\n".join(section for section in sections if section.strip())
+
+
+def _is_feishu_group_conversation(
+    context: RuntimePromptConversationContext | None,
+) -> bool:
+    if context is None:
+        return False
+    provider = str(context.source_provider or "").strip().lower()
+    chat_type = str(context.feishu_chat_type or "").strip().lower()
+    return provider == "feishu" and chat_type == "group"
 
 
 PromptBuildInput = RuntimePromptBuildInput

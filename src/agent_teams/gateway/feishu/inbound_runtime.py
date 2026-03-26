@@ -7,7 +7,10 @@ from typing import Protocol
 from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
+    FEISHU_METADATA_MESSAGE_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
+    FEISHU_METADATA_SENDER_NAME_KEY,
+    FEISHU_METADATA_SENDER_OPEN_ID_KEY,
     FEISHU_METADATA_TENANT_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
     FEISHU_PLATFORM,
@@ -26,6 +29,7 @@ from agent_teams.gateway.feishu.models import (
 )
 from agent_teams.logger import get_logger, log_event
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
+from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import IntentInput
@@ -73,10 +77,11 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str | None: ...
 
-    def get_user_name(
+    def resolve_user_name(
         self,
         *,
         open_id: str,
+        chat_id: str | None = None,
         environment: FeishuEnvironment | None = None,
     ) -> str | None: ...
 
@@ -108,10 +113,11 @@ class FeishuInboundRuntime:
         run_id, _session_id = self._run_service.create_run(
             IntentInput(
                 session_id=session_id,
-                intent=message.trigger_text,
+                intent=self._build_run_intent_text(message=message),
                 execution_mode=ExecutionMode.AI,
                 yolo=runtime_config.target.yolo,
                 thinking=runtime_config.target.thinking,
+                conversation_context=self._build_conversation_context(message=message),
             )
         )
         self._run_service.ensure_run_started(run_id)
@@ -199,6 +205,7 @@ class FeishuInboundRuntime:
             FEISHU_METADATA_CHAT_ID_KEY: message.chat_id,
             FEISHU_METADATA_CHAT_TYPE_KEY: message.chat_type,
             FEISHU_METADATA_TRIGGER_ID_KEY: runtime_config.trigger_id,
+            FEISHU_METADATA_MESSAGE_ID_KEY: message.message_id,
             SESSION_METADATA_SOURCE_KIND_KEY: SESSION_SOURCE_KIND_IM,
             SESSION_METADATA_SOURCE_PROVIDER_KEY: FEISHU_PLATFORM,
             SESSION_METADATA_SOURCE_LABEL_KEY: source_label,
@@ -206,6 +213,16 @@ class FeishuInboundRuntime:
             "title": _build_session_title(runtime_config.trigger_name, source_label),
             SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_AUTO,
         }
+        sender_name = str(message.sender_name or "").strip()
+        sender_open_id = str(message.sender_open_id or "").strip()
+        if sender_name:
+            metadata[FEISHU_METADATA_SENDER_NAME_KEY] = sender_name
+        else:
+            metadata.pop(FEISHU_METADATA_SENDER_NAME_KEY, None)
+        if sender_open_id:
+            metadata[FEISHU_METADATA_SENDER_OPEN_ID_KEY] = sender_open_id
+        else:
+            metadata.pop(FEISHU_METADATA_SENDER_OPEN_ID_KEY, None)
         return metadata
 
     def _resolve_source_label(
@@ -274,8 +291,9 @@ class FeishuInboundRuntime:
         if self._feishu_client is None or not normalized_open_id:
             return None
         try:
-            resolved = self._feishu_client.get_user_name(
+            resolved = self._feishu_client.resolve_user_name(
                 open_id=normalized_open_id,
+                chat_id=chat_id,
                 environment=runtime_config.environment,
             )
         except RuntimeError as exc:
@@ -294,6 +312,28 @@ class FeishuInboundRuntime:
             return None
         normalized = str(resolved or "").strip()
         return normalized or None
+
+    def _build_run_intent_text(self, *, message: FeishuNormalizedMessage) -> str:
+        if message.chat_type.strip().lower() != "group":
+            return message.trigger_text
+        sender_label = (
+            str(message.sender_name or "").strip()
+            or str(message.sender_open_id or "").strip()
+        )
+        if not sender_label:
+            sender_label = "unknown_sender"
+        return f"收到来自 {sender_label} 的飞书消息：{message.trigger_text}"
+
+    @staticmethod
+    def _build_conversation_context(
+        *,
+        message: FeishuNormalizedMessage,
+    ) -> RuntimePromptConversationContext:
+        return RuntimePromptConversationContext(
+            source_provider=FEISHU_PLATFORM,
+            source_kind=SESSION_SOURCE_KIND_IM,
+            feishu_chat_type=message.chat_type,
+        )
 
     def _merge_session_metadata(
         self,

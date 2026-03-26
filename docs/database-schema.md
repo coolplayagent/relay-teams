@@ -413,10 +413,14 @@ CREATE TABLE IF NOT EXISTS feishu_message_pool (
     message_key           TEXT NOT NULL,
     message_id            TEXT,
     command_name          TEXT,
+    sender_name           TEXT,
     intent_text           TEXT NOT NULL,
     payload_json          TEXT NOT NULL,
     metadata_json         TEXT NOT NULL,
     processing_status     TEXT NOT NULL,
+    reaction_status       TEXT NOT NULL DEFAULT 'pending',
+    reaction_type         TEXT,
+    reaction_attempts     INTEGER NOT NULL DEFAULT 0,
     ack_status            TEXT NOT NULL,
     ack_text              TEXT,
     final_reply_status    TEXT NOT NULL,
@@ -460,18 +464,20 @@ Notes:
 - `ignored`
 - `dead_letter`
 
-`ack_status` and `final_reply_status` values:
+`reaction_status`, `ack_status`, and `final_reply_status` values:
 - `pending`
 - `sending`
 - `sent`
 - `skipped`
-- `failed`
 - `failed`
 
 Notes:
 - same-chat Feishu messages are processed in sequence order
 - `delivery_count` tracks repeated delivery attempts for the same dedupe key
 - `run_id` links the inbound chat message to the created internal run
+- `sender_name` stores the resolved Feishu display name used for group-chat intent wrapping
+- `reaction_*` tracks the emoji acknowledgement lifecycle separately from queue-text replies
+- `ack_text` is reserved for queue backlog replies only
 
 ---
 
@@ -597,6 +603,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
     thinking_effort TEXT,
     target_role_id TEXT,
     topology_json  TEXT,
+    conversation_context_json TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
@@ -604,7 +611,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 ```
 
-Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
+Purpose: stores the user intent and per-run execution settings needed for queued runs and recoverable resume paths. `yolo` controls whether tool approvals are skipped entirely for that run. `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams. `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer. `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later. `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly.
 
 ---
 

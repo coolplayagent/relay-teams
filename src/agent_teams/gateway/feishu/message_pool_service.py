@@ -38,10 +38,12 @@ logger = get_logger(__name__)
 
 _ACK_MAX_ATTEMPTS = 3
 _FINAL_REPLY_MAX_ATTEMPTS = 5
+_REACTION_MAX_ATTEMPTS = 3
 _POLL_INTERVAL_SECONDS = 1.0
 _STALE_CLAIM_SECONDS = 60.0
 _WAITING_RUNTIME_TIMEOUT = timedelta(seconds=15)
 _WAITING_QUEUED_TIMEOUT = timedelta(seconds=15)
+_ACK_REACTION_TYPE = "OK"
 _ACTIVE_PROCESSING_STATUSES = {
     FeishuMessageProcessingStatus.QUEUED,
     FeishuMessageProcessingStatus.CLAIMED,
@@ -58,6 +60,22 @@ class FeishuRuntimeConfigLookup(Protocol):
 
 
 class FeishuClientLike(Protocol):
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
+
+    def create_message_reaction(
+        self,
+        *,
+        message_id: str,
+        reaction_type: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
+
     def send_text_message(
         self,
         *,
@@ -65,6 +83,14 @@ class FeishuClientLike(Protocol):
         text: str,
         environment: FeishuEnvironment | None = None,
     ) -> None: ...
+
+    def resolve_user_name(
+        self,
+        *,
+        open_id: str,
+        chat_id: str | None = None,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None: ...
 
 
 class FeishuMessagePoolService:
@@ -124,10 +150,20 @@ class FeishuMessagePoolService:
         remote_addr: str | None,
     ) -> TriggerProcessingResult:
         _ = (raw_body, headers, remote_addr)
+        enriched = self._enrich_sender_name(
+            normalized=normalized,
+            runtime_config=runtime_config,
+        )
         now = datetime.now(tz=timezone.utc)
+        reaction_status = (
+            FeishuMessageDeliveryStatus.PENDING
+            if self._should_send_group_reaction(enriched)
+            else FeishuMessageDeliveryStatus.SKIPPED
+        )
         ack_status = (
             FeishuMessageDeliveryStatus.PENDING
             if self._feishu_client is not None
+            and enriched.chat_type.strip().lower() == "group"
             else FeishuMessageDeliveryStatus.SKIPPED
         )
         final_reply_status = (
@@ -140,16 +176,23 @@ class FeishuMessagePoolService:
                 message_pool_id=f"fmp_{uuid4().hex[:16]}",
                 trigger_id=runtime_config.trigger_id,
                 trigger_name=runtime_config.trigger_name,
-                tenant_key=normalized.tenant_key,
-                chat_id=normalized.chat_id,
-                chat_type=normalized.chat_type,
-                event_id=normalized.event_id,
-                message_key=_message_key(normalized),
-                message_id=normalized.message_id,
-                intent_text=normalized.trigger_text,
-                payload=normalized.payload,
-                metadata=normalized.metadata,
+                tenant_key=enriched.tenant_key,
+                chat_id=enriched.chat_id,
+                chat_type=enriched.chat_type,
+                event_id=enriched.event_id,
+                message_key=_message_key(enriched),
+                message_id=enriched.message_id,
+                sender_name=enriched.sender_name,
+                intent_text=enriched.trigger_text,
+                payload=enriched.payload,
+                metadata=enriched.metadata,
                 processing_status=FeishuMessageProcessingStatus.QUEUED,
+                reaction_status=reaction_status,
+                reaction_type=(
+                    _ACK_REACTION_TYPE
+                    if reaction_status == FeishuMessageDeliveryStatus.PENDING
+                    else None
+                ),
                 ack_status=ack_status,
                 final_reply_status=final_reply_status,
                 next_attempt_at=now,
@@ -170,10 +213,11 @@ class FeishuMessagePoolService:
         )
         updated = self._message_pool_repo.update(
             record.message_pool_id,
-            ack_text=_build_ack_text(queue_depth),
+            ack_text=_build_queue_reply_text(queue_depth),
             last_error=None,
         )
-        self._attempt_acknowledgement(updated)
+        self._attempt_reaction(updated)
+        self._attempt_queue_reply(updated)
         self._wake_event.set()
         return TriggerProcessingResult(
             status="accepted",
@@ -302,7 +346,8 @@ class FeishuMessagePoolService:
         while not self._stop_event.is_set():
             progress = False
             try:
-                progress = self._retry_pending_acknowledgements() or progress
+                progress = self._retry_pending_reactions() or progress
+                progress = self._retry_pending_queue_replies() or progress
                 progress = self._process_queued_messages() or progress
                 progress = self._finalize_waiting_results() or progress
             except Exception as exc:
@@ -319,7 +364,22 @@ class FeishuMessagePoolService:
             self._wake_event.wait(timeout=_POLL_INTERVAL_SECONDS)
             self._wake_event.clear()
 
-    def _retry_pending_acknowledgements(self, *, limit: int = 20) -> bool:
+    def _retry_pending_reactions(self, *, limit: int = 20) -> bool:
+        progress = False
+        for record in self._message_pool_repo.list_pending_reactions(limit=limit):
+            if record.reaction_status != FeishuMessageDeliveryStatus.PENDING:
+                continue
+            if record.reaction_attempts >= _REACTION_MAX_ATTEMPTS:
+                self._message_pool_repo.update(
+                    record.message_pool_id,
+                    reaction_status=FeishuMessageDeliveryStatus.FAILED,
+                )
+                progress = True
+                continue
+            progress = self._attempt_reaction(record) or progress
+        return progress
+
+    def _retry_pending_queue_replies(self, *, limit: int = 20) -> bool:
         progress = False
         for record in self._message_pool_repo.list_pending_acknowledgements(
             limit=limit
@@ -333,7 +393,7 @@ class FeishuMessagePoolService:
                 )
                 progress = True
                 continue
-            progress = self._attempt_acknowledgement(record) or progress
+            progress = self._attempt_queue_reply(record) or progress
         return progress
 
     def _process_queued_messages(self, *, limit: int = 20) -> bool:
@@ -455,8 +515,8 @@ class FeishuMessagePoolService:
             return
         attempts = record.final_reply_attempts + 1
         try:
-            self._feishu_client.send_text_message(
-                chat_id=record.chat_id,
+            self._send_terminal_reply(
+                record=record,
                 text=reply_text,
                 environment=runtime_config.environment,
             )
@@ -494,7 +554,55 @@ class FeishuMessagePoolService:
             last_error=None,
         )
 
-    def _attempt_acknowledgement(self, record: FeishuMessagePoolRecord) -> bool:
+    def _attempt_reaction(self, record: FeishuMessagePoolRecord) -> bool:
+        if (
+            self._feishu_client is None
+            or record.reaction_status == FeishuMessageDeliveryStatus.SKIPPED
+            or record.reaction_status == FeishuMessageDeliveryStatus.SENDING
+        ):
+            return False
+        reaction_type = str(record.reaction_type or "").strip()
+        message_id = str(record.message_id or "").strip()
+        if not reaction_type or not message_id:
+            return False
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            record.trigger_id
+        )
+        if runtime_config is None:
+            return False
+        attempts = record.reaction_attempts + 1
+        claimed = self._message_pool_repo.update(
+            record.message_pool_id,
+            reaction_status=FeishuMessageDeliveryStatus.SENDING,
+            reaction_attempts=attempts,
+            last_error=None,
+        )
+        try:
+            self._feishu_client.create_message_reaction(
+                message_id=message_id,
+                reaction_type=reaction_type,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            status = (
+                FeishuMessageDeliveryStatus.FAILED
+                if attempts >= _REACTION_MAX_ATTEMPTS
+                else FeishuMessageDeliveryStatus.PENDING
+            )
+            self._message_pool_repo.update(
+                claimed.message_pool_id,
+                reaction_status=status,
+                last_error=str(exc),
+            )
+            return True
+        self._message_pool_repo.update(
+            claimed.message_pool_id,
+            reaction_status=FeishuMessageDeliveryStatus.SENT,
+            last_error=None,
+        )
+        return True
+
+    def _attempt_queue_reply(self, record: FeishuMessagePoolRecord) -> bool:
         if (
             self._feishu_client is None
             or record.ack_status == FeishuMessageDeliveryStatus.SKIPPED
@@ -515,8 +623,8 @@ class FeishuMessagePoolService:
             last_error=None,
         )
         try:
-            self._feishu_client.send_text_message(
-                chat_id=claimed.chat_id,
+            self._send_queue_reply(
+                record=claimed,
                 text=str(claimed.ack_text),
                 environment=runtime_config.environment,
             )
@@ -538,6 +646,58 @@ class FeishuMessagePoolService:
             last_error=None,
         )
         return True
+
+    def _send_queue_reply(
+        self,
+        *,
+        record: FeishuMessagePoolRecord,
+        text: str,
+        environment: FeishuEnvironment,
+    ) -> None:
+        feishu_client = self._feishu_client
+        if feishu_client is None:
+            raise RuntimeError("Feishu client is not configured")
+        if (
+            record.chat_type.strip().lower() == "group"
+            and str(record.message_id or "").strip()
+        ):
+            feishu_client.reply_text_message(
+                message_id=str(record.message_id),
+                text=text,
+                environment=environment,
+            )
+            return
+        feishu_client.send_text_message(
+            chat_id=record.chat_id,
+            text=text,
+            environment=environment,
+        )
+
+    def _send_terminal_reply(
+        self,
+        *,
+        record: FeishuMessagePoolRecord,
+        text: str,
+        environment: FeishuEnvironment,
+    ) -> None:
+        feishu_client = self._feishu_client
+        if feishu_client is None:
+            raise RuntimeError("Feishu client is not configured")
+        if (
+            record.chat_type.strip().lower() == "group"
+            and str(record.message_id or "").strip()
+        ):
+            feishu_client.reply_text_message(
+                message_id=str(record.message_id),
+                text=text,
+                environment=environment,
+            )
+            return
+        feishu_client.send_text_message(
+            chat_id=record.chat_id,
+            text=text,
+            environment=environment,
+        )
 
     def _mark_retryable_failure(
         self,
@@ -561,6 +721,55 @@ class FeishuMessagePoolService:
             if processing_status == FeishuMessageProcessingStatus.DEAD_LETTER
             else None,
         )
+
+    def _enrich_sender_name(
+        self,
+        *,
+        normalized: FeishuNormalizedMessage,
+        runtime_config: FeishuTriggerRuntimeConfig,
+    ) -> FeishuNormalizedMessage:
+        if (
+            self._feishu_client is None
+            or normalized.chat_type.strip().lower() != "group"
+            or str(normalized.sender_name or "").strip()
+            or not str(normalized.sender_open_id or "").strip()
+        ):
+            return normalized
+        try:
+            sender_name = self._feishu_client.resolve_user_name(
+                open_id=str(normalized.sender_open_id),
+                chat_id=normalized.chat_id,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.message_pool.sender_lookup_failed",
+                message="Failed to resolve Feishu sender name for group message",
+                payload={
+                    "trigger_id": runtime_config.trigger_id,
+                    "chat_id": normalized.chat_id,
+                    "sender_open_id": normalized.sender_open_id,
+                    "error": str(exc),
+                },
+            )
+            return normalized
+        normalized_sender_name = str(sender_name or "").strip()
+        if not normalized_sender_name:
+            return normalized
+        next_metadata = dict(normalized.metadata)
+        next_metadata["sender_name"] = normalized_sender_name
+        return normalized.model_copy(
+            update={
+                "sender_name": normalized_sender_name,
+                "metadata": next_metadata,
+            }
+        )
+
+    @staticmethod
+    def _should_send_group_reaction(message: FeishuNormalizedMessage) -> bool:
+        return message.chat_type.strip().lower() == "group"
 
     def _build_queue_preview(
         self,
@@ -596,6 +805,12 @@ def _build_ack_text(queue_depth: int) -> str:
     return f"收到，已进入排队。当前聊天前面还有 {queue_depth} 条消息。"
 
 
+def _build_queue_reply_text(queue_depth: int) -> str | None:
+    if queue_depth <= 0:
+        return None
+    return f"已进入队列，前面还有 {queue_depth} 条消息。"
+
+
 def _record_to_normalized_message(
     record: FeishuMessagePoolRecord,
 ) -> FeishuNormalizedMessage:
@@ -607,6 +822,7 @@ def _record_to_normalized_message(
         chat_type=record.chat_type,
         message_id=record.message_id or record.message_key,
         message_type="text",
+        sender_name=record.sender_name,
         raw_text=raw_text,
         trigger_text=record.intent_text,
         payload=record.payload,

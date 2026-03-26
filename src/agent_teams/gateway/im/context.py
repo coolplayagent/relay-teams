@@ -6,6 +6,8 @@ from typing import Protocol
 from agent_teams.automation import AutomationProjectRecord
 from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
+    FEISHU_METADATA_CHAT_TYPE_KEY,
+    FEISHU_METADATA_MESSAGE_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
     FEISHU_PLATFORM,
@@ -42,9 +44,20 @@ class _GatewaySessionLookup(Protocol):
 
 
 class FeishuChatContext:
-    def __init__(self, *, chat_id: str, environment: FeishuEnvironment) -> None:
+    def __init__(
+        self,
+        *,
+        chat_id: str,
+        environment: FeishuEnvironment,
+        chat_type: str | None = None,
+        reply_to_message_id: str | None = None,
+        prefer_reply: bool = False,
+    ) -> None:
         self.chat_id = chat_id
         self.environment = environment
+        self.chat_type = str(chat_type or "").strip()
+        self.reply_to_message_id = str(reply_to_message_id or "").strip() or None
+        self.prefer_reply = prefer_reply
 
 
 class WeChatChatContext:
@@ -191,9 +204,14 @@ def _resolve_from_session(
     runtime_config = runtime_config_lookup.get_runtime_config_by_trigger_id(trigger_id)
     if runtime_config is None:
         return None
+    chat_type = str(metadata.get(FEISHU_METADATA_CHAT_TYPE_KEY, "")).strip()
+    message_id = str(metadata.get(FEISHU_METADATA_MESSAGE_ID_KEY, "")).strip() or None
     return FeishuChatContext(
         chat_id=chat_id,
         environment=runtime_config.environment,
+        chat_type=chat_type,
+        reply_to_message_id=message_id,
+        prefer_reply=chat_type.lower() == "group" and message_id is not None,
     )
 
 
@@ -226,4 +244,5 @@ def _resolve_automation_binding_context(
     return FeishuChatContext(
         chat_id=binding.chat_id,
         environment=runtime_config.environment,
+        chat_type=binding.chat_type,
     )

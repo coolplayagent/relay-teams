@@ -8,6 +8,7 @@ from typing import Literal
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
+    RuntimePromptConversationContext,
     RunThinkingConfig,
     RunTopologySnapshot,
 )
@@ -37,6 +38,7 @@ class RunIntentRepository:
                 target_role_id TEXT,
                 session_mode TEXT NOT NULL DEFAULT 'normal',
                 topology_json TEXT,
+                conversation_context_json TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL
             )
@@ -76,6 +78,10 @@ class RunIntentRepository:
             self._conn.execute("ALTER TABLE run_intents ADD COLUMN target_role_id TEXT")
         if "topology_json" not in columns:
             self._conn.execute("ALTER TABLE run_intents ADD COLUMN topology_json TEXT")
+        if "conversation_context_json" not in columns:
+            self._conn.execute(
+                "ALTER TABLE run_intents ADD COLUMN conversation_context_json TEXT"
+            )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
         )
@@ -96,10 +102,11 @@ class RunIntentRepository:
                 target_role_id,
                 session_mode,
                 topology_json,
+                conversation_context_json,
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
@@ -111,6 +118,7 @@ class RunIntentRepository:
                 target_role_id=excluded.target_role_id,
                 session_mode=excluded.session_mode,
                 topology_json=excluded.topology_json,
+                conversation_context_json=excluded.conversation_context_json,
                 updated_at=excluded.updated_at
             """,
             (
@@ -126,6 +134,11 @@ class RunIntentRepository:
                 (
                     intent.topology.model_dump_json()
                     if intent.topology is not None
+                    else None
+                ),
+                (
+                    intent.conversation_context.model_dump_json()
+                    if intent.conversation_context is not None
                     else None
                 ),
                 now,
@@ -156,7 +169,7 @@ class RunIntentRepository:
     def get(self, run_id: str) -> IntentInput:
         row = self._conn.execute(
             """
-            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort, target_role_id, session_mode, topology_json
+            SELECT session_id, intent, execution_mode, yolo, thinking_enabled, thinking_effort, target_role_id, session_mode, topology_json, conversation_context_json
             FROM run_intents
             WHERE run_id=?
             """,
@@ -180,6 +193,9 @@ class RunIntentRepository:
             ),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             topology=_coerce_topology(row["topology_json"]),
+            conversation_context=_coerce_conversation_context(
+                row["conversation_context_json"]
+            ),
         )
 
 
@@ -204,3 +220,11 @@ def _coerce_topology(value: object) -> RunTopologySnapshot | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return RunTopologySnapshot.model_validate_json(value)
+
+
+def _coerce_conversation_context(
+    value: object,
+) -> RuntimePromptConversationContext | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return RuntimePromptConversationContext.model_validate_json(value)

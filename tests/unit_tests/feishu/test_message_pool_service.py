@@ -30,6 +30,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
+
 class _FakeSessionService:
     def __init__(self) -> None:
         self.sessions: dict[str, SessionRecord] = {}
@@ -127,6 +128,9 @@ class _FakeRuntimeConfigLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[tuple[str, str]] = []
+        self.reply_messages: list[tuple[str, str]] = []
+        self.reactions: list[tuple[str, str]] = []
+        self.user_names: dict[str, str] = {}
 
     def send_text_message(
         self,
@@ -137,6 +141,36 @@ class _FakeFeishuClient:
     ) -> None:
         _ = environment
         self.sent_messages.append((chat_id, text))
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        _ = environment
+        self.reply_messages.append((message_id, text))
+
+    def create_message_reaction(
+        self,
+        *,
+        message_id: str,
+        reaction_type: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        _ = environment
+        self.reactions.append((message_id, reaction_type))
+
+    def resolve_user_name(
+        self,
+        *,
+        open_id: str,
+        chat_id: str | None = None,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        _ = (chat_id, environment)
+        return self.user_names.get(open_id)
 
 
 def _build_runtime() -> FeishuTriggerRuntimeConfig:
@@ -235,11 +269,9 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
 
     assert first.status == "accepted"
     assert second.status == "accepted"
-    assert feishu_client.sent_messages[0] == ("oc_group_1", "收到，正在处理。")
-    assert feishu_client.sent_messages[1] == (
-        "oc_group_1",
-        "收到，已进入排队。当前聊天前面还有 1 条消息。",
-    )
+    assert feishu_client.reactions == [("om_1", "OK"), ("om_2", "OK")]
+    assert feishu_client.reply_messages == [("om_2", "已进入队列，前面还有 1 条消息。")]
+    assert feishu_client.sent_messages == []
     first_record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -250,8 +282,10 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
         tenant_key="tenant-1",
         message_key="om_2",
     )
-    assert first_record.ack_status == FeishuMessageDeliveryStatus.SENT
+    assert first_record.reaction_status == FeishuMessageDeliveryStatus.SENT
+    assert first_record.ack_status == FeishuMessageDeliveryStatus.PENDING
     assert second_record.ack_status == FeishuMessageDeliveryStatus.SENT
+    assert second_record.reaction_status == FeishuMessageDeliveryStatus.SENT
 
 
 def test_process_and_finalize_message_run(tmp_path: Path) -> None:
@@ -313,7 +347,7 @@ def test_process_and_finalize_message_run(tmp_path: Path) -> None:
     )
     assert updated.processing_status == FeishuMessageProcessingStatus.COMPLETED
     assert updated.final_reply_status == FeishuMessageDeliveryStatus.SENT
-    assert feishu_client.sent_messages[-1] == ("oc_group_1", "final answer")
+    assert feishu_client.reply_messages[-1] == ("om_1", "final answer")
 
 
 def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:

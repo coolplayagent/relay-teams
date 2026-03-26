@@ -79,6 +79,7 @@ class FeishuClient:
         self._token_cache: dict[tuple[str, str, str], _CachedTenantAccessToken] = {}
         self._chat_name_cache: dict[tuple[str, str, str], str] = {}
         self._user_name_cache: dict[tuple[str, str, str], str] = {}
+        self._chat_member_name_cache: dict[tuple[str, str, str, str], str] = {}
 
     def is_configured(self, environment: FeishuEnvironment | None = None) -> bool:
         return self._resolve_environment(environment) is not None
@@ -106,6 +107,50 @@ class FeishuClient:
             msg_type="text",
             content={"text": text},
             environment=environment,
+        )
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        normalized_message_id = str(message_id).strip()
+        if not normalized_message_id:
+            raise RuntimeError("Feishu reply requires a message_id.")
+        self._request_json(
+            method="POST",
+            path=f"/open-apis/im/v1/messages/{normalized_message_id}/reply",
+            json_body={
+                "msg_type": "text",
+                "content": dumps({"text": text}, ensure_ascii=False),
+            },
+            environment=self.require_environment(environment),
+            error_context="reply message",
+        )
+
+    def create_message_reaction(
+        self,
+        *,
+        message_id: str,
+        reaction_type: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        normalized_message_id = str(message_id).strip()
+        normalized_reaction_type = str(reaction_type).strip()
+        if not normalized_message_id:
+            raise RuntimeError("Feishu reaction requires a message_id.")
+        if not normalized_reaction_type:
+            raise RuntimeError("Feishu reaction requires a reaction_type.")
+        self._request_json(
+            method="POST",
+            path=f"/open-apis/im/v1/messages/{normalized_message_id}/reactions",
+            json_body={
+                "reaction_type": {"emoji_type": normalized_reaction_type},
+            },
+            environment=self.require_environment(environment),
+            error_context="create message reaction",
         )
 
     def send_card_message(
@@ -194,6 +239,90 @@ class FeishuClient:
             return None
         self._user_name_cache[cache_key] = user_name
         return user_name
+
+    def get_chat_member_name(
+        self,
+        *,
+        chat_id: str,
+        open_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        resolved_environment = self.require_environment(environment)
+        normalized_chat_id = str(chat_id).strip()
+        normalized_open_id = str(open_id).strip()
+        if not normalized_chat_id or not normalized_open_id:
+            return None
+        cache_key = (
+            resolved_environment.app_id,
+            resolved_environment.app_secret,
+            normalized_chat_id,
+            normalized_open_id,
+        )
+        existing = self._chat_member_name_cache.get(cache_key)
+        if existing is not None:
+            return existing
+        page_token: str | None = None
+        while True:
+            params: dict[str, str] = {
+                "member_id_type": "open_id",
+                "page_size": "100",
+            }
+            if page_token is not None:
+                params["page_token"] = page_token
+            response_json = self._request_json(
+                method="GET",
+                path=f"/open-apis/im/v1/chats/{normalized_chat_id}/members",
+                params=params,
+                environment=resolved_environment,
+                error_context="load chat members",
+            )
+            response_data = _require_json_object(
+                response_json.get("data"),
+                error_context="load chat members",
+            )
+            items = response_data.get("items")
+            if not isinstance(items, list):
+                raise RuntimeError(
+                    "Feishu API failed to load chat members: missing items"
+                )
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                member_id = str(item.get("member_id", "")).strip()
+                if member_id != normalized_open_id:
+                    continue
+                member_name = str(item.get("name", "")).strip()
+                if not member_name:
+                    return None
+                self._chat_member_name_cache[cache_key] = member_name
+                return member_name
+            has_more = bool(response_data.get("has_more"))
+            next_page_token = str(response_data.get("page_token", "")).strip() or None
+            if not has_more or next_page_token is None:
+                return None
+            page_token = next_page_token
+
+    def resolve_user_name(
+        self,
+        *,
+        open_id: str,
+        chat_id: str | None = None,
+        environment: FeishuEnvironment | None = None,
+    ) -> str | None:
+        try:
+            user_name = self.get_user_name(open_id=open_id, environment=environment)
+        except RuntimeError:
+            user_name = None
+        if user_name is not None:
+            return user_name
+        normalized_chat_id = str(chat_id or "").strip()
+        if not normalized_chat_id:
+            return None
+        return self.get_chat_member_name(
+            chat_id=normalized_chat_id,
+            open_id=open_id,
+            environment=environment,
+        )
 
     def upload_image(
         self,

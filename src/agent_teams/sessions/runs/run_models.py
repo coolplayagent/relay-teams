@@ -32,6 +32,14 @@ class RunTopologySnapshot(BaseModel):
     allowed_role_ids: tuple[str, ...] = ()
 
 
+class RuntimePromptConversationContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_provider: str | None = None
+    source_kind: str | None = None
+    feishu_chat_type: str | None = None
+
+
 class IntentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,6 +51,7 @@ class IntentInput(BaseModel):
     target_role_id: str | None = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
+    conversation_context: RuntimePromptConversationContext | None = None
 
 
 class RunResult(BaseModel):

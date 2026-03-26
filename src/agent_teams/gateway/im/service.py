@@ -18,6 +18,14 @@ from agent_teams.gateway.wechat.models import WeChatAccountRecord
 
 
 class _FeishuSender(Protocol):
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None: ...
+
     def send_text_message(
         self,
         *,
@@ -121,6 +129,9 @@ class ImToolService:
                 chat_id=ctx.chat_id,
                 text=text,
                 environment=ctx.environment,
+                reply_to_message_id=(
+                    ctx.reply_to_message_id if ctx.prefer_reply else None
+                ),
             )
             return
         self.send_text_to_wechat_peer(
@@ -136,7 +147,16 @@ class ImToolService:
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
+        reply_to_message_id: str | None = None,
     ) -> None:
+        normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+        if normalized_reply_to_message_id:
+            self._feishu_client.reply_text_message(
+                message_id=normalized_reply_to_message_id,
+                text=text,
+                environment=environment,
+            )
+            return
         self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,

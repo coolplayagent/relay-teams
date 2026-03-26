@@ -45,6 +45,7 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_models import (
+    RuntimePromptConversationContext,
     RunThinkingConfig,
     RunTopologySnapshot,
 )
@@ -451,6 +452,17 @@ class TaskExecutionService(BaseModel):
         except KeyError:
             return None
 
+    def _conversation_context_for_run(
+        self,
+        run_id: str,
+    ) -> RuntimePromptConversationContext | None:
+        if self.run_intent_repo is None:
+            return None
+        try:
+            return self.run_intent_repo.get(run_id).conversation_context
+        except KeyError:
+            return None
+
     def _role_with_memory(
         self,
         *,
@@ -483,6 +495,7 @@ class TaskExecutionService(BaseModel):
                 shared_state_snapshot=shared_state_snapshot,
                 working_directory=working_directory,
                 worktree_root=worktree_root,
+                conversation_context=self._conversation_context_for_run(task.trace_id),
             )
         )
         record_prompt_instruction_paths_loaded(

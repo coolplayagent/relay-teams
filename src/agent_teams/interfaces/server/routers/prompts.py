@@ -32,6 +32,7 @@ from agent_teams.paths import get_app_config_dir
 from agent_teams.roles.role_registry import RoleRegistry
 
 from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
@@ -47,6 +48,7 @@ class PromptPreviewRequest(BaseModel):
     shared_state: dict[str, JsonValue] = Field(default_factory=dict)
     tools: tuple[str, ...] | None = None
     skills: tuple[str, ...] | None = None
+    conversation_context: RuntimePromptConversationContext | None = None
 
 
 class PromptPreviewResponse(BaseModel):
@@ -119,6 +121,7 @@ async def preview_prompts(
             shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
             working_directory=working_directory,
             worktree_root=worktree_root,
+            conversation_context=req.conversation_context,
         )
     )
     skill_instructions = tuple(

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from agent_teams.sessions.runs.run_models import (
         InjectionMessage,
         IntentInput,
+        RuntimePromptConversationContext,
         RunEvent,
         RunResult,
     )
@@ -59,6 +60,7 @@ __all__ = [
     "RunIntentRepository",
     "RunManager",
     "RunResult",
+    "RuntimePromptConversationContext",
     "RunRuntimePhase",
     "RunRuntimeRecord",
     "RunRuntimeRepository",
@@ -86,6 +88,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "InjectionMessage": ("agent_teams.sessions.runs.run_models", "InjectionMessage"),
     "InjectionSource": ("agent_teams.sessions.runs.enums", "InjectionSource"),
     "IntentInput": ("agent_teams.sessions.runs.run_models", "IntentInput"),
+    "RuntimePromptConversationContext": (
+        "agent_teams.sessions.runs.run_models",
+        "RuntimePromptConversationContext",
+    ),
     "RunControlManager": (
         "agent_teams.sessions.runs.run_control_manager",
         "RunControlManager",

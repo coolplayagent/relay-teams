@@ -65,10 +65,14 @@ class FeishuMessagePoolRepository:
                     message_key           TEXT NOT NULL,
                     message_id            TEXT,
                     command_name          TEXT,
+                    sender_name           TEXT,
                     intent_text           TEXT NOT NULL,
                     payload_json          TEXT NOT NULL,
                     metadata_json         TEXT NOT NULL,
                     processing_status     TEXT NOT NULL,
+                    reaction_status       TEXT NOT NULL DEFAULT 'pending',
+                    reaction_type         TEXT,
+                    reaction_attempts     INTEGER NOT NULL DEFAULT 0,
                     ack_status            TEXT NOT NULL,
                     ack_text              TEXT,
                     final_reply_status    TEXT NOT NULL,
@@ -88,6 +92,28 @@ class FeishuMessagePoolRepository:
                 )
                 """
             )
+            columns = [
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(feishu_message_pool)"
+                ).fetchall()
+            ]
+            if "sender_name" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE feishu_message_pool ADD COLUMN sender_name TEXT"
+                )
+            if "reaction_status" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE feishu_message_pool ADD COLUMN reaction_status TEXT NOT NULL DEFAULT 'pending'"
+                )
+            if "reaction_type" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE feishu_message_pool ADD COLUMN reaction_type TEXT"
+                )
+            if "reaction_attempts" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE feishu_message_pool ADD COLUMN reaction_attempts INTEGER NOT NULL DEFAULT 0"
+                )
             self._conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_feishu_message_pool_key
@@ -149,13 +175,14 @@ class FeishuMessagePoolRepository:
                 INSERT INTO feishu_message_pool(
                     message_pool_id, trigger_id, trigger_name, tenant_key, chat_id,
                     chat_type, event_id, message_key, message_id, command_name,
-                    intent_text, payload_json, metadata_json, processing_status,
-                    ack_status, ack_text, final_reply_status, final_reply_text,
+                    sender_name, intent_text, payload_json, metadata_json,
+                    processing_status, reaction_status, reaction_type,
+                    reaction_attempts, ack_status, ack_text, final_reply_status, final_reply_text,
                     delivery_count, process_attempts, ack_attempts,
                     final_reply_attempts, session_id, run_id, next_attempt_at,
                     last_claimed_at, last_error, created_at, updated_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.message_pool_id,
@@ -168,10 +195,14 @@ class FeishuMessagePoolRepository:
                     record.message_key,
                     record.message_id,
                     record.command_name,
+                    record.sender_name,
                     record.intent_text,
                     json.dumps(record.payload),
                     json.dumps(record.metadata),
                     record.processing_status.value,
+                    record.reaction_status.value,
+                    record.reaction_type,
+                    record.reaction_attempts,
                     record.ack_status.value,
                     record.ack_text,
                     record.final_reply_status.value,
@@ -301,10 +332,14 @@ class FeishuMessagePoolRepository:
                     message_key=?,
                     message_id=?,
                     command_name=?,
+                    sender_name=?,
                     intent_text=?,
                     payload_json=?,
                     metadata_json=?,
                     processing_status=?,
+                    reaction_status=?,
+                    reaction_type=?,
+                    reaction_attempts=?,
                     ack_status=?,
                     ack_text=?,
                     final_reply_status=?,
@@ -333,10 +368,14 @@ class FeishuMessagePoolRepository:
                     next_record.message_key,
                     next_record.message_id,
                     next_record.command_name,
+                    next_record.sender_name,
                     next_record.intent_text,
                     json.dumps(next_record.payload),
                     json.dumps(next_record.metadata),
                     next_record.processing_status.value,
+                    next_record.reaction_status.value,
+                    next_record.reaction_type,
+                    next_record.reaction_attempts,
                     next_record.ack_status.value,
                     next_record.ack_text,
                     next_record.final_reply_status.value,
@@ -475,6 +514,28 @@ class FeishuMessagePoolRepository:
             ).fetchall()
         return tuple(self._row_to_record(row) for row in rows)
 
+    def list_pending_reactions(
+        self,
+        *,
+        limit: int = 20,
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        safe_limit = max(1, min(limit, 100))
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM feishu_message_pool
+                WHERE reaction_status=?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    FeishuMessageDeliveryStatus.PENDING.value,
+                    safe_limit,
+                ),
+            ).fetchall()
+        return tuple(self._row_to_record(row) for row in rows)
+
     def list_active_chat_messages(
         self,
         *,
@@ -550,6 +611,8 @@ class FeishuMessagePoolRepository:
                 UPDATE feishu_message_pool
                 SET
                     processing_status=?,
+                    reaction_status=?,
+                    ack_status=?,
                     final_reply_status=?,
                     next_attempt_at=?,
                     completed_at=?,
@@ -562,6 +625,8 @@ class FeishuMessagePoolRepository:
                 """,
                 (
                     FeishuMessageProcessingStatus.CANCELLED.value,
+                    FeishuMessageDeliveryStatus.SKIPPED.value,
+                    FeishuMessageDeliveryStatus.SKIPPED.value,
                     FeishuMessageDeliveryStatus.SKIPPED.value,
                     cancelled_at.isoformat(),
                     cancelled_at.isoformat(),
@@ -637,12 +702,20 @@ class FeishuMessagePoolRepository:
             command_name=str(row["command_name"])
             if row["command_name"] is not None
             else None,
+            sender_name=str(row["sender_name"])
+            if row["sender_name"] is not None
+            else None,
             intent_text=str(row["intent_text"]),
             payload=json.loads(str(row["payload_json"])),
             metadata=json.loads(str(row["metadata_json"])),
             processing_status=FeishuMessageProcessingStatus(
                 str(row["processing_status"])
             ),
+            reaction_status=FeishuMessageDeliveryStatus(str(row["reaction_status"])),
+            reaction_type=str(row["reaction_type"])
+            if row["reaction_type"] is not None
+            else None,
+            reaction_attempts=int(row["reaction_attempts"]),
             ack_status=FeishuMessageDeliveryStatus(str(row["ack_status"])),
             ack_text=str(row["ack_text"]) if row["ack_text"] is not None else None,
             final_reply_status=FeishuMessageDeliveryStatus(

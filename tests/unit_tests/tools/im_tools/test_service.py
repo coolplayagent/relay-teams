@@ -14,6 +14,8 @@ from agent_teams.automation import (
 )
 from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
+    FEISHU_METADATA_CHAT_TYPE_KEY,
+    FEISHU_METADATA_MESSAGE_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
     FeishuEnvironment,
@@ -55,6 +57,8 @@ def _make_session(
     platform: str = "feishu",
     chat_id: str = _CHAT_ID,
     trigger_id: str = _TRIGGER_ID,
+    chat_type: str = "group",
+    message_id: str = "om_1",
     project_kind: ProjectKind = ProjectKind.WORKSPACE,
     project_id: str | None = None,
 ) -> SessionRecord:
@@ -66,7 +70,9 @@ def _make_session(
         metadata={
             FEISHU_METADATA_PLATFORM_KEY: platform,
             FEISHU_METADATA_CHAT_ID_KEY: chat_id,
+            FEISHU_METADATA_CHAT_TYPE_KEY: chat_type,
             FEISHU_METADATA_TRIGGER_ID_KEY: trigger_id,
+            FEISHU_METADATA_MESSAGE_ID_KEY: message_id,
         },
     )
 
@@ -125,6 +131,7 @@ class _FakeGatewaySessionLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_texts: list[tuple[str, str]] = []
+        self.reply_texts: list[tuple[str, str]] = []
         self.sent_files: list[tuple[str, Path]] = []
 
     def send_text_message(
@@ -136,6 +143,16 @@ class _FakeFeishuClient:
     ) -> None:
         _ = environment
         self.sent_texts.append((chat_id, text))
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        _ = environment
+        self.reply_texts.append((message_id, text))
 
     def send_file(
         self,
@@ -406,7 +423,27 @@ def test_send_text_success_for_feishu() -> None:
     result = service.send_text(session_id=_SESSION_ID, text="hello")
 
     assert result == "Message sent."
+    assert feishu_client.sent_texts == []
+    assert feishu_client.reply_texts == [("om_1", "hello")]
+    assert wechat_client.sent_texts == []
+
+
+def test_send_text_success_for_feishu_p2p_uses_plain_send() -> None:
+    service, feishu_client, wechat_client = _build_service(
+        sessions={
+            _SESSION_ID: _make_session(
+                chat_type="p2p",
+                message_id="om_p2p_1",
+            )
+        },
+        configs=_default_configs(),
+    )
+
+    result = service.send_text(session_id=_SESSION_ID, text="hello")
+
+    assert result == "Message sent."
     assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
+    assert feishu_client.reply_texts == []
     assert wechat_client.sent_texts == []
 
 
@@ -472,6 +509,7 @@ def test_send_text_success_for_automation_session_binding() -> None:
 
     assert result == "Message sent."
     assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
+    assert feishu_client.reply_texts == []
     assert wechat_client.sent_texts == []
 
 

@@ -17,6 +17,9 @@ FEISHU_METADATA_CHAT_ID_KEY = "feishu_chat_id"
 FEISHU_METADATA_CHAT_TYPE_KEY = "feishu_chat_type"
 FEISHU_METADATA_TRIGGER_ID_KEY = "feishu_trigger_id"
 FEISHU_METADATA_ACCOUNT_ID_KEY = "feishu_account_id"
+FEISHU_METADATA_MESSAGE_ID_KEY = "feishu_message_id"
+FEISHU_METADATA_SENDER_NAME_KEY = "feishu_sender_name"
+FEISHU_METADATA_SENDER_OPEN_ID_KEY = "feishu_sender_open_id"
 SESSION_METADATA_SOURCE_KIND_KEY = "source_kind"
 SESSION_METADATA_SOURCE_PROVIDER_KEY = "source_provider"
 SESSION_METADATA_SOURCE_LABEL_KEY = "source_label"
@@ -170,6 +173,7 @@ class FeishuNormalizedMessage(BaseModel):
     message_type: str = Field(min_length=1)
     sender_type: str | None = None
     sender_open_id: str | None = None
+    sender_name: str | None = None
     raw_text: str = ""
     trigger_text: str = ""
     mentioned: bool = False
@@ -225,12 +229,16 @@ class FeishuMessagePoolRecord(BaseModel):
     message_key: str = Field(min_length=1)
     message_id: str | None = None
     command_name: str | None = None
+    sender_name: str | None = None
     intent_text: str = ""
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     metadata: dict[str, str] = Field(default_factory=dict)
     processing_status: FeishuMessageProcessingStatus = (
         FeishuMessageProcessingStatus.QUEUED
     )
+    reaction_status: FeishuMessageDeliveryStatus = FeishuMessageDeliveryStatus.PENDING
+    reaction_type: str | None = None
+    reaction_attempts: int = Field(default=0, ge=0)
     ack_status: FeishuMessageDeliveryStatus = FeishuMessageDeliveryStatus.PENDING
     ack_text: str | None = None
     final_reply_status: FeishuMessageDeliveryStatus = (

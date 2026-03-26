@@ -137,17 +137,20 @@ Behavior:
 
 - the SDK callback no longer creates runs directly
 - each accepted message is first written to the local `feishu_message_pool`
+- for group chats, the runtime resolves the sender display name before execution when possible
+- the actual run input for group chats is wrapped as `???? {sender_name} ??????{message}`
+  and falls back to `sender_open_id` when the name cannot be resolved
 - deduplication still uses the Feishu `message_id`, falling back to `event_id`
 - duplicate deliveries do not send a second acknowledgement
 - same-chat messages are processed in order
-- acknowledgement text is queue-aware
-  - no backlog: `收到，正在处理。`
-  - backlog exists: `收到，已进入排队。当前聊天前面还有 N 条消息。`
+- accepted group messages use a Feishu message reaction acknowledgement instead of a text ack
+  - default reaction emoji: `eyes`
+- only queued messages emit a separate text reply
+  - queue reply: `?????????? N ????`
+- group command replies and final run replies use Feishu reply-to-message on the triggering message
+- p2p chats still use normal outbound text sending
 - final Feishu replies for inbound chat messages are sent by the message-pool worker
   after the run reaches a terminal state
-- current queue-aware acknowledgement text is:
-  - no backlog: `收到，正在处理。`
-  - backlog exists: `收到，已进入排队。当前聊天前面还有 N 条消息。`
 - waiting messages reconcile against `run_runtime`; stalled rows are retried instead
   of remaining stuck in `waiting_result`
 
@@ -161,6 +164,14 @@ For inbound Feishu chat messages, automatic `run_completed` / `run_failed`
 notifications to Feishu are suppressed so the user receives only the message-pool
 final reply, not a duplicate terminal notification.
 
+For prompt assembly, Feishu group runs also persist a conversation context marker.
+Only when `source_provider = "feishu"` and `feishu_chat_type = "group"`, the runtime
+and provider system prompts append this extra instruction:
+
+- `??????????????????????????????????????????????????`
+
+Non-Feishu-group runs keep the original system prompt unchanged.
+
 ## Session Commands
 
 Feishu chat sessions also support lightweight chat commands:
@@ -168,6 +179,8 @@ Feishu chat sessions also support lightweight chat commands:
 - `help`: shows the command list
 - `status`: shows the active session summary and the current chat queue state
 - `clear`: clears the active session context and cancels queued messages for that chat
+
+For group chats, command responses also use reply-to-message instead of a plain send.
 
 `clear` still does not delete persisted `messages` or `token_usage`. It inserts the
 session history divider as before, and also marks the current chat's active

@@ -236,6 +236,171 @@ def test_send_text_message_uses_net_client_request_chain(monkeypatch) -> None:
     }
 
 
+def test_reply_text_message_uses_reply_endpoint(monkeypatch) -> None:
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/messages/om_1/reply"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {"message_id": "om_reply_1"}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/messages/om_1/reply",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    client.reply_text_message(
+        message_id="om_1",
+        text="queued",
+        environment=environment,
+    )
+
+    assert [request[:2] for request in fake_client.requests] == [
+        ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
+        ("POST", f"{base_url}/open-apis/im/v1/messages/om_1/reply"),
+    ]
+    assert fake_client.requests[1][4] == {
+        "msg_type": "text",
+        "content": '{"text": "queued"}',
+    }
+
+
+def test_create_message_reaction_uses_reaction_endpoint(monkeypatch) -> None:
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("POST", f"{base_url}/open-apis/im/v1/messages/om_1/reactions"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {}},
+                    method="POST",
+                    url=f"{base_url}/open-apis/im/v1/messages/om_1/reactions",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    client.create_message_reaction(
+        message_id="om_1",
+        reaction_type="eyes",
+        environment=environment,
+    )
+
+    assert [request[:2] for request in fake_client.requests] == [
+        ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
+        ("POST", f"{base_url}/open-apis/im/v1/messages/om_1/reactions"),
+    ]
+    assert fake_client.requests[1][4] == {
+        "reaction_type": {"emoji_type": "eyes"},
+    }
+
+
+def test_resolve_user_name_falls_back_to_chat_member_lookup(monkeypatch) -> None:
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("GET", f"{base_url}/open-apis/contact/v3/users/ou_user_1"): [
+                _response(
+                    200,
+                    {"code": 99991663, "msg": "user_error"},
+                    method="GET",
+                    url=f"{base_url}/open-apis/contact/v3/users/ou_user_1",
+                )
+            ],
+            ("GET", f"{base_url}/open-apis/im/v1/chats/oc_group_1/members"): [
+                _response(
+                    200,
+                    {
+                        "code": 0,
+                        "data": {
+                            "items": [
+                                {"member_id": "ou_user_1", "name": "Alice"},
+                            ],
+                            "has_more": False,
+                            "page_token": "",
+                        },
+                    },
+                    method="GET",
+                    url=f"{base_url}/open-apis/im/v1/chats/oc_group_1/members",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    resolved = client.resolve_user_name(
+        open_id="ou_user_1",
+        chat_id="oc_group_1",
+        environment=environment,
+    )
+
+    assert resolved == "Alice"
+    assert [request[:2] for request in fake_client.requests] == [
+        ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
+        ("GET", f"{base_url}/open-apis/contact/v3/users/ou_user_1"),
+        ("GET", f"{base_url}/open-apis/im/v1/chats/oc_group_1/members"),
+    ]
+    assert fake_client.requests[2][3] == {
+        "member_id_type": "open_id",
+        "page_size": "100",
+    }
+
+
 def test_get_chat_name_raises_runtime_error_for_failed_response(monkeypatch) -> None:
     base_url = "https://open.feishu.cn"
     fake_client = _FakeSyncHttpClient(

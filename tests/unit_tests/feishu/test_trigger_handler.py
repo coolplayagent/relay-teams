@@ -128,6 +128,7 @@ class _FakeRunService:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[tuple[str, str]] = []
+        self.reply_messages: list[tuple[str, str]] = []
 
     def send_text_message(
         self,
@@ -138,6 +139,16 @@ class _FakeFeishuClient:
     ) -> None:
         _ = environment
         self.sent_messages.append((chat_id, text))
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        _ = environment
+        self.reply_messages.append((message_id, text))
 
 
 class _FakeImToolService:
@@ -150,7 +161,16 @@ class _FakeImToolService:
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
+        reply_to_message_id: str | None = None,
     ) -> None:
+        normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+        if normalized_reply_to_message_id:
+            self._feishu_client.reply_text_message(
+                message_id=normalized_reply_to_message_id,
+                text=text,
+                environment=environment,
+            )
+            return
         self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
@@ -274,7 +294,9 @@ def _build_handler(
         feishu_message_pool_service=message_pool_service,
     )
     handler = FeishuTriggerHandler(
-        runtime_config_lookup=_FakeRuntimeConfigLookup(runtime_config or _build_runtime()),
+        runtime_config_lookup=_FakeRuntimeConfigLookup(
+            runtime_config or _build_runtime()
+        ),
         message_pool_service=message_pool_service,
         im_tool_service=cast(ImToolService, im_tool_service),
         im_session_command_service=im_session_command_service,
@@ -282,7 +304,14 @@ def _build_handler(
     return handler, session_service, message_pool_service, bindings, feishu_client
 
 
-def _build_event(*, message_id: str, chat_id: str, event_id: str, text: str) -> str:
+def _build_event(
+    *,
+    message_id: str,
+    chat_id: str,
+    event_id: str,
+    text: str,
+    chat_type: str = "p2p",
+) -> str:
     return json.dumps(
         {
             "schema": "2.0",
@@ -296,7 +325,7 @@ def _build_event(*, message_id: str, chat_id: str, event_id: str, text: str) -> 
                 "message": {
                     "message_id": message_id,
                     "chat_id": chat_id,
-                    "chat_type": "p2p",
+                    "chat_type": chat_type,
                     "message_type": "text",
                     "content": json.dumps({"text": text}),
                 },
@@ -356,6 +385,34 @@ def test_help_command_returns_help_and_skips_enqueue(tmp_path: Path) -> None:
     assert "help" in text
     assert "status" in text
     assert "clear" in text
+
+
+def test_group_help_command_replies_to_trigger_message(tmp_path: Path) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    raw_body = _build_event(
+        message_id="om_help_group",
+        chat_id="oc_group_help",
+        event_id="evt-help-group",
+        text="help",
+        chat_type="group",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "command"
+    assert message_pool_service.enqueued == []
+    assert feishu_client.sent_messages == []
+    assert len(feishu_client.reply_messages) == 1
+    assert feishu_client.reply_messages[0][0] == "om_help_group"
+    assert "help" in feishu_client.reply_messages[0][1]
 
 
 def test_status_and_clear_commands_include_queue_state(tmp_path: Path) -> None:

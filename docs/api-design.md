@@ -1021,6 +1021,11 @@ Request:
   "workspace_id": "default",
   "objective": "Draft release note",
   "shared_state": {"lang": "zh-CN", "priority": 1},
+  "conversation_context": {
+    "source_provider": "feishu",
+    "source_kind": "im",
+    "feishu_chat_type": "group"
+  },
   "tools": ["dispatch_task"],
   "skills": ["time"]
 }
@@ -1029,8 +1034,12 @@ Request:
 Notes:
 - `objective` is optional.
 - `workspace_id` is optional.
+- `conversation_context` is optional.
 - When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
 - `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `~/.agent-teams/prompts.json`.
+- When `conversation_context.source_provider = "feishu"` and `conversation_context.feishu_chat_type = "group"`, both `runtime_system_prompt` and `provider_system_prompt` append the extra Feishu-group instruction:
+  `当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。`
+- Other contexts leave the role system prompt unchanged.
 - When `workspace_id` does not exist, the endpoint returns `404`.
 - When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
 
@@ -1108,9 +1117,13 @@ Behavior:
 - For `group` chats configured with `trigger_rule = "mention_only"`, only messages whose mention list includes the configured application name create runs.
 - For `p2p` chats, any text message creates a run and `mention_only` does not require an application mention.
 - Persists accepted inbound messages in a local message pool before execution.
+- Resolves group sender names when possible and injects the actual run intent as
+  `收到来自 {sender_name} 的飞书消息：{message}` with `sender_open_id` fallback.
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
-- Acknowledgement text reflects the current chat backlog.
+- Accepted group messages use a Feishu reaction acknowledgement with emoji `eyes`.
+- Only queued messages send a separate text reply: `已进入队列，前面还有 N 条消息。`
+- Group command responses and group final run replies use Feishu reply-to-message on the triggering message.
 - Reuses one internal session per `account_id + tenant_key + chat_id`.
 - Requires no public callback URL.
 - Runs one SDK long connection per enabled Feishu gateway account whose credentials are ready.
