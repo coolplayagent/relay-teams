@@ -18,11 +18,12 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
+from agent_teams.media import content_parts_from_text
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
+from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -336,6 +337,67 @@ def test_process_and_finalize_message_run(tmp_path: Path) -> None:
             task_id="task-1",
             event_type=RunEventType.RUN_COMPLETED,
             payload_json='{"status":"completed","output":"final answer"}',
+        )
+    )
+
+    assert service._finalize_waiting_results() is True
+    updated = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_1",
+    )
+    assert updated.processing_status == FeishuMessageProcessingStatus.COMPLETED
+    assert updated.final_reply_status == FeishuMessageDeliveryStatus.SENT
+    assert feishu_client.reply_messages[-1] == ("om_1", "final answer")
+
+
+def test_process_and_finalize_message_run_with_structured_output(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        repo,
+        feishu_client,
+        run_runtime_repo,
+        event_log,
+        _run_service,
+    ) = _build_service(tmp_path)
+    runtime = _build_runtime()
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(event_id="evt-1", message_id="om_1", text="hello"),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+
+    assert service._process_queued_messages() is True
+
+    _ = run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = run_runtime_repo.update(
+        "run-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+        last_error=None,
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json=RunResult(
+                trace_id="run-1",
+                root_task_id="task-1",
+                status="completed",
+                output=content_parts_from_text("final answer"),
+            ).model_dump_json(),
         )
     )
 

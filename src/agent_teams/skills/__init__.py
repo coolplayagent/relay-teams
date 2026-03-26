@@ -14,6 +14,7 @@ from agent_teams.skills.skill_models import (
     SkillResource,
     SkillScope,
     SkillScript,
+    SkillSummaryEntry,
 )
 from agent_teams.skills.skill_registry import SkillRegistry
 
@@ -25,6 +26,7 @@ __all__ = [
     "SkillResource",
     "SkillScope",
     "SkillScript",
+    "SkillSummaryEntry",
     "SkillsDirectory",
     "SkillRegistry",
     "get_project_skills_dir",

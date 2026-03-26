@@ -44,7 +44,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Create a run-scoped temporary role for orchestration dispatch."""
 
-        if ctx.deps.runtime_role_resolver is None:
+        runtime_role_resolver = ctx.deps.runtime_role_resolver
+        if runtime_role_resolver is None:
             raise RuntimeError("Temporary role creation is unavailable")
 
         payload = CreateTemporaryRoleInput(
@@ -60,7 +61,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         )
 
         def _action() -> dict[str, JsonValue]:
-            role = ctx.deps.runtime_role_resolver.create_temporary_role(
+            role = runtime_role_resolver.create_temporary_role(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
                 source=TemporaryRoleSource.META_AGENT_GENERATED,

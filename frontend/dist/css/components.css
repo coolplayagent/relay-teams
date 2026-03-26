@@ -2973,7 +2973,7 @@
 
 .status-list-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
     padding: 0.9rem 0;
@@ -2982,11 +2982,30 @@
     background: transparent;
 }
 
+.status-list-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.24rem;
+}
+
 .status-list-name {
     min-width: 0;
     color: var(--text-primary);
     font-size: 0.875rem;
     word-break: break-word;
+}
+
+.status-list-description {
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.status-list-description-empty {
+    color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
 }
 
 .status-list-state {

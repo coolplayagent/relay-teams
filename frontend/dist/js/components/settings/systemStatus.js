@@ -81,6 +81,9 @@ export async function loadSkillsStatusPanel() {
     try {
         const status = await fetchConfigStatus();
         const skillsStatus = document.getElementById('skills-status');
+        if (!skillsStatus) {
+            return;
+        }
         const skills = status.skills?.skills || [];
         if (skills.length === 0) {
             skillsStatus.innerHTML = renderEmptyState(t('settings.system.no_skills'), t('settings.system.no_skills_copy'));
@@ -312,16 +315,45 @@ function renderMcpToolRow(tool) {
 }
 
 function renderStatusList(items, stateLabel) {
+    const normalizedItems = Array.isArray(items)
+        ? items.map(normalizeStatusItem).filter(item => item !== null)
+        : [];
     return `
         <div class="status-list">
-            ${items.map(item => `
+            ${normalizedItems.map(item => `
                 <div class="status-list-row">
-                    <div class="status-list-name">${escapeHtml(item)}</div>
+                    <div class="status-list-copy">
+                        <div class="status-list-name">${escapeHtml(item.name)}</div>
+                        <div class="status-list-description${item.description ? '' : ' status-list-description-empty'}">${escapeHtml(item.description || 'No description provided.')}</div>
+                    </div>
                     <div class="status-list-state">${escapeHtml(stateLabel)}</div>
                 </div>
             `).join('')}
         </div>
     `;
+}
+
+function normalizeStatusItem(item) {
+    if (typeof item === 'string') {
+        const name = item.trim();
+        if (!name) {
+            return null;
+        }
+        return {
+            name,
+            description: '',
+        };
+    }
+
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    if (!name) {
+        return null;
+    }
+
+    return {
+        name,
+        description: typeof item?.description === 'string' ? item.description.trim() : '',
+    };
 }
 
 function renderEmptyState(title, description) {

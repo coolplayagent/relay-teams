@@ -16,6 +16,7 @@ def test_registry_contains_registered_local_tools() -> None:
     registry = build_default_registry()
     assert registry.list_names() == (
         "create_tasks",
+        "create_temporary_role",
         "dispatch_task",
         "edit",
         "glob",

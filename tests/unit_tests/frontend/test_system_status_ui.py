@@ -14,16 +14,24 @@ const initialStatus = {
         servers: ['time-mcp', 'empty-mcp', 'broken-mcp'],
     },
     skills: {
-        skills: ['diff'],
+        skills: [
+            { name: 'diff', description: 'Inspect file changes before replying.' },
+            { name: 'time', description: '' },
+        ],
     },
 };
 
-const reloadedStatus = {
+const reloadedMcpStatus = {
     mcp: {
         servers: ['time-mcp'],
     },
+};
+
+const reloadedSkillsStatus = {
     skills: {
-        skills: ['diff'],
+        skills: [
+            { name: 'diff', description: 'Compare the latest workspace changes.' },
+        ],
     },
 };
 
@@ -55,7 +63,10 @@ const reloadedToolSummaries = {
 
 export async function fetchConfigStatus() {
     globalThis.__fetchConfigStatusCalls += 1;
-    return globalThis.__reloadMcpCalls > 0 ? reloadedStatus : initialStatus;
+    return {
+        mcp: globalThis.__reloadMcpCalls > 0 ? reloadedMcpStatus.mcp : initialStatus.mcp,
+        skills: globalThis.__reloadSkillsCalls > 0 ? reloadedSkillsStatus.skills : initialStatus.skills,
+    };
 }
 
 export async function fetchMcpServerTools(serverName) {
@@ -274,6 +285,50 @@ console.log(JSON.stringify({
     ]
 
 
+def test_skills_status_panel_lists_skill_descriptions_and_reload_updates_them(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { bindSystemStatusHandlers, loadSkillsStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+bindSystemStatusHandlers();
+await loadSkillsStatusPanel();
+const initialHtml = document.getElementById('skills-status').innerHTML;
+await document.getElementById('reload-skills-btn').onclick();
+
+console.log(JSON.stringify({
+    initialHtml,
+    reloadedHtml: document.getElementById('skills-status').innerHTML,
+    fetchConfigStatusCalls: globalThis.__fetchConfigStatusCalls,
+    reloadSkillsCalls: globalThis.__reloadSkillsCalls,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    initial_html = cast(str, payload["initialHtml"])
+    reloaded_html = cast(str, payload["reloadedHtml"])
+    toasts = cast(list[JsonValue], payload["toasts"])
+    assert "diff" in initial_html
+    assert "Inspect file changes before replying." in initial_html
+    assert "time" in initial_html
+    assert "No description provided." in initial_html
+    assert "Compare the latest workspace changes." in reloaded_html
+    assert "Inspect file changes before replying." not in reloaded_html
+    assert payload["fetchConfigStatusCalls"] == 2
+    assert payload["reloadSkillsCalls"] == 1
+    assert toasts == [
+        {
+            "title": "Skills Reloaded",
+            "message": "Skills reloaded.",
+            "tone": "success",
+        }
+    ]
+
+
 def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     components_css = (
@@ -292,6 +347,8 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     assert ".mcp-tool-row {" in components_css
     assert ".mcp-tool-name {" in components_css
     assert ".mcp-tools-error {" in components_css
+    assert ".status-list-copy {" in components_css
+    assert ".status-list-description {" in components_css
 
 
 def _run_system_status_script(

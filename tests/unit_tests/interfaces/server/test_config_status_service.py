@@ -16,12 +16,18 @@ from agent_teams.sessions.runs.runtime_config import (
     RuntimeConfig,
     RuntimePaths,
 )
+from agent_teams.skills.skill_models import SkillSummaryEntry
 from agent_teams.skills.skill_registry import SkillRegistry
 
 
 class _FakeSkillRegistry:
-    def list_names(self) -> tuple[str, ...]:
-        return ()
+    def list_skill_summaries(self) -> tuple[SkillSummaryEntry, ...]:
+        return (
+            SkillSummaryEntry(
+                name="diff",
+                description="Inspect changes between files.",
+            ),
+        )
 
 
 def test_get_config_status_only_exposes_app_scoped_mcp_servers() -> None:
@@ -77,7 +83,12 @@ def test_get_config_status_only_exposes_app_scoped_mcp_servers() -> None:
     }
     assert status["skills"] == {
         "loaded": True,
-        "skills": [],
+        "skills": [
+            {
+                "name": "diff",
+                "description": "Inspect changes between files.",
+            }
+        ],
     }
     assert status["proxy"] == {"enabled": False}
 

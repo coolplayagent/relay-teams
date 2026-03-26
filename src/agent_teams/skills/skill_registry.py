@@ -10,7 +10,11 @@ from pydantic_ai import Tool
 from agent_teams.logger import get_logger
 
 from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.skills.skill_models import Skill, SkillInstructionEntry
+from agent_teams.skills.skill_models import (
+    Skill,
+    SkillInstructionEntry,
+    SkillSummaryEntry,
+)
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
@@ -112,6 +116,20 @@ class SkillRegistry(BaseModel):
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(skill.metadata.name for skill in self.list_skill_definitions())
+
+    def list_skill_summaries(self) -> tuple[SkillSummaryEntry, ...]:
+        with trace_span(
+            LOGGER,
+            component="skills.registry",
+            operation="list_skill_summaries",
+        ):
+            return tuple(
+                SkillSummaryEntry(
+                    name=skill.metadata.name,
+                    description=skill.metadata.description.strip(),
+                )
+                for skill in self.list_skill_definitions()
+            )
 
     def get_instructions(self, skill_names: tuple[str, ...]) -> str:
         entries = self.get_instruction_entries(skill_names)

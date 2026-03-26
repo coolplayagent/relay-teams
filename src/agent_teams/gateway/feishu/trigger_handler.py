@@ -147,25 +147,6 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="sender_is_bot",
             )
-        response_text = self._im_session_command_service.handle_feishu_command(
-            runtime_config=runtime_config,
-            message=normalized,
-        )
-        if response_text is not None:
-            self._send_command_response(
-                chat_id=normalized.chat_id,
-                chat_type=normalized.chat_type,
-                message_id=normalized.message_id,
-                text=response_text,
-                runtime_config=runtime_config,
-            )
-            return TriggerProcessingResult(
-                status="command",
-                trigger_id=runtime_config.trigger_id,
-                trigger_name=runtime_config.trigger_name,
-                event_id=normalized.event_id,
-                reason="session_command",
-            )
         trigger_rule = runtime_config.source.trigger_rule
         if (
             trigger_rule == "mention_only"
@@ -201,6 +182,25 @@ class FeishuTriggerHandler:
                 event_id=normalized.event_id,
                 ignored=True,
                 reason="empty_trigger_text",
+            )
+        response_text = self._im_session_command_service.handle_feishu_command(
+            runtime_config=runtime_config,
+            message=normalized,
+        )
+        if response_text is not None:
+            self._send_command_response(
+                chat_id=normalized.chat_id,
+                chat_type=normalized.chat_type,
+                message_id=normalized.message_id,
+                text=response_text,
+                runtime_config=runtime_config,
+            )
+            return TriggerProcessingResult(
+                status="command",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=normalized.event_id,
+                reason="session_command",
             )
 
         return self._message_pool_service.enqueue_message(

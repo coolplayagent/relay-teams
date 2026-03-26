@@ -25,6 +25,7 @@ from agent_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import ContentPartsAdapter, content_parts_to_text
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -852,6 +853,7 @@ def _build_terminal_reply(
     if runtime_status == RunRuntimeStatus.STOPPED:
         return "处理已中断，请重试。"
     output = ""
+    terminal_error = ""
     try:
         for event in reversed(event_log.list_by_trace_with_ids(run_id)):
             event_type = str(event.get("event_type") or "")
@@ -863,19 +865,41 @@ def _build_terminal_reply(
             payload_json = str(event.get("payload_json") or "{}")
             payload = json.loads(payload_json)
             if isinstance(payload, dict):
-                output_value = payload.get("output")
-                if isinstance(output_value, str):
-                    output = output_value.strip()
+                output = _extract_terminal_output(payload)
+                terminal_error = _extract_terminal_error(payload)
             break
     except Exception:
         output = ""
+        terminal_error = ""
     if runtime_status == RunRuntimeStatus.COMPLETED:
         return output or f"Run {run_id} completed successfully."
     if output:
         return f"Run {run_id} failed: {output}"
+    if terminal_error:
+        return f"Run {run_id} failed: {terminal_error}"
     if str(fallback_error or "").strip():
         return f"Run {run_id} failed: {fallback_error}"
     return f"Run {run_id} failed."
+
+
+def _extract_terminal_output(payload: dict[str, object]) -> str:
+    output_value = payload.get("output")
+    if isinstance(output_value, str):
+        return output_value.strip()
+    if isinstance(output_value, (list, tuple)):
+        try:
+            parts = ContentPartsAdapter.validate_python(tuple(output_value))
+        except Exception:
+            return ""
+        return content_parts_to_text(parts)
+    return ""
+
+
+def _extract_terminal_error(payload: dict[str, object]) -> str:
+    error_value = payload.get("error")
+    if isinstance(error_value, str):
+        return error_value.strip()
+    return ""
 
 
 def _build_intent_preview(intent_text: str, max_length: int = 48) -> str:

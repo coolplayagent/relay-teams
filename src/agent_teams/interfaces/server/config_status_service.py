@@ -35,6 +35,10 @@ class ConfigStatusService:
             for spec in mcp_registry.list_specs()
             if spec.source == McpConfigScope.APP
         ]
+        skill_summaries = [
+            skill.model_dump(mode="json")
+            for skill in skill_registry.list_skill_summaries()
+        ]
         status: dict[str, JsonValue] = {
             "model": cast(
                 JsonValue,
@@ -55,7 +59,7 @@ class ConfigStatusService:
                 JsonValue,
                 {
                     "loaded": True,
-                    "skills": list(skill_registry.list_names()),
+                    "skills": skill_summaries,
                 },
             ),
             "proxy": self._get_proxy_status(),

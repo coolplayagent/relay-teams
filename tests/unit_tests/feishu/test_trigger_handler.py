@@ -311,7 +311,17 @@ def _build_event(
     event_id: str,
     text: str,
     chat_type: str = "p2p",
+    mention_names: tuple[str, ...] = (),
 ) -> str:
+    message: dict[str, object] = {
+        "message_id": message_id,
+        "chat_id": chat_id,
+        "chat_type": chat_type,
+        "message_type": "text",
+        "content": json.dumps({"text": text}),
+    }
+    if mention_names:
+        message["mentions"] = [{"name": name} for name in mention_names]
     return json.dumps(
         {
             "schema": "2.0",
@@ -322,13 +332,7 @@ def _build_event(
             },
             "event": {
                 "sender": {"sender_id": {"open_id": "ou_user"}, "sender_type": "user"},
-                "message": {
-                    "message_id": message_id,
-                    "chat_id": chat_id,
-                    "chat_type": chat_type,
-                    "message_type": "text",
-                    "content": json.dumps({"text": text}),
-                },
+                "message": message,
             },
         }
     )
@@ -387,7 +391,7 @@ def test_help_command_returns_help_and_skips_enqueue(tmp_path: Path) -> None:
     assert "clear" in text
 
 
-def test_group_help_command_replies_to_trigger_message(tmp_path: Path) -> None:
+def test_group_command_requires_mention_under_mention_only(tmp_path: Path) -> None:
     handler, _session_service, message_pool_service, _bindings, feishu_client = (
         _build_handler(tmp_path=tmp_path)
     )
@@ -407,12 +411,68 @@ def test_group_help_command_replies_to_trigger_message(tmp_path: Path) -> None:
         remote_addr=None,
     )
 
+    assert result.status == "ignored"
+    assert result.reason == "mention_required"
+    assert message_pool_service.enqueued == []
+    assert feishu_client.sent_messages == []
+    assert feishu_client.reply_messages == []
+
+
+def test_group_help_command_replies_when_mentioned(tmp_path: Path) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    raw_body = _build_event(
+        message_id="om_help_group",
+        chat_id="oc_group_help",
+        event_id="evt-help-group",
+        text='<at user_id="ou_bot">Agent Teams Bot</at> help',
+        chat_type="group",
+        mention_names=("Agent Teams Bot",),
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
     assert result.status == "command"
     assert message_pool_service.enqueued == []
     assert feishu_client.sent_messages == []
     assert len(feishu_client.reply_messages) == 1
     assert feishu_client.reply_messages[0][0] == "om_help_group"
     assert "help" in feishu_client.reply_messages[0][1]
+
+
+def test_group_command_ignores_other_bot_mentions(tmp_path: Path) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    raw_body = _build_event(
+        message_id="om_help_other",
+        chat_id="oc_group_help",
+        event_id="evt-help-other",
+        text='<at user_id="ou_other">Other Bot</at> help',
+        chat_type="group",
+        mention_names=("Other Bot",),
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "ignored"
+    assert result.reason == "mention_not_for_app"
+    assert message_pool_service.enqueued == []
+    assert feishu_client.sent_messages == []
+    assert feishu_client.reply_messages == []
 
 
 def test_status_and_clear_commands_include_queue_state(tmp_path: Path) -> None:

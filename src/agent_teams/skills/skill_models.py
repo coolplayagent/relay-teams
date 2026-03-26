@@ -47,6 +47,13 @@ class Skill(BaseModel):
     scope: SkillScope
 
 
+class SkillSummaryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    description: str = ""
+
+
 class SkillInstructionEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

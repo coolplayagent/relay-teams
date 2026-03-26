@@ -8,8 +8,11 @@ from threading import RLock
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.roles.memory_models import MemoryProfile
-from agent_teams.roles.temporary_role_models import TemporaryRoleRecord
-from agent_teams.roles.temporary_role_models import TemporaryRoleSpec
+from agent_teams.roles.temporary_role_models import (
+    TemporaryRoleRecord,
+    TemporaryRoleSource,
+    TemporaryRoleSpec,
+)
 
 
 class TemporaryRoleRepository:
@@ -156,7 +159,7 @@ class TemporaryRoleRepository:
         return TemporaryRoleRecord(
             run_id=str(row["run_id"]),
             session_id=str(row["session_id"]),
-            source=str(row["source"]),
+            source=TemporaryRoleSource(str(row["source"])),
             role=TemporaryRoleSpec(
                 role_id=str(row["role_id"]),
                 name=str(row["name"]),
