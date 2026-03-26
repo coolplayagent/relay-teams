@@ -279,7 +279,7 @@ def test_compose_system_prompt_renders_tools_and_skills() -> None:
     assert "## Available Skills" in prompt
     assert "- time: Normalize all times to UTC." in prompt
     assert "Use `load_skill` when a listed skill is relevant" in prompt
-    assert "absolute file paths for the skill directory" in prompt
+    assert "selected absolute file paths for the skill directory" in prompt
     assert "Use `read_skill_resource`" not in prompt
     assert "Use `run_skill_script`" not in prompt
 

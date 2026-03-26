@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Iterable
+import json
+import logging
 from pathlib import Path
+from typing import cast
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Tool
 
-from agent_teams.logger import get_logger
+from agent_teams.logger import get_logger, log_event
 
 from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.skill_models import (
@@ -19,6 +21,34 @@ from agent_teams.trace import trace_span
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 LOGGER = get_logger(__name__)
+_SKILL_LOAD_MAX_PAYLOAD_CHARS = 120_000
+_SKILL_LOAD_MAX_FILE_COUNT = 200
+_SKILL_LOAD_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".next",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "out",
+        "target",
+        "venv",
+    }
+)
+_SKILL_LOAD_EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
+class _SkillFileSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    files: list[str] = Field(default_factory=list)
+    omitted_count: int = 0
 
 
 class SkillRegistry(BaseModel):
@@ -96,7 +126,7 @@ class SkillRegistry(BaseModel):
                 name="load_skill",
                 description=(
                     "Load a specific skill by name, including its instructions and "
-                    "absolute file paths."
+                    "selected absolute file paths."
                 ),
             ),
         ]
@@ -189,7 +219,29 @@ class SkillRegistry(BaseModel):
                 skill = self.get_skill_definition(name)
                 if skill is None:
                     raise KeyError(f"Skill not found: {name}")
-                return _skill_to_json(skill)
+                result = _skill_to_json(skill)
+                omitted_count_value = result.get("files_omitted_count")
+                omitted_count = (
+                    omitted_count_value if isinstance(omitted_count_value, int) else 0
+                )
+                if omitted_count > 0:
+                    files_value = result.get("files")
+                    returned_count = (
+                        len(files_value) if isinstance(files_value, list) else 0
+                    )
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="skill.load.truncated",
+                        message="Skill payload truncated for load_skill",
+                        payload={
+                            "skill_name": skill.metadata.name,
+                            "directory": _normalize_skill_path(skill.directory),
+                            "returned_file_count": returned_count,
+                            "omitted_file_count": omitted_count,
+                        },
+                    )
+                return result
 
         return await execute_tool(
             ctx,
@@ -213,7 +265,7 @@ class SkillRegistry(BaseModel):
 def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
     metadata = skill.metadata
     manifest_path = (skill.directory / "SKILL.md").resolve()
-    return {
+    payload: dict[str, JsonValue] = {
         "name": metadata.name,
         "description": metadata.description,
         "manifest_path": _normalize_skill_path(manifest_path),
@@ -242,16 +294,82 @@ def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
             }
             for name, script in metadata.scripts.items()
         },
-        "files": [
-            _normalize_skill_path(path)
-            for path in _iter_skill_files(skill.directory.rglob("*"))
-        ],
     }
+    file_selection = _select_skill_files(skill=skill, base_payload=payload)
+    payload["files"] = cast(JsonValue, file_selection.files)
+    payload["files_truncated"] = file_selection.omitted_count > 0
+    payload["files_omitted_count"] = file_selection.omitted_count
+    return payload
 
 
 def _normalize_skill_path(path: Path) -> str:
     return path.resolve().as_posix()
 
 
-def _iter_skill_files(paths: Iterable[Path]) -> tuple[Path, ...]:
-    return tuple(sorted((path.resolve() for path in paths if path.is_file())))
+def _iter_skill_files(skill_dir: Path) -> tuple[Path, ...]:
+    resolved_skill_dir = skill_dir.resolve()
+    return tuple(
+        sorted(
+            (
+                path.resolve()
+                for path in skill_dir.rglob("*")
+                if path.is_file()
+                and not _should_exclude_skill_file(
+                    skill_dir=resolved_skill_dir, path=path
+                )
+            ),
+            key=lambda path: _skill_file_sort_key(
+                skill_dir=resolved_skill_dir, path=path
+            ),
+        )
+    )
+
+
+def _select_skill_files(
+    *, skill: Skill, base_payload: dict[str, JsonValue]
+) -> _SkillFileSelection:
+    candidate_files = [
+        _normalize_skill_path(path) for path in _iter_skill_files(skill.directory)
+    ]
+    if not candidate_files:
+        return _SkillFileSelection()
+
+    max_candidates = min(len(candidate_files), _SKILL_LOAD_MAX_FILE_COUNT)
+    selected_files: list[str] = []
+    for index, file_path in enumerate(candidate_files[:max_candidates], start=1):
+        remaining_count = len(candidate_files) - index
+        candidate_selection = [*selected_files, file_path]
+        candidate_payload = {
+            **base_payload,
+            "files": candidate_selection,
+            "files_truncated": remaining_count > 0,
+            "files_omitted_count": remaining_count,
+        }
+        if _skill_payload_char_count(candidate_payload) > _SKILL_LOAD_MAX_PAYLOAD_CHARS:
+            break
+        selected_files = candidate_selection
+    return _SkillFileSelection(
+        files=selected_files,
+        omitted_count=len(candidate_files) - len(selected_files),
+    )
+
+
+def _skill_payload_char_count(payload: dict[str, JsonValue]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def _should_exclude_skill_file(*, skill_dir: Path, path: Path) -> bool:
+    relative_path = path.resolve().relative_to(skill_dir.resolve())
+    if any(part in _SKILL_LOAD_EXCLUDED_DIR_NAMES for part in relative_path.parts[:-1]):
+        return True
+    return relative_path.suffix in _SKILL_LOAD_EXCLUDED_FILE_SUFFIXES
+
+
+def _skill_file_sort_key(*, skill_dir: Path, path: Path) -> tuple[int, int, str]:
+    relative_path = path.resolve().relative_to(skill_dir.resolve())
+    priority = 2
+    if relative_path.name == "SKILL.md":
+        priority = 0
+    elif relative_path.parts and relative_path.parts[0] in {"resources", "scripts"}:
+        priority = 1
+    return (priority, len(relative_path.parts), relative_path.as_posix())

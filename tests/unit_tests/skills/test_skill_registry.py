@@ -201,7 +201,9 @@ def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> No
     )
 
 
-def test_load_skill_returns_manifest_and_absolute_file_paths(tmp_path: Path) -> None:
+def test_load_skill_returns_manifest_and_selected_absolute_file_paths(
+    tmp_path: Path,
+) -> None:
     skill_dir = tmp_path / "skills" / "time"
     resources_dir = skill_dir / "resources"
     scripts_dir = skill_dir / "scripts"
@@ -250,6 +252,8 @@ def test_load_skill_returns_manifest_and_absolute_file_paths(tmp_path: Path) -> 
         "description": "Execute trace_context script.",
         "path": script_path.resolve().as_posix(),
     }
+    assert data["files_truncated"] is False
+    assert data["files_omitted_count"] == 0
     assert sorted(cast(list[str], data["files"])) == sorted(
         [
             manifest_path.resolve().as_posix(),
@@ -257,6 +261,51 @@ def test_load_skill_returns_manifest_and_absolute_file_paths(tmp_path: Path) -> 
             usage_path.resolve().as_posix(),
         ]
     )
+
+
+def test_load_skill_omits_large_dependency_trees_from_file_listing(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "deck"
+    docs_dir = skill_dir / "docs"
+    node_modules_dir = skill_dir / "node_modules" / "pkg"
+    docs_dir.mkdir(parents=True)
+    node_modules_dir.mkdir(parents=True)
+    manifest_path = skill_dir / "SKILL.md"
+    manifest_path.write_text(
+        "---\n"
+        "name: deck\n"
+        "description: build slide decks\n"
+        "---\n"
+        "Use the planner and designer workflow.\n",
+        encoding="utf-8",
+    )
+    bundled_dependency = node_modules_dir / "index.js"
+    bundled_dependency.write_text("export const bundled = true;\n", encoding="utf-8")
+    for index in range(240):
+        (docs_dir / f"section_{index:03}.md").write_text(
+            f"Section {index}\n",
+            encoding="utf-8",
+        )
+
+    registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
+
+    result = asyncio.run(
+        registry.load_skill(
+            cast(ToolContext, cast(object, _FakeCtx())),
+            name="deck",
+        )
+    )
+
+    assert result["ok"] is True
+    data = cast(dict[str, JsonValue], result["data"])
+    files = cast(list[str], data["files"])
+    assert manifest_path.resolve().as_posix() in files
+    assert bundled_dependency.resolve().as_posix() not in files
+    assert all("node_modules" not in path for path in files)
+    assert data["files_truncated"] is True
+    assert cast(int, data["files_omitted_count"]) > 0
+    assert len(files) < 241
 
 
 def _write_skill(

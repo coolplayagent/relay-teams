@@ -47,7 +47,7 @@ SKILL_USAGE_PROMPT = (
     "## Skill Usage\n"
     "The list below is a catalog of available skills in the form `skill_name: description`. "
     "Use `load_skill` when a listed skill is relevant and you need its full instructions before acting. "
-    "It returns the complete skill manifest, instructions, and absolute file paths for the skill directory. "
+    "It returns the skill manifest, instructions, and selected absolute file paths for the skill directory. "
     "After loading a skill, use the normal `read` tool for skill files when you need more detail."
 )
 FEISHU_GROUP_CONTEXT_PROMPT = (
