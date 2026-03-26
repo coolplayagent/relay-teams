@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_teams.feishu.models import FeishuTriggerSecretConfig
-from agent_teams.feishu.secret_store import FeishuTriggerSecretStore
+from agent_teams.gateway.feishu.models import FeishuTriggerSecretConfig
+from agent_teams.gateway.feishu.secret_store import FeishuTriggerSecretStore
 
 
 def _make_store_file_backend() -> FeishuTriggerSecretStore:

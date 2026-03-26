@@ -54,7 +54,7 @@ from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.tools.feishu_tools import FeishuToolService
+from agent_teams.gateway.im import ImToolService
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -402,7 +402,7 @@ def _build_manager(
         tool_approval_manager=cast(ToolApprovalManager, object()),
         tool_approval_policy=tool_approval_policy or ToolApprovalPolicy(),
         get_notification_service=lambda: cast(NotificationService | None, None),
-        feishu_tool_service=cast(FeishuToolService | None, None),
+        im_tool_service=cast(ImToolService | None, None),
     )
 
 

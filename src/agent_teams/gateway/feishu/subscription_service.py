@@ -20,7 +20,7 @@ from agent_teams.env.proxy_env import (
     proxy_applies_to_url,
     resolve_ssl_verify,
 )
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
 )

@@ -17,7 +17,7 @@ from agent_teams.automation.automation_models import (
     AutomationProjectRecord,
     AutomationRunDeliveryRecord,
 )
-from agent_teams.feishu.models import FeishuEnvironment
+from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (

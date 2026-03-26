@@ -12,7 +12,7 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.session_service import SessionService
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.sessions.session_models import SessionMode
-from agent_teams.feishu import (
+from agent_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,

@@ -41,7 +41,7 @@ from agent_teams.external_agents import (
     ExternalAgentSessionRepository,
 )
 from agent_teams.external_agents.provider import ExternalAcpSessionManager
-from agent_teams.feishu import (
+from agent_teams.gateway.feishu import (
     FeishuClient,
     FeishuInboundRuntime,
     FeishuMessagePoolRepository,
@@ -51,6 +51,7 @@ from agent_teams.feishu import (
     FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
+from agent_teams.gateway.im import ImToolContextResolver, ImToolService
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -117,17 +118,17 @@ from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.feishu_tools import FeishuToolContextResolver, FeishuToolService
 from agent_teams.tools.registry import ToolRegistry, build_default_registry
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
     ToolApprovalPolicy,
 )
 from agent_teams.triggers import TriggerRepository, TriggerService
-from agent_teams.wechat import (
+from agent_teams.gateway.wechat import (
     WeChatAccountRepository,
     WeChatClient,
     WeChatGatewayService,
+    get_wechat_secret_store,
 )
 from agent_teams.workspace import (
     WorkspaceManager,
@@ -327,17 +328,25 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
         )
         self.feishu_client = FeishuClient()
-        self.feishu_tool_service: FeishuToolService = FeishuToolService(
+        self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
+        self.wechat_client = WeChatClient()
+        self.im_tool_service: ImToolService = ImToolService(
+            config_dir=config_dir,
             session_repo=self.session_repo,
             runtime_config_lookup=self.feishu_trigger_config_service,
             automation_project_repo=self.automation_repo,
+            gateway_session_lookup=self.gateway_session_repository,
             feishu_client=self.feishu_client,
+            wechat_account_repo=self.wechat_account_repository,
+            wechat_secret_store=get_wechat_secret_store(),
+            wechat_client=self.wechat_client,
         )
         self.tool_registry.register_implicit_resolver(
-            FeishuToolContextResolver(
+            ImToolContextResolver(
                 session_repo=self.session_repo,
                 runtime_config_lookup=self.feishu_trigger_config_service,
                 automation_project_repo=self.automation_repo,
+                gateway_session_lookup=self.gateway_session_repository,
             )
         )
         self.notification_service: NotificationService = NotificationService(
@@ -382,7 +391,7 @@ class ServerContainer:
             tool_approval_policy=self.tool_approval_policy,
             get_notification_service=lambda: self.notification_service,
             metric_recorder=self.metric_recorder,
-            feishu_tool_service=self.feishu_tool_service,
+            im_tool_service=self.im_tool_service,
         )
         self.run_control_manager.bind_runtime(
             run_event_hub=self.run_event_hub,
@@ -471,8 +480,6 @@ class ServerContainer:
             repository=self.gateway_session_repository,
             session_service=self.session_service,
         )
-        self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
-        self.wechat_client = WeChatClient()
         self.wechat_gateway_service = WeChatGatewayService(
             config_dir=config_dir,
             repository=self.wechat_account_repository,
@@ -629,7 +636,7 @@ class ServerContainer:
             get_task_execution_service=get_task_execution_service,
             token_usage_repo=self.token_usage_repo,
             metric_recorder=self.metric_recorder,
-            feishu_tool_service=self.feishu_tool_service,
+            im_tool_service=self.im_tool_service,
             external_agent_session_manager=self.external_acp_session_manager,
             session_model_profile_lookup=self._session_model_profile_lookup,
         )

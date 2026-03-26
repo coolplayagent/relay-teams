@@ -20,7 +20,7 @@ from agent_teams.roles.role_registry import (
     LEGACY_COORDINATOR_IDENTIFIERS,
     MAIN_AGENT_IDENTIFIERS,
 )
-from agent_teams.feishu import (
+from agent_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_MANUAL,
 )

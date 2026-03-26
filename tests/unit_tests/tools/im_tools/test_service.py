@@ -12,7 +12,7 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
@@ -21,9 +21,14 @@ from agent_teams.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
+from agent_teams.gateway import (
+    GatewayChannelType,
+    GatewaySessionRecord,
+)
 from agent_teams.sessions.session_models import ProjectKind, SessionRecord
-from agent_teams.tools.feishu_tools import FeishuToolContextResolver, FeishuToolService
+from agent_teams.gateway.im import ImToolContextResolver, ImToolService
 from agent_teams.tools.registry import ToolResolutionContext
+from agent_teams.gateway.wechat.models import WeChatAccountRecord
 
 
 _ENV = FeishuEnvironment(
@@ -40,6 +45,8 @@ _CHAT_ID = "oc_test_chat"
 _TRIGGER_ID = "trigger-1"
 _SESSION_ID = "session-1"
 _AUTOMATION_PROJECT_ID = "aut-1"
+_WECHAT_ACCOUNT_ID = "wx-account-1"
+_WECHAT_PEER_ID = "wx-peer-1"
 
 
 def _make_session(
@@ -82,7 +89,8 @@ class _FakeRuntimeConfigLookup:
         self._configs = configs or {}
 
     def get_runtime_config_by_trigger_id(
-        self, trigger_id: str
+        self,
+        trigger_id: str,
     ) -> FeishuTriggerRuntimeConfig | None:
         return self._configs.get(trigger_id)
 
@@ -100,6 +108,20 @@ class _FakeAutomationProjectRepo:
         return self._projects[automation_project_id]
 
 
+class _FakeGatewaySessionLookup:
+    def __init__(
+        self,
+        sessions: dict[str, GatewaySessionRecord] | None = None,
+    ) -> None:
+        self._sessions = sessions or {}
+
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        return self._sessions.get(internal_session_id)
+
+
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_texts: list[tuple[str, str]] = []
@@ -112,6 +134,7 @@ class _FakeFeishuClient:
         text: str,
         environment: FeishuEnvironment | None = None,
     ) -> None:
+        _ = environment
         self.sent_texts.append((chat_id, text))
 
     def send_file(
@@ -121,8 +144,53 @@ class _FakeFeishuClient:
         file_path: Path,
         environment: FeishuEnvironment | None = None,
     ) -> str:
+        _ = environment
         self.sent_files.append((chat_id, file_path))
         return f"file sent ({file_path.name})"
+
+
+class _FakeWeChatAccountRepo:
+    def __init__(self) -> None:
+        self._accounts = {
+            _WECHAT_ACCOUNT_ID: WeChatAccountRecord(
+                account_id=_WECHAT_ACCOUNT_ID,
+                display_name="WeChat Account",
+                base_url="https://wechat.example.test",
+                cdn_base_url="https://cdn.example.test",
+            )
+        }
+
+    def get_account(self, account_id: str) -> WeChatAccountRecord:
+        if account_id not in self._accounts:
+            raise KeyError(account_id)
+        return self._accounts[account_id]
+
+
+class _FakeWeChatSecretStore:
+    def __init__(self, token: str | None = "wechat-token") -> None:
+        self._token = token
+
+    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None:
+        _ = (config_dir, account_id)
+        return self._token
+
+
+class _FakeWeChatClient:
+    def __init__(self) -> None:
+        self.sent_texts: list[tuple[str, str, str, str | None]] = []
+
+    def send_text_message(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        text: str,
+        context_token: str | None,
+    ) -> None:
+        self.sent_texts.append(
+            (account.account_id, token, to_user_id, context_token or "")
+        )
 
 
 def _build_service(
@@ -130,16 +198,25 @@ def _build_service(
     sessions: dict[str, SessionRecord] | None = None,
     configs: dict[str, FeishuTriggerRuntimeConfig] | None = None,
     projects: dict[str, AutomationProjectRecord] | None = None,
+    gateway_sessions: dict[str, GatewaySessionRecord] | None = None,
+    wechat_token: str | None = "wechat-token",
     feishu_client: _FakeFeishuClient | None = None,
-) -> tuple[FeishuToolService, _FakeFeishuClient]:
-    client = feishu_client or _FakeFeishuClient()
-    service = FeishuToolService(
+    wechat_client: _FakeWeChatClient | None = None,
+) -> tuple[ImToolService, _FakeFeishuClient, _FakeWeChatClient]:
+    resolved_feishu_client = feishu_client or _FakeFeishuClient()
+    resolved_wechat_client = wechat_client or _FakeWeChatClient()
+    service = ImToolService(
+        config_dir=Path("C:/config"),
         session_repo=_FakeSessionRepo(sessions),
         runtime_config_lookup=_FakeRuntimeConfigLookup(configs),
         automation_project_repo=_FakeAutomationProjectRepo(projects),
-        feishu_client=client,
+        gateway_session_lookup=_FakeGatewaySessionLookup(gateway_sessions),
+        feishu_client=resolved_feishu_client,
+        wechat_account_repo=_FakeWeChatAccountRepo(),
+        wechat_secret_store=_FakeWeChatSecretStore(wechat_token),
+        wechat_client=resolved_wechat_client,
     )
-    return service, client
+    return service, resolved_feishu_client, resolved_wechat_client
 
 
 def _build_context_resolver(
@@ -147,11 +224,13 @@ def _build_context_resolver(
     sessions: dict[str, SessionRecord] | None = None,
     configs: dict[str, FeishuTriggerRuntimeConfig] | None = None,
     projects: dict[str, AutomationProjectRecord] | None = None,
-) -> FeishuToolContextResolver:
-    return FeishuToolContextResolver(
+    gateway_sessions: dict[str, GatewaySessionRecord] | None = None,
+) -> ImToolContextResolver:
+    return ImToolContextResolver(
         session_repo=_FakeSessionRepo(sessions),
         runtime_config_lookup=_FakeRuntimeConfigLookup(configs),
         automation_project_repo=_FakeAutomationProjectRepo(projects),
+        gateway_session_lookup=_FakeGatewaySessionLookup(gateway_sessions),
     )
 
 
@@ -213,7 +292,29 @@ def _automation_project(
     )
 
 
-def test_resolver_returns_feishu_tool_for_feishu_session() -> None:
+def _wechat_gateway_session(
+    *,
+    session_id: str = _SESSION_ID,
+    account_id: str = _WECHAT_ACCOUNT_ID,
+    peer_user_id: str = _WECHAT_PEER_ID,
+    context_token: str | None = "ctx-1",
+) -> GatewaySessionRecord:
+    return GatewaySessionRecord(
+        gateway_session_id="gws-1",
+        channel_type=GatewayChannelType.WECHAT,
+        external_session_id=f"wechat:{account_id}:{peer_user_id}",
+        internal_session_id=session_id,
+        peer_user_id=peer_user_id,
+        peer_chat_id=peer_user_id,
+        channel_state={
+            "account_id": account_id,
+            "peer_user_id": peer_user_id,
+            "context_token": context_token,
+        },
+    )
+
+
+def test_resolver_returns_im_tool_for_feishu_session() -> None:
     resolver = _build_context_resolver(
         sessions=_default_sessions(),
         configs=_default_configs(),
@@ -223,10 +324,23 @@ def test_resolver_returns_feishu_tool_for_feishu_session() -> None:
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("feishu_send",)
+    assert resolved == ("im_send",)
 
 
-def test_resolver_returns_no_tool_without_feishu_context() -> None:
+def test_resolver_returns_im_tool_for_wechat_session() -> None:
+    resolver = _build_context_resolver(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+    )
+
+    resolved = resolver.resolve_implicit_tools(
+        ToolResolutionContext(session_id=_SESSION_ID)
+    )
+
+    assert resolved == ("im_send",)
+
+
+def test_resolver_returns_no_tool_without_im_context() -> None:
     resolver = _build_context_resolver(
         sessions={_SESSION_ID: _make_session(platform="other")},
         configs=_default_configs(),
@@ -239,7 +353,7 @@ def test_resolver_returns_no_tool_without_feishu_context() -> None:
     assert resolved == ()
 
 
-def test_resolver_returns_feishu_tool_for_automation_session_binding() -> None:
+def test_resolver_returns_im_tool_for_automation_session_binding() -> None:
     resolver = _build_context_resolver(
         sessions={_SESSION_ID: _automation_session()},
         configs=_default_configs(),
@@ -250,7 +364,7 @@ def test_resolver_returns_feishu_tool_for_automation_session_binding() -> None:
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("feishu_send",)
+    assert resolved == ("im_send",)
 
 
 def test_resolver_returns_no_tool_for_automation_session_without_binding() -> None:
@@ -268,44 +382,72 @@ def test_resolver_returns_no_tool_for_automation_session_without_binding() -> No
     assert resolved == ()
 
 
-def test_send_text_success() -> None:
-    service, client = _build_service(
+def test_send_text_success_for_feishu() -> None:
+    service, feishu_client, wechat_client = _build_service(
         sessions=_default_sessions(),
         configs=_default_configs(),
     )
+
     result = service.send_text(session_id=_SESSION_ID, text="hello")
+
     assert result == "Message sent."
-    assert len(client.sent_texts) == 1
-    assert client.sent_texts[0] == (_CHAT_ID, "hello")
+    assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
+    assert wechat_client.sent_texts == []
 
 
-def test_send_text_no_feishu_session() -> None:
-    session = _make_session(platform="other")
-    service, client = _build_service(
-        sessions={_SESSION_ID: session},
+def test_send_text_success_for_wechat() -> None:
+    service, feishu_client, wechat_client = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+    )
+
+    result = service.send_text(session_id=_SESSION_ID, text="hello")
+
+    assert result == "Message sent."
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == [
+        (_WECHAT_ACCOUNT_ID, "wechat-token", _WECHAT_PEER_ID, "ctx-1")
+    ]
+
+
+def test_send_text_no_im_session() -> None:
+    service, feishu_client, wechat_client = _build_service(
+        sessions={_SESSION_ID: _make_session(platform="other")},
         configs=_default_configs(),
     )
+
     result = service.send_text(session_id=_SESSION_ID, text="hello")
+
     assert "not linked" in result
-    assert len(client.sent_texts) == 0
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []
 
 
 def test_send_text_unknown_session() -> None:
-    service, client = _build_service(configs=_default_configs())
+    service, feishu_client, wechat_client = _build_service(configs=_default_configs())
+
     result = service.send_text(session_id="nonexistent", text="hello")
+
     assert "not linked" in result
-    assert len(client.sent_texts) == 0
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []
 
 
 def test_send_text_no_runtime_config() -> None:
-    service, client = _build_service(sessions=_default_sessions(), configs={})
+    service, feishu_client, wechat_client = _build_service(
+        sessions=_default_sessions(),
+        configs={},
+    )
+
     result = service.send_text(session_id=_SESSION_ID, text="hello")
+
     assert "not linked" in result
-    assert len(client.sent_texts) == 0
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []
 
 
 def test_send_text_success_for_automation_session_binding() -> None:
-    service, client = _build_service(
+    service, feishu_client, wechat_client = _build_service(
         sessions={_SESSION_ID: _automation_session()},
         configs=_default_configs(),
         projects={_AUTOMATION_PROJECT_ID: _automation_project()},
@@ -314,63 +456,100 @@ def test_send_text_success_for_automation_session_binding() -> None:
     result = service.send_text(session_id=_SESSION_ID, text="hello")
 
     assert result == "Message sent."
-    assert len(client.sent_texts) == 1
-    assert client.sent_texts[0] == (_CHAT_ID, "hello")
+    assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
+    assert wechat_client.sent_texts == []
 
 
-def test_send_file_success(tmp_path: Path) -> None:
+def test_send_text_wechat_requires_token() -> None:
+    service, _, _ = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+        wechat_token=None,
+    )
+
+    with pytest.raises(RuntimeError, match="bot token is missing"):
+        _ = service.send_text(session_id=_SESSION_ID, text="hello")
+
+
+def test_send_file_success_for_feishu(tmp_path: Path) -> None:
     test_file = tmp_path / "report.pdf"
     test_file.write_text("content")
-    service, client = _build_service(
+    service, feishu_client, wechat_client = _build_service(
         sessions=_default_sessions(),
         configs=_default_configs(),
     )
+
     result = service.send_file(session_id=_SESSION_ID, file_path=test_file)
+
     assert "file sent" in result
-    assert len(client.sent_files) == 1
-    assert client.sent_files[0] == (_CHAT_ID, test_file)
+    assert feishu_client.sent_files == [(_CHAT_ID, test_file)]
+    assert wechat_client.sent_texts == []
 
 
 def test_send_file_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "missing.pdf"
-    service, _ = _build_service(
+    service, _, _ = _build_service(
         sessions=_default_sessions(),
         configs=_default_configs(),
     )
+
     with pytest.raises(FileNotFoundError):
-        service.send_file(session_id=_SESSION_ID, file_path=missing)
+        _ = service.send_file(session_id=_SESSION_ID, file_path=missing)
 
 
-def test_send_file_no_feishu_session(tmp_path: Path) -> None:
+def test_send_file_no_im_session(tmp_path: Path) -> None:
     test_file = tmp_path / "report.pdf"
     test_file.write_text("content")
-    session = _make_session(platform="other")
-    service, client = _build_service(
-        sessions={_SESSION_ID: session},
+    service, feishu_client, wechat_client = _build_service(
+        sessions={_SESSION_ID: _make_session(platform="other")},
         configs=_default_configs(),
     )
+
     result = service.send_file(session_id=_SESSION_ID, file_path=test_file)
+
     assert "not linked" in result
-    assert len(client.sent_files) == 0
+    assert feishu_client.sent_files == []
+    assert wechat_client.sent_texts == []
+
+
+def test_send_file_is_not_supported_for_wechat(tmp_path: Path) -> None:
+    test_file = tmp_path / "report.pdf"
+    test_file.write_text("content")
+    service, feishu_client, wechat_client = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+    )
+
+    result = service.send_file(session_id=_SESSION_ID, file_path=test_file)
+
+    assert result == "File sending is not supported for WeChat sessions."
+    assert feishu_client.sent_files == []
+    assert wechat_client.sent_texts == []
 
 
 def test_resolve_context_missing_chat_id() -> None:
     session = _make_session(chat_id="")
-    service, client = _build_service(
+    service, feishu_client, wechat_client = _build_service(
         sessions={_SESSION_ID: session},
         configs=_default_configs(),
     )
+
     result = service.send_text(session_id=_SESSION_ID, text="hello")
+
     assert "not linked" in result
-    assert len(client.sent_texts) == 0
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []
 
 
 def test_resolve_context_missing_trigger_id() -> None:
     session = _make_session(trigger_id="")
-    service, client = _build_service(
+    service, feishu_client, wechat_client = _build_service(
         sessions={_SESSION_ID: session},
         configs=_default_configs(),
     )
+
     result = service.send_text(session_id=_SESSION_ID, text="hello")
+
     assert "not linked" in result
-    assert len(client.sent_texts) == 0
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []

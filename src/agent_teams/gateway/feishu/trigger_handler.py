@@ -14,7 +14,7 @@ from lark_oapi.event.context import EventHeader
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from pydantic import JsonValue
 
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,

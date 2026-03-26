@@ -19,7 +19,7 @@ from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
-from agent_teams.feishu import (
+from agent_teams.gateway.feishu import (
     FeishuSubscriptionService,
     FeishuTriggerConfigService,
     FeishuTriggerHandler,
@@ -40,7 +40,7 @@ from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
-from agent_teams.wechat import WeChatGatewayService
+from agent_teams.gateway.wechat import WeChatGatewayService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
 

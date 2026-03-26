@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode
-from agent_teams.wechat import WeChatAccountRecord, WeChatAccountRepository
+from agent_teams.gateway.wechat import WeChatAccountRecord, WeChatAccountRepository
 
 
 def test_wechat_account_repository_round_trips_account_settings(

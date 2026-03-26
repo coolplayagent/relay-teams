@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FeishuMessageDeliveryStatus,
     FeishuMessagePoolRecord,
     FeishuMessageProcessingStatus,

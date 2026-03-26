@@ -1,0 +1,7 @@
+Send a message or file back to the IM conversation that initiated this session.
+
+This tool automatically routes to the active provider for the session:
+- Feishu sessions send text or files to the bound Feishu chat.
+- WeChat sessions send text back to the matching WeChat peer.
+
+You must provide at least one of `text` or `file_path`.

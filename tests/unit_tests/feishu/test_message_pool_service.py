@@ -4,10 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_teams.feishu.inbound_runtime import FeishuInboundRuntime
-from agent_teams.feishu.message_pool_repository import FeishuMessagePoolRepository
-from agent_teams.feishu.message_pool_service import FeishuMessagePoolService
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from agent_teams.gateway.feishu.message_pool_repository import (
+    FeishuMessagePoolRepository,
+)
+from agent_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
+from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuMessageDeliveryStatus,
     FeishuMessageProcessingStatus,

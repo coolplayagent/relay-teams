@@ -132,6 +132,23 @@ class GatewaySessionRepository:
             return None
         return self._to_record(row)
 
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gateway_sessions
+            WHERE internal_session_id=?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (internal_session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._to_record(row)
+
     def update(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
         cursor = self._conn.execute(
             """

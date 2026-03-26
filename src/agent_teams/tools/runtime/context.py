@@ -84,7 +84,7 @@ class TaskExecutionServiceLike(Protocol):
     ) -> str: ...
 
 
-class FeishuToolServiceLike(Protocol):
+class ImToolServiceLike(Protocol):
     def send_text(self, *, session_id: str, text: str) -> str: ...
 
     def send_file(self, *, session_id: str, file_path: Path) -> str: ...
@@ -125,7 +125,7 @@ class ToolDeps(BaseModel):
     tool_approval_policy: SkipValidation[ToolApprovalPolicy]
     metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
-    feishu_tool_service: SkipValidation[FeishuToolServiceLike | None] = None
+    im_tool_service: SkipValidation[ImToolServiceLike | None] = None
 
 
 ToolContext = RunContext[ToolDeps]

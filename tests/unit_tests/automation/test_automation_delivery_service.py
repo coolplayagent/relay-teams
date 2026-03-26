@@ -14,7 +14,7 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.feishu.models import FeishuEnvironment
+from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_models import RunEvent

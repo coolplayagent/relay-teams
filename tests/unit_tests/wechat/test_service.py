@@ -15,11 +15,11 @@ from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import RunEvent
-from agent_teams.wechat.account_repository import WeChatAccountRepository
-from agent_teams.wechat.client import WeChatClient
-from agent_teams.wechat.models import WeChatAccountRecord
-from agent_teams.wechat.secret_store import WeChatSecretStore
-from agent_teams.wechat.service import WeChatGatewayService
+from agent_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from agent_teams.gateway.wechat.client import WeChatClient
+from agent_teams.gateway.wechat.models import WeChatAccountRecord
+from agent_teams.gateway.wechat.secret_store import WeChatSecretStore
+from agent_teams.gateway.wechat.service import WeChatGatewayService
 
 
 def test_normalize_qr_code_url_keeps_image_url() -> None:

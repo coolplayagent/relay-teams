@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agent_teams.feishu.client import FeishuClient
-from agent_teams.feishu.models import FeishuEnvironment
+from agent_teams.gateway.feishu.client import FeishuClient
+from agent_teams.gateway.feishu.models import FeishuEnvironment
 
 
 class _FakeSyncHttpClient:
@@ -121,7 +121,7 @@ def test_get_chat_name_uses_net_client_and_cache(monkeypatch) -> None:
         return fake_client
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         _fake_create_sync_http_client,
     )
     client = FeishuClient(merged_env={"SSL_VERIFY": "false"})
@@ -167,7 +167,7 @@ def test_get_user_name_uses_net_client_and_cache(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -212,7 +212,7 @@ def test_send_text_message_uses_net_client_request_chain(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -263,7 +263,7 @@ def test_get_chat_name_raises_runtime_error_for_failed_response(monkeypatch) -> 
     )
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -317,7 +317,7 @@ def test_send_file_uploads_image_and_sends_image_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -385,7 +385,7 @@ def test_send_file_uploads_regular_file_and_sends_file_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.feishu.client.create_sync_http_client",
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()

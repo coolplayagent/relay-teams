@@ -10,7 +10,7 @@ import httpx
 
 from agent_teams.env.proxy_env import ProxyEnvConfig
 
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
     FeishuTriggerSourceConfig,
@@ -19,7 +19,7 @@ from agent_teams.feishu.models import (
 )
 from lark_oapi.ws.model import ClientConfig
 
-from agent_teams.feishu.subscription_service import (
+from agent_teams.gateway.feishu.subscription_service import (
     FeishuSubscriptionService,
     _FeishuWsController,
     _FeishuWsHub,
@@ -438,7 +438,7 @@ def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> 
 
 def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(ssl_verify=False),
     )
 
@@ -451,7 +451,7 @@ def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> 
 
 def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(
             https_proxy="http://proxy.internal:8443",
             http_proxy="http://proxy.internal:8080",
@@ -468,7 +468,7 @@ def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> No
 
 def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.feishu.subscription_service.load_proxy_env_config",
+        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(
             https_proxy="http://proxy.internal:8443", no_proxy="open.feishu.cn"
         ),

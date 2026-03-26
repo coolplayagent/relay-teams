@@ -11,7 +11,10 @@ from agent_teams.interfaces.server.deps import (
     get_feishu_trigger_config_service,
     get_trigger_service,
 )
-from agent_teams.feishu import FeishuSubscriptionService, FeishuTriggerConfigService
+from agent_teams.gateway.feishu import (
+    FeishuSubscriptionService,
+    FeishuTriggerConfigService,
+)
 from agent_teams.logger import get_logger, log_event
 from agent_teams.trace import bind_trace_context
 from agent_teams.triggers import (

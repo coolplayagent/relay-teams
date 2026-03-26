@@ -8,8 +8,11 @@ import json
 import httpx
 import pytest
 
-from agent_teams.wechat.client import WeChatClient
-from agent_teams.wechat.models import WeChatAccountRecord, WeChatLoginSession
+from agent_teams.gateway.wechat.client import WeChatClient
+from agent_teams.gateway.wechat.models import (
+    WeChatAccountRecord,
+    WeChatLoginSession,
+)
 
 
 class _FakeSyncHttpClient:
@@ -78,7 +81,7 @@ def test_start_qr_login_accepts_success_payload_with_ret(
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -110,7 +113,7 @@ def test_start_qr_login_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -139,7 +142,7 @@ def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -176,7 +179,7 @@ def test_send_text_message_builds_wechat_bot_message_payload(
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -228,7 +231,7 @@ def test_send_text_message_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -262,7 +265,7 @@ def test_send_typing_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.wechat.client.create_sync_http_client",
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 

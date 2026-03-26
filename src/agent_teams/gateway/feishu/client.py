@@ -9,7 +9,7 @@ import time
 import httpx
 
 from agent_teams.env.runtime_env import load_merged_env_vars
-from agent_teams.feishu.models import FeishuEnvironment
+from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.net import create_sync_http_client
 
 _IMAGE_EXTENSIONS: frozenset[str] = frozenset(

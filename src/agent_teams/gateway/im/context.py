@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from agent_teams.automation import AutomationProjectRecord
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
     FEISHU_METADATA_TRIGGER_ID_KEY,
@@ -12,10 +12,11 @@ from agent_teams.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
 )
+from agent_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from agent_teams.sessions.session_models import ProjectKind, SessionRecord
 from agent_teams.tools.registry.registry import ToolResolutionContext
 
-FEISHU_IMPLICIT_TOOLS: tuple[str, ...] = ("feishu_send",)
+IM_IMPLICIT_TOOLS: tuple[str, ...] = ("im_send",)
 
 
 class _SessionLookup(Protocol):
@@ -24,7 +25,8 @@ class _SessionLookup(Protocol):
 
 class _RuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
-        self, trigger_id: str
+        self,
+        trigger_id: str,
     ) -> FeishuTriggerRuntimeConfig | None: ...
 
 
@@ -32,10 +34,30 @@ class _AutomationProjectLookup(Protocol):
     def get(self, automation_project_id: str) -> AutomationProjectRecord: ...
 
 
+class _GatewaySessionLookup(Protocol):
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None: ...
+
+
 class FeishuChatContext:
     def __init__(self, *, chat_id: str, environment: FeishuEnvironment) -> None:
         self.chat_id = chat_id
         self.environment = environment
+
+
+class WeChatChatContext:
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+    ) -> None:
+        self.account_id = account_id
+        self.peer_user_id = peer_user_id
+        self.context_token = context_token
 
 
 def resolve_feishu_chat_context(
@@ -56,17 +78,77 @@ def resolve_feishu_chat_context(
     )
 
 
-class FeishuToolContextResolver:
+def resolve_im_chat_context(
+    *,
+    session_repo: _SessionLookup,
+    runtime_config_lookup: _RuntimeConfigLookup,
+    automation_project_repo: _AutomationProjectLookup | None = None,
+    gateway_session_lookup: _GatewaySessionLookup | None = None,
+    session_id: str,
+) -> FeishuChatContext | WeChatChatContext | None:
+    feishu_context = resolve_feishu_chat_context(
+        session_repo=session_repo,
+        runtime_config_lookup=runtime_config_lookup,
+        automation_project_repo=automation_project_repo,
+        session_id=session_id,
+    )
+    if feishu_context is not None:
+        return feishu_context
+    if gateway_session_lookup is None:
+        return None
+    return resolve_wechat_chat_context(
+        gateway_session_lookup=gateway_session_lookup,
+        session_id=session_id,
+    )
+
+
+def resolve_wechat_chat_context(
+    *,
+    gateway_session_lookup: _GatewaySessionLookup,
+    session_id: str,
+) -> WeChatChatContext | None:
+    gateway_session = gateway_session_lookup.get_by_internal_session_id(session_id)
+    if (
+        gateway_session is None
+        or gateway_session.channel_type != GatewayChannelType.WECHAT
+    ):
+        return None
+    account_id = str(gateway_session.channel_state.get("account_id", "")).strip()
+    if not account_id:
+        return None
+    peer_user_id = str(
+        gateway_session.channel_state.get("peer_user_id")
+        or gateway_session.peer_user_id
+        or ""
+    ).strip()
+    if not peer_user_id:
+        return None
+    raw_context_token = gateway_session.channel_state.get("context_token")
+    context_token = None
+    if isinstance(raw_context_token, str):
+        normalized_context_token = raw_context_token.strip()
+        if normalized_context_token:
+            context_token = normalized_context_token
+    return WeChatChatContext(
+        account_id=account_id,
+        peer_user_id=peer_user_id,
+        context_token=context_token,
+    )
+
+
+class ImToolContextResolver:
     def __init__(
         self,
         *,
         session_repo: _SessionLookup,
         runtime_config_lookup: _RuntimeConfigLookup,
         automation_project_repo: _AutomationProjectLookup | None = None,
+        gateway_session_lookup: _GatewaySessionLookup | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._runtime_config_lookup = runtime_config_lookup
         self._automation_project_repo = automation_project_repo
+        self._gateway_session_lookup = gateway_session_lookup
 
     def resolve_implicit_tools(
         self,
@@ -75,15 +157,16 @@ class FeishuToolContextResolver:
         session_id = context.session_id.strip()
         if not session_id:
             return ()
-        chat_context = resolve_feishu_chat_context(
+        chat_context = resolve_im_chat_context(
             session_repo=self._session_repo,
             runtime_config_lookup=self._runtime_config_lookup,
             automation_project_repo=self._automation_project_repo,
+            gateway_session_lookup=self._gateway_session_lookup,
             session_id=session_id,
         )
         if chat_context is None:
             return ()
-        return FEISHU_IMPLICIT_TOOLS
+        return IM_IMPLICIT_TOOLS
 
 
 def _resolve_from_session(

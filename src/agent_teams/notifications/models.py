@@ -5,7 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_teams.feishu.models import FeishuMessageFormat
+from agent_teams.gateway.feishu.models import FeishuMessageFormat
 
 
 class NotificationType(str, Enum):

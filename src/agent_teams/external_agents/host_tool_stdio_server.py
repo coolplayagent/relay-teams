@@ -68,7 +68,7 @@ async def _run_stdio_server() -> None:
         tool_approval_policy=container.tool_approval_policy,
         get_notification_service=lambda: container.notification_service,
         metric_recorder=container.metric_recorder,
-        feishu_tool_service=container.feishu_tool_service,
+        im_tool_service=container.im_tool_service,
     )
 
     async def unavailable_request(

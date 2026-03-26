@@ -28,9 +28,9 @@ from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.agents.orchestration import OrchestrationSettingsService
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.workspace import WorkspaceService
-from agent_teams.wechat.account_repository import WeChatAccountRepository
-from agent_teams.wechat.client import WeChatClient
-from agent_teams.wechat.models import (
+from agent_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from agent_teams.gateway.wechat.client import WeChatClient
+from agent_teams.gateway.wechat.models import (
     DEFAULT_WECHAT_BASE_URL,
     DEFAULT_WECHAT_CDN_BASE_URL,
     WeChatAccountRecord,
@@ -44,7 +44,10 @@ from agent_teams.wechat.models import (
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
 )
-from agent_teams.wechat.secret_store import WeChatSecretStore, get_wechat_secret_store
+from agent_teams.gateway.wechat.secret_store import (
+    WeChatSecretStore,
+    get_wechat_secret_store,
+)
 
 _TERMINAL_EVENT_TYPES = {
     RunEventType.RUN_COMPLETED,

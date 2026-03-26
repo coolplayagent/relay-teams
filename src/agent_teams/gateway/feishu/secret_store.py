@@ -9,7 +9,7 @@ try:
 except Exception:  # pragma: no cover - import availability depends on environment
     keyring = None
 
-from agent_teams.feishu.models import FeishuTriggerSecretConfig
+from agent_teams.gateway.feishu.models import FeishuTriggerSecretConfig
 from agent_teams.logger import get_logger
 
 logger = get_logger(__name__)

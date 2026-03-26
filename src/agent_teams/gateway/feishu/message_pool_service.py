@@ -8,9 +8,11 @@ from threading import Event, Thread
 from typing import Protocol
 from uuid import uuid4
 
-from agent_teams.feishu.inbound_runtime import FeishuInboundRuntime
-from agent_teams.feishu.message_pool_repository import FeishuMessagePoolRepository
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from agent_teams.gateway.feishu.message_pool_repository import (
+    FeishuMessagePoolRepository,
+)
+from agent_teams.gateway.feishu.models import (
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,
     FeishuChatQueueSummary,

@@ -11,7 +11,7 @@ from uuid import uuid4
 import httpx
 
 from agent_teams.net import create_sync_http_client
-from agent_teams.wechat.models import (
+from agent_teams.gateway.wechat.models import (
     DEFAULT_WECHAT_BOT_TYPE,
     WeChatAccountRecord,
     WeChatBaseInfo,

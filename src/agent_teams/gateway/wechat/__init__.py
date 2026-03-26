@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.wechat.account_repository import WeChatAccountRepository
-from agent_teams.wechat.client import WeChatClient
-from agent_teams.wechat.models import (
+from agent_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from agent_teams.gateway.wechat.client import WeChatClient
+from agent_teams.gateway.wechat.models import (
     DEFAULT_WECHAT_BASE_URL,
     DEFAULT_WECHAT_BOT_TYPE,
     DEFAULT_WECHAT_CDN_BASE_URL,
@@ -17,8 +17,11 @@ from agent_teams.wechat.models import (
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
 )
-from agent_teams.wechat.secret_store import WeChatSecretStore, get_wechat_secret_store
-from agent_teams.wechat.service import WeChatGatewayService
+from agent_teams.gateway.wechat.secret_store import (
+    WeChatSecretStore,
+    get_wechat_secret_store,
+)
+from agent_teams.gateway.wechat.service import WeChatGatewayService
 
 __all__ = [
     "DEFAULT_WECHAT_BASE_URL",

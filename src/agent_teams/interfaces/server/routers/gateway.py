@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import get_wechat_gateway_service
-from agent_teams.wechat import (
+from agent_teams.gateway.wechat import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
     WeChatGatewayService,

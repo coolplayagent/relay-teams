@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.feishu.inbound_runtime import FeishuInboundRuntime
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuNormalizedMessage,
     FeishuTriggerRuntimeConfig,

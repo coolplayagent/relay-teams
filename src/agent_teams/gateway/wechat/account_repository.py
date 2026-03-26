@@ -8,7 +8,10 @@ from pathlib import Path
 from threading import RLock
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
-from agent_teams.wechat.models import WeChatAccountRecord, WeChatAccountStatus
+from agent_teams.gateway.wechat.models import (
+    WeChatAccountRecord,
+    WeChatAccountStatus,
+)
 
 
 class WeChatAccountRepository:

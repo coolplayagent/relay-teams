@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
     from agent_teams.skills.skill_registry import SkillRegistry
-    from agent_teams.tools.feishu_tools import FeishuToolService
+    from agent_teams.gateway.im import ImToolService
     from agent_teams.tools.registry import ToolRegistry
     from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
     from agent_teams.tools.runtime.approval_ticket_repo import (
@@ -132,7 +132,7 @@ class ExternalAcpSessionManager:
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
         metric_recorder: MetricRecorder | None = None,
-        feishu_tool_service: FeishuToolService | None = None,
+        im_tool_service: ImToolService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._config_service = config_service
@@ -160,7 +160,7 @@ class ExternalAcpSessionManager:
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
         self._metric_recorder = metric_recorder
-        self._feishu_tool_service = feishu_tool_service
+        self._im_tool_service = im_tool_service
         self._conversations: dict[str, _ConversationHandle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -870,7 +870,7 @@ class ExternalAcpSessionManager:
             tool_approval_policy=self._tool_approval_policy,
             get_notification_service=self._get_notification_service,
             metric_recorder=self._metric_recorder,
-            feishu_tool_service=self._feishu_tool_service,
+            im_tool_service=self._im_tool_service,
         )
 
     async def _cancel_prompt(self, handle: _ConversationHandle) -> None:

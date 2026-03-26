@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from agent_teams.metrics import MetricRecorder
     from agent_teams.notifications import NotificationService
     from agent_teams.persistence.shared_state_repo import SharedStateRepository
-    from agent_teams.tools.feishu_tools import FeishuToolService
+    from agent_teams.gateway.im import ImToolService
 
 
 HOST_TOOL_SERVER_ID = "agent_teams_host_tools"
@@ -127,7 +127,7 @@ class ExternalAcpHostToolBridge:
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
         metric_recorder: MetricRecorder | None = None,
-        feishu_tool_service: FeishuToolService | None = None,
+        im_tool_service: ImToolService | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._shared_store = shared_store
@@ -152,7 +152,7 @@ class ExternalAcpHostToolBridge:
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
         self._metric_recorder = metric_recorder
-        self._feishu_tool_service = feishu_tool_service
+        self._im_tool_service = im_tool_service
 
         self._catalog_by_name: dict[str, HostedToolDefinition] = {}
         self._catalog_signature = ""
@@ -468,7 +468,7 @@ class ExternalAcpHostToolBridge:
             tool_approval_policy=self._tool_approval_policy.with_yolo(yolo),
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),
-            feishu_tool_service=self._feishu_tool_service,
+            im_tool_service=self._im_tool_service,
         )
 
 

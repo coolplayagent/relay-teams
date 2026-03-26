@@ -8,7 +8,7 @@ from pathlib import Path
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from pydantic import JsonValue
 
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,
     FeishuChatQueueSummary,
@@ -20,7 +20,7 @@ from agent_teams.feishu.models import (
     FeishuTriggerTargetConfig,
     TriggerProcessingResult,
 )
-from agent_teams.feishu.trigger_handler import FeishuTriggerHandler
+from agent_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig

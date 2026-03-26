@@ -126,7 +126,7 @@ def test_tool_deps_can_be_instantiated_without_model_rebuild() -> None:
         tool_approval_policy=cast(ToolApprovalPolicy, object()),
         metric_recorder=None,
         notification_service=None,
-        feishu_tool_service=None,
+        im_tool_service=None,
     )
 
     assert deps.session_id == "session-1"

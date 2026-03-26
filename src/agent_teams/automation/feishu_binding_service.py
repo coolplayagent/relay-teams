@@ -8,7 +8,7 @@ from agent_teams.automation.automation_models import (
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
 )
-from agent_teams.feishu import (
+from agent_teams.gateway.feishu import (
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_PLATFORM,
     SESSION_METADATA_SOURCE_LABEL_KEY,

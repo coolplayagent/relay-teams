@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
@@ -15,7 +15,9 @@ from agent_teams.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.feishu.notification_delivery import FeishuNotificationDispatcher
+from agent_teams.gateway.feishu.notification_delivery import (
+    FeishuNotificationDispatcher,
+)
 from agent_teams.notifications import (
     NotificationChannel,
     NotificationContext,

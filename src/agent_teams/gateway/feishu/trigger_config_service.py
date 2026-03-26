@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from agent_teams.feishu.models import (
+from agent_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
@@ -14,7 +14,7 @@ from agent_teams.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.feishu.secret_store import (
+from agent_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )

@@ -144,6 +144,12 @@ class GatewaySessionService:
     def get_session(self, gateway_session_id: str) -> GatewaySessionRecord:
         return self._repository.get(gateway_session_id)
 
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        return self._repository.get_by_internal_session_id(internal_session_id)
+
     def bind_active_run(
         self,
         gateway_session_id: str,

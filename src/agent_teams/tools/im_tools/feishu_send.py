@@ -5,11 +5,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
-from agent_teams.tools.runtime import (
-    ToolContext,
-    ToolDeps,
-    execute_tool,
-)
+from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 DESCRIPTION = load_tool_description(__file__)
 
@@ -24,9 +20,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """Send a text message or file to the Feishu chat for this session."""
 
         async def _action() -> dict[str, JsonValue]:
-            service = ctx.deps.feishu_tool_service
+            service = ctx.deps.im_tool_service
             if service is None:
-                raise RuntimeError("Feishu send is not available in this session.")
+                raise RuntimeError("IM send is not available in this session.")
             if text is None and file_path is None:
                 raise ValueError("Provide at least one of text or file_path.")
             results: list[JsonValue] = []
