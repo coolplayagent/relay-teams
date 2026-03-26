@@ -533,7 +533,9 @@ class AgentTeamsClient:
         payload: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         request_payload = {} if payload is None else payload
-        return self._request_json("POST", "/api/gateway/wechat/login/start", request_payload)
+        return self._request_json(
+            "POST", "/api/gateway/wechat/login/start", request_payload
+        )
 
     def wait_wechat_gateway_login(
         self,

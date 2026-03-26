@@ -26,7 +26,9 @@ class WeChatSecretStore:
         except Exception:
             return None
 
-    def set_bot_token(self, config_dir: Path, account_id: str, token: str | None) -> None:
+    def set_bot_token(
+        self, config_dir: Path, account_id: str, token: str | None
+    ) -> None:
         normalized = _normalize_secret(token)
         if normalized is None:
             self.delete_bot_token(config_dir, account_id)

@@ -126,8 +126,12 @@ class WeChatAccountRepository:
                     record.normal_root_role_id,
                     record.orchestration_preset_id,
                     1 if record.yolo else 0,
-                    json.dumps(record.thinking.model_dump(mode="json"), ensure_ascii=False),
-                    record.last_login_at.isoformat() if record.last_login_at is not None else None,
+                    json.dumps(
+                        record.thinking.model_dump(mode="json"), ensure_ascii=False
+                    ),
+                    record.last_login_at.isoformat()
+                    if record.last_login_at is not None
+                    else None,
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
@@ -158,10 +162,14 @@ class WeChatAccountRepository:
                 "display_name": str(row["display_name"]),
                 "base_url": str(row["base_url"]),
                 "cdn_base_url": str(row["cdn_base_url"]),
-                "route_tag": str(row["route_tag"]) if row["route_tag"] is not None else None,
+                "route_tag": str(row["route_tag"])
+                if row["route_tag"] is not None
+                else None,
                 "status": WeChatAccountStatus(str(row["status"])),
                 "remote_user_id": (
-                    str(row["remote_user_id"]) if row["remote_user_id"] is not None else None
+                    str(row["remote_user_id"])
+                    if row["remote_user_id"] is not None
+                    else None
                 ),
                 "sync_cursor": str(row["sync_cursor"]),
                 "workspace_id": str(row["workspace_id"]),

@@ -102,8 +102,36 @@ The external provider is responsible for:
 - creating or loading the remote ACP session
 - sending prompt turns to the remote agent
 - translating remote updates back into Agent Teams messages and run events
+- exposing Agent Teams host tools to the remote ACP session when the bound role has local tools or skill tools
 
 The coordinator and task runtime stay in place. The change is backend selection, not a second orchestration system.
+
+### 6.1 Prompt Packaging
+
+External ACP prompt turns send the effective provider system prompt on every `session/prompt`, not only the user prompt.
+
+The outbound prompt text is packaged as:
+
+- `Role Prompt`: current `request.system_prompt`
+- `Host Tools`: host-tool usage guidance when Agent Teams exposes local tools to the remote agent
+- `User Prompt`: the current user/task prompt text
+
+This keeps the remote ACP session aligned with the active runtime role instructions even when the remote session itself is reused across turns.
+
+### 6.2 Host Tool Bridge
+
+When a bound role has local tools or skill tools, Agent Teams injects one session-scoped stdio MCP server into `mcpServers` during `session/new` or `session/load`.
+
+Rules:
+
+- reserved MCP server id: `agent_teams_host_tools`
+- local tool names are exported as `agent_teams_builtin_<tool_name>`
+- skill tool names are exported as `agent_teams_skill_<tool_name>`
+- the injected server is launched as a local stdio process using the current Agent Teams Python environment
+- the stdio server receives the active run/task/session context through environment variables
+- because the stdio payload is prompt-scoped, Agent Teams refreshes the remote ACP session when that context changes between prompts
+
+The exported names are fully namespaced so they do not collide with native tools provided by the external ACP agent itself.
 
 ## 7. Direct `@Role` Chat
 

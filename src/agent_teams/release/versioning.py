@@ -9,7 +9,9 @@ DEFAULT_BASE_VERSION = "0.0.3"
 DEFAULT_VERSION_FILE = Path("src/agent_teams/_version.py")
 
 
-def build_timestamp_version(timestamp: str, base_version: str = DEFAULT_BASE_VERSION) -> str:
+def build_timestamp_version(
+    timestamp: str, base_version: str = DEFAULT_BASE_VERSION
+) -> str:
     normalized_timestamp = timestamp.strip()
     if not normalized_timestamp.isdigit():
         raise ValueError("Timestamp must contain digits only.")
@@ -61,7 +63,9 @@ def main() -> int:
     args = parser.parse_args()
 
     timestamp = args.timestamp or generate_timestamp()
-    version = build_timestamp_version(timestamp=timestamp, base_version=args.base_version)
+    version = build_timestamp_version(
+        timestamp=timestamp, base_version=args.base_version
+    )
     write_version_file(version=version, output_path=args.output)
     print(version)
     return 0

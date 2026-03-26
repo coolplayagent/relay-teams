@@ -178,9 +178,7 @@ class WeChatGatewayService:
         record = WeChatAccountRecord(
             account_id=status.ilink_bot_id,
             display_name=(
-                existing.display_name
-                if existing is not None
-                else status.ilink_bot_id
+                existing.display_name if existing is not None else status.ilink_bot_id
             ),
             base_url=(status.baseurl or login_session.base_url).strip(),
             cdn_base_url=(
@@ -191,17 +189,21 @@ class WeChatGatewayService:
             route_tag=(
                 existing.route_tag if existing is not None else login_session.route_tag
             ),
-            status=existing.status if existing is not None else WeChatAccountStatus.ENABLED,
+            status=existing.status
+            if existing is not None
+            else WeChatAccountStatus.ENABLED,
             remote_user_id=status.ilink_user_id,
             sync_cursor=existing.sync_cursor if existing is not None else "",
             workspace_id=existing.workspace_id if existing is not None else "default",
             session_mode=(
-                existing.session_mode
-                if existing is not None
-                else SessionMode.NORMAL
+                existing.session_mode if existing is not None else SessionMode.NORMAL
             ),
-            normal_root_role_id=existing.normal_root_role_id if existing is not None else None,
-            orchestration_preset_id=existing.orchestration_preset_id if existing is not None else None,
+            normal_root_role_id=existing.normal_root_role_id
+            if existing is not None
+            else None,
+            orchestration_preset_id=existing.orchestration_preset_id
+            if existing is not None
+            else None,
             yolo=existing.yolo if existing is not None else True,
             thinking=existing.thinking if existing is not None else RunThinkingConfig(),
             last_login_at=now,
@@ -237,10 +239,7 @@ class WeChatGatewayService:
         if normal_root_role_id:
             self._role_registry.get(normal_root_role_id)
         orchestration_preset_id = request.orchestration_preset_id
-        if (
-            session_mode == existing.session_mode
-            and orchestration_preset_id is None
-        ):
+        if session_mode == existing.session_mode and orchestration_preset_id is None:
             orchestration_preset_id = existing.orchestration_preset_id
         if session_mode.value == "orchestration":
             preset_id = (
@@ -262,7 +261,9 @@ class WeChatGatewayService:
                 "display_name": request.display_name or existing.display_name,
                 "base_url": request.base_url or existing.base_url,
                 "cdn_base_url": request.cdn_base_url or existing.cdn_base_url,
-                "route_tag": request.route_tag if request.route_tag is not None else existing.route_tag,
+                "route_tag": request.route_tag
+                if request.route_tag is not None
+                else existing.route_tag,
                 "status": (
                     WeChatAccountStatus.ENABLED
                     if request.enabled is None
@@ -283,7 +284,9 @@ class WeChatGatewayService:
         self.reload()
         return self._merge_status(saved)
 
-    def set_account_enabled(self, account_id: str, enabled: bool) -> WeChatAccountRecord:
+    def set_account_enabled(
+        self, account_id: str, enabled: bool
+    ) -> WeChatAccountRecord:
         return self.update_account(
             account_id,
             WeChatAccountUpdateInput(enabled=enabled),
@@ -396,11 +399,18 @@ class WeChatGatewayService:
                 account = self._repository.get_account(account_id)
                 token = self._secret_store.get_bot_token(self._config_dir, account_id)
                 if token is None:
-                    self._set_status(account_id, running=False, last_error="missing_token")
+                    self._set_status(
+                        account_id, running=False, last_error="missing_token"
+                    )
                     return
-                response = self._client.get_updates(account=account, token=token, timeout_ms=_DEFAULT_POLL_TIMEOUT_MS)
+                response = self._client.get_updates(
+                    account=account, token=token, timeout_ms=_DEFAULT_POLL_TIMEOUT_MS
+                )
                 updated_account = account
-                if response.get_updates_buf and response.get_updates_buf != account.sync_cursor:
+                if (
+                    response.get_updates_buf
+                    and response.get_updates_buf != account.sync_cursor
+                ):
                     updated_account = self._repository.upsert_account(
                         account.model_copy(
                             update={
@@ -442,7 +452,9 @@ class WeChatGatewayService:
         )
         gateway_session = self._gateway_session_service.resolve_or_create_session(
             channel_type=GatewayChannelType.WECHAT,
-            external_session_id=self._external_session_id(account.account_id, peer_user_id),
+            external_session_id=self._external_session_id(
+                account.account_id, peer_user_id
+            ),
             workspace_id=account.workspace_id,
             metadata={
                 "title": f"{account.display_name} - {peer_user_id}",
@@ -472,7 +484,9 @@ class WeChatGatewayService:
                 thinking=account.thinking,
             )
         )
-        self._gateway_session_service.bind_active_run(gateway_session.gateway_session_id, run_id)
+        self._gateway_session_service.bind_active_run(
+            gateway_session.gateway_session_id, run_id
+        )
         self._run_service.ensure_run_started(run_id)
         self._send_typing(account, token, peer_user_id, message.context_token, 1)
         if run_id not in self._watched_runs:

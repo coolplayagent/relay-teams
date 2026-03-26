@@ -22,7 +22,10 @@ from agent_teams.logger import get_logger, log_event
 from agent_teams.net.clients import create_async_http_client
 
 JsonRpcId = str | int
-AcpNotificationHandler = Callable[[dict[str, JsonValue]], Awaitable[None]]
+AcpInboundMessageHandler = Callable[
+    [str, dict[str, JsonValue], JsonRpcId | None],
+    Awaitable[dict[str, JsonValue] | None],
+]
 
 LOGGER = get_logger(__name__)
 
@@ -57,7 +60,7 @@ class CustomAcpTransportAdapter(Protocol):
         self,
         *,
         config: CustomTransportConfig,
-        on_message: AcpNotificationHandler,
+        on_message: AcpInboundMessageHandler,
     ) -> AcpTransportClient: ...
 
 
@@ -77,7 +80,7 @@ def register_custom_transport_adapter(
 def build_acp_transport(
     *,
     config: ExternalAgentConfig,
-    on_message: AcpNotificationHandler,
+    on_message: AcpInboundMessageHandler,
     runtime_cwd: str | None = None,
 ) -> AcpTransportClient:
     if isinstance(config.transport, StdioTransportConfig):
@@ -108,8 +111,12 @@ def build_acp_transport(
 
 
 async def probe_acp_agent(config: ExternalAgentConfig) -> ExternalAgentTestResult:
-    async def _ignore_message(_message: dict[str, JsonValue]) -> None:
-        return None
+    async def _ignore_message(
+        _method: str,
+        _params: dict[str, JsonValue],
+        _message_id: JsonRpcId | None,
+    ) -> dict[str, JsonValue]:
+        return {}
 
     transport = build_acp_transport(config=config, on_message=_ignore_message)
     try:
@@ -141,7 +148,7 @@ class StdioAcpTransportClient:
         self,
         *,
         config: StdioTransportConfig,
-        on_message: AcpNotificationHandler,
+        on_message: AcpInboundMessageHandler,
         runtime_cwd: str | None = None,
     ) -> None:
         self._config = config
@@ -298,19 +305,40 @@ class StdioAcpTransportClient:
         if not method:
             return
         params = _as_object(payload.get("params"))
-        if response_id is not None:
+        if response_id is None:
+            _ = await self._on_message(method, params, None)
+            return
+        try:
+            result = await self._on_message(method, params, response_id)
+        except AcpProtocolError as exc:
             await self._send_raw(
                 {
                     "jsonrpc": "2.0",
                     "id": response_id,
-                    "error": {"code": -32601, "message": f"Method not found: {method}"},
+                    "error": {
+                        "code": exc.code,
+                        "message": exc.message,
+                    },
                 }
             )
             return
-        await self._on_message(
+        except Exception as exc:
+            await self._send_raw(
+                {
+                    "jsonrpc": "2.0",
+                    "id": response_id,
+                    "error": {
+                        "code": -32000,
+                        "message": str(exc) or exc.__class__.__name__,
+                    },
+                }
+            )
+            return
+        await self._send_raw(
             {
-                "method": method,
-                "params": params,
+                "jsonrpc": "2.0",
+                "id": response_id,
+                "result": result or {},
             }
         )
 
@@ -320,7 +348,7 @@ class HttpAcpTransportClient:
         self,
         *,
         config: StreamableHttpTransportConfig,
-        on_message: AcpNotificationHandler,
+        on_message: AcpInboundMessageHandler,
     ) -> None:
         self._config = config
         self._on_message = on_message
@@ -381,12 +409,42 @@ class HttpAcpTransportClient:
                     continue
                 method_name = _as_str(parsed.get("method"))
                 if method_name:
-                    await self._on_message(
-                        {
-                            "method": method_name,
-                            "params": _as_object(parsed.get("params")),
+                    params = _as_object(parsed.get("params"))
+                    response_id = _optional_id(parsed)
+                    if response_id is None:
+                        _ = await self._on_message(method_name, params, None)
+                        continue
+                    try:
+                        result = await self._on_message(
+                            method_name,
+                            params,
+                            response_id,
+                        )
+                        reply: dict[str, JsonValue] = {
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "result": result or {},
                         }
-                    )
+                    except AcpProtocolError as exc:
+                        reply = {
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "error": {
+                                "code": exc.code,
+                                "message": exc.message,
+                            },
+                        }
+                    except Exception as exc:
+                        reply = {
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "error": {
+                                "code": -32000,
+                                "message": str(exc) or exc.__class__.__name__,
+                            },
+                        }
+                    response = await self._send_raw_message(reply)
+                    response.raise_for_status()
         if response_message is None:
             raise RuntimeError(
                 "ACP HTTP transport did not return a JSON-RPC response for the request"
@@ -407,19 +465,12 @@ class HttpAcpTransportClient:
         await self.start()
         if self._client is None:
             raise RuntimeError("ACP HTTP transport is not started")
-        headers = {
-            item.name: item.value
-            for item in self._config.headers
-            if item.value is not None
-        }
-        response = await self._client.post(
-            self._config.url,
-            json={
+        response = await self._send_raw_message(
+            {
                 "jsonrpc": "2.0",
                 "method": method,
                 "params": params,
-            },
-            headers=headers,
+            }
         )
         response.raise_for_status()
 
@@ -428,6 +479,23 @@ class HttpAcpTransportClient:
             return
         await self._client.aclose()
         self._client = None
+
+    async def _send_raw_message(
+        self,
+        message: dict[str, JsonValue],
+    ) -> httpx.Response:
+        if self._client is None:
+            raise RuntimeError("ACP HTTP transport is not started")
+        headers = {
+            item.name: item.value
+            for item in self._config.headers
+            if item.value is not None
+        }
+        return await self._client.post(
+            self._config.url,
+            json=message,
+            headers=headers,
+        )
 
 
 async def _read_next_stdio_message(

@@ -49,7 +49,9 @@ def test_normalize_qr_code_url_wraps_base64_png() -> None:
 
 
 def test_normalize_qr_code_url_wraps_base64_svg() -> None:
-    result = WeChatGatewayService._normalize_qr_code_url("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg==")
+    result = WeChatGatewayService._normalize_qr_code_url(
+        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg=="
+    )
 
     assert result == (
         "data:image/svg+xml;base64,"

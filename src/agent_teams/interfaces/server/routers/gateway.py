@@ -76,7 +76,9 @@ def enable_wechat_account(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/wechat/accounts/{account_id}:disable", response_model=WeChatAccountRecord)
+@router.post(
+    "/wechat/accounts/{account_id}:disable", response_model=WeChatAccountRecord
+)
 def disable_wechat_account(
     account_id: str,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],

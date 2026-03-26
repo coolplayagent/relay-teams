@@ -57,7 +57,9 @@ def _response(
     )
 
 
-def test_start_qr_login_accepts_success_payload_with_ret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_qr_login_accepts_success_payload_with_ret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
     fake_client = _FakeSyncHttpClient(
         [
