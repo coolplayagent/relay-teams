@@ -49,6 +49,17 @@ def _expand_path_variables(raw_path: str) -> str:
     expanded = os.path.expandvars(raw_path)
     return re.sub(
         r"%([A-Za-z_][A-Za-z0-9_]*)%",
-        lambda match: os.environ.get(match.group(1), match.group(0)),
+        lambda match: _get_env_var(match.group(1), fallback=match.group(0)),
         expanded,
     )
+
+
+def _get_env_var(name: str, *, fallback: str) -> str:
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+    lowered_name = name.lower()
+    for key, candidate in os.environ.items():
+        if key.lower() == lowered_name:
+            return candidate
+    return fallback
