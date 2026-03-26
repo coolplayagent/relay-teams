@@ -46,6 +46,7 @@
 - Expose public package APIs through package-level `__init__.py`.
 - Use the project logger in production paths; do not use `print()`.
 - Do not use emoji in code, comments, docs, or commit messages.
+- Keep transport semantics consistent for the same provider/model path. If the primary execution flow uses streaming, auxiliary LLM flows such as reflection, compaction, or memory rewrite must also use streaming APIs against that endpoint rather than mixing in non-streaming shortcuts.
 - For outbound network changes, evaluate proxy requirements first and reuse the existing proxy module when needed.
 - CLI modules should provide their own subcommands. List/query output must support default table output and `--format json`.
 - Database schema and API changes do not need backward compatibility, but matching `docs/` updates must be included in the same task.

@@ -5,7 +5,7 @@ import logging
 from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRequestNode
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -217,12 +217,31 @@ class SubagentReflectionService:
             f"Transcript to absorb:\n{transcript}"
         )
         result = await run_with_llm_retry(
-            operation=lambda: agent.run(prompt),
+            operation=lambda: self._run_streaming_reflection(
+                agent=agent, prompt=prompt
+            ),
             config=self._retry_config,
             is_retry_allowed=lambda: True,
             on_retry_scheduled=lambda _schedule: None,
         )
-        return result.output.strip()
+        return result.strip()
+
+    async def _run_streaming_reflection(
+        self,
+        *,
+        agent: Agent[None, str],
+        prompt: str,
+    ) -> str:
+        async with agent.iter(prompt) as agent_run:
+            async for node in agent_run:
+                if not isinstance(node, ModelRequestNode):
+                    continue
+                async with node.stream(agent_run.ctx) as stream:
+                    async for _event in stream:
+                        pass
+            if agent_run.result is None:
+                raise RuntimeError("Reflection rewrite did not produce a final result")
+            return agent_run.result.output.strip()
 
     def _build_model(self) -> OpenAIChatModel:
         profile: OpenAIModelProfile | None = resolve_openai_chat_model_profile(

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import cast
 
 import httpx
@@ -24,6 +26,7 @@ class _FakeRoleMemoryService:
 
 class _FakeAgent:
     attempts = 0
+    run_calls = 0
 
     def __class_getitem__(cls, _item):
         return cls
@@ -33,6 +36,37 @@ class _FakeAgent:
 
     async def run(self, prompt: str) -> object:
         _ = prompt
+        _FakeAgent.run_calls += 1
+        raise AssertionError(
+            "reflection rewrite should not use non-streaming agent.run"
+        )
+
+    @asynccontextmanager
+    async def iter(self, prompt: str) -> AsyncIterator[_FakeAgentRun]:
+        _ = prompt
+        yield _FakeAgentRun()
+
+
+class _FakeAgentRun:
+    def __init__(self) -> None:
+        self.ctx = object()
+        self.result = type("_Result", (), {"output": "- stable memory"})()
+        self._nodes = [_FakeModelRequestNode()]
+
+    def __aiter__(self) -> _FakeAgentRun:
+        return self
+
+    async def __anext__(self) -> _FakeModelRequestNode:
+        if not self._nodes:
+            raise StopAsyncIteration
+        return self._nodes.pop(0)
+
+
+class _FakeStream:
+    def __aiter__(self) -> _FakeStream:
+        return self
+
+    async def __anext__(self) -> object:
         _FakeAgent.attempts += 1
         if _FakeAgent.attempts < 3:
             raise APIError(
@@ -42,7 +76,13 @@ class _FakeAgent:
                 ),
                 body={"error": {"code": "2062", "message": "busy"}},
             )
-        return type("_Result", (), {"output": "- stable memory"})()
+        raise StopAsyncIteration
+
+
+class _FakeModelRequestNode:
+    @asynccontextmanager
+    async def stream(self, _ctx: object) -> AsyncIterator[_FakeStream]:
+        yield _FakeStream()
 
 
 @pytest.mark.asyncio
@@ -51,6 +91,7 @@ async def test_rewrite_reflection_summary_retries_provider_errors(
     tmp_path,
 ) -> None:
     _FakeAgent.attempts = 0
+    _FakeAgent.run_calls = 0
     service = SubagentReflectionService(
         config=ModelEndpointConfig(
             model="gpt-test",
@@ -62,6 +103,7 @@ async def test_rewrite_reflection_summary_retries_provider_errors(
         role_memory_service=cast(RoleMemoryService, _FakeRoleMemoryService()),
     )
     monkeypatch.setattr(reflection_module, "Agent", _FakeAgent)
+    monkeypatch.setattr(reflection_module, "ModelRequestNode", _FakeModelRequestNode)
     monkeypatch.setattr(service, "_build_model", lambda: object())
 
     summary = await service._rewrite_reflection_summary(
@@ -79,3 +121,4 @@ async def test_rewrite_reflection_summary_retries_provider_errors(
 
     assert summary == "- stable memory"
     assert _FakeAgent.attempts == 3
+    assert _FakeAgent.run_calls == 0
