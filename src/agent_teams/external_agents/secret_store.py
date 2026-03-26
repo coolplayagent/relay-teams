@@ -102,7 +102,9 @@ class ExternalAgentSecretStore:
             f"{kind.strip()}:{name.strip()}"
         )
         try:
-            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            legacy_value = keyring.get_password(
+                _LEGACY_KEYRING_SERVICE_NAME, account_name
+            )
         except Exception:
             return None
         normalized = _normalize_secret(legacy_value)

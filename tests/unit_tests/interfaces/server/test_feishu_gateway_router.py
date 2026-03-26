@@ -125,8 +125,8 @@ def _client(
     app = FastAPI()
     app.include_router(feishu_gateway.router, prefix="/api")
     app.dependency_overrides[get_feishu_gateway_service] = lambda: gateway_service
-    app.dependency_overrides[get_feishu_subscription_service] = (
-        lambda: subscription_service
+    app.dependency_overrides[get_feishu_subscription_service] = lambda: (
+        subscription_service
     )
     return TestClient(app)
 

@@ -108,9 +108,7 @@ class AppSecretStore:
         index = SecretIndexDocument(
             version=index.version,
             entries=tuple(
-                entry
-                for entry in index.entries
-                if entry.coordinate() != coordinate
+                entry for entry in index.entries if entry.coordinate() != coordinate
             ),
         )
         self._save_index(config_dir, index)

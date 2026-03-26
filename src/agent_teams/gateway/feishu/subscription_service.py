@@ -34,7 +34,9 @@ if TYPE_CHECKING:
 
 
 class FeishuRuntimeConfigLookup(Protocol):
-    def list_enabled_runtime_configs(self) -> tuple[FeishuTriggerRuntimeConfig, ...]: ...
+    def list_enabled_runtime_configs(
+        self,
+    ) -> tuple[FeishuTriggerRuntimeConfig, ...]: ...
 
 
 class FeishuTriggerHandlerLike(Protocol):

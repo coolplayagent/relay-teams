@@ -31,7 +31,9 @@ class WeChatSecretStore:
         )
         return _normalize_secret(value if value is not None else migrated)
 
-    def set_bot_token(self, config_dir: Path, account_id: str, token: str | None) -> None:
+    def set_bot_token(
+        self, config_dir: Path, account_id: str, token: str | None
+    ) -> None:
         self._secret_store.set_secret(
             config_dir,
             namespace=_NAMESPACE,
@@ -56,7 +58,9 @@ class WeChatSecretStore:
             return None
         account_name = f"{config_dir.expanduser().resolve()}::{account_id}"
         try:
-            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            legacy_value = keyring.get_password(
+                _LEGACY_KEYRING_SERVICE_NAME, account_name
+            )
         except Exception:
             return None
         normalized = _normalize_secret(legacy_value)

@@ -57,7 +57,9 @@ class GitHubSecretStore:
             return None
         account_name = str(config_dir.expanduser().resolve())
         try:
-            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            legacy_value = keyring.get_password(
+                _LEGACY_KEYRING_SERVICE_NAME, account_name
+            )
         except Exception:
             return None
         normalized = _normalize_secret(legacy_value)

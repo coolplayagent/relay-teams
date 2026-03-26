@@ -32,7 +32,9 @@ class ModelConfigManager:
         model_file = self._config_dir / "model.json"
         if model_file.exists():
             config = _load_json_object(model_file)
-            config = self._migrate_legacy_profile_api_keys(config, model_file=model_file)
+            config = self._migrate_legacy_profile_api_keys(
+                config, model_file=model_file
+            )
             return self._hydrate_model_config(config)
         return {}
 
@@ -78,7 +80,9 @@ class ModelConfigManager:
         config: dict[str, JsonValue] = {}
         if model_file.exists():
             config = _load_json_object(model_file)
-            config = self._migrate_legacy_profile_api_keys(config, model_file=model_file)
+            config = self._migrate_legacy_profile_api_keys(
+                config, model_file=model_file
+            )
         existing_profile = config.get(name)
         if source_name is not None and source_name != name:
             existing_profile = config.get(source_name, existing_profile)
@@ -87,10 +91,12 @@ class ModelConfigManager:
             if source_name is not None and source_name != name
             else self._get_profile_secret(name)
         )
-        config[name], next_secret, preserve_secret = _prepare_profile_api_key_for_storage(
-            existing_profile=existing_profile,
-            next_profile=profile,
-            current_secret=current_secret,
+        config[name], next_secret, preserve_secret = (
+            _prepare_profile_api_key_for_storage(
+                existing_profile=existing_profile,
+                next_profile=profile,
+                current_secret=current_secret,
+            )
         )
         if source_name is not None and source_name != name:
             config.pop(source_name, None)
@@ -132,10 +138,12 @@ class ModelConfigManager:
                 next_config[name] = profile
                 continue
             current_secret = self._get_profile_secret(name)
-            next_profile, next_secret, preserve_secret = _prepare_profile_api_key_for_storage(
-                existing_profile=existing_config.get(name),
-                next_profile=profile,
-                current_secret=current_secret,
+            next_profile, next_secret, preserve_secret = (
+                _prepare_profile_api_key_for_storage(
+                    existing_profile=existing_config.get(name),
+                    next_profile=profile,
+                    current_secret=current_secret,
+                )
             )
             next_config[name] = next_profile
             secret_updates[name] = (next_secret, preserve_secret)

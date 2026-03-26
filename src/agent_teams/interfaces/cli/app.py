@@ -204,6 +204,8 @@ metrics_app = build_metrics_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+
+
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
     sync_proxy_env_to_process_env(load_proxy_env_config())
     _stream_events_impl(base_url, run_id, debug)
