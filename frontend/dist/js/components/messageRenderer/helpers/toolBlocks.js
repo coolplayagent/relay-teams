@@ -2,8 +2,8 @@
  * components/messageRenderer/helpers/toolBlocks.js
  * Tool block rendering and mutation helpers.
  */
-import { parseMarkdown } from '../../../utils/markdown.js';
 import { syncApprovalStateFromEnvelope } from './approval.js';
+import { renderRichContent } from './content.js';
 
 export function buildToolBlock(toolName, args, toolCallId = null) {
     const tb = document.createElement('div');
@@ -44,7 +44,7 @@ export function setToolValidationFailureState(toolBlock, payload) {
     statusEl.innerHTML = `<svg class="status-icon status-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86l-8.2 14.2A2 2 0 0 0 3.8 21h16.4a2 2 0 0 0 1.73-2.94l-8.2-14.2a2 2 0 0 0-3.46 0z"/></svg>`;
     resultEl.classList.remove('error-text');
     resultEl.classList.add('warning-text');
-    resultEl.innerHTML = parseMarkdown(formatValidationDetails(payload));
+    renderRichContent(resultEl, formatValidationDetails(payload));
 }
 
 export function applyToolReturn(toolBlock, content) {
@@ -64,7 +64,7 @@ export function applyToolReturn(toolBlock, content) {
     }
 
     const val = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
-    resultEl.innerHTML = parseMarkdown(val);
+    renderRichContent(resultEl, val);
     syncApprovalStateFromEnvelope(toolBlock, content);
 }
 

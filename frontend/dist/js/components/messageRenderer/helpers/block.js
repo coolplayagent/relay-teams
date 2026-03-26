@@ -3,7 +3,6 @@
  * Message block and part rendering helpers.
  */
 import { getPrimaryRoleLabel, isCoordinatorRoleId, isMainAgentRoleId } from '../../../core/state.js';
-import { parseMarkdown } from '../../../utils/markdown.js';
 import { t } from '../../../utils/i18n.js';
 import {
     applyToolReturn,
@@ -12,6 +11,7 @@ import {
     resolvePendingToolBlock,
     setToolValidationFailureState,
 } from './toolBlocks.js';
+import { renderRichContent } from './content.js';
 
 const STREAMING_CURSOR_CLASS = 'streaming-cursor';
 
@@ -142,7 +142,7 @@ export function appendThinkingText(contentEl, text, options = {}) {
 }
 
 export function updateMessageText(textEl, text, options = {}) {
-    textEl.innerHTML = parseMarkdown(String(text || ''));
+    renderRichContent(textEl, String(text || ''));
     syncStreamingCursor(textEl, options.streaming === true);
     return textEl;
 }

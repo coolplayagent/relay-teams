@@ -8,6 +8,16 @@ export async function fetchWorkspaces() {
     return requestJson('/api/workspaces', undefined, 'Failed to fetch projects');
 }
 
+export function buildWorkspaceImagePreviewUrl(workspaceId, path) {
+    const safeWorkspaceId = String(workspaceId || '').trim();
+    const safePath = String(path || '').trim();
+    if (!safeWorkspaceId || !safePath) {
+        return '';
+    }
+    const query = new URLSearchParams({ path: safePath });
+    return `/api/workspaces/${encodeURIComponent(safeWorkspaceId)}/preview-file?${query.toString()}`;
+}
+
 export async function fetchWorkspaceSnapshot(workspaceId) {
     return requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,

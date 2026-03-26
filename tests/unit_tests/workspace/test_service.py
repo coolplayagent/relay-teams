@@ -297,6 +297,50 @@ def test_workspace_service_rejects_tree_path_that_escapes_workspace_root(
         )
 
 
+def test_workspace_service_returns_image_preview_for_absolute_workspace_path(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    image_path = root_path / "artifacts" / "brief.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"not-a-real-png")
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    preview_path, media_type = service.get_workspace_image_preview_file(
+        "project-alpha",
+        path=str(image_path.resolve()),
+    )
+
+    assert preview_path == image_path.resolve()
+    assert media_type == "image/png"
+
+
+def test_workspace_service_rejects_non_image_preview_file(tmp_path: Path) -> None:
+    root_path = tmp_path / "workspace-root"
+    text_path = root_path / "notes.txt"
+    root_path.mkdir()
+    text_path.write_text("hello\n", encoding="utf-8")
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="supported image"):
+        _ = service.get_workspace_image_preview_file(
+            "project-alpha",
+            path="notes.txt",
+        )
+
+
 def test_workspace_service_returns_git_diffs_separately(tmp_path: Path) -> None:
     root_path = tmp_path / "workspace-root"
     (root_path / "src").mkdir(parents=True)

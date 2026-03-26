@@ -735,6 +735,26 @@
     margin-bottom: 0;
 }
 
+.msg-image {
+    margin: 0;
+}
+
+.msg-text > .msg-image,
+.tool-result > .msg-image {
+    margin-top: 0.75rem;
+}
+
+.msg-image-preview {
+    display: block;
+    width: min(100%, 42rem);
+    max-height: 32rem;
+    object-fit: contain;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-surface-muted) 88%, transparent);
+    box-shadow: var(--shadow-sm);
+}
+
 .thinking-block {
     margin: 0 0 0.95rem;
     border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);

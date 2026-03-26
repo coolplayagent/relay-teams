@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import mimetypes
 import re
 import shutil
 import subprocess
@@ -31,6 +32,16 @@ from agent_teams.workspace.workspace_repository import WorkspaceRepository
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")
 _GIT_TIMEOUT_SECONDS = 30.0
 _BINARY_DIFF_MESSAGE = "Binary file changed"
+_WORKSPACE_IMAGE_MEDIA_TYPES = frozenset(
+    {
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
 _logger = get_logger(__name__)
 
 
@@ -222,6 +233,26 @@ class WorkspaceService:
                     has_head=has_head,
                 )
         raise ValueError(f"Workspace diff file not found: {path}")
+
+    def get_workspace_image_preview_file(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+    ) -> tuple[Path, str]:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        resolved_path = self._resolve_workspace_file_path(
+            root_path=root_path,
+            file_path=path,
+        )
+        if not resolved_path.exists() or not resolved_path.is_file():
+            raise FileNotFoundError(f"Workspace file not found: {path}")
+
+        media_type, _ = mimetypes.guess_type(resolved_path.name)
+        if media_type not in _WORKSPACE_IMAGE_MEDIA_TYPES:
+            raise ValueError(f"Workspace file is not a supported image: {path}")
+        return resolved_path, media_type
 
     def list_workspaces(self) -> tuple[WorkspaceRecord, ...]:
         return self._repository.list_all()
@@ -417,6 +448,22 @@ class WorkspaceService:
         if not normalized_parts or any(part == ".." for part in normalized_parts):
             raise ValueError(f"Workspace path escapes root: {path}")
         return Path(*normalized_parts).as_posix()
+
+    def _resolve_workspace_file_path(self, *, root_path: Path, file_path: str) -> Path:
+        raw_path = str(file_path).strip()
+        if not raw_path or raw_path == ".":
+            raise ValueError("Workspace path must not be empty")
+
+        candidate = Path(raw_path).expanduser()
+        if candidate.is_absolute():
+            resolved_path = candidate.resolve()
+        else:
+            normalized_path = self._normalize_workspace_relative_path(raw_path)
+            resolved_path = (root_path / normalized_path).resolve()
+
+        if resolved_path == root_path or root_path not in resolved_path.parents:
+            raise ValueError(f"Workspace path escapes root: {file_path}")
+        return resolved_path
 
     def _iter_tree_entries(self, current_path: Path) -> tuple[Path, ...]:
         try:

@@ -911,6 +911,16 @@ Rules:
 - `path` must be a relative workspace path and must match one file currently reported by `/diffs`.
 - Binary files are reported with `is_binary = true` and a summary diff message instead of inline text hunks.
 
+### `GET /workspaces/{workspace_id}/preview-file?path=...`
+
+Streams one workspace image file for inline UI preview.
+
+Rules:
+- `path` may be a relative workspace path or an absolute path inside the workspace root.
+- Paths that escape the workspace root are rejected.
+- Only raster image files are supported for preview.
+- Missing files return `404`.
+
 ### `POST /workspaces/{workspace_id}:fork`
 
 Creates a forked execution workspace backed by a Git worktree.

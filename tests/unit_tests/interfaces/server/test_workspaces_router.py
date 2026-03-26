@@ -252,6 +252,44 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
     assert diff_file_payload["diff"] == "patched content"
 
 
+def test_get_workspace_preview_file_streams_workspace_image(tmp_path: Path) -> None:
+    client, service = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    image_path = root_path / "artifacts" / "brief.png"
+    image_path.parent.mkdir(parents=True)
+    image_bytes = b"png-preview"
+    image_path.write_bytes(image_bytes)
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    response = client.get(
+        f"/api/workspaces/project-alpha/preview-file?path={image_path.as_posix()}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content == image_bytes
+
+
+def test_get_workspace_preview_file_rejects_non_image(tmp_path: Path) -> None:
+    client, service = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    file_path = root_path / "notes.txt"
+    root_path.mkdir()
+    file_path.write_text("hello\n", encoding="utf-8")
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    response = client.get("/api/workspaces/project-alpha/preview-file?path=notes.txt")
+
+    assert response.status_code == 400
+    assert "supported image" in response.json()["detail"]
+
+
 def test_pick_workspace_creates_workspace_for_selected_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
