@@ -3,11 +3,19 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+import sys
 from typing import cast
+import warnings
 
 import httpx
+import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import ConnectionClosedOK, InvalidStatus
+from websockets.frames import Close
+from websockets.http11 import Response
 
 from agent_teams.env.proxy_env import ProxyEnvConfig
+from agent_teams.gateway.feishu.lark_ws_compat import import_lark_ws_client_module
 from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
@@ -21,6 +29,7 @@ from agent_teams.gateway.feishu.subscription_service import (
     _FeishuWsController,
     _FeishuWsHub,
     _build_websocket_ssl_context,
+    _parse_ws_conn_exception,
     _resolve_websocket_proxy_url,
 )
 
@@ -434,3 +443,78 @@ def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
     )
 
     assert proxy_url is None
+
+
+def test_import_lark_ws_client_module_suppresses_known_deprecations() -> None:
+    try:
+        previous_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        previous_loop = None
+
+    removed_modules = {
+        name: sys.modules.pop(name, None)
+        for name in (
+            "lark_oapi.ws.client",
+            "lark_oapi.ws.pb.google.protobuf.internal.well_known_types",
+        )
+    }
+    loop = asyncio.new_event_loop()
+
+    try:
+        asyncio.set_event_loop(loop)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            module = import_lark_ws_client_module()
+        assert module.__name__ == "lark_oapi.ws.client"
+        assert caught == []
+    finally:
+        loop.close()
+        asyncio.set_event_loop(previous_loop)
+        for name, module in removed_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+                continue
+            sys.modules[name] = module
+
+
+def test_parse_ws_conn_exception_reads_invalid_status_response_headers() -> None:
+    headers = Headers()
+    headers["handshake-status"] = "403"
+    headers["handshake-msg"] = "forbidden"
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        import_lark_ws_client_module()
+        with pytest.raises(Exception, match="forbidden") as caught:
+            _parse_ws_conn_exception(InvalidStatus(Response(403, "Forbidden", headers)))
+        assert caught.type.__name__ == "ClientException"
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+def test_feishu_ws_controller_receive_loop_ignores_normal_close_after_stop() -> None:
+    controller = _FeishuWsController(
+        runtime_config=_build_runtime(
+            trigger_id="trg_a",
+            name="bot_a",
+            app_id="cli_demo",
+            app_name="bot-a",
+            app_secret="secret-demo",
+        ),
+        event_handler=_FakeHandler(),
+    )
+
+    class _ClosingWsConnection:
+        async def close(self) -> None:
+            return None
+
+        async def recv(self) -> bytes | str:
+            controller._stop_requested = True
+            raise ConnectionClosedOK(Close(1000, "bye"), Close(1000, ""), False)
+
+    ws_client = _FakeWsClient()
+    ws_client._conn = cast(_FakeWsConnection, _ClosingWsConnection())
+
+    asyncio.run(controller._receive_loop(cast(WsClientLike, ws_client)))

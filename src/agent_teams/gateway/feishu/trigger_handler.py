@@ -6,12 +6,6 @@ import re
 from json import JSONDecodeError, loads
 from typing import TYPE_CHECKING, Protocol, cast
 
-from lark_oapi.api.im.v1.model.event_message import EventMessage
-from lark_oapi.api.im.v1.model.event_sender import EventSender
-from lark_oapi.api.im.v1.model.user_id import UserId
-from lark_oapi.core.json import JSON
-from lark_oapi.event.context import EventHeader
-from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from pydantic import JsonValue
 
 from agent_teams.gateway.feishu.models import (
@@ -26,6 +20,11 @@ from agent_teams.logger import get_logger, log_event
 
 if TYPE_CHECKING:
     from agent_teams.gateway.im import ImSessionCommandService, ImToolService
+    from lark_oapi.api.im.v1.model.event_message import EventMessage
+    from lark_oapi.api.im.v1.model.event_sender import EventSender
+    from lark_oapi.api.im.v1.model.user_id import UserId
+    from lark_oapi.event.context import EventHeader
+    from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
 _AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
@@ -309,6 +308,8 @@ def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessa
 
 
 def _sdk_event_payload(event: P2ImMessageReceiveV1) -> dict[str, JsonValue]:
+    from lark_oapi.core.json import JSON
+
     marshaled = JSON.marshal(event)
     if marshaled is None:
         raise ValueError("Feishu SDK event payload is empty")

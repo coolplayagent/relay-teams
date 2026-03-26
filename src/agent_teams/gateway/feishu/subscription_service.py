@@ -7,19 +7,18 @@ import random
 import ssl
 from contextlib import suppress
 from threading import Event, Lock, Thread
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from lark_oapi.core.json import JSON
-from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
-from websockets.legacy.exceptions import InvalidStatusCode
+from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 
 from agent_teams.env.proxy_env import (
     load_proxy_env_config,
     proxy_applies_to_url,
     resolve_ssl_verify,
 )
+from agent_teams.gateway.feishu.lark_ws_compat import import_lark_ws_client_module
 from agent_teams.gateway.feishu.models import (
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
@@ -30,6 +29,7 @@ from agent_teams.net import create_sync_http_client
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
+    from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
     from lark_oapi.ws.model import ClientConfig
 
 
@@ -77,6 +77,11 @@ class WsConnectionLike(Protocol):
     async def close(self) -> None: ...
 
     async def recv(self) -> bytes | str: ...
+
+
+@runtime_checkable
+class HeadersLike(Protocol):
+    def get(self, key: str) -> str | None: ...
 
 
 class WsClientLike(Protocol):
@@ -373,11 +378,10 @@ class _FeishuWsHub:
             raise RuntimeError("Timed out waiting for Feishu subscription hub loop")
 
     def _run_loop(self) -> None:
-        import lark_oapi.ws.client as ws_client_module
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        ws_client_module.loop = loop
+        ws_client_module = import_lark_ws_client_module()
+        setattr(ws_client_module, "loop", loop)
         self._loop = loop
         self._ready.set()
         try:
@@ -482,11 +486,15 @@ class _FeishuWsController:
     def _build_client(self) -> WsClientLike:
         import lark_oapi as lark
         from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
-        from lark_oapi.ws.client import Client as WsClient
+
+        ws_client_module = import_lark_ws_client_module()
+        WsClient = ws_client_module.Client
 
         environment = self._runtime_config.environment
 
         def _on_message(event: P2ImMessageReceiveV1) -> None:
+            from lark_oapi.core.json import JSON
+
             raw_body = JSON.marshal(event) or "{}"
             result = self._event_handler.handle_sdk_event(
                 trigger_id=self._runtime_config.trigger_id,
@@ -513,24 +521,24 @@ class _FeishuWsController:
         )
 
     async def _connect_client(self, client: WsClientLike) -> None:
-        import lark_oapi.ws.client as ws_client_module
         from lark_oapi.ws.const import DEVICE_ID, SERVICE_ID
 
+        ws_client_module = import_lark_ws_client_module()
         conn_url = await asyncio.to_thread(self._get_conn_url, client)
         conn_query = parse_qs(urlparse(conn_url).query)
         conn_ids = conn_query.get(DEVICE_ID)
         service_ids = conn_query.get(SERVICE_ID)
         if not conn_ids or not service_ids:
             raise RuntimeError("Feishu websocket connection metadata is incomplete")
+        connection: WsConnectionLike
         try:
             connection = await ws_client_module.websockets.connect(
                 conn_url,
                 proxy=_resolve_websocket_proxy_url(conn_url),
                 ssl=_build_websocket_ssl_context(conn_url),
             )
-        except InvalidStatusCode as exc:
-            ws_client_module._parse_ws_conn_exception(exc)
-            raise
+        except InvalidStatus as exc:
+            _parse_ws_conn_exception(exc)
         client._conn = connection
         client._conn_url = conn_url
         client._conn_id = conn_ids[0]
@@ -561,18 +569,22 @@ class _FeishuWsController:
         raise RuntimeError("Feishu websocket loop exited unexpectedly")
 
     async def _receive_loop(self, client: WsClientLike) -> None:
-        while not self._stop_requested:
-            connection = client._conn
-            if connection is None:
-                raise RuntimeError("Feishu websocket connection is not available")
-            message = await connection.recv()
-            if isinstance(message, str):
-                message = message.encode("utf-8")
-            await client._handle_message(message)
+        try:
+            while not self._stop_requested:
+                connection = client._conn
+                if connection is None:
+                    raise RuntimeError("Feishu websocket connection is not available")
+                message = await connection.recv()
+                if isinstance(message, str):
+                    message = message.encode("utf-8")
+                await client._handle_message(message)
+        except ConnectionClosedOK:
+            if self._stop_requested:
+                return
+            raise
 
     async def _ping_loop(self, client: WsClientLike) -> None:
-        import lark_oapi.ws.client as ws_client_module
-
+        ws_client_module = import_lark_ws_client_module()
         while not self._stop_requested:
             try:
                 if client._conn is not None and client._service_id:
@@ -710,6 +722,49 @@ def _httpish_url_for_websocket(url: str) -> str:
     if url.startswith("ws://"):
         return f"http://{url.removeprefix('ws://')}"
     return url
+
+
+def _resolve_ws_exception_headers(exc: Exception) -> HeadersLike | None:
+    response = getattr(exc, "response", None)
+    response_headers = getattr(response, "headers", None)
+    if isinstance(response_headers, HeadersLike):
+        return response_headers
+
+    direct_headers = getattr(exc, "headers", None)
+    if isinstance(direct_headers, HeadersLike):
+        return direct_headers
+    return None
+
+
+def _parse_ws_conn_exception(exc: Exception) -> NoReturn:
+    from lark_oapi.ws.const import (
+        AUTH_FAILED,
+        EXCEED_CONN_LIMIT,
+        FORBIDDEN,
+        HEADER_HANDSHAKE_AUTH_ERRCODE,
+        HEADER_HANDSHAKE_MSG,
+        HEADER_HANDSHAKE_STATUS,
+    )
+    from lark_oapi.ws.exception import ClientException, ServerException
+
+    headers = _resolve_ws_exception_headers(exc)
+    if headers is None:
+        raise exc
+
+    code = headers.get(HEADER_HANDSHAKE_STATUS)
+    msg = headers.get(HEADER_HANDSHAKE_MSG)
+    if code is None or msg is None:
+        raise exc
+
+    status_code = int(code)
+    if status_code == AUTH_FAILED:
+        auth_code = headers.get(HEADER_HANDSHAKE_AUTH_ERRCODE)
+        if auth_code is not None and int(auth_code) == EXCEED_CONN_LIMIT:
+            raise ClientException(status_code, msg)
+        raise ServerException(status_code, msg)
+    if status_code == FORBIDDEN:
+        raise ClientException(status_code, msg)
+    raise ServerException(status_code, msg)
 
 
 def _log_processing_result(result: TriggerProcessingResult) -> None:

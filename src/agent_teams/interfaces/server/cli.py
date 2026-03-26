@@ -159,6 +159,7 @@ def start(
             fastapi_app,
             host=host,
             port=port,
+            ws="websockets-sansio",
             timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
         )
     finally:

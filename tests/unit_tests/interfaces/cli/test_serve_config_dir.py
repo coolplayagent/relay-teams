@@ -21,11 +21,13 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         app: object,
         host: str,
         port: int,
+        ws: str,
         timeout_graceful_shutdown: int,
     ) -> None:
         captured["app"] = app
         captured["host"] = host
         captured["port"] = port
+        captured["ws"] = ws
         captured["timeout_graceful_shutdown"] = timeout_graceful_shutdown
         captured["managed_process"] = (
             server_cli.ManagedServerProcess.model_validate_json(
@@ -58,6 +60,7 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "app": sentinel_app,
         "host": "127.0.0.1",
         "port": 8911,
+        "ws": "websockets-sansio",
         "timeout_graceful_shutdown": 10,
         "managed_process": managed_process,
     }
