@@ -37,9 +37,18 @@ def _normalize_input_path(raw_path: str) -> str:
     normalized = raw_path.strip().strip('"').strip("'")
     if not normalized:
         raise ValueError("file_path cannot be empty.")
-    normalized = os.path.expandvars(os.path.expanduser(normalized))
+    normalized = _expand_path_variables(os.path.expanduser(normalized))
     if sys.platform == "win32" and normalized.startswith("/"):
         match = re.match(r"^/([a-zA-Z])/(.*)", normalized)
         if match is not None:
             normalized = f"{match.group(1)}:/{match.group(2)}"
     return normalized
+
+
+def _expand_path_variables(raw_path: str) -> str:
+    expanded = os.path.expandvars(raw_path)
+    return re.sub(
+        r"%([A-Za-z_][A-Za-z0-9_]*)%",
+        lambda match: os.environ.get(match.group(1), match.group(0)),
+        expanded,
+    )

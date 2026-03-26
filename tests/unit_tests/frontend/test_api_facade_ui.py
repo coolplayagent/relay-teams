@@ -124,7 +124,9 @@ def test_update_trigger_omits_enabled_field_from_patch_payload(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "triggers.js"
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "triggers.js"
+    )
     module_under_test_path = tmp_path / "triggers.mjs"
     mock_request_path = tmp_path / "mockRequest.mjs"
 
