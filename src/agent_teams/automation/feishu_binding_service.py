@@ -15,17 +15,19 @@ from agent_teams.gateway.feishu import (
 )
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.triggers import TriggerDefinition
 
 
-class TriggerLookup(Protocol):
-    def get_trigger(self, trigger_id: str) -> TriggerDefinition: ...
+class FeishuAccountLike(Protocol):
+    account_id: str
+    display_name: str
+
+
+class FeishuAccountLookup(Protocol):
+    def get_account(self, account_id: str) -> FeishuAccountLike: ...
 
 
 class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(self, trigger_id: str) -> object | None: ...
-
-    def is_feishu_trigger(self, trigger: TriggerDefinition) -> bool: ...
 
 
 class AutomationFeishuBindingService:
@@ -34,12 +36,12 @@ class AutomationFeishuBindingService:
         *,
         external_session_binding_repo: ExternalSessionBindingRepository,
         session_repo: SessionRepository,
-        trigger_lookup: TriggerLookup,
+        account_lookup: FeishuAccountLookup,
         runtime_config_lookup: FeishuRuntimeConfigLookup,
     ) -> None:
         self._external_session_binding_repo = external_session_binding_repo
         self._session_repo = session_repo
-        self._trigger_lookup = trigger_lookup
+        self._account_lookup = account_lookup
         self._runtime_config_lookup = runtime_config_lookup
 
     def list_candidates(self) -> tuple[AutomationFeishuBindingCandidate, ...]:
@@ -56,8 +58,13 @@ class AutomationFeishuBindingService:
             if dedupe_key in seen:
                 continue
             try:
-                trigger = self._trigger_lookup.get_trigger(binding.trigger_id)
-                if not self._runtime_config_lookup.is_feishu_trigger(trigger):
+                account = self._account_lookup.get_account(binding.trigger_id)
+                if (
+                    self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+                        binding.trigger_id
+                    )
+                    is None
+                ):
                     continue
                 session = self._session_repo.get(binding.session_id)
             except KeyError:
@@ -77,7 +84,7 @@ class AutomationFeishuBindingService:
             candidates.append(
                 AutomationFeishuBindingCandidate(
                     trigger_id=binding.trigger_id,
-                    trigger_name=trigger.display_name,
+                    trigger_name=account.display_name,
                     tenant_key=binding.tenant_key,
                     chat_id=binding.external_chat_id,
                     chat_type=chat_type,
@@ -94,11 +101,7 @@ class AutomationFeishuBindingService:
         self,
         binding: AutomationFeishuBinding,
     ) -> AutomationFeishuBinding:
-        trigger = self._trigger_lookup.get_trigger(binding.trigger_id)
-        if not self._runtime_config_lookup.is_feishu_trigger(trigger):
-            raise ValueError(
-                "delivery_binding.trigger_id must reference a Feishu IM trigger"
-            )
+        _ = self._account_lookup.get_account(binding.trigger_id)
         if (
             self._runtime_config_lookup.get_runtime_config_by_trigger_id(
                 binding.trigger_id

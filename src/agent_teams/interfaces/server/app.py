@@ -22,6 +22,7 @@ from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.routers import (
     automation,
+    feishu_gateway,
     gateway,
     logs,
     mcp,
@@ -32,7 +33,6 @@ from agent_teams.interfaces.server.routers import (
     sessions,
     system,
     tasks,
-    triggers,
     workspaces,
 )
 from agent_teams.logger import (
@@ -100,6 +100,7 @@ app = FastAPI(
 
 app.include_router(system.router, prefix="/api")
 app.include_router(automation.router, prefix="/api")
+app.include_router(feishu_gateway.router, prefix="/api")
 app.include_router(gateway.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
 app.include_router(observability.router, prefix="/api")
@@ -109,7 +110,6 @@ app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
-app.include_router(triggers.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
 
 

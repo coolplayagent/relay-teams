@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from datetime import UTC, datetime
 from typing import cast
 
 import httpx
 
 from agent_teams.env.proxy_env import ProxyEnvConfig
-
 from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
@@ -17,87 +15,47 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerTargetConfig,
     TriggerProcessingResult,
 )
-from lark_oapi.ws.model import ClientConfig
-
 from agent_teams.gateway.feishu.subscription_service import (
     FeishuSubscriptionService,
+    WsClientLike,
     _FeishuWsController,
     _FeishuWsHub,
     _build_websocket_ssl_context,
     _resolve_websocket_proxy_url,
-    WsClientLike,
-)
-from agent_teams.triggers import (
-    TriggerAuthMode,
-    TriggerAuthPolicy,
-    TriggerDefinition,
-    TriggerSourceType,
-    TriggerStatus,
 )
 
 
-def _build_trigger(
+def _build_runtime(
     *,
     trigger_id: str,
     name: str,
     app_id: str,
     app_name: str,
-    enabled: bool = True,
-) -> TriggerDefinition:
-    now = datetime.now(tz=UTC)
-    return TriggerDefinition(
-        trigger_id=trigger_id,
-        name=name,
-        display_name=name,
-        source_type=TriggerSourceType.IM,
-        status=TriggerStatus.ENABLED if enabled else TriggerStatus.DISABLED,
-        public_token=f"token-{trigger_id}",
-        source_config={
-            "provider": "feishu",
-            "trigger_rule": "mention_only",
-            "app_id": app_id,
-            "app_name": app_name,
-        },
-        auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
-        target_config={"workspace_id": "default"},
-        created_at=now,
-        updated_at=now,
-    )
-
-
-def _build_runtime(
-    trigger: TriggerDefinition, *, app_secret: str
+    app_secret: str,
 ) -> FeishuTriggerRuntimeConfig:
     return FeishuTriggerRuntimeConfig(
-        trigger_id=trigger.trigger_id,
-        trigger_name=trigger.name,
-        source=FeishuTriggerSourceConfig.model_validate(trigger.source_config),
-        target=FeishuTriggerTargetConfig.model_validate(trigger.target_config or {}),
+        trigger_id=trigger_id,
+        trigger_name=name,
+        source=FeishuTriggerSourceConfig(
+            provider="feishu",
+            trigger_rule="mention_only",
+            app_id=app_id,
+            app_name=app_name,
+        ),
+        target=FeishuTriggerTargetConfig(workspace_id="default"),
         environment=FeishuEnvironment(
-            app_id=str(trigger.source_config["app_id"]),
+            app_id=app_id,
             app_secret=app_secret,
-            app_name=str(trigger.source_config["app_name"]),
+            app_name=app_name,
         ),
     )
 
 
-class _FakeTriggerService:
-    def __init__(self, *triggers: TriggerDefinition) -> None:
-        self.triggers = triggers
-
-    def list_triggers(self) -> tuple[TriggerDefinition, ...]:
-        return self.triggers
-
-
-class _FakeFeishuConfigService:
+class _FakeRuntimeConfigLookup:
     def __init__(self, runtime_configs: tuple[FeishuTriggerRuntimeConfig, ...]) -> None:
         self.runtime_configs = runtime_configs
 
-    def list_enabled_runtime_configs(
-        self,
-        triggers: tuple[TriggerDefinition, ...] | list[TriggerDefinition],
-    ) -> tuple[FeishuTriggerRuntimeConfig, ...]:
-        _ = triggers
+    def list_enabled_runtime_configs(self) -> tuple[FeishuTriggerRuntimeConfig, ...]:
         return self.runtime_configs
 
 
@@ -158,29 +116,25 @@ class _FakeAsyncController:
 
 
 def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
-    trigger_a = _build_trigger(
+    runtime_a = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
         app_id="cli_a",
         app_name="bot-a",
+        app_secret="secret-a",
     )
-    trigger_b = _build_trigger(
+    runtime_b = _build_runtime(
         trigger_id="trg_b",
         name="bot_b",
         app_id="cli_b",
         app_name="bot-b",
+        app_secret="secret-b",
     )
     runner_a = _FakeRunner()
     runner_b = _FakeRunner()
     runners = [runner_a, runner_b]
     service = FeishuSubscriptionService(
-        trigger_service=_FakeTriggerService(trigger_a, trigger_b),
-        feishu_config_service=_FakeFeishuConfigService(
-            (
-                _build_runtime(trigger_a, app_secret="secret-a"),
-                _build_runtime(trigger_b, app_secret="secret-b"),
-            )
-        ),
+        runtime_config_lookup=_FakeRuntimeConfigLookup((runtime_a, runtime_b)),
         event_handler=_FakeHandler(),
         runner_factory=lambda **_kwargs: runners.pop(0),
     )
@@ -194,28 +148,31 @@ def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
 
 
 def test_subscription_service_reloads_only_changed_bot_runner() -> None:
-    trigger = _build_trigger(
+    first_runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
         app_id="cli_a",
         app_name="bot-a",
+        app_secret="secret-a",
+    )
+    second_runtime = _build_runtime(
+        trigger_id="trg_a",
+        name="bot_a",
+        app_id="cli_a",
+        app_name="bot-a",
+        app_secret="secret-b",
     )
     first_runner = _FakeRunner()
     second_runner = _FakeRunner()
-    runtime_configs = [
-        (_build_runtime(trigger, app_secret="secret-a"),),
-        (_build_runtime(trigger, app_secret="secret-b"),),
-    ]
-
+    lookup = _FakeRuntimeConfigLookup((first_runtime,))
     service = FeishuSubscriptionService(
-        trigger_service=_FakeTriggerService(trigger),
-        feishu_config_service=_FakeFeishuConfigService(runtime_configs[0]),
+        runtime_config_lookup=lookup,
         event_handler=_FakeHandler(),
         runner_factory=lambda **_kwargs: first_runner,
     )
 
     service.start()
-    service._feishu_config_service = _FakeFeishuConfigService(runtime_configs[1])
+    lookup.runtime_configs = (second_runtime,)
     service._runner_factory = lambda **_kwargs: second_runner
     service.reload()
 
@@ -226,24 +183,23 @@ def test_subscription_service_reloads_only_changed_bot_runner() -> None:
 
 
 def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
-    trigger = _build_trigger(
+    runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
         app_id="cli_a",
         app_name="bot-a",
+        app_secret="secret-a",
     )
     runner = _FakeRunner()
+    lookup = _FakeRuntimeConfigLookup((runtime,))
     service = FeishuSubscriptionService(
-        trigger_service=_FakeTriggerService(trigger),
-        feishu_config_service=_FakeFeishuConfigService(
-            (_build_runtime(trigger, app_secret="secret-a"),)
-        ),
+        runtime_config_lookup=lookup,
         event_handler=_FakeHandler(),
         runner_factory=lambda **_kwargs: runner,
     )
 
     service.start()
-    service._feishu_config_service = _FakeFeishuConfigService(())
+    lookup.runtime_configs = ()
     service.reload()
 
     assert runner.started is True
@@ -251,19 +207,17 @@ def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
 
 
 def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
-    trigger = _build_trigger(
+    runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
         app_id="cli_a",
         app_name="bot-a",
+        app_secret="secret-a",
     )
     runner = _FakeRunner()
     runner_factory = _FakeShutdownableRunnerFactory(runner)
     service = FeishuSubscriptionService(
-        trigger_service=_FakeTriggerService(trigger),
-        feishu_config_service=_FakeFeishuConfigService(
-            (_build_runtime(trigger, app_secret="secret-a"),)
-        ),
+        runtime_config_lookup=_FakeRuntimeConfigLookup((runtime,)),
         event_handler=_FakeHandler(),
         runner_factory=runner_factory,
     )
@@ -277,20 +231,20 @@ def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
 
 
 def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots() -> None:
-    trigger_a = _build_trigger(
+    runtime_a = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
         app_id="cli_a",
         app_name="bot-a",
+        app_secret="secret-a",
     )
-    trigger_b = _build_trigger(
+    runtime_b = _build_runtime(
         trigger_id="trg_b",
         name="bot_b",
         app_id="cli_b",
         app_name="bot-b",
+        app_secret="secret-b",
     )
-    runtime_a = _build_runtime(trigger_a, app_secret="secret-a")
-    runtime_b = _build_runtime(trigger_b, app_secret="secret-b")
     created_controllers: dict[str, _FakeAsyncController] = {}
 
     def _controller_factory(
@@ -383,7 +337,7 @@ class _FakeWsClient:
     def _get_conn_url(self) -> str:
         raise AssertionError("controller should not call SDK _get_conn_url directly")
 
-    def _configure(self, conf: ClientConfig) -> None:
+    def _configure(self, conf: object) -> None:
         ping_interval = getattr(conf, "PingInterval", None)
         if isinstance(ping_interval, int):
             self.configured_ping_interval = ping_interval
@@ -392,12 +346,10 @@ class _FakeWsClient:
 def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> None:
     controller = _FeishuWsController(
         runtime_config=_build_runtime(
-            _build_trigger(
-                trigger_id="trg_a",
-                name="bot_a",
-                app_id="cli_demo",
-                app_name="bot-a",
-            ),
+            trigger_id="trg_a",
+            name="bot_a",
+            app_id="cli_demo",
+            app_name="bot-a",
             app_secret="secret-demo",
         ),
         event_handler=_FakeHandler(),
@@ -419,7 +371,9 @@ def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> 
         )
     )
     monkeypatch.setattr(
-        controller, "_create_feishu_http_client", lambda: fake_http_client
+        controller,
+        "_create_feishu_http_client",
+        lambda: fake_http_client,
     )
     ws_client = _FakeWsClient()
 
@@ -470,7 +424,8 @@ def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
     monkeypatch.setattr(
         "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(
-            https_proxy="http://proxy.internal:8443", no_proxy="open.feishu.cn"
+            https_proxy="http://proxy.internal:8443",
+            no_proxy="open.feishu.cn",
         ),
     )
 

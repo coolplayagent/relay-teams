@@ -16,6 +16,7 @@ FEISHU_METADATA_TENANT_KEY = "feishu_tenant_key"
 FEISHU_METADATA_CHAT_ID_KEY = "feishu_chat_id"
 FEISHU_METADATA_CHAT_TYPE_KEY = "feishu_chat_type"
 FEISHU_METADATA_TRIGGER_ID_KEY = "feishu_trigger_id"
+FEISHU_METADATA_ACCOUNT_ID_KEY = "feishu_account_id"
 SESSION_METADATA_SOURCE_KIND_KEY = "source_kind"
 SESSION_METADATA_SOURCE_PROVIDER_KEY = "source_provider"
 SESSION_METADATA_SOURCE_LABEL_KEY = "source_label"
@@ -115,6 +116,47 @@ class FeishuTriggerRuntimeConfig(BaseModel):
             self.environment.verification_token,
             self.environment.encrypt_key,
         )
+
+
+class FeishuGatewayAccountStatus(str, Enum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class FeishuGatewayAccountCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    display_name: str | None = None
+    source_config: dict[str, JsonValue] = Field(default_factory=dict)
+    target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
+    enabled: bool = True
+
+
+class FeishuGatewayAccountUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1)
+    display_name: str | None = None
+    source_config: dict[str, JsonValue] | None = None
+    target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
+
+
+class FeishuGatewayAccountRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    status: FeishuGatewayAccountStatus
+    source_config: dict[str, JsonValue] = Field(default_factory=dict)
+    target_config: dict[str, JsonValue] | None = None
+    secret_config: dict[str, str] | None = None
+    secret_status: dict[str, bool] | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class FeishuNormalizedMessage(BaseModel):

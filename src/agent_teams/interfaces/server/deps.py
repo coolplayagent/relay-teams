@@ -20,8 +20,8 @@ from agent_teams.interfaces.server.config_status_service import ConfigStatusServ
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.gateway.feishu import (
+    FeishuGatewayService,
     FeishuSubscriptionService,
-    FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
@@ -39,7 +39,6 @@ from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
-from agent_teams.triggers import TriggerService
 from agent_teams.gateway.wechat import WeChatGatewayService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
@@ -60,20 +59,16 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
     return get_container(request).task_service
 
 
-def get_trigger_service(request: Request) -> TriggerService:
-    return get_container(request).trigger_service
-
-
 def get_automation_service(request: Request) -> AutomationService:
     return get_container(request).automation_service
 
 
+def get_feishu_gateway_service(request: Request) -> FeishuGatewayService:
+    return get_container(request).feishu_gateway_service
+
+
 def get_feishu_trigger_handler(request: Request) -> FeishuTriggerHandler:
     return get_container(request).feishu_trigger_handler
-
-
-def get_feishu_trigger_config_service(request: Request) -> FeishuTriggerConfigService:
-    return get_container(request).feishu_trigger_config_service
 
 
 def get_feishu_subscription_service(request: Request) -> FeishuSubscriptionService:

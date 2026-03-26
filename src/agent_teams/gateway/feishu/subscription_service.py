@@ -26,7 +26,6 @@ from agent_teams.gateway.feishu.models import (
 )
 from agent_teams.logger import get_logger, log_event
 from agent_teams.net import create_sync_http_client
-from agent_teams.triggers import TriggerDefinition
 
 logger = get_logger(__name__)
 
@@ -34,17 +33,8 @@ if TYPE_CHECKING:
     from lark_oapi.ws.model import ClientConfig
 
 
-class TriggerServiceLike(Protocol):
-    def list_triggers(
-        self,
-    ) -> tuple[TriggerDefinition, ...] | list[TriggerDefinition]: ...
-
-
-class FeishuConfigServiceLike(Protocol):
-    def list_enabled_runtime_configs(
-        self,
-        triggers: tuple[TriggerDefinition, ...] | list[TriggerDefinition],
-    ) -> tuple[FeishuTriggerRuntimeConfig, ...]: ...
+class FeishuRuntimeConfigLookup(Protocol):
+    def list_enabled_runtime_configs(self) -> tuple[FeishuTriggerRuntimeConfig, ...]: ...
 
 
 class FeishuTriggerHandlerLike(Protocol):
@@ -134,13 +124,11 @@ class FeishuSubscriptionService:
     def __init__(
         self,
         *,
-        trigger_service: TriggerServiceLike,
-        feishu_config_service: FeishuConfigServiceLike,
+        runtime_config_lookup: FeishuRuntimeConfigLookup,
         event_handler: FeishuTriggerHandlerLike,
         runner_factory: EventRunnerFactory | None = None,
     ) -> None:
-        self._trigger_service = trigger_service
-        self._feishu_config_service = feishu_config_service
+        self._runtime_config_lookup = runtime_config_lookup
         self._event_handler = event_handler
         self._runner_factory = (
             _SharedFeishuRunnerFactory() if runner_factory is None else runner_factory
@@ -163,10 +151,7 @@ class FeishuSubscriptionService:
 
     def reload(self) -> None:
         with self._lock:
-            trigger_records = tuple(self._trigger_service.list_triggers())
-            runtime_configs = self._feishu_config_service.list_enabled_runtime_configs(
-                trigger_records
-            )
+            runtime_configs = self._runtime_config_lookup.list_enabled_runtime_configs()
             desired = {config.trigger_id: config for config in runtime_configs}
             current_ids = set(self._runners.keys())
             desired_ids = set(desired.keys())

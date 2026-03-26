@@ -7,6 +7,10 @@ import uuid
 
 from pydantic import JsonValue
 
+from agent_teams.automation.automation_event_repository import (
+    AutomationEventRepository,
+    AutomationExecutionEventRecord,
+)
 from agent_teams.automation.automation_models import (
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
@@ -31,18 +35,6 @@ from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.sessions.session_service import (
     SessionService,
 )
-from agent_teams.triggers import (
-    TriggerAuthMode,
-    TriggerAuthPolicy,
-    TriggerCreateInput,
-    TriggerDefinition,
-    TriggerEventRecord,
-    TriggerIngestInput,
-    TriggerService,
-    TriggerSourceType,
-    TriggerStatus,
-    TriggerUpdateInput,
-)
 
 
 class AutomationService:
@@ -50,14 +42,14 @@ class AutomationService:
         self,
         *,
         repository: AutomationProjectRepository,
-        trigger_service: TriggerService,
+        event_repository: AutomationEventRepository,
         session_service: SessionService,
         run_service: RunManager,
         feishu_binding_service: AutomationFeishuBindingService | None = None,
         delivery_service: AutomationDeliveryService | None = None,
     ) -> None:
         self._repository = repository
-        self._trigger_service = trigger_service
+        self._event_repository = event_repository
         self._session_service = session_service
         self._run_service = run_service
         self._feishu_binding_service = feishu_binding_service
@@ -79,22 +71,6 @@ class AutomationService:
         )
         now = datetime.now(tz=UTC)
         automation_project_id = f"aut_{uuid.uuid4().hex[:12]}"
-        trigger = self._trigger_service.create_trigger(
-            TriggerCreateInput(
-                name=f"automation-{automation_project_id}",
-                display_name=payload.display_name or payload.name,
-                source_type=TriggerSourceType.SCHEDULE,
-                source_config=_trigger_source_config(
-                    automation_project_id=automation_project_id,
-                    schedule_mode=payload.schedule_mode,
-                    cron_expression=payload.cron_expression,
-                    run_at=payload.run_at,
-                    timezone=timezone_name,
-                ),
-                auth_policies=(TriggerAuthPolicy(mode=TriggerAuthMode.NONE),),
-                enabled=payload.enabled,
-            )
-        )
         record = AutomationProjectRecord(
             automation_project_id=automation_project_id,
             name=payload.name,
@@ -113,7 +89,7 @@ class AutomationService:
             run_config=payload.run_config,
             delivery_binding=delivery_binding,
             delivery_events=delivery_events,
-            trigger_id=trigger.trigger_id,
+            trigger_id=f"schedule-{automation_project_id}",
             next_run_at=(
                 _next_run_at(
                     schedule_mode=payload.schedule_mode,
@@ -220,7 +196,6 @@ class AutomationService:
                 "updated_at": now,
             }
         )
-        self._sync_trigger(updated)
         return self._repository.update(updated)
 
     def set_project_status(
@@ -247,12 +222,10 @@ class AutomationService:
                 "updated_at": now,
             }
         )
-        self._sync_trigger(updated)
         return self._repository.update(updated)
 
     def delete_project(self, automation_project_id: str) -> None:
-        existing = self._repository.get(automation_project_id)
-        self._trigger_service.delete_trigger(existing.trigger_id)
+        _ = self._repository.get(automation_project_id)
         if self._delivery_service is not None:
             self._delivery_service.delete_project_deliveries(automation_project_id)
         self._repository.delete(automation_project_id)
@@ -291,7 +264,7 @@ class AutomationService:
         now: datetime | None = None,
     ) -> str:
         effective_now = now or datetime.now(tz=UTC)
-        event_record = self._record_trigger_event(project, reason=reason)
+        event_record = self._record_execution_event(project, reason=reason)
         title = (
             f"{project.display_name} · "
             f"{effective_now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')}"
@@ -346,8 +319,6 @@ class AutomationService:
                 }
             )
             self._repository.update(updated)
-            if next_status != project.status:
-                self._sync_trigger(updated)
             return session.session_id
         except Exception as exc:
             next_run_at = _next_run_at_after_fire(
@@ -364,8 +335,6 @@ class AutomationService:
                 }
             )
             self._repository.update(updated)
-            if next_status != project.status:
-                self._sync_trigger(updated)
             raise
 
     def _resolve_delivery_binding(
@@ -400,73 +369,24 @@ class AutomationService:
             AutomationDeliveryEvent.FAILED,
         )
 
-    def _sync_trigger(self, project: AutomationProjectRecord) -> TriggerDefinition:
-        definition = self._trigger_service.update_trigger(
-            project.trigger_id,
-            TriggerUpdateInput(
-                name=f"automation-{project.automation_project_id}",
-                display_name=project.display_name,
-                source_config=_trigger_source_config(
-                    automation_project_id=project.automation_project_id,
-                    schedule_mode=project.schedule_mode,
-                    cron_expression=project.cron_expression,
-                    run_at=project.run_at,
-                    timezone=project.timezone,
-                ),
-            ),
-        )
-        expected_status = (
-            TriggerStatus.ENABLED
-            if project.status == AutomationProjectStatus.ENABLED
-            else TriggerStatus.DISABLED
-        )
-        if definition.status == expected_status:
-            return definition
-        return self._trigger_service.set_trigger_status(
-            project.trigger_id,
-            expected_status,
-        )
-
-    def _record_trigger_event(
+    def _record_execution_event(
         self,
         project: AutomationProjectRecord,
         *,
         reason: str,
-    ) -> TriggerEventRecord:
-        result = self._trigger_service.ingest_event(
-            event=TriggerIngestInput(
-                trigger_id=project.trigger_id,
-                source_type=TriggerSourceType.SCHEDULE,
-                event_key=f"{reason}:{uuid.uuid4().hex[:16]}",
-                occurred_at=datetime.now(tz=UTC),
+    ) -> AutomationExecutionEventRecord:
+        occurred_at = datetime.now(tz=UTC)
+        return self._event_repository.create_event(
+            AutomationExecutionEventRecord(
+                event_id=f"aevt_{uuid.uuid4().hex[:16]}",
+                automation_project_id=project.automation_project_id,
+                reason=reason,
                 payload={"automation_project_id": project.automation_project_id},
                 metadata={"reason": reason},
-            ),
-            headers={},
-            remote_addr=None,
-            raw_body="{}",
+                occurred_at=occurred_at,
+                created_at=occurred_at,
+            )
         )
-        return self._trigger_service.get_event(result.event_id)
-
-
-def _trigger_source_config(
-    *,
-    automation_project_id: str,
-    schedule_mode: AutomationScheduleMode,
-    cron_expression: str | None,
-    run_at: datetime | None,
-    timezone: str,
-) -> dict[str, JsonValue]:
-    config: dict[str, JsonValue] = {
-        "mode": schedule_mode.value,
-        "timezone": timezone,
-        "automation_project_id": automation_project_id,
-    }
-    if cron_expression:
-        config["cron"] = cron_expression
-    if run_at is not None:
-        config["run_at"] = run_at.isoformat()
-    return config
 
 
 def _validate_timezone(timezone_name: str) -> str:

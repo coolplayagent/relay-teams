@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.automation import (
     AutomationDeliveryRepository,
+    AutomationEventRepository,
     AutomationDeliveryService,
     AutomationDeliveryWorker,
     AutomationFeishuBindingService,
@@ -42,13 +43,14 @@ from agent_teams.external_agents import (
 )
 from agent_teams.external_agents.provider import ExternalAcpSessionManager
 from agent_teams.gateway.feishu import (
+    FeishuAccountRepository,
     FeishuClient,
+    FeishuGatewayService,
     FeishuInboundRuntime,
     FeishuMessagePoolRepository,
     FeishuMessagePoolService,
     FeishuNotificationDispatcher,
     FeishuSubscriptionService,
-    FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
 from agent_teams.gateway.im import (
@@ -127,7 +129,6 @@ from agent_teams.tools.runtime import (
     ToolApprovalManager,
     ToolApprovalPolicy,
 )
-from agent_teams.triggers import TriggerRepository, TriggerService
 from agent_teams.gateway.wechat import (
     WeChatAccountRepository,
     WeChatClient,
@@ -289,24 +290,14 @@ class ServerContainer:
         self.metrics_service: MetricsService = MetricsService(
             query_service=self.metrics_query_service
         )
-        self.trigger_repo: TriggerRepository = TriggerRepository(runtime.paths.db_path)
-        self.trigger_service: TriggerService = TriggerService(
-            trigger_repo=self.trigger_repo
-        )
         self.feishu_message_pool_repo: FeishuMessagePoolRepository = (
             FeishuMessagePoolRepository(runtime.paths.db_path)
         )
-        self.feishu_trigger_config_service = FeishuTriggerConfigService(
-            config_dir=config_dir,
-            get_trigger=self.trigger_service.get_trigger,
-            role_registry=self.role_registry,
-            orchestration_settings_service=self.orchestration_settings_service,
-            workspace_service=self.workspace_service,
-            external_session_binding_repo=self.external_session_binding_repo,
-        )
+        self.feishu_account_repository = FeishuAccountRepository(runtime.paths.db_path)
         self.automation_repo: AutomationProjectRepository = AutomationProjectRepository(
             runtime.paths.db_path
         )
+        self.automation_event_repo = AutomationEventRepository(runtime.paths.db_path)
         self.automation_delivery_repo: AutomationDeliveryRepository = (
             AutomationDeliveryRepository(runtime.paths.db_path)
         )
@@ -334,10 +325,19 @@ class ServerContainer:
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
         self.wechat_client = WeChatClient()
+        self.feishu_gateway_service = FeishuGatewayService(
+            config_dir=config_dir,
+            repository=self.feishu_account_repository,
+            secret_store=None,
+            role_registry=self.role_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
+            workspace_service=self.workspace_service,
+            external_session_binding_repo=self.external_session_binding_repo,
+        )
         self.im_tool_service: ImToolService = ImToolService(
             config_dir=config_dir,
             session_repo=self.session_repo,
-            runtime_config_lookup=self.feishu_trigger_config_service,
+            runtime_config_lookup=self.feishu_gateway_service,
             automation_project_repo=self.automation_repo,
             gateway_session_lookup=self.gateway_session_repository,
             feishu_client=self.feishu_client,
@@ -348,7 +348,7 @@ class ServerContainer:
         self.tool_registry.register_implicit_resolver(
             ImToolContextResolver(
                 session_repo=self.session_repo,
-                runtime_config_lookup=self.feishu_trigger_config_service,
+                runtime_config_lookup=self.feishu_gateway_service,
                 automation_project_repo=self.automation_repo,
                 gateway_session_lookup=self.gateway_session_repository,
             )
@@ -359,7 +359,7 @@ class ServerContainer:
             dispatchers=(
                 FeishuNotificationDispatcher(
                     session_repo=self.session_repo,
-                    runtime_config_lookup=self.feishu_trigger_config_service,
+                    runtime_config_lookup=self.feishu_gateway_service,
                     feishu_client=self.feishu_client,
                     terminal_notification_suppressor=None,
                 ),
@@ -491,8 +491,7 @@ class ServerContainer:
             feishu_client=self.feishu_client,
         )
         self.feishu_message_pool_service = FeishuMessagePoolService(
-            trigger_service=self.trigger_service,
-            runtime_config_lookup=self.feishu_trigger_config_service,
+            runtime_config_lookup=self.feishu_gateway_service,
             inbound_runtime=self.feishu_inbound_runtime,
             feishu_client=self.feishu_client,
             message_pool_repo=self.feishu_message_pool_repo,
@@ -527,7 +526,7 @@ class ServerContainer:
             dispatchers=(
                 FeishuNotificationDispatcher(
                     session_repo=self.session_repo,
-                    runtime_config_lookup=self.feishu_trigger_config_service,
+                    runtime_config_lookup=self.feishu_gateway_service,
                     feishu_client=self.feishu_client,
                     terminal_notification_suppressor=self.feishu_message_pool_service,
                 ),
@@ -537,12 +536,12 @@ class ServerContainer:
         self.automation_feishu_binding_service = AutomationFeishuBindingService(
             external_session_binding_repo=self.external_session_binding_repo,
             session_repo=self.session_repo,
-            trigger_lookup=self.trigger_service,
-            runtime_config_lookup=self.feishu_trigger_config_service,
+            account_lookup=self.feishu_gateway_service,
+            runtime_config_lookup=self.feishu_gateway_service,
         )
         self.automation_delivery_service = AutomationDeliveryService(
             repository=self.automation_delivery_repo,
-            runtime_config_lookup=self.feishu_trigger_config_service,
+            runtime_config_lookup=self.feishu_gateway_service,
             feishu_client=self.feishu_client,
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
@@ -551,20 +550,18 @@ class ServerContainer:
             delivery_service=self.automation_delivery_service
         )
         self.feishu_trigger_handler = FeishuTriggerHandler(
-            trigger_service=self.trigger_service,
-            feishu_config_service=self.feishu_trigger_config_service,
+            runtime_config_lookup=self.feishu_gateway_service,
             message_pool_service=self.feishu_message_pool_service,
             im_tool_service=self.im_tool_service,
             im_session_command_service=self.im_session_command_service,
         )
         self.feishu_subscription_service = FeishuSubscriptionService(
-            trigger_service=self.trigger_service,
-            feishu_config_service=self.feishu_trigger_config_service,
+            runtime_config_lookup=self.feishu_gateway_service,
             event_handler=self.feishu_trigger_handler,
         )
         self.automation_service: AutomationService = AutomationService(
             repository=self.automation_repo,
-            trigger_service=self.trigger_service,
+            event_repository=self.automation_event_repo,
             session_service=self.session_service,
             run_service=self.run_service,
             feishu_binding_service=self.automation_feishu_binding_service,

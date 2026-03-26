@@ -7,9 +7,8 @@ Agent Teams supports Feishu app bot integration for:
 - inbound IM trigger delivery through the Feishu SDK long connection
 - outbound notifications back to the originating Feishu chat
 
-The settings UI now groups Feishu and WeChat under a shared Gateway section.
-Backend ownership is unchanged here: Feishu still runs on the `triggers` path, not the
-new conversational `gateway` runtime path used by WeChat.
+The settings UI now groups Feishu and WeChat under a shared Gateway section, and the
+backend ownership is also unified under `agent_teams.gateway`.
 
 Inbound and outbound Feishu handling use Feishu's official Python SDK (`lark-oapi`).
 Inbound delivery uses SDK long connection mode, so no public callback URL or reverse
@@ -17,8 +16,8 @@ proxy is required just for Feishu event delivery.
 
 The integration model is now:
 
-- one Feishu trigger equals one Feishu bot
-- each Feishu trigger carries its own app identity and runtime preset
+- one Feishu gateway account equals one Feishu bot
+- each Feishu gateway account carries its own app identity and runtime preset
 - multiple Feishu bots can run at the same time
 - the same Feishu chat is isolated per bot, not shared globally
 
@@ -31,12 +30,12 @@ This version is designed for Feishu chat workflows:
 - single chats accept any text message and do not require mention
 - tool approvals are still resolved through the existing UI/API, not inside Feishu
 
-## Trigger Model
+## Account Model
 
 Feishu credentials are no longer loaded from global `FEISHU_*` app environment
-variables for trigger runtime.
+variables for gateway runtime.
 
-Each Feishu trigger stores:
+Each Feishu gateway account stores:
 
 - `source_config`
   - `provider = "feishu"`
@@ -58,8 +57,8 @@ Each Feishu trigger stores:
 
 Secrets are stored in the unified Agent Teams secret store. When a usable system
 keyring backend exists, that store uses keyring; otherwise it falls back to
-`~/.agent-teams/secrets.json`. They are not written back to the trigger table or
-`.env`.
+`~/.agent-teams/secrets.json`. They are not written back to the gateway account
+table or `.env`.
 
 Read APIs expose both the current `secret_config` payload and `secret_status`.
 The settings UI uses that to render `App Secret` as masked by default and reveal
@@ -70,15 +69,14 @@ it on demand.
 - `secret_status.verification_token_configured`
 - `secret_status.encrypt_key_configured`
 
-## Trigger Setup
+## Account Setup
 
-Create a Feishu trigger with:
+Create a Feishu gateway account with:
 
 ```json
 {
   "name": "feishu_ops",
   "display_name": "Feishu Ops",
-  "source_type": "im",
   "source_config": {
     "provider": "feishu",
     "trigger_rule": "mention_only",
@@ -104,11 +102,11 @@ Create a Feishu trigger with:
 
 Rules:
 
-- `app_id`, `app_name`, and `app_secret` are required when creating a Feishu trigger
+- `app_id`, `app_name`, and `app_secret` are required when creating a Feishu gateway account
 - `session_mode = "orchestration"` requires `orchestration_preset_id`
 - `thinking.enabled = true` should include an explicit `thinking.effort`
 
-The server opens one Feishu SDK long connection per enabled Feishu trigger whose
+The server opens one Feishu SDK long connection per enabled Feishu gateway account whose
 credentials are ready.
 
 ## Session Binding
@@ -119,6 +117,8 @@ Inbound Feishu session reuse is keyed by:
 - `trigger_id`
 - `tenant_key`
 - `external_chat_id`
+
+For Feishu bindings, `trigger_id` now carries the gateway `account_id`.
 
 That means:
 
@@ -153,7 +153,7 @@ Behavior:
 
 This separates three concerns:
 
-- `trigger_events`: raw ingest audit
+- `feishu_gateway_accounts`: bot identity and runtime targeting
 - `feishu_message_pool`: inbound message lifecycle and retry state
 - `run_runtime` / run events: actual run execution state
 

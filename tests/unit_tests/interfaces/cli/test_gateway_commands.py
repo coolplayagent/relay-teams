@@ -22,6 +22,14 @@ def test_gateway_acp_help_lists_stdio_command() -> None:
     assert "stdio" in result.output
 
 
+def test_gateway_feishu_help_lists_management_commands() -> None:
+    result = runner.invoke(cli_app.app, ["gateway", "feishu", "--help"])
+
+    assert result.exit_code == 0
+    assert "create" in result.output
+    assert "list" in result.output
+
+
 def test_gateway_wechat_help_lists_management_commands() -> None:
     result = runner.invoke(cli_app.app, ["gateway", "wechat", "--help"])
 

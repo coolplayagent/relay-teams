@@ -33,11 +33,6 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.triggers import (
-    TriggerIngestInput,
-    TriggerIngestResult,
-    TriggerSourceType,
-)
 
 logger = get_logger(__name__)
 
@@ -53,17 +48,6 @@ _ACTIVE_PROCESSING_STATUSES = {
     FeishuMessageProcessingStatus.WAITING_RESULT,
     FeishuMessageProcessingStatus.RETRYABLE_FAILED,
 }
-
-
-class TriggerServiceLike(Protocol):
-    def ingest_event(
-        self,
-        event: TriggerIngestInput,
-        *,
-        headers: dict[str, str],
-        remote_addr: str | None,
-        raw_body: str,
-    ) -> TriggerIngestResult: ...
 
 
 class FeishuRuntimeConfigLookup(Protocol):
@@ -87,7 +71,6 @@ class FeishuMessagePoolService:
     def __init__(
         self,
         *,
-        trigger_service: TriggerServiceLike,
         runtime_config_lookup: FeishuRuntimeConfigLookup,
         inbound_runtime: FeishuInboundRuntime,
         feishu_client: FeishuClientLike | None,
@@ -95,7 +78,6 @@ class FeishuMessagePoolService:
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
     ) -> None:
-        self._trigger_service = trigger_service
         self._runtime_config_lookup = runtime_config_lookup
         self._inbound_runtime = inbound_runtime
         self._feishu_client = feishu_client
@@ -141,27 +123,7 @@ class FeishuMessagePoolService:
         headers: dict[str, str],
         remote_addr: str | None,
     ) -> TriggerProcessingResult:
-        ingest_result = self._trigger_service.ingest_event(
-            TriggerIngestInput(
-                trigger_id=runtime_config.trigger_id,
-                source_type=TriggerSourceType.IM,
-                event_key=_message_key(normalized),
-                payload=normalized.payload,
-                metadata=normalized.metadata,
-            ),
-            headers=headers,
-            remote_addr=remote_addr,
-            raw_body=raw_body,
-        )
-        if ingest_result.duplicate:
-            return TriggerProcessingResult(
-                status="accepted",
-                trigger_id=ingest_result.trigger_id,
-                trigger_name=ingest_result.trigger_name,
-                event_id=ingest_result.event_id,
-                duplicate=True,
-            )
-
+        _ = (raw_body, headers, remote_addr)
         now = datetime.now(tz=timezone.utc)
         ack_status = (
             FeishuMessageDeliveryStatus.PENDING
@@ -173,7 +135,7 @@ class FeishuMessagePoolService:
             if self._feishu_client is not None
             else FeishuMessageDeliveryStatus.SKIPPED
         )
-        record, _created = self._message_pool_repo.create_or_get(
+        record, created = self._message_pool_repo.create_or_get(
             FeishuMessagePoolRecord(
                 message_pool_id=f"fmp_{uuid4().hex[:16]}",
                 trigger_id=runtime_config.trigger_id,
@@ -181,7 +143,7 @@ class FeishuMessagePoolService:
                 tenant_key=normalized.tenant_key,
                 chat_id=normalized.chat_id,
                 chat_type=normalized.chat_type,
-                event_id=str(ingest_result.event_id),
+                event_id=normalized.event_id,
                 message_key=_message_key(normalized),
                 message_id=normalized.message_id,
                 intent_text=normalized.trigger_text,
@@ -195,6 +157,14 @@ class FeishuMessagePoolService:
                 updated_at=now,
             )
         )
+        if not created:
+            return TriggerProcessingResult(
+                status="accepted",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=record.event_id,
+                duplicate=True,
+            )
         queue_depth = self._message_pool_repo.count_active_chat_messages_ahead(
             record.message_pool_id
         )
@@ -207,9 +177,9 @@ class FeishuMessagePoolService:
         self._wake_event.set()
         return TriggerProcessingResult(
             status="accepted",
-            trigger_id=ingest_result.trigger_id,
-            trigger_name=ingest_result.trigger_name,
-            event_id=ingest_result.event_id,
+            trigger_id=runtime_config.trigger_id,
+            trigger_name=runtime_config.trigger_name,
+            event_id=record.event_id,
             duplicate=False,
         )
 

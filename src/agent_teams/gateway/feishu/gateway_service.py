@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import logging
-from collections.abc import Callable, Iterable, Mapping
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
+
+from agent_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
+from agent_teams.gateway.feishu.account_repository import (
+    FeishuAccountNameConflictError,
+    FeishuAccountRepository,
+)
 from agent_teams.gateway.feishu.models import (
-    FEISHU_PLATFORM,
     FeishuEnvironment,
+    FeishuGatewayAccountCreateInput,
+    FeishuGatewayAccountRecord,
+    FeishuGatewayAccountStatus,
+    FeishuGatewayAccountUpdateInput,
     FeishuTriggerRuntimeConfig,
     FeishuTriggerSecretConfig,
     FeishuTriggerSecretStatus,
@@ -18,33 +29,20 @@ from agent_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )
-from agent_teams.logger import get_logger, log_event
 from agent_teams.roles import RoleRegistry
 from agent_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
-from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.session_models import SessionMode
-from agent_teams.triggers import (
-    TriggerCreateInput,
-    TriggerDefinition,
-    TriggerSourceType,
-    TriggerUpdateInput,
-)
+from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.workspace import WorkspaceService
-from agent_teams.agents.orchestration.settings_service import (
-    OrchestrationSettingsService,
-)
-
-logger = get_logger(__name__)
 
 
-class FeishuTriggerConfigService:
+class FeishuGatewayService:
     def __init__(
         self,
         *,
         config_dir: Path,
-        get_trigger: Callable[[str], TriggerDefinition],
+        repository: FeishuAccountRepository,
         secret_store: FeishuTriggerSecretStore | None = None,
         role_registry: RoleRegistry,
         orchestration_settings_service: OrchestrationSettingsService,
@@ -52,7 +50,7 @@ class FeishuTriggerConfigService:
         external_session_binding_repo: ExternalSessionBindingRepository,
     ) -> None:
         self._config_dir = config_dir
-        self._get_trigger = get_trigger
+        self._repository = repository
         self._secret_store = (
             get_feishu_trigger_secret_store() if secret_store is None else secret_store
         )
@@ -61,40 +59,131 @@ class FeishuTriggerConfigService:
         self._workspace_service = workspace_service
         self._external_session_binding_repo = external_session_binding_repo
 
-    def is_feishu_trigger(self, trigger: TriggerDefinition) -> bool:
-        provider = str(trigger.source_config.get("provider", "")).strip().lower()
-        return (
-            trigger.source_type == TriggerSourceType.IM and provider == FEISHU_PLATFORM
+    def list_accounts(self) -> tuple[FeishuGatewayAccountRecord, ...]:
+        return tuple(
+            self.attach_secret_status(account)
+            for account in self._repository.list_accounts()
         )
 
-    def attach_secret_status(self, trigger: TriggerDefinition) -> TriggerDefinition:
-        if not self.is_feishu_trigger(trigger):
-            return trigger
+    def get_account(self, account_id: str) -> FeishuGatewayAccountRecord:
+        return self.attach_secret_status(self._repository.get_account(account_id))
+
+    def create_account(
+        self,
+        payload: FeishuGatewayAccountCreateInput,
+    ) -> FeishuGatewayAccountRecord:
+        self.validate_create_request(payload)
+        now = datetime.now(tz=UTC)
+        record = FeishuGatewayAccountRecord(
+            account_id=f"fsg_{uuid4().hex[:12]}",
+            name=payload.name,
+            display_name=payload.display_name or payload.name,
+            status=(
+                FeishuGatewayAccountStatus.ENABLED
+                if payload.enabled
+                else FeishuGatewayAccountStatus.DISABLED
+            ),
+            source_config=payload.source_config,
+            target_config=payload.target_config,
+            created_at=now,
+            updated_at=now,
+        )
+        created = self._repository.create_account(record)
+        self.save_secret_config(
+            account_id=created.account_id,
+            secret_config_payload=payload.secret_config,
+            require_app_secret=True,
+        )
+        return self.get_account(created.account_id)
+
+    def update_account(
+        self,
+        account_id: str,
+        payload: FeishuGatewayAccountUpdateInput,
+    ) -> FeishuGatewayAccountRecord:
+        existing = self._repository.get_account(account_id)
+        self.validate_update_request(existing=existing, request=payload)
+        updated = existing.model_copy(
+            update={
+                "name": payload.name if payload.name is not None else existing.name,
+                "display_name": (
+                    payload.display_name
+                    if payload.display_name is not None
+                    else existing.display_name
+                ),
+                "source_config": (
+                    payload.source_config
+                    if payload.source_config is not None
+                    else existing.source_config
+                ),
+                "target_config": (
+                    payload.target_config
+                    if payload.target_config is not None
+                    else existing.target_config
+                ),
+                "updated_at": datetime.now(tz=UTC),
+            }
+        )
+        stored = self._repository.update_account(updated)
+        self.save_secret_config(
+            account_id=stored.account_id,
+            secret_config_payload=payload.secret_config,
+            require_app_secret=False,
+        )
+        if self.runtime_settings_changed(existing, stored):
+            self.clear_bindings(stored.account_id)
+        return self.get_account(stored.account_id)
+
+    def set_account_enabled(
+        self,
+        account_id: str,
+        enabled: bool,
+    ) -> FeishuGatewayAccountRecord:
+        existing = self._repository.get_account(account_id)
+        updated = existing.model_copy(
+            update={
+                "status": (
+                    FeishuGatewayAccountStatus.ENABLED
+                    if enabled
+                    else FeishuGatewayAccountStatus.DISABLED
+                ),
+                "updated_at": datetime.now(tz=UTC),
+            }
+        )
+        _ = self._repository.update_account(updated)
+        return self.get_account(account_id)
+
+    def delete_account(self, account_id: str) -> None:
+        _ = self._repository.get_account(account_id)
+        self.clear_bindings(account_id)
+        self.delete_secret_config(account_id)
+        self._repository.delete_account(account_id)
+
+    def attach_secret_status(
+        self,
+        account: FeishuGatewayAccountRecord,
+    ) -> FeishuGatewayAccountRecord:
         secret_config = self._secret_store.get_secret_config(
             self._config_dir,
-            trigger.trigger_id,
+            account.account_id,
         )
-        return trigger.model_copy(
+        return account.model_copy(
             update={
                 "secret_config": secret_config.model_dump(
-                    mode="json", exclude_none=True
+                    mode="json",
+                    exclude_none=True,
                 )
                 or None,
-                "secret_status": self.get_secret_status(trigger.trigger_id).model_dump(
+                "secret_status": self.get_secret_status(account.account_id).model_dump(
                     mode="json"
                 ),
             }
         )
 
-    def attach_secret_statuses(
-        self,
-        triggers: Iterable[TriggerDefinition],
-    ) -> tuple[TriggerDefinition, ...]:
-        return tuple(self.attach_secret_status(trigger) for trigger in triggers)
-
-    def get_secret_status(self, trigger_id: str) -> FeishuTriggerSecretStatus:
+    def get_secret_status(self, account_id: str) -> FeishuTriggerSecretStatus:
         secret_config = self._secret_store.get_secret_config(
-            self._config_dir, trigger_id
+            self._config_dir,
+            account_id,
         )
         return FeishuTriggerSecretStatus(
             app_secret_configured=secret_config.app_secret is not None,
@@ -102,18 +191,16 @@ class FeishuTriggerConfigService:
             encrypt_key_configured=secret_config.encrypt_key is not None,
         )
 
-    def validate_create_request(self, request: TriggerCreateInput) -> None:
-        if not self._is_feishu_request(
-            source_type=request.source_type,
-            source_config=request.source_config,
-        ):
-            return
+    def validate_create_request(
+        self,
+        request: FeishuGatewayAccountCreateInput,
+    ) -> None:
         self._validate_source_and_target(
             source_config=request.source_config,
             target_config=request.target_config,
         )
         _ = self._merge_secret_config(
-            trigger_id=None,
+            account_id=None,
             secret_config_payload=request.secret_config,
             require_app_secret=True,
         )
@@ -121,14 +208,9 @@ class FeishuTriggerConfigService:
     def validate_update_request(
         self,
         *,
-        existing: TriggerDefinition,
-        request: TriggerUpdateInput,
+        existing: FeishuGatewayAccountRecord,
+        request: FeishuGatewayAccountUpdateInput,
     ) -> None:
-        if not self.is_feishu_trigger(existing) and not self._is_feishu_request(
-            source_type=existing.source_type,
-            source_config=request.source_config or {},
-        ):
-            return
         merged_source = (
             request.source_config
             if request.source_config is not None
@@ -145,7 +227,7 @@ class FeishuTriggerConfigService:
         )
         if request.secret_config is not None:
             _ = self._merge_secret_config(
-                trigger_id=existing.trigger_id,
+                account_id=existing.account_id,
                 secret_config_payload=request.secret_config,
                 require_app_secret=False,
             )
@@ -153,43 +235,41 @@ class FeishuTriggerConfigService:
     def save_secret_config(
         self,
         *,
-        trigger_id: str,
+        account_id: str,
         secret_config_payload: Mapping[str, str] | None,
         require_app_secret: bool,
     ) -> None:
         if secret_config_payload is None:
             return
         merged = self._merge_secret_config(
-            trigger_id=trigger_id,
+            account_id=account_id,
             secret_config_payload=secret_config_payload,
             require_app_secret=require_app_secret,
         )
         self._secret_store.set_secret_config(
             self._config_dir,
-            trigger_id,
+            account_id,
             merged,
         )
 
-    def delete_secret_config(self, trigger_id: str) -> None:
-        self._secret_store.delete_secret_config(self._config_dir, trigger_id)
+    def delete_secret_config(self, account_id: str) -> None:
+        self._secret_store.delete_secret_config(self._config_dir, account_id)
 
     def resolve_runtime_config(
         self,
-        trigger: TriggerDefinition,
+        account: FeishuGatewayAccountRecord,
     ) -> FeishuTriggerRuntimeConfig | None:
-        if not self.is_feishu_trigger(trigger):
-            return None
-        source = FeishuTriggerSourceConfig.model_validate(trigger.source_config)
-        target = FeishuTriggerTargetConfig.model_validate(trigger.target_config or {})
+        source = FeishuTriggerSourceConfig.model_validate(account.source_config)
+        target = FeishuTriggerTargetConfig.model_validate(account.target_config or {})
         secret_config = self._secret_store.get_secret_config(
             self._config_dir,
-            trigger.trigger_id,
+            account.account_id,
         )
         if secret_config.app_secret is None:
             return None
         return FeishuTriggerRuntimeConfig(
-            trigger_id=trigger.trigger_id,
-            trigger_name=trigger.name,
+            trigger_id=account.account_id,
+            trigger_name=account.display_name,
             source=source,
             target=target,
             environment=FeishuEnvironment(
@@ -201,64 +281,44 @@ class FeishuTriggerConfigService:
             ),
         )
 
+    def get_runtime_config_by_account_id(
+        self,
+        account_id: str,
+    ) -> FeishuTriggerRuntimeConfig | None:
+        try:
+            account = self._repository.get_account(account_id)
+        except KeyError:
+            return None
+        return self.resolve_runtime_config(account)
+
     def get_runtime_config_by_trigger_id(
         self,
         trigger_id: str,
     ) -> FeishuTriggerRuntimeConfig | None:
-        try:
-            trigger = self._get_trigger(trigger_id)
-        except KeyError:
-            return None
-        return self.resolve_runtime_config(trigger)
+        return self.get_runtime_config_by_account_id(trigger_id)
 
-    def list_enabled_runtime_configs(
-        self,
-        triggers: Iterable[TriggerDefinition],
-    ) -> tuple[FeishuTriggerRuntimeConfig, ...]:
+    def list_enabled_runtime_configs(self) -> tuple[FeishuTriggerRuntimeConfig, ...]:
         resolved: list[FeishuTriggerRuntimeConfig] = []
-        for trigger in triggers:
-            if not self.is_feishu_trigger(trigger):
+        for account in self._repository.list_accounts():
+            if account.status != FeishuGatewayAccountStatus.ENABLED:
                 continue
-            if str(trigger.status.value) != "enabled":
-                continue
-            try:
-                runtime = self.resolve_runtime_config(trigger)
-            except ValueError as exc:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    event="feishu.trigger.invalid_config",
-                    message="Skipping Feishu trigger with invalid configuration",
-                    payload={"trigger_id": trigger.trigger_id, "error": str(exc)},
-                )
-                continue
+            runtime = self.resolve_runtime_config(account)
             if runtime is None:
                 continue
             resolved.append(runtime)
         return tuple(resolved)
 
-    def runtime_settings_changed(
-        self,
-        before: TriggerDefinition,
-        after: TriggerDefinition,
-    ) -> bool:
-        if not self.is_feishu_trigger(before) or not self.is_feishu_trigger(after):
-            return False
-        return self._normalized_target(before) != self._normalized_target(after)
-
     def subscription_runtime_changed_for_update(
         self,
         *,
-        existing: TriggerDefinition,
-        request: TriggerUpdateInput,
+        existing: FeishuGatewayAccountRecord,
+        request: FeishuGatewayAccountUpdateInput,
     ) -> bool:
-        if not self.is_feishu_trigger(existing):
-            return False
         before_signature = self._subscription_runtime_signature(
             source_config=existing.source_config,
             secret_config=self._secret_store.get_secret_config(
                 self._config_dir,
-                existing.trigger_id,
+                existing.account_id,
             ),
         )
         after_source_config = (
@@ -267,7 +327,7 @@ class FeishuTriggerConfigService:
             else request.source_config
         )
         after_secret_config = self._merge_secret_config(
-            trigger_id=existing.trigger_id,
+            account_id=existing.account_id,
             secret_config_payload=request.secret_config,
             require_app_secret=False,
         )
@@ -277,8 +337,15 @@ class FeishuTriggerConfigService:
         )
         return before_signature != after_signature
 
-    def clear_bindings(self, trigger_id: str) -> None:
-        self._external_session_binding_repo.delete_by_trigger(trigger_id)
+    def runtime_settings_changed(
+        self,
+        before: FeishuGatewayAccountRecord,
+        after: FeishuGatewayAccountRecord,
+    ) -> bool:
+        return self._normalized_target(before) != self._normalized_target(after)
+
+    def clear_bindings(self, account_id: str) -> None:
+        self._external_session_binding_repo.delete_by_trigger(account_id)
 
     def _validate_source_and_target(
         self,
@@ -302,17 +369,17 @@ class FeishuTriggerConfigService:
                 session_mode=SessionMode.ORCHESTRATION,
                 normal_root_role_id=normalized_root_role_id,
                 orchestration_preset_id=target.orchestration_preset_id,
-                created_at=datetime.now(tz=timezone.utc),
-                updated_at=datetime.now(tz=timezone.utc),
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
             )
             _ = self._orchestration_settings_service.resolve_run_topology(probe)
         _ = source
 
     def _normalized_target(
         self,
-        trigger: TriggerDefinition,
+        account: FeishuGatewayAccountRecord,
     ) -> FeishuTriggerTargetConfig:
-        target = FeishuTriggerTargetConfig.model_validate(trigger.target_config or {})
+        target = FeishuTriggerTargetConfig.model_validate(account.target_config or {})
         return target.model_copy(
             update={
                 "normal_root_role_id": self._resolve_normal_root_role_id(
@@ -327,7 +394,7 @@ class FeishuTriggerConfigService:
     def _merge_secret_config(
         self,
         *,
-        trigger_id: str | None,
+        account_id: str | None,
         secret_config_payload: Mapping[str, str] | None,
         require_app_secret: bool,
     ) -> FeishuTriggerSecretConfig:
@@ -336,8 +403,8 @@ class FeishuTriggerConfigService:
         )
         current = (
             FeishuTriggerSecretConfig()
-            if trigger_id is None
-            else self._secret_store.get_secret_config(self._config_dir, trigger_id)
+            if account_id is None
+            else self._secret_store.get_secret_config(self._config_dir, account_id)
         )
         next_secret = FeishuTriggerSecretConfig(
             app_secret=(
@@ -360,15 +427,6 @@ class FeishuTriggerConfigService:
             raise ValueError("Feishu app_secret is required")
         return next_secret
 
-    def _is_feishu_request(
-        self,
-        *,
-        source_type: TriggerSourceType,
-        source_config: Mapping[str, object],
-    ) -> bool:
-        provider = str(source_config.get("provider", "")).strip().lower()
-        return source_type == TriggerSourceType.IM and provider == FEISHU_PLATFORM
-
     def _subscription_runtime_signature(
         self,
         *,
@@ -389,3 +447,9 @@ def _normalize_secret_value(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+__all__ = [
+    "FeishuAccountNameConflictError",
+    "FeishuGatewayService",
+]

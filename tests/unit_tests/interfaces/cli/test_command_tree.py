@@ -402,5 +402,5 @@ def test_root_help_lists_env_module() -> None:
     assert "agents" in result.output
     assert "roles" in result.output
     assert "skills" in result.output
-    assert "triggers" in result.output
+    assert "gateway" in result.output
     assert "prompts" not in result.output

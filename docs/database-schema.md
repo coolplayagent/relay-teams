@@ -79,6 +79,7 @@ Purpose: persistent mapping between an external chat identity and the internal A
 Notes:
 - `platform` starts with `feishu`.
 - `trigger_id + tenant_key + external_chat_id` is the durable lookup key used by inbound Feishu callbacks.
+- For Feishu rows, `trigger_id` now carries the gateway `account_id`.
 - The same external chat under different Feishu bots resolves to different internal sessions.
 - The owning session remains the source of truth for runtime state; this table only resolves the external conversation back to that session.
 
@@ -342,42 +343,29 @@ Notes:
 
 ---
 
-### 2.8 `triggers`
+### 2.8 `feishu_gateway_accounts`
 
 ```sql
-CREATE TABLE IF NOT EXISTS triggers (
-    trigger_id         TEXT PRIMARY KEY,
-    name               TEXT NOT NULL UNIQUE,
-    display_name       TEXT NOT NULL,
-    source_type        TEXT NOT NULL,
-    status             TEXT NOT NULL,
-    public_token       TEXT UNIQUE,
-    source_config_json TEXT NOT NULL,
-    auth_policies_json TEXT NOT NULL,
-    target_config_json TEXT,
-    created_at         TEXT NOT NULL,
-    updated_at         TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS feishu_gateway_accounts (
+    account_id          TEXT PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    display_name        TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    source_config_json  TEXT NOT NULL,
+    target_config_json  TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_triggers_source_type
-    ON triggers(source_type);
-CREATE INDEX IF NOT EXISTS idx_triggers_status
-    ON triggers(status);
+CREATE INDEX IF NOT EXISTS idx_feishu_gateway_accounts_status
+    ON feishu_gateway_accounts(status, updated_at DESC);
 ```
 
-Purpose: trigger definitions and webhook routing configuration.
+Purpose: persisted Feishu gateway account definitions and runtime/session targeting config.
 
 Notes:
-- Feishu bot secrets are not stored in this table.
-- Feishu `app_secret`, `verification_token`, and `encrypt_key` are stored in the unified secret store and resolved by `trigger_id`.
-- Trigger auth secrets such as `header_token.token` and `hmac.secret` are also stored in the unified secret store, while `auth_policies_json` keeps redacted placeholders for required secret fields.
-
-`source_type` values:
-- `schedule`
-- `webhook`
-- `im`
-- `rss`
-- `custom`
+- Feishu `app_secret`, `verification_token`, and `encrypt_key` are stored in the unified secret store and resolved by `account_id`.
+- On first boot after migration, legacy Feishu trigger rows are copied into this table and keep the old `trigger_id` value as `account_id` so existing chat bindings and queue rows continue to resolve.
 
 `status` values:
 - `enabled`
@@ -385,44 +373,28 @@ Notes:
 
 ---
 
-### 2.9 `trigger_events`
+### 2.9 `automation_execution_events`
 
 ```sql
-CREATE TABLE IF NOT EXISTS trigger_events (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id           TEXT NOT NULL UNIQUE,
-    trigger_id         TEXT NOT NULL,
-    trigger_name       TEXT NOT NULL,
-    source_type        TEXT NOT NULL,
-    event_key          TEXT,
-    status             TEXT NOT NULL,
-    received_at        TEXT NOT NULL,
-    occurred_at        TEXT,
-    payload_json       TEXT NOT NULL,
-    metadata_json      TEXT NOT NULL,
-    headers_json       TEXT NOT NULL,
-    remote_addr        TEXT,
-    auth_mode          TEXT,
-    auth_result        TEXT NOT NULL,
-    auth_reason        TEXT,
-    FOREIGN KEY(trigger_id) REFERENCES triggers(trigger_id)
+CREATE TABLE IF NOT EXISTS automation_execution_events (
+    event_id TEXT PRIMARY KEY,
+    automation_project_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_trigger_events_key
-    ON trigger_events(trigger_id, event_key)
-    WHERE event_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_trigger_events_trigger
-    ON trigger_events(trigger_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_trigger_events_status
-    ON trigger_events(status, id DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_execution_events_project
+    ON automation_execution_events(automation_project_id, created_at DESC);
 ```
 
-Purpose: append-only ingest audit log for trigger events.
+Purpose: append-only execution ledger for automation runs after schedule trigger removal.
 
-`status` values:
-- `received`
-- `duplicate`
-- `rejected_auth`
+Notes:
+- Each row is created immediately before materializing a scheduled or manual automation run.
+- `reason` is `manual` or `schedule`.
 
 ---
 
@@ -474,6 +446,9 @@ CREATE INDEX IF NOT EXISTS idx_feishu_message_pool_run
 ```
 
 Purpose: durable inbound Feishu message queue and lifecycle ledger.
+
+Notes:
+- `trigger_id` now carries the Feishu gateway `account_id` so existing binding and queue keys remain stable during and after migration.
 
 `processing_status` values:
 - `queued`
@@ -578,11 +553,12 @@ Primary query keys used by repositories:
 - `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
-- `trigger_id`: trigger-level retrieval across `triggers`, `trigger_events`.
-- `event_id`: trigger-event level retrieval for audit and replay preparation.
-- `platform + trigger_id + tenant_key + external_chat_id`: external-chat lookup for inbound IM triggers.
+- `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
+- `event_id`: message/event level retrieval for audit and replay preparation.
+- `platform + trigger_id + tenant_key + external_chat_id`: external-chat lookup for inbound IM accounts.
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
+- `account_id`: Feishu gateway account retrieval across `feishu_gateway_accounts`.
 - `account_id`: WeChat gateway account retrieval across `wechat_accounts`.
 
 ---
@@ -599,7 +575,8 @@ Primary query keys used by repositories:
 - `agent_teams.agents.execution`: `messages`.
 - `agent_teams.tools.runtime`: `approval_tickets`.
 - `agent_teams.providers`: `token_usage`.
-- `agent_teams.triggers`: `triggers`, `trigger_events`.
+- `agent_teams.gateway.feishu`: `feishu_gateway_accounts`, `feishu_message_pool`.
+- `agent_teams.automation`: `automation_execution_events`.
 - `agent_teams.gateway`: `gateway_sessions`.
 - `agent_teams.wechat`: `wechat_accounts`.
 - `agent_teams.roles`: `role_memories`.
@@ -713,7 +690,7 @@ Notes:
 - `run_config_json` stores session mode, orchestration preset, execution mode, YOLO, and thinking configuration.
 - `delivery_binding_json` stores the selected Feishu chat target copied from an existing `external_session_bindings` row.
 - `delivery_events_json` stores which Feishu notifications are enabled for that automation project.
-- `trigger_id` points at the backing `triggers` row used as the schedule event ledger.
+- `trigger_id` is a legacy compatibility field and now stores `schedule-{automation_project_id}`.
 - `last_session_id` points at the most recent generated session instance.
 - `next_run_at` is the scheduler cursor used to find due projects.
 

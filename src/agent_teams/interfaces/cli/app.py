@@ -28,7 +28,6 @@ from agent_teams.mcp.mcp_cli import mcp_app
 from agent_teams.roles.role_cli import build_roles_app
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.skills.skill_cli import skills_app
-from agent_teams.triggers.trigger_cli import build_triggers_app
 
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
 
@@ -161,28 +160,6 @@ def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
         raise RuntimeError("Failed to start local Agent Teams server")
 
 
-def _trigger_request_json(
-    base_url: str,
-    method: str,
-    path: str,
-    payload: dict[str, object] | None = None,
-    extra_headers: dict[str, str] | None = None,
-    timeout_seconds: float = 30.0,
-) -> dict[str, object] | list[object]:
-    return _request_json(
-        base_url=base_url,
-        method=method,
-        path=path,
-        payload=payload,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_seconds,
-    )
-
-
-def _trigger_auto_start(base_url: str, autostart: bool) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
-
-
 def _module_request_json(
     base_url: str,
     method: str,
@@ -227,13 +204,6 @@ metrics_app = build_metrics_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
-triggers_app = build_triggers_app(
-    request_json=_trigger_request_json,
-    auto_start_if_needed=_trigger_auto_start,
-    default_base_url=DEFAULT_BASE_URL,
-)
-
-
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
     sync_proxy_env_to_process_env(load_proxy_env_config())
     _stream_events_impl(base_url, run_id, debug)
@@ -343,7 +313,6 @@ app.add_typer(agents_app, name="agents")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")
-app.add_typer(triggers_app, name="triggers")
 app.add_typer(skills_app, name="skills")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(gateway_app, name="gateway")

@@ -16,6 +16,9 @@ from agent_teams.automation.automation_models import (
 from agent_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
 )
+from agent_teams.automation.automation_event_repository import (
+    AutomationEventRepository,
+)
 from agent_teams.automation.automation_delivery_service import (
     AutomationDeliveryService,
     AutomationDeliveryWorker,
@@ -36,6 +39,7 @@ from agent_teams.automation.scheduler_service import AutomationSchedulerService
 __all__ = [
     "AutomationDeliveryEvent",
     "AutomationDeliveryRepository",
+    "AutomationEventRepository",
     "AutomationDeliveryService",
     "AutomationDeliveryStatus",
     "AutomationDeliveryWorker",

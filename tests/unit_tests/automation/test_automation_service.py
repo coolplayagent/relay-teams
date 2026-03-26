@@ -8,6 +8,7 @@ from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.automation import (
+    AutomationEventRepository,
     AutomationProjectCreateInput,
     AutomationProjectRepository,
     AutomationProjectStatus,
@@ -17,12 +18,9 @@ from agent_teams.automation import (
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_service import SessionService
 from agent_teams.sessions.session_repository import SessionRepository
+from agent_teams.sessions.session_service import SessionService
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.triggers.trigger_repository import TriggerRepository
-from agent_teams.triggers.trigger_models import TriggerStatus
-from agent_teams.triggers.trigger_service import TriggerService
 
 
 class _FakeRunManager:
@@ -30,9 +28,10 @@ class _FakeRunManager:
         self.create_calls: list[object] = []
         self.started_run_ids: list[str] = []
 
-    def create_run(self, intent) -> tuple[str, str]:
+    def create_run(self, intent: object) -> tuple[str, str]:
+        session_id = getattr(intent, "session_id")
         self.create_calls.append(intent)
-        return (f"run-{len(self.create_calls)}", intent.session_id)
+        return (f"run-{len(self.create_calls)}", cast(str, session_id))
 
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
@@ -55,7 +54,7 @@ def _build_service(tmp_path: Path) -> tuple[AutomationService, _FakeRunManager]:
     run_manager = _FakeRunManager()
     service = AutomationService(
         repository=AutomationProjectRepository(db_path),
-        trigger_service=TriggerService(trigger_repo=TriggerRepository(db_path)),
+        event_repository=AutomationEventRepository(db_path),
         session_service=_build_session_service(db_path),
         run_service=cast(RunManager, run_manager),
     )
@@ -76,7 +75,7 @@ def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
         )
     )
 
-    assert created.trigger_id.startswith("trg_")
+    assert created.trigger_id == f"schedule-{created.automation_project_id}"
     assert created.next_run_at is not None
     assert created.status.value == "enabled"
 
@@ -105,6 +104,7 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert session_payload["project_kind"] == "automation"
     assert session_payload["project_id"] == created.automation_project_id
     assert metadata["automation_reason"] == "manual"
+    assert "automation_trigger_event_id" in metadata
     assert len(run_manager.create_calls) == 1
     assert run_manager.started_run_ids == ["run-1"]
 
@@ -139,9 +139,7 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
     assert run_manager.started_run_ids == ["run-1"]
 
 
-def test_enable_project_reenables_backing_trigger_for_manual_run(
-    tmp_path: Path,
-) -> None:
+def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> None:
     service, run_manager = _build_service(tmp_path)
     created = service.create_project(
         AutomationProjectCreateInput(
@@ -159,10 +157,9 @@ def test_enable_project_reenables_backing_trigger_for_manual_run(
         created.automation_project_id,
         status=AutomationProjectStatus.ENABLED,
     )
-    trigger = service._trigger_service.get_trigger(created.trigger_id)
     result = service.run_now(created.automation_project_id)
 
     assert enabled.status.value == "enabled"
-    assert trigger.status == TriggerStatus.ENABLED
+    assert enabled.next_run_at is not None
     assert result["automation_project_id"] == created.automation_project_id
     assert run_manager.started_run_ids == ["run-1"]

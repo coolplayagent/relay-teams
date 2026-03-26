@@ -373,6 +373,73 @@ class AgentTeamsClient:
             {"scope": "subagent", "instance_id": instance_id},
         )
 
+    def create_feishu_gateway_account(
+        self,
+        *,
+        name: str,
+        display_name: str | None = None,
+        source_config: dict[str, JsonValue] | None = None,
+        target_config: dict[str, JsonValue] | None = None,
+        secret_config: dict[str, str] | None = None,
+        enabled: bool = True,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "name": name,
+            "enabled": enabled,
+        }
+        if display_name is not None:
+            payload["display_name"] = display_name
+        if source_config is not None:
+            payload["source_config"] = source_config
+        if target_config is not None:
+            payload["target_config"] = target_config
+        if secret_config is not None:
+            payload["secret_config"] = {
+                key: value for key, value in secret_config.items()
+            }
+        return self._request_json("POST", "/api/gateway/feishu/accounts", payload)
+
+    def list_feishu_gateway_accounts(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/gateway/feishu/accounts")
+        items = data.get("data", data)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def update_feishu_gateway_account(
+        self,
+        account_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PATCH",
+            f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}",
+            payload,
+        )
+
+    def enable_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}:enable",
+            {},
+        )
+
+    def disable_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}:disable",
+            {},
+        )
+
+    def delete_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}",
+        )
+
+    def reload_feishu_gateway(self) -> dict[str, JsonValue]:
+        return self._request_json("POST", "/api/gateway/feishu/reload", {})
+
     def create_trigger(
         self,
         *,
@@ -385,38 +452,42 @@ class AgentTeamsClient:
         public_token: str | None = None,
         enabled: bool = True,
     ) -> dict[str, JsonValue]:
-        payload: dict[str, JsonValue] = {
-            "name": name,
-            "source_type": source_type,
-            "enabled": enabled,
-        }
-        if display_name is not None:
-            payload["display_name"] = display_name
-        if source_config is not None:
-            payload["source_config"] = source_config
-        if auth_policies is not None:
-            policies_payload: list[JsonValue] = [policy for policy in auth_policies]
-            payload["auth_policies"] = policies_payload
-        if target_config is not None:
-            payload["target_config"] = target_config
-        if public_token is not None:
-            payload["public_token"] = public_token
-        return self._request_json("POST", "/api/triggers", payload)
+        _ = (source_type, auth_policies, public_token)
+        return self.create_feishu_gateway_account(
+            name=name,
+            display_name=display_name,
+            source_config=source_config,
+            target_config=target_config,
+            enabled=enabled,
+        )
 
     def list_triggers(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/triggers")
-        items = data.get("data", data)
-        if isinstance(items, list):
-            return [item for item in items if isinstance(item, dict)]
-        return []
+        accounts = self.list_feishu_gateway_accounts()
+        normalized: list[dict[str, JsonValue]] = []
+        for account in accounts:
+            normalized.append(
+                {
+                    "trigger_id": str(account.get("account_id") or ""),
+                    "name": str(account.get("name") or ""),
+                    "display_name": str(
+                        account.get("display_name") or account.get("name") or ""
+                    ),
+                    "source_type": "im",
+                    "status": str(account.get("status") or "disabled"),
+                    "source_config": account.get("source_config") or {},
+                    "target_config": account.get("target_config") or {},
+                    "secret_config": account.get("secret_config") or None,
+                    "secret_status": account.get("secret_status") or None,
+                }
+            )
+        return normalized
 
     def ingest_trigger_webhook(
         self, public_token: str, payload: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
-        return self._request_json(
-            "POST",
-            f"/api/triggers/webhooks/{public_token}",
-            payload,
+        _ = (public_token, payload)
+        raise RuntimeError(
+            "Trigger webhooks were removed. Use the gateway-specific IM integrations instead."
         )
 
     def inject_subagent_message(

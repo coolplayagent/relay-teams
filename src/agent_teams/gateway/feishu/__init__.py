@@ -5,10 +5,15 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.gateway.feishu.account_repository import (
+        FeishuAccountNameConflictError,
+        FeishuAccountRepository,
+    )
     from agent_teams.gateway.feishu.client import (
         FeishuClient,
         load_feishu_environment,
     )
+    from agent_teams.gateway.feishu.gateway_service import FeishuGatewayService
     from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
     from agent_teams.gateway.feishu.message_pool_repository import (
         FeishuMessagePoolRepository,
@@ -17,6 +22,7 @@ if TYPE_CHECKING:
     from agent_teams.gateway.feishu.models import (
         FEISHU_METADATA_CHAT_ID_KEY,
         FEISHU_METADATA_CHAT_TYPE_KEY,
+        FEISHU_METADATA_ACCOUNT_ID_KEY,
         FEISHU_METADATA_PLATFORM_KEY,
         FEISHU_METADATA_TENANT_KEY,
         FEISHU_METADATA_TRIGGER_ID_KEY,
@@ -34,6 +40,10 @@ if TYPE_CHECKING:
         FeishuChatQueueItemPreview,
         FeishuChatQueueSummary,
         FeishuEnvironment,
+        FeishuGatewayAccountCreateInput,
+        FeishuGatewayAccountRecord,
+        FeishuGatewayAccountStatus,
+        FeishuGatewayAccountUpdateInput,
         FeishuMessageDeliveryStatus,
         FeishuMessageFormat,
         FeishuMessagePoolRecord,
@@ -48,18 +58,18 @@ if TYPE_CHECKING:
     from agent_teams.gateway.feishu.subscription_service import (
         FeishuSubscriptionService,
     )
-    from agent_teams.gateway.feishu.trigger_config_service import (
-        FeishuTriggerConfigService,
-    )
     from agent_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 
 __all__ = [
+    "FEISHU_METADATA_ACCOUNT_ID_KEY",
     "FEISHU_METADATA_CHAT_ID_KEY",
     "FEISHU_METADATA_CHAT_TYPE_KEY",
     "FEISHU_METADATA_PLATFORM_KEY",
     "FEISHU_METADATA_TENANT_KEY",
     "FEISHU_METADATA_TRIGGER_ID_KEY",
     "FEISHU_PLATFORM",
+    "FeishuAccountNameConflictError",
+    "FeishuAccountRepository",
     "FeishuChatQueueClearResult",
     "FeishuChatQueueItemPreview",
     "FeishuChatQueueSummary",
@@ -75,6 +85,11 @@ __all__ = [
     "SESSION_TITLE_SOURCE_MANUAL",
     "FeishuClient",
     "FeishuEnvironment",
+    "FeishuGatewayAccountCreateInput",
+    "FeishuGatewayAccountRecord",
+    "FeishuGatewayAccountStatus",
+    "FeishuGatewayAccountUpdateInput",
+    "FeishuGatewayService",
     "FeishuMessageDeliveryStatus",
     "FeishuMessageFormat",
     "FeishuMessagePoolRecord",
@@ -85,13 +100,16 @@ __all__ = [
     "FeishuNotificationDispatcher",
     "FeishuNotificationTarget",
     "FeishuSubscriptionService",
-    "FeishuTriggerConfigService",
     "FeishuTriggerHandler",
     "TriggerProcessingResult",
     "load_feishu_environment",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "FEISHU_METADATA_ACCOUNT_ID_KEY": (
+        "agent_teams.gateway.feishu.models",
+        "FEISHU_METADATA_ACCOUNT_ID_KEY",
+    ),
     "FEISHU_METADATA_CHAT_ID_KEY": (
         "agent_teams.gateway.feishu.models",
         "FEISHU_METADATA_CHAT_ID_KEY",
@@ -113,6 +131,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "FEISHU_METADATA_TRIGGER_ID_KEY",
     ),
     "FEISHU_PLATFORM": ("agent_teams.gateway.feishu.models", "FEISHU_PLATFORM"),
+    "FeishuAccountNameConflictError": (
+        "agent_teams.gateway.feishu.account_repository",
+        "FeishuAccountNameConflictError",
+    ),
+    "FeishuAccountRepository": (
+        "agent_teams.gateway.feishu.account_repository",
+        "FeishuAccountRepository",
+    ),
     "FeishuInboundRuntime": (
         "agent_teams.gateway.feishu.inbound_runtime",
         "FeishuInboundRuntime",
@@ -167,6 +193,26 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "FeishuChatQueueSummary",
     ),
     "FeishuEnvironment": ("agent_teams.gateway.feishu.models", "FeishuEnvironment"),
+    "FeishuGatewayAccountCreateInput": (
+        "agent_teams.gateway.feishu.models",
+        "FeishuGatewayAccountCreateInput",
+    ),
+    "FeishuGatewayAccountRecord": (
+        "agent_teams.gateway.feishu.models",
+        "FeishuGatewayAccountRecord",
+    ),
+    "FeishuGatewayAccountStatus": (
+        "agent_teams.gateway.feishu.models",
+        "FeishuGatewayAccountStatus",
+    ),
+    "FeishuGatewayAccountUpdateInput": (
+        "agent_teams.gateway.feishu.models",
+        "FeishuGatewayAccountUpdateInput",
+    ),
+    "FeishuGatewayService": (
+        "agent_teams.gateway.feishu.gateway_service",
+        "FeishuGatewayService",
+    ),
     "FeishuMessageDeliveryStatus": (
         "agent_teams.gateway.feishu.models",
         "FeishuMessageDeliveryStatus",
@@ -206,10 +252,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "FeishuSubscriptionService": (
         "agent_teams.gateway.feishu.subscription_service",
         "FeishuSubscriptionService",
-    ),
-    "FeishuTriggerConfigService": (
-        "agent_teams.gateway.feishu.trigger_config_service",
-        "FeishuTriggerConfigService",
     ),
     "FeishuTriggerHandler": (
         "agent_teams.gateway.feishu.trigger_handler",

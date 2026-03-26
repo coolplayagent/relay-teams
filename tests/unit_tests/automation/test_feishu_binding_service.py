@@ -8,66 +8,63 @@ from agent_teams.automation import (
 )
 from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.triggers import (
-    TriggerCreateInput,
-    TriggerRepository,
-    TriggerService,
-    TriggerSourceType,
-)
+
+
+class _FakeAccount:
+    def __init__(self, account_id: str, display_name: str) -> None:
+        self.account_id = account_id
+        self.display_name = display_name
+
+
+class _FakeAccountLookup:
+    def __init__(self, *accounts: _FakeAccount) -> None:
+        self._accounts = {account.account_id: account for account in accounts}
+
+    def get_account(self, account_id: str) -> _FakeAccount:
+        try:
+            return self._accounts[account_id]
+        except KeyError as exc:
+            raise KeyError(account_id) from exc
 
 
 class _FakeRuntimeConfigLookup:
-    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> object | None:
-        _ = trigger_id
-        return object()
+    def __init__(self, *account_ids: str) -> None:
+        self._account_ids = set(account_ids)
 
-    def is_feishu_trigger(self, trigger) -> bool:
-        return (
-            trigger.source_type == TriggerSourceType.IM
-            and str(trigger.source_config.get("provider", "")).strip() == "feishu"
-        )
+    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> object | None:
+        if trigger_id in self._account_ids:
+            return object()
+        return None
 
 
 def _build_service(
     tmp_path: Path,
 ) -> tuple[
     AutomationFeishuBindingService,
-    TriggerService,
     SessionRepository,
     ExternalSessionBindingRepository,
 ]:
     db_path = tmp_path / "automation-feishu.db"
-    trigger_service = TriggerService(trigger_repo=TriggerRepository(db_path))
     session_repo = SessionRepository(db_path)
     binding_repo = ExternalSessionBindingRepository(db_path)
     service = AutomationFeishuBindingService(
         external_session_binding_repo=binding_repo,
         session_repo=session_repo,
-        trigger_lookup=trigger_service,
-        runtime_config_lookup=_FakeRuntimeConfigLookup(),
+        account_lookup=_FakeAccountLookup(
+            _FakeAccount("fsg_main", "Feishu Main"),
+        ),
+        runtime_config_lookup=_FakeRuntimeConfigLookup("fsg_main"),
     )
-    return service, trigger_service, session_repo, binding_repo
+    return service, session_repo, binding_repo
 
 
 def test_list_candidates_returns_existing_feishu_chat_bindings(tmp_path: Path) -> None:
-    service, trigger_service, session_repo, binding_repo = _build_service(tmp_path)
-    trigger = trigger_service.create_trigger(
-        TriggerCreateInput(
-            name="feishu_main",
-            source_type=TriggerSourceType.IM,
-            source_config={
-                "provider": "feishu",
-                "trigger_rule": "mention_only",
-                "app_id": "cli_demo",
-                "app_name": "Agent Teams Bot",
-            },
-        )
-    )
+    service, session_repo, binding_repo = _build_service(tmp_path)
     session = session_repo.create(
         session_id="session-im-1",
         workspace_id="default",
         metadata={
-            "title": "feishu_main - Release Updates",
+            "title": "Feishu Main - Release Updates",
             "source_label": "Release Updates",
             "title_source": "auto",
             "feishu_chat_type": "group",
@@ -75,7 +72,7 @@ def test_list_candidates_returns_existing_feishu_chat_bindings(tmp_path: Path) -
     )
     binding_repo.upsert_binding(
         platform="feishu",
-        trigger_id=trigger.trigger_id,
+        trigger_id="fsg_main",
         tenant_key="tenant-1",
         external_chat_id="oc_123",
         session_id=session.session_id,
@@ -85,31 +82,20 @@ def test_list_candidates_returns_existing_feishu_chat_bindings(tmp_path: Path) -
 
     assert len(candidates) == 1
     candidate = candidates[0]
-    assert candidate.trigger_id == trigger.trigger_id
+    assert candidate.trigger_id == "fsg_main"
+    assert candidate.trigger_name == "Feishu Main"
     assert candidate.chat_id == "oc_123"
     assert candidate.source_label == "Release Updates"
-    assert candidate.session_title == "feishu_main - Release Updates"
+    assert candidate.session_title == "Feishu Main - Release Updates"
 
 
 def test_list_candidates_preserves_manual_session_title(tmp_path: Path) -> None:
-    service, trigger_service, session_repo, binding_repo = _build_service(tmp_path)
-    trigger = trigger_service.create_trigger(
-        TriggerCreateInput(
-            name="feishu_main",
-            source_type=TriggerSourceType.IM,
-            source_config={
-                "provider": "feishu",
-                "trigger_rule": "mention_only",
-                "app_id": "cli_demo",
-                "app_name": "Agent Teams Bot",
-            },
-        )
-    )
+    service, session_repo, binding_repo = _build_service(tmp_path)
     session = session_repo.create(
         session_id="session-im-1",
         workspace_id="default",
         metadata={
-            "title": "值班告警群",
+            "title": "Manual Oncall Session",
             "title_source": "manual",
             "source_label": "Release Updates",
             "feishu_chat_type": "group",
@@ -117,7 +103,7 @@ def test_list_candidates_preserves_manual_session_title(tmp_path: Path) -> None:
     )
     binding_repo.upsert_binding(
         platform="feishu",
-        trigger_id=trigger.trigger_id,
+        trigger_id="fsg_main",
         tenant_key="tenant-1",
         external_chat_id="oc_123",
         session_id=session.session_id,
@@ -126,28 +112,16 @@ def test_list_candidates_preserves_manual_session_title(tmp_path: Path) -> None:
     candidates = service.list_candidates()
 
     assert len(candidates) == 1
-    assert candidates[0].session_title == "值班告警群"
+    assert candidates[0].session_title == "Manual Oncall Session"
 
 
 def test_validate_binding_rejects_unknown_chat_binding(tmp_path: Path) -> None:
-    service, trigger_service, _session_repo, _binding_repo = _build_service(tmp_path)
-    trigger = trigger_service.create_trigger(
-        TriggerCreateInput(
-            name="feishu_main",
-            source_type=TriggerSourceType.IM,
-            source_config={
-                "provider": "feishu",
-                "trigger_rule": "mention_only",
-                "app_id": "cli_demo",
-                "app_name": "Agent Teams Bot",
-            },
-        )
-    )
+    service, _session_repo, _binding_repo = _build_service(tmp_path)
 
     try:
         service.validate_binding(
             AutomationFeishuBinding(
-                trigger_id=trigger.trigger_id,
+                trigger_id="fsg_main",
                 tenant_key="tenant-1",
                 chat_id="oc_missing",
                 chat_type="group",

@@ -29,45 +29,6 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
-from agent_teams.triggers import (
-    TriggerEventStatus,
-    TriggerIngestInput,
-    TriggerIngestResult,
-)
-
-
-class _FakeTriggerService:
-    def __init__(self) -> None:
-        self.seen_event_keys: set[str] = set()
-
-    def ingest_event(
-        self,
-        event: TriggerIngestInput,
-        *,
-        headers: dict[str, str],
-        remote_addr: str | None,
-        raw_body: str,
-    ) -> TriggerIngestResult:
-        _ = headers
-        _ = remote_addr
-        _ = raw_body
-        event_key = str(event.event_key)
-        duplicate = event_key in self.seen_event_keys
-        if not duplicate:
-            self.seen_event_keys.add(event_key)
-        return TriggerIngestResult(
-            accepted=True,
-            event_id=f"tev_{event_key}",
-            duplicate=duplicate,
-            status=(
-                TriggerEventStatus.DUPLICATE
-                if duplicate
-                else TriggerEventStatus.RECEIVED
-            ),
-            trigger_id=str(event.trigger_id),
-            trigger_name="feishu_main",
-        )
-
 
 class _FakeSessionService:
     def __init__(self) -> None:
@@ -241,7 +202,6 @@ def _build_service(
         feishu_client=None,
     )
     service = FeishuMessagePoolService(
-        trigger_service=_FakeTriggerService(),
         runtime_config_lookup=_FakeRuntimeConfigLookup(runtime),
         inbound_runtime=inbound_runtime,
         feishu_client=feishu_client,

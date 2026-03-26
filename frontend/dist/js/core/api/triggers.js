@@ -1,65 +1,115 @@
 /**
  * core/api/triggers.js
- * Trigger-related API wrappers.
+ * Backward-compatible Feishu gateway API wrappers.
  */
 import { requestJson } from './request.js';
 
 export async function fetchTriggers() {
-    return requestJson('/api/triggers', undefined, 'Failed to fetch triggers');
+    const accounts = await requestJson(
+        '/api/gateway/feishu/accounts',
+        undefined,
+        'Failed to fetch Feishu gateway accounts',
+    );
+    const rows = Array.isArray(accounts) ? accounts : [];
+    return rows.map(normalizeFeishuGatewayAccount);
 }
 
 export async function createTrigger(payload) {
     return requestJson(
-        '/api/triggers',
+        '/api/gateway/feishu/accounts',
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(toGatewayPayload(payload)),
         },
-        'Failed to create trigger',
+        'Failed to create Feishu gateway account',
     );
 }
 
 export async function updateTrigger(triggerId, payload) {
     return requestJson(
-        `/api/triggers/${encodeURIComponent(triggerId)}`,
+        `/api/gateway/feishu/accounts/${encodeURIComponent(triggerId)}`,
         {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(toGatewayPayload(payload)),
         },
-        'Failed to update trigger',
+        'Failed to update Feishu gateway account',
     );
 }
 
 export async function deleteTrigger(triggerId) {
     return requestJson(
-        `/api/triggers/${encodeURIComponent(triggerId)}`,
+        `/api/gateway/feishu/accounts/${encodeURIComponent(triggerId)}`,
         { method: 'DELETE' },
-        'Failed to delete trigger',
+        'Failed to delete Feishu gateway account',
     );
 }
 
 export async function enableTrigger(triggerId) {
     return requestJson(
-        `/api/triggers/${encodeURIComponent(triggerId)}:enable`,
+        `/api/gateway/feishu/accounts/${encodeURIComponent(triggerId)}:enable`,
         { method: 'POST' },
-        'Failed to enable trigger',
+        'Failed to enable Feishu gateway account',
     );
 }
 
 export async function disableTrigger(triggerId) {
     return requestJson(
-        `/api/triggers/${encodeURIComponent(triggerId)}:disable`,
+        `/api/gateway/feishu/accounts/${encodeURIComponent(triggerId)}:disable`,
         { method: 'POST' },
-        'Failed to disable trigger',
+        'Failed to disable Feishu gateway account',
     );
 }
 
 export async function rotateTriggerToken(triggerId) {
-    return requestJson(
-        `/api/triggers/${encodeURIComponent(triggerId)}:rotate-token`,
-        { method: 'POST' },
-        'Failed to rotate trigger token',
+    throw new Error(
+        `Feishu gateway accounts do not support public token rotation: ${triggerId}`,
     );
+}
+
+function toGatewayPayload(payload) {
+    return {
+        name: String(payload?.name || '').trim(),
+        display_name: payload?.display_name ?? null,
+        source_config:
+            payload?.source_config && typeof payload.source_config === 'object'
+                ? { ...payload.source_config }
+                : {},
+        target_config:
+            payload?.target_config && typeof payload.target_config === 'object'
+                ? { ...payload.target_config }
+                : {},
+        secret_config:
+            payload?.secret_config && typeof payload.secret_config === 'object'
+                ? { ...payload.secret_config }
+                : undefined,
+        enabled: payload?.enabled !== false,
+    };
+}
+
+function normalizeFeishuGatewayAccount(account) {
+    return {
+        trigger_id: String(account?.account_id || '').trim(),
+        name: String(account?.name || '').trim(),
+        display_name: String(account?.display_name || account?.name || '').trim(),
+        source_type: 'im',
+        status: String(account?.status || 'disabled').trim() || 'disabled',
+        source_config:
+            account?.source_config && typeof account.source_config === 'object'
+                ? { ...account.source_config }
+                : {},
+        target_config:
+            account?.target_config && typeof account.target_config === 'object'
+                ? { ...account.target_config }
+                : {},
+        secret_config:
+            account?.secret_config && typeof account.secret_config === 'object'
+                ? { ...account.secret_config }
+                : {},
+        secret_status:
+            account?.secret_status && typeof account.secret_status === 'object'
+                ? { ...account.secret_status }
+                : {},
+    };
 }

@@ -37,6 +37,7 @@ def build_gateway_app(
 ) -> typer.Typer:
     gateway_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
     acp_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+    feishu_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
     wechat_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
     @acp_app.command("stdio")
@@ -45,6 +46,113 @@ def build_gateway_app(
         asyncio.run(runtime.serve_forever())
 
     if request_json is not None and auto_start_if_needed is not None:
+
+        @feishu_app.command("list")
+        def feishu_list(
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(base_url, "GET", "/api/gateway/feishu/accounts", None)
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("create")
+        def feishu_create(
+            payload_json: str = typer.Option(..., "--payload-json"),
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            payload = _parse_json_object_option(
+                payload_json,
+                option_name="--payload-json",
+            )
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "POST",
+                "/api/gateway/feishu/accounts",
+                payload,
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("update")
+        def feishu_update(
+            account_id: str = typer.Option(..., "--account-id"),
+            payload_json: str = typer.Option(..., "--payload-json"),
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            payload = _parse_json_object_option(
+                payload_json,
+                option_name="--payload-json",
+            )
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "PATCH",
+                f"/api/gateway/feishu/accounts/{account_id}",
+                payload,
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("enable")
+        def feishu_enable(
+            account_id: str = typer.Option(..., "--account-id"),
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "POST",
+                f"/api/gateway/feishu/accounts/{account_id}:enable",
+                {},
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("disable")
+        def feishu_disable(
+            account_id: str = typer.Option(..., "--account-id"),
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "POST",
+                f"/api/gateway/feishu/accounts/{account_id}:disable",
+                {},
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("delete")
+        def feishu_delete(
+            account_id: str = typer.Option(..., "--account-id"),
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "DELETE",
+                f"/api/gateway/feishu/accounts/{account_id}",
+                None,
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
+
+        @feishu_app.command("reload")
+        def feishu_reload(
+            base_url: str = typer.Option(default_base_url, "--base-url"),
+            autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        ) -> None:
+            auto_start_if_needed(base_url, autostart)
+            result = request_json(
+                base_url,
+                "POST",
+                "/api/gateway/feishu/reload",
+                {},
+            )
+            typer.echo(json.dumps(result, ensure_ascii=False))
 
         @wechat_app.command("list")
         def wechat_list(
@@ -100,13 +208,10 @@ def build_gateway_app(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
         ) -> None:
-            try:
-                parsed = json.loads(payload_json)
-            except json.JSONDecodeError as exc:
-                raise typer.BadParameter("--payload-json must be valid JSON") from exc
-            if not isinstance(parsed, dict):
-                raise typer.BadParameter("--payload-json must be a JSON object")
-            payload = {str(key): value for key, value in parsed.items()}
+            payload = _parse_json_object_option(
+                payload_json,
+                option_name="--payload-json",
+            )
             auto_start_if_needed(base_url, autostart)
             result = request_json(
                 base_url,
@@ -176,6 +281,7 @@ def build_gateway_app(
             typer.echo(json.dumps(result, ensure_ascii=False))
 
     gateway_app.add_typer(acp_app, name="acp")
+    gateway_app.add_typer(feishu_app, name="feishu")
     gateway_app.add_typer(wechat_app, name="wechat")
     return gateway_app
 
@@ -224,6 +330,20 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
 
 async def _noop_notify(_message: dict[str, JsonValue]) -> None:
     return None
+
+
+def _parse_json_object_option(
+    payload_json: str,
+    *,
+    option_name: str,
+) -> dict[str, object]:
+    try:
+        parsed = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{option_name} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter(f"{option_name} must be a JSON object")
+    return {str(key): value for key, value in parsed.items()}
 
 
 gateway_app = build_gateway_app()

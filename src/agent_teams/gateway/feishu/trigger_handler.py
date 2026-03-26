@@ -23,11 +23,6 @@ from agent_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from agent_teams.logger import get_logger, log_event
-from agent_teams.triggers import (
-    TriggerDefinition,
-    TriggerIngestInput,
-    TriggerIngestResult,
-)
 
 if TYPE_CHECKING:
     from agent_teams.gateway.im import ImSessionCommandService, ImToolService
@@ -39,23 +34,10 @@ _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
 logger = get_logger(__name__)
 
 
-class TriggerServiceLike(Protocol):
-    def get_trigger(self, trigger_id: str) -> TriggerDefinition: ...
-
-    def ingest_event(
+class FeishuRuntimeConfigLookup(Protocol):
+    def get_runtime_config_by_trigger_id(
         self,
-        event: TriggerIngestInput,
-        *,
-        headers: dict[str, str],
-        remote_addr: str | None,
-        raw_body: str,
-    ) -> TriggerIngestResult: ...
-
-
-class FeishuConfigResolverLike(Protocol):
-    def resolve_runtime_config(
-        self,
-        trigger: TriggerDefinition,
+        trigger_id: str,
     ) -> FeishuTriggerRuntimeConfig | None: ...
 
 
@@ -92,14 +74,12 @@ class FeishuTriggerHandler:
     def __init__(
         self,
         *,
-        trigger_service: TriggerServiceLike,
-        feishu_config_service: FeishuConfigResolverLike,
+        runtime_config_lookup: FeishuRuntimeConfigLookup,
         message_pool_service: FeishuMessagePoolServiceLike,
         im_tool_service: ImToolService,
         im_session_command_service: ImSessionCommandService,
     ) -> None:
-        self._trigger_service = trigger_service
-        self._feishu_config_service = feishu_config_service
+        self._runtime_config_lookup = runtime_config_lookup
         self._message_pool_service = message_pool_service
         self._im_tool_service = im_tool_service
         self._im_session_command_service = im_session_command_service
@@ -113,30 +93,13 @@ class FeishuTriggerHandler:
         headers: dict[str, str],
         remote_addr: str | None,
     ) -> TriggerProcessingResult:
-        try:
-            trigger = self._trigger_service.get_trigger(trigger_id)
-        except KeyError:
-            return TriggerProcessingResult(
-                status="ignored",
-                trigger_id=trigger_id,
-                ignored=True,
-                reason="trigger_not_found",
-            )
-        try:
-            runtime_config = self._feishu_config_service.resolve_runtime_config(trigger)
-        except ValueError:
-            return TriggerProcessingResult(
-                status="ignored",
-                trigger_id=trigger.trigger_id,
-                trigger_name=trigger.name,
-                ignored=True,
-                reason="invalid_trigger_config",
-            )
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            trigger_id
+        )
         if runtime_config is None:
             return TriggerProcessingResult(
                 status="ignored",
-                trigger_id=trigger.trigger_id,
-                trigger_name=trigger.name,
+                trigger_id=trigger_id,
                 ignored=True,
                 reason="missing_credentials",
             )

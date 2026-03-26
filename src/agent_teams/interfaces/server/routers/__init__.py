@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from agent_teams.interfaces.server.routers import (
     automation,
+    feishu_gateway,
     gateway,
     logs,
     mcp,
@@ -13,12 +14,12 @@ from agent_teams.interfaces.server.routers import (
     sessions,
     system,
     tasks,
-    triggers,
     workspaces,
 )
 
 __all__ = [
     "automation",
+    "feishu_gateway",
     "gateway",
     "logs",
     "mcp",
@@ -29,6 +30,5 @@ __all__ = [
     "sessions",
     "system",
     "tasks",
-    "triggers",
     "workspaces",
 ]

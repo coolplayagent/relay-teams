@@ -258,7 +258,7 @@ Each rule includes:
 Replaces notification rules.
 Notes:
 - `feishu` delivery is best-effort and only applies when the session/run has Feishu chat context.
-- Feishu credentials are resolved from the Feishu trigger bound to that session, not from `notifications.json`.
+- Feishu credentials are resolved from the Feishu gateway account bound to that session, not from `notifications.json`.
 
 ### `GET /system/configs/orchestration`
 
@@ -1058,51 +1058,49 @@ Lists effective MCP servers from app scope.
 
 Lists tools exposed by one MCP server. Returned tool names are the effective callable names registered at runtime in the form `<server_name>_<tool_name>` so tools from different MCP servers cannot collide.
 
-## Trigger APIs
+## Gateway APIs
 
-### `POST /triggers`
+### `GET /gateway/feishu/accounts`
 
-Creates a trigger definition.
-For Feishu IM triggers, the request may also include top-level `secret_config`.
+Lists all persisted Feishu gateway accounts.
 
-### `GET /triggers`
+Each record includes:
+- `account_id`
+- `name`
+- `display_name`
+- `status`
+- `source_config`
+- `target_config`
+- `secret_status`
+- `secret_config`
 
-Lists trigger definitions.
-For Feishu IM triggers, responses also include `secret_status` and the current `secret_config`.
+### `POST /gateway/feishu/accounts`
 
-### `GET /triggers/{trigger_id}`
+Creates a Feishu gateway account and persists its secret config.
 
-Gets one trigger definition.
-For Feishu IM triggers, the response also includes `secret_status` and the current `secret_config`.
+### `PATCH /gateway/feishu/accounts/{account_id}`
 
-### `PATCH /triggers/{trigger_id}`
+Updates a Feishu gateway account. If the runtime credential signature changes, the backend reloads the Feishu long-connection runtime. If the target session preset changes, the backend clears the existing external chat bindings for that account.
 
-Updates trigger mutable fields.
-For Feishu IM triggers, the request may also include top-level `secret_config`.
+### `POST /gateway/feishu/accounts/{account_id}:enable`
 
-### `POST /triggers/{trigger_id}:enable`
+Enables a Feishu gateway account and reloads the Feishu long-connection runtime.
 
-Enables a trigger.
+### `POST /gateway/feishu/accounts/{account_id}:disable`
 
-### `POST /triggers/{trigger_id}:disable`
+Disables a Feishu gateway account and reloads the Feishu long-connection runtime.
 
-Disables a trigger.
+### `DELETE /gateway/feishu/accounts/{account_id}`
 
-### `POST /triggers/{trigger_id}:rotate-token`
+Deletes the Feishu gateway account, removes its stored secret config, and clears its external chat bindings.
 
-Rotates the public webhook token.
+### `POST /gateway/feishu/reload`
 
-### `POST /triggers/ingest`
+Reloads all Feishu long-connection clients from the persisted gateway account list.
 
-Internal generic trigger ingest endpoint.
+### Feishu Gateway Accounts
 
-### `POST /triggers/webhooks/{public_token}`
-
-Public webhook ingest endpoint.
-
-### Feishu IM Triggers
-
-Feishu IM triggers no longer use an `/api/triggers/feishu/...` HTTP callback endpoint.
+Feishu IM ingress is managed only through `/api/gateway/feishu/accounts`. The legacy `/api/triggers/*` endpoints have been removed.
 
 Behavior:
 - Uses the Feishu Python SDK long connection mode for inbound `im.message.receive_v1` events.
@@ -1113,17 +1111,16 @@ Behavior:
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
 - Acknowledgement text reflects the current chat backlog.
-- Reuses one internal session per `trigger_id + tenant_key + chat_id`.
+- Reuses one internal session per `account_id + tenant_key + chat_id`.
 - Requires no public callback URL.
-- Runs one SDK long connection per enabled Feishu trigger whose credentials are ready.
+- Runs one SDK long connection per enabled Feishu gateway account whose credentials are ready.
 - Supports multiple Feishu bots at the same time.
 - Supports session commands `help`, `status`, and `clear`.
 - `status` shows both session usage and the current chat queue state.
 - `clear` inserts the logical session history divider and also cancels active queued
   messages for that chat so they do not continue executing.
 
-Recommended trigger contract:
-- `source_type = "im"`
+Recommended Feishu gateway contract:
 - `source_config.provider = "feishu"`
 - `source_config.trigger_rule = "mention_only"`
 - `source_config.app_id = "<feishu_app_id>"`
@@ -1144,7 +1141,6 @@ Feishu-specific request shape:
 ```json
 {
   "name": "feishu_ops",
-  "source_type": "im",
   "source_config": {
     "provider": "feishu",
     "trigger_rule": "mention_only",
@@ -1175,19 +1171,9 @@ Feishu-specific response additions:
 - `secret_config.app_secret`
 
 Notes:
-- Feishu secrets are stored in the unified secret store, not in the trigger table or `.env`, and trigger read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
-- When a Feishu trigger's runtime preset changes, the backend clears that trigger's external chat bindings so the next message creates a session with the new preset.
+- Feishu secrets are stored in the unified secret store, not in `.env`, and gateway account read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
+- When a Feishu gateway account's runtime preset changes, the backend clears that account's external chat bindings so the next message creates a session with the new preset.
 - For inbound Feishu chat messages, terminal Feishu replies are owned by the message pool worker, and the generic Feishu `run_completed` / `run_failed` notification path is suppressed to avoid duplicate replies.
-
-### `GET /triggers/{trigger_id}/events`
-
-Lists persisted trigger events.
-
-### `GET /triggers/events/{event_id}`
-
-Gets one persisted trigger event.
-
-## Gateway APIs
 
 ### `GET /gateway/wechat/accounts`
 
