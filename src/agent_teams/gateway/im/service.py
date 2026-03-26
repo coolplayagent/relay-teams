@@ -93,14 +93,7 @@ class ImToolService:
         ctx = self._resolve_context(session_id)
         if ctx is None:
             return "Session is not linked to an IM chat."
-        if isinstance(ctx, FeishuChatContext):
-            self._feishu_client.send_text_message(
-                chat_id=ctx.chat_id,
-                text=text,
-                environment=ctx.environment,
-            )
-            return "Message sent."
-        self._send_wechat_text(ctx=ctx, text=text)
+        self.send_text_to_context(ctx=ctx, text=text)
         return "Message sent."
 
     def send_file(self, *, session_id: str, file_path: Path) -> str:
@@ -116,6 +109,56 @@ class ImToolService:
                 environment=ctx.environment,
             )
         return self._send_wechat_file(ctx=ctx, file_path=file_path)
+
+    def send_text_to_context(
+        self,
+        *,
+        ctx: FeishuChatContext | WeChatChatContext,
+        text: str,
+    ) -> None:
+        if isinstance(ctx, FeishuChatContext):
+            self.send_text_to_feishu_chat(
+                chat_id=ctx.chat_id,
+                text=text,
+                environment=ctx.environment,
+            )
+            return
+        self.send_text_to_wechat_peer(
+            account_id=ctx.account_id,
+            peer_user_id=ctx.peer_user_id,
+            text=text,
+            context_token=ctx.context_token,
+        )
+
+    def send_text_to_feishu_chat(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self._feishu_client.send_text_message(
+            chat_id=chat_id,
+            text=text,
+            environment=environment,
+        )
+
+    def send_text_to_wechat_peer(
+        self,
+        *,
+        account_id: str,
+        peer_user_id: str,
+        text: str,
+        context_token: str | None,
+    ) -> None:
+        self._send_wechat_text(
+            ctx=WeChatChatContext(
+                account_id=account_id,
+                peer_user_id=peer_user_id,
+                context_token=context_token,
+            ),
+            text=text,
+        )
 
     def _resolve_context(
         self,

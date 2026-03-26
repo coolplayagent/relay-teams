@@ -51,7 +51,11 @@ from agent_teams.gateway.feishu import (
     FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
-from agent_teams.gateway.im import ImToolContextResolver, ImToolService
+from agent_teams.gateway.im import (
+    ImSessionCommandService,
+    ImToolContextResolver,
+    ImToolService,
+)
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -480,18 +484,6 @@ class ServerContainer:
             repository=self.gateway_session_repository,
             session_service=self.session_service,
         )
-        self.wechat_gateway_service = WeChatGatewayService(
-            config_dir=config_dir,
-            repository=self.wechat_account_repository,
-            secret_store=None,
-            client=self.wechat_client,
-            gateway_session_service=self.gateway_session_service,
-            run_service=self.run_service,
-            run_event_hub=self.run_event_hub,
-            workspace_service=self.workspace_service,
-            role_registry=self.role_registry,
-            orchestration_settings_service=self.orchestration_settings_service,
-        )
         self.feishu_inbound_runtime = FeishuInboundRuntime(
             session_service=self.session_service,
             run_service=self.run_service,
@@ -506,6 +498,28 @@ class ServerContainer:
             message_pool_repo=self.feishu_message_pool_repo,
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
+        )
+        self.im_session_command_service = ImSessionCommandService(
+            session_service=self.session_service,
+            run_service=self.run_service,
+            external_session_binding_repo=self.external_session_binding_repo,
+            gateway_session_service=self.gateway_session_service,
+            feishu_message_pool_service=self.feishu_message_pool_service,
+        )
+        self.wechat_gateway_service = WeChatGatewayService(
+            config_dir=config_dir,
+            repository=self.wechat_account_repository,
+            secret_store=None,
+            client=self.wechat_client,
+            gateway_session_service=self.gateway_session_service,
+            run_service=self.run_service,
+            run_event_hub=self.run_event_hub,
+            workspace_service=self.workspace_service,
+            role_registry=self.role_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
+            session_service=self.session_service,
+            im_tool_service=self.im_tool_service,
+            im_session_command_service=self.im_session_command_service,
         )
         self.notification_service = NotificationService(
             run_event_hub=self.run_event_hub,
@@ -539,11 +553,9 @@ class ServerContainer:
         self.feishu_trigger_handler = FeishuTriggerHandler(
             trigger_service=self.trigger_service,
             feishu_config_service=self.feishu_trigger_config_service,
-            session_service=self.session_service,
-            run_service=self.run_service,
-            external_session_binding_repo=self.external_session_binding_repo,
             message_pool_service=self.feishu_message_pool_service,
-            feishu_client=self.feishu_client,
+            im_tool_service=self.im_tool_service,
+            im_session_command_service=self.im_session_command_service,
         )
         self.feishu_subscription_service = FeishuSubscriptionService(
             trigger_service=self.trigger_service,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 import json
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import Event, Lock, Thread
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
@@ -26,6 +28,7 @@ from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.agents.orchestration import OrchestrationSettingsService
+from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.workspace import WorkspaceService
 from agent_teams.gateway.wechat.account_repository import WeChatAccountRepository
@@ -48,6 +51,9 @@ from agent_teams.gateway.wechat.secret_store import (
     WeChatSecretStore,
     get_wechat_secret_store,
 )
+
+if TYPE_CHECKING:
+    from agent_teams.gateway.im import ImSessionCommandService, ImToolService
 
 _TERMINAL_EVENT_TYPES = {
     RunEventType.RUN_COMPLETED,
@@ -73,6 +79,9 @@ class WeChatGatewayService:
         workspace_service: WorkspaceService,
         role_registry: RoleRegistry,
         orchestration_settings_service: OrchestrationSettingsService,
+        session_service: SessionService,
+        im_tool_service: ImToolService,
+        im_session_command_service: ImSessionCommandService,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -86,6 +95,9 @@ class WeChatGatewayService:
         self._workspace_service = workspace_service
         self._role_registry = role_registry
         self._orchestration_settings_service = orchestration_settings_service
+        self._session_service = session_service
+        self._im_tool_service = im_tool_service
+        self._im_session_command_service = im_session_command_service
         self._status_lock = Lock()
         self._status_by_account: dict[str, WeChatGatewaySnapshot] = {}
         self._monitor_stop_events: dict[str, Event] = {}
@@ -479,6 +491,39 @@ class WeChatGatewayService:
                 "last_inbound_at": now.isoformat(),
             },
         )
+        command_response = self._im_session_command_service.handle_wechat_command(
+            session_id=gateway_session.internal_session_id,
+            gateway_session_id=gateway_session.gateway_session_id,
+            text=text,
+        )
+        if command_response is not None:
+            self._send_intermediate_text(
+                account_id=account.account_id,
+                gateway_session_id=gateway_session.gateway_session_id,
+                peer_user_id=peer_user_id,
+                context_token=message.context_token,
+                text=command_response,
+                event_name="wechat.command.response",
+                failure_message="Failed to send WeChat command response",
+            )
+            return
+        recovery_snapshot = self._session_service.get_recovery_snapshot(
+            gateway_session.internal_session_id
+        )
+        has_active_run = isinstance(recovery_snapshot.get("active_run"), Mapping)
+        if has_active_run:
+            receipt_text = "\u6536\u5230\uff0c\u5df2\u52a0\u5165\u5f53\u524d\u4f1a\u8bdd\u5904\u7406\u3002"
+        else:
+            receipt_text = "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
+        self._send_intermediate_text(
+            account_id=account.account_id,
+            gateway_session_id=gateway_session.gateway_session_id,
+            peer_user_id=peer_user_id,
+            context_token=message.context_token,
+            text=receipt_text,
+            event_name="wechat.receipt",
+            failure_message="Failed to send WeChat receipt",
+        )
         run_id, _ = self._run_service.create_run(
             IntentInput(
                 session_id=gateway_session.internal_session_id,
@@ -549,10 +594,9 @@ class WeChatGatewayService:
                         "peer_user_id": peer_user_id,
                     },
                 )
-                self._client.send_text_message(
-                    account=account,
-                    token=token,
-                    to_user_id=peer_user_id,
+                self._im_tool_service.send_text_to_wechat_peer(
+                    account_id=account_id,
+                    peer_user_id=peer_user_id,
                     text=text,
                     context_token=context_token,
                 )
@@ -716,6 +760,87 @@ class WeChatGatewayService:
                 },
                 exc_info=exc,
             )
+
+    def _send_intermediate_text(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+        text: str,
+        event_name: str,
+        failure_message: str,
+    ) -> None:
+        try:
+            self._im_tool_service.send_text_to_wechat_peer(
+                account_id=account_id,
+                peer_user_id=peer_user_id,
+                text=text,
+                context_token=context_token,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event=f"{event_name}.failed",
+                message=failure_message,
+                payload={
+                    "account_id": account_id,
+                    "gateway_session_id": gateway_session_id,
+                    "peer_user_id": peer_user_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+            return
+        self._record_intermediate_outbound(
+            account_id=account_id,
+            gateway_session_id=gateway_session_id,
+            peer_user_id=peer_user_id,
+            context_token=context_token,
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+
+    def _record_intermediate_outbound(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+        occurred_at: datetime,
+    ) -> None:
+        try:
+            self._gateway_session_service.update_channel_state(
+                gateway_session_id,
+                channel_state={
+                    "context_token": context_token,
+                    "last_outbound_at": occurred_at.isoformat(),
+                },
+                peer_user_id=peer_user_id,
+                peer_chat_id=peer_user_id,
+            )
+        except KeyError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.intermediate.channel_state_update_failed",
+                message="Failed to update WeChat channel state after sending text",
+                payload={
+                    "account_id": account_id,
+                    "gateway_session_id": gateway_session_id,
+                    "peer_user_id": peer_user_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+        self._set_status(
+            account_id,
+            last_error=None,
+            last_outbound_at=occurred_at,
+            last_event_at=occurred_at,
+        )
 
     def _send_typing(
         self,

@@ -5,6 +5,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.gateway.im.command_service import ImSessionCommandService
     from agent_teams.gateway.im.context import (
         FeishuChatContext,
         ImToolContextResolver,
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "FeishuChatContext",
+    "ImSessionCommandService",
     "ImToolContextResolver",
     "ImToolService",
     "WeChatChatContext",
@@ -27,6 +29,10 @@ __all__ = [
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "FeishuChatContext": ("agent_teams.gateway.im.context", "FeishuChatContext"),
+    "ImSessionCommandService": (
+        "agent_teams.gateway.im.command_service",
+        "ImSessionCommandService",
+    ),
     "ImToolContextResolver": (
         "agent_teams.gateway.im.context",
         "ImToolContextResolver",

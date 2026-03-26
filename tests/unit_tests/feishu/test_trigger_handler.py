@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timezone
 from pathlib import Path
+from typing import cast
 
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 from pydantic import JsonValue
@@ -21,8 +22,11 @@ from agent_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from agent_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
+from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.gateway.im import ImSessionCommandService, ImToolService
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
-from agent_teams.sessions import ExternalSessionBindingRepository
+from agent_teams.sessions import ExternalSessionBindingRepository, SessionService
+from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.triggers import (
@@ -55,10 +59,7 @@ class _FakeTriggerService:
         remote_addr: str | None,
         raw_body: str,
     ) -> TriggerIngestResult:
-        _ = event
-        _ = headers
-        _ = remote_addr
-        _ = raw_body
+        _ = (event, headers, remote_addr, raw_body)
         return TriggerIngestResult(
             accepted=True,
             event_id="tev_1",
@@ -149,6 +150,17 @@ class _FakeSessionService:
         self.cleared_sessions.append(session_id)
         return count
 
+    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
+        if session_id not in self.sessions:
+            raise KeyError(session_id)
+        return {
+            "active_run": {
+                "run_id": "run-1",
+                "status": "paused",
+                "phase": "awaiting_tool_approval",
+            }
+        }
+
 
 class _FakeRunService:
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
@@ -172,6 +184,24 @@ class _FakeFeishuClient:
     ) -> None:
         _ = environment
         self.sent_messages.append((chat_id, text))
+
+
+class _FakeImToolService:
+    def __init__(self, feishu_client: _FakeFeishuClient) -> None:
+        self._feishu_client = feishu_client
+
+    def send_text_to_feishu_chat(
+        self,
+        *,
+        chat_id: str,
+        text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        self._feishu_client.send_text_message(
+            chat_id=chat_id,
+            text=text,
+            environment=environment,
+        )
 
 
 class _FakeMessagePoolService:
@@ -207,10 +237,7 @@ class _FakeMessagePoolService:
         headers: dict[str, str],
         remote_addr: str | None,
     ) -> TriggerProcessingResult:
-        _ = runtime_config
-        _ = raw_body
-        _ = headers
-        _ = remote_addr
+        _ = (runtime_config, raw_body, headers, remote_addr)
         self.enqueued.append(normalized)
         return self.result
 
@@ -239,6 +266,11 @@ class _FakeMessagePoolService:
         return self.clear_result
 
 
+class _FakeGatewaySessionService:
+    def bind_active_run(self, gateway_session_id: str, run_id: str | None) -> None:
+        _ = (gateway_session_id, run_id)
+
+
 def _build_trigger(
     *,
     trigger_id: str,
@@ -257,7 +289,7 @@ def _build_trigger(
         "workspace_id": workspace_id,
         "session_mode": session_mode.value,
         "yolo": yolo,
-        "thinking": ((thinking or RunThinkingConfig()).model_dump(mode="json")),
+        "thinking": (thinking or RunThinkingConfig()).model_dump(mode="json"),
     }
     if normal_root_role_id is not None:
         target_config["normal_root_role_id"] = normal_root_role_id
@@ -317,6 +349,17 @@ def _build_handler(
     message_pool_service = _FakeMessagePoolService()
     bindings = ExternalSessionBindingRepository(tmp_path / "bindings.db")
     feishu_client = _FakeFeishuClient()
+    im_tool_service = _FakeImToolService(feishu_client)
+    im_session_command_service = ImSessionCommandService(
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, _FakeRunService()),
+        external_session_binding_repo=bindings,
+        gateway_session_service=cast(
+            GatewaySessionService,
+            _FakeGatewaySessionService(),
+        ),
+        feishu_message_pool_service=message_pool_service,
+    )
     resolved_runtime_configs: dict[str, FeishuTriggerRuntimeConfig | None]
     if runtime_configs is None:
         resolved_runtime_configs = {
@@ -327,11 +370,9 @@ def _build_handler(
     handler = FeishuTriggerHandler(
         trigger_service=_FakeTriggerService(*triggers),
         feishu_config_service=_FakeFeishuConfigService(resolved_runtime_configs),
-        session_service=session_service,
-        run_service=_FakeRunService(),
-        external_session_binding_repo=bindings,
         message_pool_service=message_pool_service,
-        feishu_client=feishu_client,
+        im_tool_service=cast(ImToolService, im_tool_service),
+        im_session_command_service=im_session_command_service,
     )
     return handler, session_service, message_pool_service, bindings, feishu_client
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from json import JSONDecodeError, loads
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from lark_oapi.api.im.v1.model.event_message import EventMessage
 from lark_oapi.api.im.v1.model.event_sender import EventSender
@@ -17,28 +17,24 @@ from pydantic import JsonValue
 from agent_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuChatQueueClearResult,
-    FeishuChatQueueItemPreview,
     FeishuChatQueueSummary,
-    FeishuEnvironment,
     FeishuNormalizedMessage,
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
 )
 from agent_teams.logger import get_logger, log_event
-from agent_teams.providers.token_usage_repo import SessionTokenUsage
-from agent_teams.sessions import ExternalSessionBindingRepository
-from agent_teams.sessions.runs.run_models import IntentInput
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.triggers import (
     TriggerDefinition,
     TriggerIngestInput,
     TriggerIngestResult,
 )
 
+if TYPE_CHECKING:
+    from agent_teams.gateway.im import ImSessionCommandService, ImToolService
+
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
 _AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
 _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
-_SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear"})
 
 logger = get_logger(__name__)
 
@@ -61,45 +57,6 @@ class FeishuConfigResolverLike(Protocol):
         self,
         trigger: TriggerDefinition,
     ) -> FeishuTriggerRuntimeConfig | None: ...
-
-
-class SessionServiceLike(Protocol):
-    def create_session(
-        self,
-        *,
-        session_id: str | None = None,
-        workspace_id: str,
-        metadata: dict[str, str] | None = None,
-        session_mode: SessionMode | None = None,
-        normal_root_role_id: str | None = None,
-        orchestration_preset_id: str | None = None,
-    ) -> SessionRecord: ...
-
-    def get_session(self, session_id: str) -> SessionRecord: ...
-
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None: ...
-
-    def get_session_messages(self, session_id: str) -> list[dict[str, object]]: ...
-
-    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage: ...
-
-    def clear_session_messages(self, session_id: str) -> int: ...
-
-
-class RunServiceLike(Protocol):
-    def create_run(self, intent: IntentInput) -> tuple[str, str]: ...
-
-    def ensure_run_started(self, run_id: str) -> None: ...
-
-
-class FeishuClientLike(Protocol):
-    def send_text_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        environment: FeishuEnvironment | None = None,
-    ) -> None: ...
 
 
 class FeishuMessagePoolServiceLike(Protocol):
@@ -137,19 +94,15 @@ class FeishuTriggerHandler:
         *,
         trigger_service: TriggerServiceLike,
         feishu_config_service: FeishuConfigResolverLike,
-        session_service: SessionServiceLike,
-        run_service: RunServiceLike,
-        external_session_binding_repo: ExternalSessionBindingRepository,
         message_pool_service: FeishuMessagePoolServiceLike,
-        feishu_client: FeishuClientLike | None = None,
+        im_tool_service: ImToolService,
+        im_session_command_service: ImSessionCommandService,
     ) -> None:
         self._trigger_service = trigger_service
         self._feishu_config_service = feishu_config_service
-        self._session_service = session_service
-        self._run_service = run_service
-        self._external_session_binding_repo = external_session_binding_repo
         self._message_pool_service = message_pool_service
-        self._feishu_client = feishu_client
+        self._im_tool_service = im_tool_service
+        self._im_session_command_service = im_session_command_service
 
     def handle_sdk_event(
         self,
@@ -269,12 +222,22 @@ class FeishuTriggerHandler:
                 reason="empty_trigger_text",
             )
 
-        command = normalized.trigger_text.strip().casefold()
-        if command in _SESSION_COMMANDS:
-            return self._handle_session_command(
-                command=command,
+        response_text = self._im_session_command_service.handle_feishu_command(
+            runtime_config=runtime_config,
+            message=normalized,
+        )
+        if response_text is not None:
+            self._send_command_response(
+                chat_id=normalized.chat_id,
+                text=response_text,
                 runtime_config=runtime_config,
-                normalized=normalized,
+            )
+            return TriggerProcessingResult(
+                status="command",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=normalized.event_id,
+                reason="session_command",
             )
         return self._message_pool_service.enqueue_message(
             runtime_config=runtime_config,
@@ -284,199 +247,18 @@ class FeishuTriggerHandler:
             remote_addr=remote_addr,
         )
 
-    def _handle_session_command(
-        self,
-        *,
-        command: str,
-        runtime_config: FeishuTriggerRuntimeConfig,
-        normalized: FeishuNormalizedMessage,
-    ) -> TriggerProcessingResult:
-        if command == "help":
-            response_text = self._cmd_help()
-        elif command == "status":
-            response_text = self._cmd_status(
-                runtime_config=runtime_config,
-                message=normalized,
-            )
-        else:
-            response_text = self._cmd_clear(
-                runtime_config=runtime_config,
-                message=normalized,
-            )
-        self._send_command_response(
-            chat_id=normalized.chat_id,
-            text=response_text,
-            environment=runtime_config.environment,
-        )
-        return TriggerProcessingResult(
-            status="command",
-            trigger_id=runtime_config.trigger_id,
-            trigger_name=runtime_config.trigger_name,
-            event_id=normalized.event_id,
-            reason="session_command",
-        )
-
-    def _cmd_help(self) -> str:
-        lines = [
-            "[Session Commands]",
-            "",
-            "help   - Show this help message",
-            "status - Show current session and queue state",
-            "clear  - Clear session context and queued messages",
-        ]
-        return "\n".join(lines)
-
-    def _cmd_status(
-        self,
-        *,
-        runtime_config: FeishuTriggerRuntimeConfig,
-        message: FeishuNormalizedMessage,
-    ) -> str:
-        session_id = self._resolve_existing_session_id(
-            runtime_config=runtime_config,
-            message=message,
-        )
-        queue_summary = self._message_pool_service.get_chat_summary(
-            trigger_id=runtime_config.trigger_id,
-            tenant_key=message.tenant_key,
-            chat_id=message.chat_id,
-        )
-        lines = ["[Session Status]", ""]
-        if session_id is None:
-            lines.append("Session: (none)")
-        else:
-            messages = self._session_service.get_session_messages(session_id)
-            usage = self._session_service.get_token_usage_by_session(session_id)
-            lines.extend(
-                [
-                    f"Session: {session_id}",
-                    f"Messages: {len(messages)}",
-                    f"Tokens: input={usage.total_input_tokens}"
-                    f"  output={usage.total_output_tokens}"
-                    f"  total={usage.total_tokens}",
-                    f"Requests: {usage.total_requests}",
-                ]
-            )
-            recent = messages[-3:]
-            if recent:
-                lines.append("")
-                lines.append("Recent messages:")
-                for msg in recent:
-                    role = str(msg.get("role", "unknown"))
-                    preview = _extract_content_preview(msg)
-                    lines.append(f"  [{role}] {preview}")
-
-        lines.append("")
-        lines.append(
-            "Queue: "
-            f"active={queue_summary.active_total} "
-            f"queued={queue_summary.queued_count} "
-            f"claimed={queue_summary.claimed_count} "
-            f"waiting={queue_summary.waiting_result_count} "
-            f"retryable_failed={queue_summary.retryable_failed_count} "
-            f"dead_letter={queue_summary.dead_letter_count} "
-            f"cancelled={queue_summary.cancelled_count}"
-        )
-        if queue_summary.processing_item is not None:
-            lines.append("")
-            lines.append(
-                "Processing: " + self._format_queue_item(queue_summary.processing_item)
-            )
-        if queue_summary.queued_items:
-            lines.append("")
-            lines.append("Queued messages:")
-            for item in queue_summary.queued_items:
-                lines.append("  " + self._format_queue_item(item))
-        return "\n".join(lines)
-
-    def _cmd_clear(
-        self,
-        *,
-        runtime_config: FeishuTriggerRuntimeConfig,
-        message: FeishuNormalizedMessage,
-    ) -> str:
-        session_id = self._resolve_existing_session_id(
-            runtime_config=runtime_config,
-            message=message,
-        )
-        cleared_session_messages = 0
-        if session_id is not None:
-            try:
-                cleared_session_messages = self._session_service.clear_session_messages(
-                    session_id
-                )
-            except Exception as exc:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    event="feishu.command.clear_failed",
-                    message="Failed to clear session messages",
-                    payload={"session_id": session_id, "error": str(exc)},
-                )
-                return "[Clear] Failed to clear session messages."
-        try:
-            queue_result = self._message_pool_service.clear_chat(
-                trigger_id=runtime_config.trigger_id,
-                tenant_key=message.tenant_key,
-                chat_id=message.chat_id,
-            )
-        except Exception as exc:
-            log_event(
-                logger,
-                logging.WARNING,
-                event="feishu.command.clear_queue_failed",
-                message="Failed to clear queued Feishu messages",
-                payload={
-                    "trigger_id": runtime_config.trigger_id,
-                    "tenant_key": message.tenant_key,
-                    "chat_id": message.chat_id,
-                    "error": str(exc),
-                },
-            )
-            return "[Clear] Failed to clear queued messages."
-        if session_id is None and queue_result.cleared_queue_count == 0:
-            return "[Clear] No active session or queued messages. Nothing to clear."
-        return (
-            "[Clear] "
-            f"Cleared {cleared_session_messages} active session messages and "
-            f"{queue_result.cleared_queue_count} queued messages. "
-            f"Stopped {queue_result.stopped_run_count} active runs."
-        )
-
-    def _resolve_existing_session_id(
-        self,
-        *,
-        runtime_config: FeishuTriggerRuntimeConfig,
-        message: FeishuNormalizedMessage,
-    ) -> str | None:
-        binding = self._external_session_binding_repo.get_binding(
-            platform=FEISHU_PLATFORM,
-            trigger_id=runtime_config.trigger_id,
-            tenant_key=message.tenant_key,
-            external_chat_id=message.chat_id,
-        )
-        if binding is None:
-            return None
-        try:
-            self._session_service.get_session(binding.session_id)
-        except KeyError:
-            return None
-        return binding.session_id
-
     def _send_command_response(
         self,
         *,
         chat_id: str,
         text: str,
-        environment: FeishuEnvironment,
+        runtime_config: FeishuTriggerRuntimeConfig,
     ) -> None:
-        if self._feishu_client is None:
-            return
         try:
-            self._feishu_client.send_text_message(
+            self._im_tool_service.send_text_to_feishu_chat(
                 chat_id=chat_id,
                 text=text,
-                environment=environment,
+                environment=runtime_config.environment,
             )
         except RuntimeError as exc:
             log_event(
@@ -486,22 +268,6 @@ class FeishuTriggerHandler:
                 message="Failed to send command response to Feishu chat",
                 payload={"chat_id": chat_id, "error": str(exc)},
             )
-
-    def _format_queue_item(self, item: FeishuChatQueueItemPreview) -> str:
-        segments = [item.processing_status.value]
-        if item.intent_preview:
-            segments.append(item.intent_preview)
-        if item.run_id:
-            segments.append(f"run={item.run_id}")
-        if item.run_status:
-            segments.append(f"status={item.run_status}")
-        if item.run_phase:
-            segments.append(f"phase={item.run_phase}")
-        if item.blocking_reason:
-            segments.append(f"blocked={item.blocking_reason}")
-        if item.last_error:
-            segments.append(f"error={item.last_error}")
-        return " | ".join(segments)
 
 
 def _parse_json_object(raw_body: str) -> dict[str, JsonValue]:
@@ -702,29 +468,3 @@ def _is_sender_bot(sender_type: str | None) -> bool:
         return False
     lowered = sender_type.strip().lower()
     return lowered in {"app", "bot"}
-
-
-def _extract_content_preview(
-    msg: dict[str, object],
-    *,
-    max_length: int = 60,
-) -> str:
-    message_payload = msg.get("message")
-    if not isinstance(message_payload, dict):
-        return "(no content)"
-    parts = message_payload.get("parts")
-    if not isinstance(parts, list) or not parts:
-        return "(no content)"
-    for part in parts:
-        if not isinstance(part, dict):
-            continue
-        kind = str(part.get("part_kind", ""))
-        if kind not in {"user-prompt", "text"}:
-            continue
-        content = part.get("content")
-        if isinstance(content, str) and content.strip():
-            text = content.strip().replace("\n", " ")
-            if len(text) > max_length:
-                return text[:max_length] + "..."
-            return text
-    return "(no content)"
