@@ -165,6 +165,47 @@ def test_uvicorn_access_logs_are_excluded_from_backend_log(tmp_path: Path) -> No
         snapshot.restore()
 
 
+def test_httpx_info_access_logs_are_excluded_from_backend_log(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        httpx_logger = logging.getLogger("httpx")
+        httpx_logger.info('HTTP Request: POST https://example.test "HTTP/1.1 200 OK"')
+
+        shutdown_logging()
+
+        backend_lines = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        debug_lines = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert (
+            'HTTP Request: POST https://example.test "HTTP/1.1 200 OK"'
+            not in backend_lines
+        )
+        assert (
+            'HTTP Request: POST https://example.test "HTTP/1.1 200 OK"' in debug_lines
+        )
+    finally:
+        snapshot.restore()
+
+
+def test_httpx_error_logs_remain_in_backend_log(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        httpx_logger = logging.getLogger("httpx")
+        httpx_logger.error("HTTP transport failed")
+
+        shutdown_logging()
+
+        backend_lines = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        debug_lines = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert "HTTP transport failed" in backend_lines
+        assert "HTTP transport failed" in debug_lines
+    finally:
+        snapshot.restore()
+
+
 def test_log_level_filters_lower_priority_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

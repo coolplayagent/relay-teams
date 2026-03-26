@@ -116,13 +116,25 @@ class _BackendLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if _resolve_log_source(record) != "backend":
             return False
-        return record.name != "uvicorn.access"
+        if record.name == "uvicorn.access":
+            return False
+        if _is_noisy_httpx_access_log(record):
+            return False
+        return True
 
 
 class _DebugLogFilter(logging.Filter):
     @override
     def filter(self, record: logging.LogRecord) -> bool:
         return _resolve_log_source(record) == "backend"
+
+
+def _is_noisy_httpx_access_log(record: logging.LogRecord) -> bool:
+    if record.name != "httpx":
+        return False
+    if record.levelno != logging.INFO:
+        return False
+    return record.getMessage().startswith("HTTP Request:")
 
 
 class HumanReadableFormatter(logging.Formatter):
