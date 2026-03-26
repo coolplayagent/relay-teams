@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import Future as ConcurrentFuture
 import json
+import logging
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -16,7 +19,7 @@ import qrcode.image.svg
 
 from agent_teams.gateway.gateway_models import GatewayChannelType
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
-from agent_teams.logger import get_logger
+from agent_teams.logger import get_logger, log_event
 from agent_teams.roles import RoleRegistry
 from agent_teams.sessions.runs import RunEventHub
 from agent_teams.sessions.runs.enums import RunEventType
@@ -337,8 +340,27 @@ class WeChatGatewayService:
         if thread is not None and thread.is_alive():
             return
         try:
-            _ = self._secret_store.get_bot_token(self._config_dir, account_id)
-        except Exception:
+            token = self._secret_store.get_bot_token(self._config_dir, account_id)
+        except Exception as exc:
+            self._set_status(account_id, running=False, last_error=str(exc))
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.worker.start_failed",
+                message="Failed to start WeChat worker",
+                payload={"account_id": account_id, "error": str(exc)},
+                exc_info=exc,
+            )
+            return
+        if token is None:
+            self._set_status(account_id, running=False, last_error="missing_token")
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.worker.missing_token",
+                message="Skipped WeChat worker startup because token is missing",
+                payload={"account_id": account_id},
+            )
             return
         stop_event = Event()
         self._monitor_stop_events[account_id] = stop_event
@@ -350,6 +372,13 @@ class WeChatGatewayService:
         )
         self._monitor_threads[account_id] = thread
         thread.start()
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="wechat.worker.started",
+            message="Started WeChat worker",
+            payload={"account_id": account_id},
+        )
 
     def _stop_account_worker(self, account_id: str) -> None:
         stop_event = self._monitor_stop_events.pop(account_id, None)
@@ -381,7 +410,7 @@ class WeChatGatewayService:
                         )
                     )
                 now = datetime.now(tz=timezone.utc)
-                self._set_status(account_id, running=True, last_error=None, last_event_at=now)
+                self._set_status(account_id, running=True, last_event_at=now)
                 for message in response.msgs:
                     self._handle_message(updated_account, token, message)
             except Exception as exc:
@@ -448,7 +477,7 @@ class WeChatGatewayService:
         self._send_typing(account, token, peer_user_id, message.context_token, 1)
         if run_id not in self._watched_runs:
             self._watched_runs.add(run_id)
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self._await_terminal_and_reply(
                     account_id=account.account_id,
                     gateway_session_id=gateway_session.gateway_session_id,
@@ -458,6 +487,17 @@ class WeChatGatewayService:
                 ),
                 self._require_loop(),
             )
+
+            def on_reply_done(done: ConcurrentFuture[None]) -> None:
+                self._handle_reply_future(
+                    account_id=account.account_id,
+                    gateway_session_id=gateway_session.gateway_session_id,
+                    run_id=run_id,
+                    peer_user_id=peer_user_id,
+                    future=done,
+                )
+
+            future.add_done_callback(on_reply_done)
 
     async def _await_terminal_and_reply(
         self,
@@ -475,9 +515,23 @@ class WeChatGatewayService:
                 account = self._repository.get_account(account_id)
                 token = self._secret_store.get_bot_token(self._config_dir, account_id)
                 if token is None:
-                    return
+                    raise RuntimeError(
+                        f"WeChat reply failed because bot token is missing for {account_id}."
+                    )
                 text = self._terminal_text(event)
                 self._send_typing(account, token, peer_user_id, context_token, 2)
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    event="wechat.reply.attempted",
+                    message="Attempting to send WeChat reply",
+                    payload={
+                        "account_id": account_id,
+                        "gateway_session_id": gateway_session_id,
+                        "run_id": run_id,
+                        "peer_user_id": peer_user_id,
+                    },
+                )
                 self._client.send_text_message(
                     account=account,
                     token=token,
@@ -486,24 +540,165 @@ class WeChatGatewayService:
                     context_token=context_token,
                 )
                 now = datetime.now(tz=timezone.utc)
-                self._gateway_session_service.update_channel_state(
-                    gateway_session_id,
-                    channel_state={
-                        "context_token": context_token,
-                        "last_outbound_at": now.isoformat(),
-                    },
+                self._record_reply_success(
+                    account_id=account_id,
+                    gateway_session_id=gateway_session_id,
+                    run_id=run_id,
                     peer_user_id=peer_user_id,
-                    peer_chat_id=peer_user_id,
-                )
-                self._gateway_session_service.bind_active_run(gateway_session_id, None)
-                self._set_status(
-                    account_id,
-                    last_outbound_at=now,
-                    last_event_at=now,
+                    context_token=context_token,
+                    occurred_at=now,
                 )
                 return
+            raise RuntimeError(
+                f"WeChat reply watcher ended before a terminal run event for {run_id}."
+            )
+        except Exception as exc:
+            self._record_reply_failure(
+                account_id=account_id,
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+                peer_user_id=peer_user_id,
+                error_message=str(exc),
+            )
+            raise
         finally:
             self._watched_runs.discard(run_id)
+
+    def _handle_reply_future(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        run_id: str,
+        peer_user_id: str,
+        future: ConcurrentFuture[None],
+    ) -> None:
+        try:
+            future.result()
+        except FutureCancelledError as exc:
+            message = f"WeChat reply task was cancelled for run {run_id}."
+            self._record_reply_failure(
+                account_id=account_id,
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+                peer_user_id=peer_user_id,
+                error_message=message,
+            )
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.reply.cancelled",
+                message="WeChat reply task was cancelled",
+                payload={
+                    "account_id": account_id,
+                    "gateway_session_id": gateway_session_id,
+                    "run_id": run_id,
+                    "peer_user_id": peer_user_id,
+                },
+                exc_info=exc,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                event="wechat.reply.failed",
+                message="WeChat reply task failed",
+                payload={
+                    "account_id": account_id,
+                    "gateway_session_id": gateway_session_id,
+                    "run_id": run_id,
+                    "peer_user_id": peer_user_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+
+    def _record_reply_success(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        run_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+        occurred_at: datetime,
+    ) -> None:
+        try:
+            self._gateway_session_service.update_channel_state(
+                gateway_session_id,
+                channel_state={
+                    "context_token": context_token,
+                    "last_outbound_at": occurred_at.isoformat(),
+                },
+                peer_user_id=peer_user_id,
+                peer_chat_id=peer_user_id,
+            )
+        except KeyError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.reply.channel_state_update_failed",
+                message="Failed to update WeChat channel state after sending reply",
+                payload={
+                    "account_id": account_id,
+                    "gateway_session_id": gateway_session_id,
+                    "run_id": run_id,
+                    "peer_user_id": peer_user_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+        self._clear_active_run(gateway_session_id)
+        self._set_status(
+            account_id,
+            last_error=None,
+            last_outbound_at=occurred_at,
+            last_event_at=occurred_at,
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="wechat.reply.sent",
+            message="Sent WeChat reply",
+            payload={
+                "account_id": account_id,
+                "gateway_session_id": gateway_session_id,
+                "run_id": run_id,
+                "peer_user_id": peer_user_id,
+            },
+        )
+
+    def _record_reply_failure(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        run_id: str,
+        peer_user_id: str,
+        error_message: str,
+    ) -> None:
+        self._clear_active_run(gateway_session_id)
+        self._set_status(
+            account_id,
+            last_error=error_message,
+            last_event_at=datetime.now(tz=timezone.utc),
+        )
+
+    def _clear_active_run(self, gateway_session_id: str) -> None:
+        try:
+            self._gateway_session_service.bind_active_run(gateway_session_id, None)
+        except KeyError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.reply.clear_active_run_failed",
+                message="Failed to clear WeChat active run binding",
+                payload={
+                    "gateway_session_id": gateway_session_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
 
     def _send_typing(
         self,

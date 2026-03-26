@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 import secrets
 import time
+from uuid import uuid4
 
 import httpx
 
@@ -16,6 +17,7 @@ from agent_teams.wechat.models import (
     WeChatBaseInfo,
     WeChatGetUpdatesResponse,
     WeChatLoginSession,
+    WeChatOperationResponse,
     WeChatQrCodeResponse,
     WeChatQrStatusResponse,
     WeChatTypingConfigResponse,
@@ -23,6 +25,8 @@ from agent_teams.wechat.models import (
 
 _DEFAULT_LONG_POLL_TIMEOUT_MS = 35000
 _DEFAULT_API_TIMEOUT_SECONDS = 15.0
+_WECHAT_BOT_MESSAGE_TYPE = 2
+_WECHAT_MESSAGE_STATE_FINISH = 2
 
 
 class WeChatClient:
@@ -123,26 +127,28 @@ class WeChatClient:
         text: str,
         context_token: str | None,
     ) -> None:
-        self._request(
+        response = self._request(
             base_url=account.base_url,
             path="ilink/bot/sendmessage",
             route_tag=account.route_tag,
             method="POST",
             payload={
-                "msg": {
-                    "to_user_id": to_user_id,
-                    "context_token": context_token,
-                    "item_list": [
-                        {
-                            "type": 1,
-                            "text_item": {"text": text},
-                        }
-                    ],
-                },
+                "msg": self._build_text_message(
+                    to_user_id=to_user_id,
+                    text=text,
+                    context_token=context_token,
+                ),
                 "base_info": WeChatBaseInfo().model_dump(mode="json"),
             },
             token=token,
             timeout_seconds=_DEFAULT_API_TIMEOUT_SECONDS,
+        )
+        parsed = WeChatOperationResponse.model_validate(response)
+        self._raise_if_provider_error(
+            ret=parsed.ret,
+            errcode=parsed.errcode,
+            errmsg=parsed.errmsg,
+            operation="send_text_message",
         )
 
     def get_typing_ticket(
@@ -184,7 +190,7 @@ class WeChatClient:
         typing_ticket: str,
         status: int,
     ) -> None:
-        self._request(
+        response = self._request(
             base_url=account.base_url,
             path="ilink/bot/sendtyping",
             route_tag=account.route_tag,
@@ -197,6 +203,13 @@ class WeChatClient:
             },
             token=token,
             timeout_seconds=10.0,
+        )
+        parsed = WeChatOperationResponse.model_validate(response)
+        self._raise_if_provider_error(
+            ret=parsed.ret,
+            errcode=parsed.errcode,
+            errmsg=parsed.errmsg,
+            operation="send_typing",
         )
 
     def _request(
@@ -268,6 +281,30 @@ class WeChatClient:
     def _build_wechat_uin() -> str:
         random_value = secrets.randbelow(2**32 - 1)
         return base64.b64encode(str(random_value).encode("utf-8")).decode("utf-8")
+
+    @staticmethod
+    def _build_text_message(
+        *,
+        to_user_id: str,
+        text: str,
+        context_token: str | None,
+    ) -> dict[str, object]:
+        message: dict[str, object] = {
+            "from_user_id": "",
+            "to_user_id": to_user_id,
+            "client_id": f"agent-teams-wechat-{uuid4().hex}",
+            "message_type": _WECHAT_BOT_MESSAGE_TYPE,
+            "message_state": _WECHAT_MESSAGE_STATE_FINISH,
+            "item_list": [
+                {
+                    "type": 1,
+                    "text_item": {"text": text},
+                }
+            ],
+        }
+        if context_token is not None and context_token.strip():
+            message["context_token"] = context_token
+        return message
 
     @staticmethod
     def _raise_if_provider_error(

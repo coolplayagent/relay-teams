@@ -224,6 +224,14 @@ class WeChatTypingConfigResponse(BaseModel):
     typing_ticket: str | None = None
 
 
+class WeChatOperationResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    ret: int = 0
+    errcode: int | None = None
+    errmsg: str | None = None
+
+
 class WeChatGatewaySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
