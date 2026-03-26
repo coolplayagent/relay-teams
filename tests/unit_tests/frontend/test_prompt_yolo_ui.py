@@ -53,6 +53,7 @@ console.log(JSON.stringify(globalThis.__captured));
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -391,6 +392,7 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -675,6 +677,7 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -1016,6 +1019,7 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 

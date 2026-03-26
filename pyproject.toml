@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cool-play-agent-teams"
-version = "0.0.2"
+dynamic = ["version"]
 description = "Role-driven multi-agent framework with strong typing and tool-based collaboration."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -47,6 +47,9 @@ pythonpath = ["src", "tests", "."]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "agent_teams._version.__version__" }
+
 [tool.setuptools.package-data]
 "agent_teams.builtin" = [
   "config/*.json",
@@ -74,4 +77,3 @@ default-groups = ["evals"]
 [tool.pyright]
 extraPaths = ["src", "tests"]
 typeCheckingMode = "standard"
-
