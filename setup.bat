@@ -31,6 +31,13 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+echo Installing project entry points...
+uv pip install -e .
+if %errorlevel% neq 0 (
+    echo [Error] Editable project install failed.
+    exit /b 1
+)
+
 echo install git hooks....
 uv run pre-commit install
 if %errorlevel% neq 0 (

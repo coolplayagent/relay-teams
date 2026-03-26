@@ -27,6 +27,12 @@ if ! uv sync --all-extras --index-strategy unsafe-best-match; then
   exit 1
 fi
 
+echo "Installing project entry points..."
+if ! uv pip install -e .; then
+  echo "[Error] Editable project install failed."
+  exit 1
+fi
+
 echo "install git hooks...."
 if uv run pre-commit install; then
   echo "Git Hooks install successful"

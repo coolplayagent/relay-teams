@@ -59,6 +59,7 @@ Direct install:
 
 ```bash
 uv sync --extra dev
+uv pip install -e .
 ```
 
 ### 2) help
@@ -69,4 +70,6 @@ agent-teams --help
 # for evals
 agent-teams-evals --help
 ```
+
+If the `agent-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m agent_teams --help` as a fallback.
 
