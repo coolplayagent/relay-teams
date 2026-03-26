@@ -1,7 +1,14 @@
-Send a message or file back to the IM conversation that initiated this session.
+Send content back to the IM conversation that initiated this session.
 
-This tool automatically routes to the active provider for the session:
-- Feishu sessions send text or files to the bound Feishu chat.
-- WeChat sessions send text back to the matching WeChat peer.
+This is the single outbound IM tool entrypoint. It routes by the gateway session bound to the current run:
+- Feishu sessions send to the bound Feishu chat.
+- WeChat sessions send to the matching WeChat peer conversation.
 
 You must provide at least one of `text` or `file_path`.
+
+`file_path` may be quoted, include `~` or environment variables, and may resolve from:
+- the current workspace
+- an absolute local path
+- the current process working directory
+
+When both `text` and `file_path` are provided, the tool sends both to the current IM conversation.

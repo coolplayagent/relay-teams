@@ -178,6 +178,7 @@ class _FakeWeChatSecretStore:
 class _FakeWeChatClient:
     def __init__(self) -> None:
         self.sent_texts: list[tuple[str, str, str, str | None]] = []
+        self.sent_files: list[tuple[str, str, Path, str | None]] = []
 
     def send_text_message(
         self,
@@ -191,6 +192,20 @@ class _FakeWeChatClient:
         self.sent_texts.append(
             (account.account_id, token, to_user_id, context_token or "")
         )
+
+    def send_file(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        file_path: Path,
+        context_token: str | None,
+    ) -> str:
+        self.sent_files.append(
+            (account.account_id, to_user_id, file_path, context_token)
+        )
+        return f"file sent ({file_path.name})"
 
 
 def _build_service(
@@ -484,6 +499,7 @@ def test_send_file_success_for_feishu(tmp_path: Path) -> None:
     assert "file sent" in result
     assert feishu_client.sent_files == [(_CHAT_ID, test_file)]
     assert wechat_client.sent_texts == []
+    assert wechat_client.sent_files == []
 
 
 def test_send_file_not_found(tmp_path: Path) -> None:
@@ -510,9 +526,10 @@ def test_send_file_no_im_session(tmp_path: Path) -> None:
     assert "not linked" in result
     assert feishu_client.sent_files == []
     assert wechat_client.sent_texts == []
+    assert wechat_client.sent_files == []
 
 
-def test_send_file_is_not_supported_for_wechat(tmp_path: Path) -> None:
+def test_send_file_success_for_wechat(tmp_path: Path) -> None:
     test_file = tmp_path / "report.pdf"
     test_file.write_text("content")
     service, feishu_client, wechat_client = _build_service(
@@ -522,9 +539,25 @@ def test_send_file_is_not_supported_for_wechat(tmp_path: Path) -> None:
 
     result = service.send_file(session_id=_SESSION_ID, file_path=test_file)
 
-    assert result == "File sending is not supported for WeChat sessions."
+    assert result == "file sent (report.pdf)"
     assert feishu_client.sent_files == []
     assert wechat_client.sent_texts == []
+    assert wechat_client.sent_files == [
+        (_WECHAT_ACCOUNT_ID, _WECHAT_PEER_ID, test_file, "ctx-1")
+    ]
+
+
+def test_send_file_wechat_requires_token(tmp_path: Path) -> None:
+    test_file = tmp_path / "report.pdf"
+    test_file.write_text("content")
+    service, _, _ = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+        wechat_token=None,
+    )
+
+    with pytest.raises(RuntimeError, match="bot token is missing"):
+        _ = service.send_file(session_id=_SESSION_ID, file_path=test_file)
 
 
 def test_resolve_context_missing_chat_id() -> None:

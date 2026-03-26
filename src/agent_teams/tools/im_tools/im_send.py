@@ -5,6 +5,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
+from agent_teams.tools.im_tools.path_resolution import resolve_im_file_path
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
 DESCRIPTION = load_tool_description(__file__)
@@ -33,7 +34,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 )
                 results.append(result)
             if file_path is not None:
-                resolved_path = ctx.deps.workspace.resolve_path(file_path, write=False)
+                resolved_path = resolve_im_file_path(
+                    file_path=file_path,
+                    workspace=ctx.deps.workspace,
+                )
                 result = service.send_file(
                     session_id=ctx.deps.session_id,
                     file_path=resolved_path,

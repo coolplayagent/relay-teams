@@ -196,3 +196,7 @@ Example:
 Feishu notifications are only sent when the run/session already has Feishu chat
 context. Outbound delivery is bot-aware: the dispatcher uses the `feishu_trigger_id`
 stored on the session metadata to resolve the correct Feishu bot credentials.
+
+Related diagrams:
+
+- [IM Message Flow](./im-message-flow.md)

@@ -18,7 +18,6 @@ def test_registry_contains_registered_local_tools() -> None:
         "create_tasks",
         "dispatch_task",
         "edit",
-        "feishu_send",
         "glob",
         "grep",
         "im_send",
@@ -33,8 +32,7 @@ def test_registry_contains_registered_local_tools() -> None:
     )
 
 
-def test_registry_hides_feishu_send_from_manual_role_configuration() -> None:
+def test_registry_hides_im_send_from_manual_role_configuration() -> None:
     registry = build_default_registry()
 
-    assert "feishu_send" not in registry.list_configurable_names()
     assert "im_send" not in registry.list_configurable_names()

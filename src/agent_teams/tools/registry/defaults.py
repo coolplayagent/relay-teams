@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.tools.im_tools.feishu_send import register as register_feishu_send
 from agent_teams.tools.im_tools.im_send import register as register_im_send
 from agent_teams.tools.registry.registry import ToolRegistry
 from agent_teams.tools.task_tools import TOOLS as TASK_TOOLS
@@ -9,10 +8,9 @@ from agent_teams.tools.web_tools import TOOLS as WEB_TOOLS
 from agent_teams.tools.workspace_tools import TOOLS as WORKSPACE_TOOLS
 
 IM_TOOLS = {
-    "feishu_send": register_feishu_send,
     "im_send": register_im_send,
 }
-HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("feishu_send", "im_send")
+HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send",)
 
 
 def build_default_registry() -> ToolRegistry:

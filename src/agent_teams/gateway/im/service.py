@@ -54,6 +54,16 @@ class _WeChatSender(Protocol):
         context_token: str | None,
     ) -> None: ...
 
+    def send_file(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        file_path: Path,
+        context_token: str | None,
+    ) -> str: ...
+
 
 class ImToolService:
     def __init__(
@@ -105,7 +115,7 @@ class ImToolService:
                 file_path=file_path,
                 environment=ctx.environment,
             )
-        return "File sending is not supported for WeChat sessions."
+        return self._send_wechat_file(ctx=ctx, file_path=file_path)
 
     def _resolve_context(
         self,
@@ -139,5 +149,28 @@ class ImToolService:
             token=token,
             to_user_id=ctx.peer_user_id,
             text=text,
+            context_token=ctx.context_token,
+        )
+
+    def _send_wechat_file(
+        self,
+        *,
+        ctx: WeChatChatContext,
+        file_path: Path,
+    ) -> str:
+        account = self._wechat_account_repo.get_account(ctx.account_id)
+        token = self._wechat_secret_store.get_bot_token(
+            self._config_dir,
+            ctx.account_id,
+        )
+        if token is None:
+            raise RuntimeError(
+                "WeChat send is unavailable because the bot token is missing."
+            )
+        return self._wechat_client.send_file(
+            account=account,
+            token=token,
+            to_user_id=ctx.peer_user_id,
+            file_path=file_path,
             context_token=ctx.context_token,
         )

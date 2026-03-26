@@ -1,3 +1,0 @@
-Compatibility alias for `im_send`.
-
-Use `im_send` for new configurations. This alias still routes through the current IM session and supports the same `text` and `file_path` arguments.

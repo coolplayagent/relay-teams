@@ -85,3 +85,7 @@ CLI management lives under:
 - `agent-teams gateway wechat reload`
 
 Frontend management lives under Settings -> Gateway.
+
+Related diagrams:
+
+- [IM Message Flow](./im-message-flow.md)

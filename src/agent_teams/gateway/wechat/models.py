@@ -26,6 +26,13 @@ class WeChatChatType(str, Enum):
     GROUP = "group"
 
 
+class WeChatUploadMediaType(int, Enum):
+    IMAGE = 1
+    VIDEO = 2
+    FILE = 3
+    VOICE = 4
+
+
 class WeChatAccountRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -230,6 +237,26 @@ class WeChatOperationResponse(BaseModel):
     ret: int = 0
     errcode: int | None = None
     errmsg: str | None = None
+
+
+class WeChatUploadUrlResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    ret: int = 0
+    errcode: int | None = None
+    errmsg: str | None = None
+    upload_param: str | None = None
+    thumb_upload_param: str | None = None
+
+
+class WeChatUploadedMedia(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filekey: str = Field(min_length=1)
+    download_encrypted_query_param: str = Field(min_length=1)
+    aes_key_hex: str = Field(min_length=32, max_length=32)
+    file_size: int = Field(ge=0)
+    file_size_ciphertext: int = Field(ge=0)
 
 
 class WeChatGatewaySnapshot(BaseModel):

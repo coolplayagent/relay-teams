@@ -2,14 +2,21 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 import json
+import hashlib
+import mimetypes
 from datetime import datetime, timedelta, timezone
 import secrets
 import time
+from urllib.parse import quote
 from uuid import uuid4
 
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import httpx
 
+from agent_teams.logger import get_logger
 from agent_teams.net import create_sync_http_client
 from agent_teams.gateway.wechat.models import (
     DEFAULT_WECHAT_BOT_TYPE,
@@ -21,12 +28,23 @@ from agent_teams.gateway.wechat.models import (
     WeChatQrCodeResponse,
     WeChatQrStatusResponse,
     WeChatTypingConfigResponse,
+    WeChatUploadMediaType,
+    WeChatUploadedMedia,
+    WeChatUploadUrlResponse,
 )
 
 _DEFAULT_LONG_POLL_TIMEOUT_MS = 35000
 _DEFAULT_API_TIMEOUT_SECONDS = 15.0
+_DEFAULT_CDN_TIMEOUT_SECONDS = 60.0
+_CDN_UPLOAD_MAX_RETRIES = 3
 _WECHAT_BOT_MESSAGE_TYPE = 2
 _WECHAT_MESSAGE_STATE_FINISH = 2
+_WECHAT_TEXT_ITEM_TYPE = 1
+_WECHAT_IMAGE_ITEM_TYPE = 2
+_WECHAT_FILE_ITEM_TYPE = 4
+_WECHAT_VIDEO_ITEM_TYPE = 5
+
+LOGGER = get_logger(__name__)
 
 
 class WeChatClient:
@@ -150,6 +168,38 @@ class WeChatClient:
             errmsg=parsed.errmsg,
             operation="send_text_message",
         )
+
+    def send_file(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        file_path: Path,
+        context_token: str | None,
+    ) -> str:
+        media_type = self._resolve_media_type(file_path)
+        uploaded = self._upload_media(
+            account=account,
+            token=token,
+            to_user_id=to_user_id,
+            file_path=file_path,
+            media_type=media_type,
+        )
+        self._send_media_message(
+            account=account,
+            token=token,
+            to_user_id=to_user_id,
+            file_path=file_path,
+            media_type=media_type,
+            uploaded=uploaded,
+            context_token=context_token,
+        )
+        if media_type is WeChatUploadMediaType.IMAGE:
+            return f"image sent ({file_path.name})"
+        if media_type is WeChatUploadMediaType.VIDEO:
+            return f"video sent ({file_path.name})"
+        return f"file sent ({file_path.name})"
 
     def get_typing_ticket(
         self,
@@ -297,7 +347,7 @@ class WeChatClient:
             "message_state": _WECHAT_MESSAGE_STATE_FINISH,
             "item_list": [
                 {
-                    "type": 1,
+                    "type": _WECHAT_TEXT_ITEM_TYPE,
                     "text_item": {"text": text},
                 }
             ],
@@ -305,6 +355,265 @@ class WeChatClient:
         if context_token is not None and context_token.strip():
             message["context_token"] = context_token
         return message
+
+    def _upload_media(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        file_path: Path,
+        media_type: WeChatUploadMediaType,
+    ) -> WeChatUploadedMedia:
+        plaintext = file_path.read_bytes()
+        raw_size = len(plaintext)
+        raw_md5 = hashlib.md5(plaintext).hexdigest()
+        aes_key_bytes = secrets.token_bytes(16)
+        filekey = secrets.token_hex(16)
+        encrypted_bytes = self._encrypt_aes_ecb(plaintext, aes_key_bytes)
+        upload_response = self._request(
+            base_url=account.base_url,
+            path="ilink/bot/getuploadurl",
+            route_tag=account.route_tag,
+            method="POST",
+            payload={
+                "filekey": filekey,
+                "media_type": int(media_type.value),
+                "to_user_id": to_user_id,
+                "rawsize": raw_size,
+                "rawfilemd5": raw_md5,
+                "filesize": len(encrypted_bytes),
+                "no_need_thumb": True,
+                "aeskey": aes_key_bytes.hex(),
+                "base_info": WeChatBaseInfo().model_dump(mode="json"),
+            },
+            token=token,
+            timeout_seconds=_DEFAULT_API_TIMEOUT_SECONDS,
+        )
+        parsed = WeChatUploadUrlResponse.model_validate(upload_response)
+        self._raise_if_provider_error(
+            ret=parsed.ret,
+            errcode=parsed.errcode,
+            errmsg=parsed.errmsg,
+            operation="get_upload_url",
+        )
+        upload_param = (parsed.upload_param or "").strip()
+        if not upload_param:
+            raise RuntimeError("WeChat get_upload_url failed: missing upload_param")
+        download_query_param = self._upload_to_cdn(
+            cdn_base_url=account.cdn_base_url,
+            upload_param=upload_param,
+            filekey=filekey,
+            encrypted_bytes=encrypted_bytes,
+        )
+        return WeChatUploadedMedia(
+            filekey=filekey,
+            download_encrypted_query_param=download_query_param,
+            aes_key_hex=aes_key_bytes.hex(),
+            file_size=raw_size,
+            file_size_ciphertext=len(encrypted_bytes),
+        )
+
+    def _send_media_message(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        to_user_id: str,
+        file_path: Path,
+        media_type: WeChatUploadMediaType,
+        uploaded: WeChatUploadedMedia,
+        context_token: str | None,
+    ) -> None:
+        response = self._request(
+            base_url=account.base_url,
+            path="ilink/bot/sendmessage",
+            route_tag=account.route_tag,
+            method="POST",
+            payload={
+                "msg": self._build_media_message(
+                    to_user_id=to_user_id,
+                    file_path=file_path,
+                    media_type=media_type,
+                    uploaded=uploaded,
+                    context_token=context_token,
+                ),
+                "base_info": WeChatBaseInfo().model_dump(mode="json"),
+            },
+            token=token,
+            timeout_seconds=_DEFAULT_API_TIMEOUT_SECONDS,
+        )
+        parsed = WeChatOperationResponse.model_validate(response)
+        self._raise_if_provider_error(
+            ret=parsed.ret,
+            errcode=parsed.errcode,
+            errmsg=parsed.errmsg,
+            operation="send_file_message",
+        )
+
+    @staticmethod
+    def _build_media_message(
+        *,
+        to_user_id: str,
+        file_path: Path,
+        media_type: WeChatUploadMediaType,
+        uploaded: WeChatUploadedMedia,
+        context_token: str | None,
+    ) -> dict[str, object]:
+        media: dict[str, object] = {
+            "encrypt_query_param": uploaded.download_encrypted_query_param,
+            "aes_key": base64.b64encode(uploaded.aes_key_hex.encode("utf-8")).decode(
+                "utf-8"
+            ),
+            "encrypt_type": 1,
+        }
+        item: dict[str, object]
+        if media_type is WeChatUploadMediaType.IMAGE:
+            item = {
+                "type": _WECHAT_IMAGE_ITEM_TYPE,
+                "image_item": {
+                    "media": media,
+                    "mid_size": uploaded.file_size_ciphertext,
+                },
+            }
+        elif media_type is WeChatUploadMediaType.VIDEO:
+            item = {
+                "type": _WECHAT_VIDEO_ITEM_TYPE,
+                "video_item": {
+                    "media": media,
+                    "video_size": uploaded.file_size_ciphertext,
+                },
+            }
+        else:
+            item = {
+                "type": _WECHAT_FILE_ITEM_TYPE,
+                "file_item": {
+                    "media": media,
+                    "file_name": file_path.name,
+                    "len": str(uploaded.file_size),
+                },
+            }
+        message: dict[str, object] = {
+            "from_user_id": "",
+            "to_user_id": to_user_id,
+            "client_id": f"agent-teams-wechat-{uuid4().hex}",
+            "message_type": _WECHAT_BOT_MESSAGE_TYPE,
+            "message_state": _WECHAT_MESSAGE_STATE_FINISH,
+            "item_list": [item],
+        }
+        if context_token is not None and context_token.strip():
+            message["context_token"] = context_token
+        return message
+
+    def _upload_to_cdn(
+        self,
+        *,
+        cdn_base_url: str,
+        upload_param: str,
+        filekey: str,
+        encrypted_bytes: bytes,
+    ) -> str:
+        url = self._build_cdn_upload_url(
+            cdn_base_url=cdn_base_url,
+            upload_param=upload_param,
+            filekey=filekey,
+        )
+        last_exception: Exception | None = None
+        for attempt in range(1, _CDN_UPLOAD_MAX_RETRIES + 1):
+            try:
+                with create_sync_http_client(
+                    timeout_seconds=_DEFAULT_CDN_TIMEOUT_SECONDS
+                ) as client:
+                    response = client.request(
+                        method="POST",
+                        url=url,
+                        content=encrypted_bytes,
+                        headers={"Content-Type": "application/octet-stream"},
+                    )
+                if 400 <= response.status_code < 500:
+                    message = self._read_cdn_error_message(response)
+                    raise RuntimeError(
+                        "WeChat CDN upload failed: "
+                        f"status={response.status_code}, message={message}"
+                    )
+                if response.status_code != 200:
+                    message = self._read_cdn_error_message(response)
+                    raise httpx.HTTPStatusError(
+                        message=(
+                            "WeChat CDN upload failed: "
+                            f"status={response.status_code}, message={message}"
+                        ),
+                        request=response.request,
+                        response=response,
+                    )
+                download_query_param = str(
+                    response.headers.get("x-encrypted-param", "")
+                ).strip()
+                if not download_query_param:
+                    raise RuntimeError(
+                        "WeChat CDN upload failed: missing x-encrypted-param header"
+                    )
+                return download_query_param
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                last_exception = (
+                    exc if isinstance(exc, Exception) else RuntimeError(str(exc))
+                )
+                LOGGER.warning(
+                    "WeChat CDN upload attempt failed",
+                    extra={
+                        "filekey": filekey,
+                        "attempt": attempt,
+                    },
+                    exc_info=last_exception,
+                )
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("WeChat CDN upload failed")
+
+    @staticmethod
+    def _resolve_media_type(file_path: Path) -> WeChatUploadMediaType:
+        mime_type, _ = mimetypes.guess_type(file_path.name)
+        if mime_type is not None:
+            if mime_type.startswith("image/"):
+                return WeChatUploadMediaType.IMAGE
+            if mime_type.startswith("video/"):
+                return WeChatUploadMediaType.VIDEO
+        return WeChatUploadMediaType.FILE
+
+    @staticmethod
+    def _encrypt_aes_ecb(plaintext: bytes, key: bytes) -> bytes:
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(plaintext) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        encryptor = cipher.encryptor()
+        return encryptor.update(padded) + encryptor.finalize()
+
+    @staticmethod
+    def _build_cdn_upload_url(
+        *,
+        cdn_base_url: str,
+        upload_param: str,
+        filekey: str,
+    ) -> str:
+        normalized = cdn_base_url.rstrip("/")
+        encoded_upload_param = quote(upload_param, safe="")
+        encoded_filekey = quote(filekey, safe="")
+        return (
+            f"{normalized}/upload?encrypted_query_param={encoded_upload_param}"
+            f"&filekey={encoded_filekey}"
+        )
+
+    @staticmethod
+    def _read_cdn_error_message(response: httpx.Response) -> str:
+        header_message = str(response.headers.get("x-error-message", "")).strip()
+        if header_message:
+            return header_message
+        body_text = response.text.strip()
+        if body_text:
+            return body_text
+        return "unknown_error"
 
     @staticmethod
     def _raise_if_provider_error(
