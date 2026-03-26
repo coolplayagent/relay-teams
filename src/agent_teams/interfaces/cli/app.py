@@ -217,7 +217,11 @@ approvals_app = build_approvals_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
-gateway_app = build_gateway_app()
+gateway_app = build_gateway_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 metrics_app = build_metrics_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,

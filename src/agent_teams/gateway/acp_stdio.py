@@ -12,6 +12,9 @@ from pydantic import JsonValue
 
 from agent_teams.env import get_env_var
 from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay
+from agent_teams.gateway.gateway_model_profile_override import (
+    GatewayModelProfileOverride,
+)
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.logger import get_logger, log_event
@@ -180,11 +183,15 @@ class AcpGatewayServer:
         cwd = _optional_str(params, "cwd")
         capabilities = _optional_object(params, "capabilities")
         mcp_servers = _parse_mcp_servers(params.get("mcpServers"))
+        model_profile_override = _parse_model_profile_override(
+            params.get("modelProfileOverride")
+        )
         record = self._gateway_session_service.create_session(
             channel_type=GatewayChannelType.ACP_STDIO,
             cwd=cwd,
             capabilities=capabilities,
             session_mcp_servers=mcp_servers,
+            model_profile_override=model_profile_override,
         )
         self._mcp_relay.bind_session_servers(record.gateway_session_id, mcp_servers)
         return {"sessionId": record.gateway_session_id}
@@ -200,6 +207,14 @@ class AcpGatewayServer:
             record = self._gateway_session_service.set_session_mcp_servers(
                 gateway_session_id,
                 mcp_servers,
+            )
+        if "modelProfileOverride" in params:
+            model_profile_override = _parse_model_profile_override(
+                params.get("modelProfileOverride")
+            )
+            record = self._gateway_session_service.set_session_model_profile_override(
+                gateway_session_id,
+                model_profile_override,
             )
         self._mcp_relay.bind_session_servers(
             gateway_session_id,
@@ -672,6 +687,19 @@ def _required_list(payload: dict[str, JsonValue], key: str) -> list[JsonValue]:
     if isinstance(value, list):
         return value
     raise AcpProtocolError(-32602, f"{key} must be a list")
+
+
+def _parse_model_profile_override(
+    raw_value: JsonValue | None,
+) -> GatewayModelProfileOverride | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        raise AcpProtocolError(-32602, "modelProfileOverride must be an object")
+    try:
+        return GatewayModelProfileOverride.from_acp_payload(raw_value)
+    except Exception as exc:
+        raise AcpProtocolError(-32602, str(exc)) from exc
 
 
 def _parse_mcp_servers(raw_value: JsonValue | None) -> tuple[GatewayMcpServerSpec, ...]:

@@ -528,11 +528,45 @@ CREATE INDEX IF NOT EXISTS idx_gateway_sessions_internal_session
 Purpose: persistent mapping between an external gateway channel session and the internal Agent Teams session/run state used by the runtime.
 
 Notes:
-- `channel_type` identifies the transport-facing gateway implementation, starting with `acp_stdio`.
+- `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio` and `wechat`.
 - `external_session_id` is the channel-visible session key; `internal_session_id` remains the core runtime session source of truth.
 - `capabilities_json` stores channel-scoped capability negotiation data.
 - `session_mcp_servers_json` stores session-scoped MCP server declarations supplied through the gateway transport.
 - `mcp_connections_json` stores MCP connection state for gateway-managed transports such as MCP over ACP.
+
+---
+
+### 2.10.2 `wechat_accounts`
+
+```sql
+CREATE TABLE IF NOT EXISTS wechat_accounts (
+    account_id               TEXT PRIMARY KEY,
+    display_name             TEXT NOT NULL,
+    base_url                 TEXT NOT NULL,
+    cdn_base_url             TEXT NOT NULL,
+    route_tag                TEXT,
+    status                   TEXT NOT NULL,
+    remote_user_id           TEXT,
+    sync_cursor              TEXT NOT NULL,
+    workspace_id             TEXT NOT NULL,
+    session_mode             TEXT NOT NULL,
+    normal_root_role_id      TEXT,
+    orchestration_preset_id  TEXT,
+    yolo                     INTEGER NOT NULL,
+    thinking_json            TEXT NOT NULL,
+    last_login_at            TEXT,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
+);
+```
+
+Purpose: persisted account-level configuration and sync cursor state for the WeChat gateway worker.
+
+Notes:
+- bot tokens are stored in keyring, not in this table
+- `sync_cursor` stores the last upstream long-poll cursor returned by WeChat
+- `workspace_id`, `session_mode`, `normal_root_role_id`, and `orchestration_preset_id` define the runtime preset applied to new or resolved gateway sessions for that account
+- runtime status fields such as `running` and `last_error` are computed in memory and returned by the API, not persisted in this table
 
 ---
 
@@ -548,6 +582,7 @@ Primary query keys used by repositories:
 - `platform + trigger_id + tenant_key + external_chat_id`: external-chat lookup for inbound IM triggers.
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
+- `account_id`: WeChat gateway account retrieval across `wechat_accounts`.
 
 ---
 
@@ -565,6 +600,7 @@ Primary query keys used by repositories:
 - `agent_teams.providers`: `token_usage`.
 - `agent_teams.triggers`: `triggers`, `trigger_events`.
 - `agent_teams.gateway`: `gateway_sessions`.
+- `agent_teams.wechat`: `wechat_accounts`.
 - `agent_teams.roles`: `role_memories`.
 
 ---

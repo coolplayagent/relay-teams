@@ -78,7 +78,7 @@ class TaskExecutionService(BaseModel):
     run_runtime_repo: RunRuntimeRepository
     workspace_manager: WorkspaceManager
     prompt_builder: RuntimePromptBuilder
-    provider_factory: Callable[[RoleDefinition], object]
+    provider_factory: Callable[[RoleDefinition, str | None], object]
     tool_registry: object
     skill_registry: object
     mcp_registry: McpRegistry
@@ -196,7 +196,7 @@ class TaskExecutionService(BaseModel):
         runner = SubAgentRunner(
             role=role_for_run,
             prompt_builder=self.prompt_builder,
-            provider=self.provider_factory(role_for_run),
+            provider=self.provider_factory(role_for_run, task.session_id),
         )
         snapshot = self._shared_state_snapshot(
             session_id=task.session_id,

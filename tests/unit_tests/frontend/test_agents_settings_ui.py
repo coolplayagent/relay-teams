@@ -86,6 +86,76 @@ console.log(JSON.stringify({
     assert toasts[0]["title"] == "Agent Deleted"
 
 
+def test_agents_settings_stdio_environment_bindings_use_settings_variables(
+    tmp_path: Path,
+) -> None:
+    payload = _run_agents_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindAgentSettingsHandlers, loadAgentSettingsPanel } from "./agentsSettings.mjs";
+
+installGlobals(createElements());
+bindAgentSettingsHandlers();
+await loadAgentSettingsPanel("codex_local");
+await document.getElementById("add-agent-stdio-env-btn").onclick();
+await document.getElementById("save-agent-btn").onclick();
+
+console.log(JSON.stringify({
+    envListHtml: document.getElementById("agent-stdio-env-list").innerHTML,
+    saveCalls: globalThis.__saveCalls,
+}));
+""".strip(),
+    )
+
+    save_calls = cast(list[dict[str, JsonValue]], payload["saveCalls"])
+    env_list_html = cast(str, payload["envListHtml"])
+    assert "agent-binding-name-select" in env_list_html
+    assert "OPENAI_API_KEY" in env_list_html
+    assert "App variable" in env_list_html
+    assert "agent-binding-value" not in env_list_html
+    assert cast(dict[str, JsonValue], save_calls[0]["payload"]) == {
+        "agent_id": "codex_local",
+        "name": "Codex Local",
+        "description": "Runs Codex locally.",
+        "transport": {
+            "transport": "stdio",
+            "command": "codex",
+            "args": ["--serve"],
+            "env": [
+                {
+                    "name": "OPENAI_API_KEY",
+                    "value": "sk-live",
+                    "secret": False,
+                    "configured": False,
+                }
+            ],
+        },
+    }
+
+
+def test_agents_settings_panel_markup_uses_i18n_keys() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    panel_start = source_text.index('<div class="settings-panel" id="agents-panel"')
+    panel_end = source_text.index(
+        '<div class="settings-panel" id="roles-panel"', panel_start
+    )
+    panel_html = source_text[panel_start:panel_end]
+
+    assert 'data-i18n="settings.agents.empty"' in panel_html
+    assert 'data-i18n="settings.agents.editor"' in panel_html
+    assert 'data-i18n="settings.agents.env_bindings"' in panel_html
+    assert 'data-i18n="settings.agents.header_bindings"' in panel_html
+    assert 'data-i18n-placeholder="settings.agents.id_placeholder"' in panel_html
+    assert 'data-i18n-placeholder="settings.agents.command_placeholder"' in panel_html
+    assert 'data-i18n="settings.agents.transport_http"' in panel_html
+    assert 'data-i18n="settings.action.add_agent"' in source_text
+    assert 'data-i18n="settings.action.delete"' in source_text
+
+
 def _run_agents_settings_script(
     tmp_path: Path, runner_source: str
 ) -> dict[str, object]:
@@ -138,6 +208,33 @@ export async function fetchExternalAgent(agentId) {
     return agentRecords[agentId];
 }
 
+export async function fetchEnvironmentVariables() {
+    return {
+        app: [
+            {
+                key: "OPENAI_API_KEY",
+                value: "sk-live",
+                scope: "app",
+                value_kind: "string",
+            },
+            {
+                key: "HTTP_PROXY",
+                value: "http://hidden.proxy",
+                scope: "app",
+                value_kind: "string",
+            },
+        ],
+        system: [
+            {
+                key: "PATH",
+                value: "/usr/bin",
+                scope: "system",
+                value_kind: "string",
+            },
+        ],
+    };
+}
+
 export async function saveExternalAgent(agentId, payload) {
     globalThis.__saveCalls.push({ agentId, payload });
     agentRecords[payload.agent_id] = payload;
@@ -170,8 +267,63 @@ export function showToast(payload) {
     )
     mock_i18n_path.write_text(
         """
+const TRANSLATIONS = {
+    "settings.roles.edit": "Edit",
+    "settings.agents.saved": "Agent Saved",
+    "settings.agents.saved_message": "saved and reloaded.",
+    "settings.agents.saved_status": "Saved successfully.",
+    "settings.agents.save_failed": "Save Failed",
+    "settings.agents.save_failed_message": "Failed to save external agent config.",
+    "settings.agents.test_passed": "Agent Test Passed",
+    "settings.agents.test_passed_message": "Connection succeeded.",
+    "settings.agents.test_passed_detail": "responded to ACP initialize.",
+    "settings.agents.test_failed": "Agent Test Failed",
+    "settings.agents.test_failed_message": "Failed to test external agent config.",
+    "settings.agents.deleted": "Agent Deleted",
+    "settings.agents.deleted_message": "removed from settings.",
+    "settings.agents.delete_failed": "Delete Failed",
+    "settings.agents.delete_failed_message": "Failed to delete external agent config.",
+    "settings.agents.select_to_delete": "Select an agent to delete.",
+    "settings.agents.id_required": "Agent ID is required.",
+    "settings.agents.name_required": "Agent name is required.",
+    "settings.agents.http_url_required": "HTTP transport URL is required.",
+    "settings.agents.custom_adapter_required": "Custom transport adapter ID is required.",
+    "settings.agents.stdio_command_required": "Stdio command is required.",
+    "settings.agents.custom_config": "Config JSON",
+    "settings.agents.json_object_required": "must be a JSON object.",
+    "settings.agents.json_invalid": "must be valid JSON.",
+    "settings.agents.transport_stdio_label": "Stdio",
+    "settings.agents.transport_http_label": "HTTP",
+    "settings.agents.transport_custom_label": "Custom",
+    "settings.agents.no_description": "No description",
+    "settings.agents.none": "No external agents found",
+    "settings.agents.none_copy": "Add an ACP-compatible external agent to make it available for role bindings.",
+    "settings.agents.load_failed": "Load Failed",
+    "settings.agents.load_failed_message": "Unable to load agent settings.",
+    "settings.agents.no_env_options": "No environment variables available",
+    "settings.agents.no_env_options_copy": "Add environment variables in Settings > Environment first.",
+    "settings.agents.no_env_bindings": "No environment variables selected.",
+    "settings.agents.no_headers": "No headers configured.",
+    "settings.agents.select_env": "Select environment variable",
+    "settings.agents.action_label": "Action",
+    "settings.agents.action_remove": "Remove",
+    "settings.agents.header_name": "Header",
+    "settings.agents.header_value": "Value",
+    "settings.agents.secret_mode": "Secret",
+    "settings.agents.secret_plain": "Plain",
+    "settings.agents.secret_keyring": "Keyring",
+    "settings.agents.secret_configured": "Configured in keyring",
+    "settings.agents.env_missing": "missing",
+    "settings.agents.env_missing_note": "Missing from Settings > Environment.",
+    "settings.agents.env_scope_app": "App variable",
+    "settings.agents.env_scope_system": "System variable",
+    "settings.agents.env_value_kind_secret": "Secret",
+    "settings.agents.env_value_kind_masked": "Masked",
+    "settings.agents.env_value_kind_string": "String",
+};
+
 export function t(key) {
-    return key;
+    return TRANSLATIONS[key] || key;
 }
 """.strip(),
         encoding="utf-8",
@@ -299,6 +451,9 @@ function createElements() {{
 
 function installGlobals(elements) {{
     globalThis.document = {{
+        addEventListener() {{
+            return undefined;
+        }},
         getElementById(id) {{
             const element = elements.get(id);
             if (!element) {{

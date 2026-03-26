@@ -53,6 +53,7 @@ console.log(JSON.stringify(globalThis.__captured));
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -391,6 +392,7 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
@@ -480,8 +482,8 @@ export async function fetchRoleConfigOptions() {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
         normal_mode_roles: [
-            { role_id: "writer", name: "Writer", description: "" },
-            { role_id: "reviewer", name: "Reviewer", description: "" },
+            { role_id: "writer", name: "Writer", description: "Draft final responses" },
+            { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
         ],
     };
 }
@@ -540,8 +542,8 @@ export const state = {
 let coordinatorRoleId = "Coordinator";
 let mainAgentRoleId = "MainAgent";
 let normalModeRoles = [
-    { role_id: "writer", name: "Writer", description: "" },
-    { role_id: "reviewer", name: "Reviewer", description: "" },
+    { role_id: "writer", name: "Writer", description: "Draft final responses" },
+    { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
 
 export function applyCurrentSessionRecord() {
@@ -650,6 +652,8 @@ export function sysLog(message, tone = "log-info") {
 
     runner = """
 import { handleSend } from "./prompt.js";
+import { state } from "./mockState.mjs";
+import { els } from "./mockDom.mjs";
 
 globalThis.__streamCalls = [];
 globalThis.__logs = [];
@@ -657,9 +661,13 @@ globalThis.__liveRounds = [];
 globalThis.__roundMessages = [];
 
 await handleSend();
+els.promptInput.value = "＠Writer ship it";
+els.promptInput.disabled = false;
+state.isGenerating = false;
+await handleSend();
 
 console.log(JSON.stringify({
-    streamCall: globalThis.__streamCalls[0],
+    streamCalls: globalThis.__streamCalls,
     liveRounds: globalThis.__liveRounds,
     roundMessages: globalThis.__roundMessages,
 }));
@@ -669,15 +677,28 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
     payload = json.loads(result.stdout)
-    assert payload["streamCall"]["text"] == "ship it"
-    assert payload["streamCall"]["sessionId"] == "session-1"
-    assert payload["streamCall"]["options"]["targetRoleId"] == "writer"
-    assert payload["liveRounds"] == [{"runId": "run-1", "text": "ship it"}]
-    assert payload["roundMessages"] == [{"runId": "run-1", "text": "ship it"}]
+    assert [call["text"] for call in payload["streamCalls"]] == ["ship it", "ship it"]
+    assert [call["sessionId"] for call in payload["streamCalls"]] == [
+        "session-1",
+        "session-1",
+    ]
+    assert [call["options"]["targetRoleId"] for call in payload["streamCalls"]] == [
+        "writer",
+        "writer",
+    ]
+    assert payload["liveRounds"] == [
+        {"runId": "run-1", "text": "ship it"},
+        {"runId": "run-1", "text": "ship it"},
+    ]
+    assert payload["roundMessages"] == [
+        {"runId": "run-1", "text": "ship it"},
+        {"runId": "run-1", "text": "ship it"},
+    ]
 
 
 def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
@@ -736,8 +757,8 @@ export async function fetchRoleConfigOptions() {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
         normal_mode_roles: [
-            { role_id: "writer", name: "Writer", description: "" },
-            { role_id: "reviewer", name: "Reviewer", description: "" },
+            { role_id: "writer", name: "Writer", description: "Draft final responses" },
+            { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
         ],
     };
 }
@@ -796,8 +817,8 @@ export const state = {
 let coordinatorRoleId = "Coordinator";
 let mainAgentRoleId = "MainAgent";
 let normalModeRoles = [
-    { role_id: "writer", name: "Writer", description: "" },
-    { role_id: "reviewer", name: "Reviewer", description: "" },
+    { role_id: "writer", name: "Writer", description: "Draft final responses" },
+    { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
 
 export function applyCurrentSessionRecord() {
@@ -863,8 +884,19 @@ function createElement(initial = {}) {
         dataset: {},
         classList: { toggle() { return undefined; } },
         _listeners: new Map(),
+        _scrollEvents: [],
         addEventListener(type, listener) {
             this._listeners.set(type, listener);
+        },
+        querySelector(selector) {
+            if (selector !== ".prompt-mention-item.active") {
+                return null;
+            }
+            return {
+                scrollIntoView: (options) => {
+                    this._scrollEvents.push(options);
+                },
+            };
         },
         focus() { return undefined; },
         contains(target) {
@@ -876,9 +908,9 @@ function createElement(initial = {}) {
 
 export const els = {
     promptInput: createElement({
-        value: "@Ma",
-        selectionStart: 3,
-        selectionEnd: 3,
+        value: "@",
+        selectionStart: 1,
+        selectionEnd: 1,
         hidden: false,
     }),
     promptMentionMenu: createElement({ hidden: true }),
@@ -924,12 +956,43 @@ import {
 import { els } from "./mockDom.mjs";
 
 handlePromptComposerInput();
-const beforeSelect = {
+const beforeAsciiSelect = {
     menuHidden: els.promptMentionMenu.hidden,
     menuHtml: els.promptMentionMenu.innerHTML,
+    scrollEvents: els.promptMentionMenu._scrollEvents.slice(),
 };
 
-const enterHandled = handlePromptComposerKeydown({
+const arrowDownHandled = handlePromptComposerKeydown({
+    key: "ArrowDown",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+const afterArrowDownScrollEvents = els.promptMentionMenu._scrollEvents.slice();
+
+const asciiEnterHandled = handlePromptComposerKeydown({
+    key: "Enter",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+const asciiValue = els.promptInput.value;
+const asciiSelectionStart = els.promptInput.selectionStart;
+const asciiSelectionEnd = els.promptInput.selectionEnd;
+
+els.promptInput.value = "＠Ma";
+els.promptInput.selectionStart = 3;
+els.promptInput.selectionEnd = 3;
+handlePromptComposerInput();
+const beforeFullwidthSelect = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+    scrollEvents: els.promptMentionMenu._scrollEvents.slice(),
+};
+
+const fullwidthEnterHandled = handlePromptComposerKeydown({
     key: "Enter",
     preventDefault() { return undefined; },
     stopImmediatePropagation() { return undefined; },
@@ -937,11 +1000,18 @@ const enterHandled = handlePromptComposerKeydown({
 });
 
 console.log(JSON.stringify({
-    beforeSelect,
-    enterHandled,
-    value: els.promptInput.value,
-    selectionStart: els.promptInput.selectionStart,
-    selectionEnd: els.promptInput.selectionEnd,
+    beforeAsciiSelect,
+    arrowDownHandled,
+    afterArrowDownScrollEvents,
+    asciiEnterHandled,
+    asciiValue,
+    asciiSelectionStart,
+    asciiSelectionEnd,
+    beforeFullwidthSelect,
+    fullwidthEnterHandled,
+    fullwidthValue: els.promptInput.value,
+    fullwidthSelectionStart: els.promptInput.selectionStart,
+    fullwidthSelectionEnd: els.promptInput.selectionEnd,
 }));
 """.strip()
     result = subprocess.run(
@@ -949,14 +1019,39 @@ console.log(JSON.stringify({
         cwd=temp_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
 
     payload = json.loads(result.stdout)
-    assert payload["beforeSelect"]["menuHidden"] is False
-    assert "Main Agent" in payload["beforeSelect"]["menuHtml"]
-    assert "MainAgent" in payload["beforeSelect"]["menuHtml"]
-    assert payload["enterHandled"] is True
-    assert payload["value"] == "@Main Agent "
-    assert payload["selectionStart"] == 12
-    assert payload["selectionEnd"] == 12
+    rendered_ascii_text = re.sub(
+        r"<[^>]+>", "", payload["beforeAsciiSelect"]["menuHtml"]
+    )
+    rendered_fullwidth_text = re.sub(
+        r"<[^>]+>", "", payload["beforeFullwidthSelect"]["menuHtml"]
+    )
+    assert payload["beforeAsciiSelect"]["menuHidden"] is False
+    assert payload["beforeFullwidthSelect"]["menuHidden"] is False
+    assert "prompt-mention-menu-header" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-item-accent" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-menu-footer" in payload["beforeAsciiSelect"]["menuHtml"]
+    assert "prompt-mention-match" in payload["beforeFullwidthSelect"]["menuHtml"]
+    assert "Draft final responses" in rendered_ascii_text
+    assert "Main Agent" in rendered_ascii_text
+    assert "MainAgent" in rendered_ascii_text
+    assert "Main Agent" in rendered_fullwidth_text
+    assert "MainAgent" in rendered_fullwidth_text
+    assert payload["arrowDownHandled"] is True
+    assert (
+        len(payload["afterArrowDownScrollEvents"])
+        == len(payload["beforeAsciiSelect"]["scrollEvents"]) + 1
+    )
+    assert payload["afterArrowDownScrollEvents"][-1] == {"block": "nearest"}
+    assert payload["asciiEnterHandled"] is True
+    assert payload["asciiValue"] == "@Main Agent "
+    assert payload["asciiSelectionStart"] == 12
+    assert payload["asciiSelectionEnd"] == 12
+    assert payload["fullwidthEnterHandled"] is True
+    assert payload["fullwidthValue"] == "＠Main Agent "
+    assert payload["fullwidthSelectionStart"] == 12
+    assert payload["fullwidthSelectionEnd"] == 12

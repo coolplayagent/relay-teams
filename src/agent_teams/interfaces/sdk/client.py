@@ -521,6 +521,62 @@ class AgentTeamsClient:
             return []
         return [item for item in raw if isinstance(item, dict)]
 
+    def list_wechat_gateway_accounts(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/gateway/wechat/accounts")
+        raw = data.get("data", data)
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
+
+    def start_wechat_gateway_login(
+        self,
+        payload: dict[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
+        request_payload = {} if payload is None else payload
+        return self._request_json(
+            "POST", "/api/gateway/wechat/login/start", request_payload
+        )
+
+    def wait_wechat_gateway_login(
+        self,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json("POST", "/api/gateway/wechat/login/wait", payload)
+
+    def update_wechat_gateway_account(
+        self,
+        account_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PATCH",
+            f"/api/gateway/wechat/accounts/{account_id}",
+            payload,
+        )
+
+    def enable_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/gateway/wechat/accounts/{account_id}:enable",
+            {},
+        )
+
+    def disable_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/gateway/wechat/accounts/{account_id}:disable",
+            {},
+        )
+
+    def delete_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/gateway/wechat/accounts/{account_id}",
+        )
+
+    def reload_wechat_gateway(self) -> dict[str, JsonValue]:
+        return self._request_json("POST", "/api/gateway/wechat/reload", {})
+
     def get_automation_project(
         self, automation_project_id: str
     ) -> dict[str, JsonValue]:

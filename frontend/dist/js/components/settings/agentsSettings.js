@@ -6,6 +6,7 @@ import {
     deleteExternalAgent,
     fetchExternalAgent,
     fetchExternalAgents,
+    fetchEnvironmentVariables,
     saveExternalAgent,
     testExternalAgent,
 } from '../../core/api.js';
@@ -13,12 +14,27 @@ import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const HIDDEN_APP_ENV_KEYS = new Set([
+    'HTTP_PROXY',
+    'http_proxy',
+    'HTTPS_PROXY',
+    'https_proxy',
+    'ALL_PROXY',
+    'all_proxy',
+    'NO_PROXY',
+    'no_proxy',
+    'SSL_VERIFY',
+    'ssl_verify',
+]);
+
 let agentSummaries = [];
 let selectedAgentId = '';
 let selectedSourceAgentId = '';
 let currentTransport = 'stdio';
 let currentStdioEnv = [];
 let currentHttpHeaders = [];
+let availableEnvironmentBindings = [];
+let languageBound = false;
 
 export function bindAgentSettingsHandlers() {
     bindActionButton('add-agent-btn', handleAddAgent);
@@ -36,12 +52,24 @@ export function bindAgentSettingsHandlers() {
             renderTransportSections();
         };
     }
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', () => {
+            renderAgentsList();
+            renderBindingRows('stdio');
+            renderBindingRows('http');
+        });
+        languageBound = true;
+    }
 }
 
 export async function loadAgentSettingsPanel(preferredAgentId = '') {
     try {
-        const summaries = await fetchExternalAgents();
+        const [summaries, environmentBindings] = await Promise.all([
+            fetchExternalAgents(),
+            loadEnvironmentBindings(),
+        ]);
         agentSummaries = Array.isArray(summaries) ? summaries.map(normalizeAgentSummary) : [];
+        availableEnvironmentBindings = environmentBindings;
         renderAgentsList();
         if (agentSummaries.length === 0) {
             showAgentsList();
@@ -63,7 +91,10 @@ export async function loadAgentSettingsPanel(preferredAgentId = '') {
             errorToPayload(error),
         );
         showAgentsList();
-        renderEmptyAgentsList('Failed to load agents', error.message || 'Unable to load agent settings.');
+        renderEmptyAgentsList(
+            t('settings.agents.load_failed'),
+            error.message || t('settings.agents.load_failed_message'),
+        );
     }
 }
 
@@ -90,6 +121,47 @@ function normalizeBinding(binding) {
         secret: binding?.secret === true,
         configured: binding?.configured === true,
     };
+}
+
+async function loadEnvironmentBindings() {
+    try {
+        return normalizeEnvironmentBindings(await fetchEnvironmentVariables());
+    } catch (error) {
+        logError(
+            'frontend.agents_settings.environment_bindings_load_failed',
+            'Failed to load environment variables for agents settings',
+            errorToPayload(error),
+        );
+        return [];
+    }
+}
+
+function normalizeEnvironmentBindings(payload) {
+    const bindings = new Map();
+    normalizeEnvironmentScope(Array.isArray(payload?.app) ? payload.app : [], 'app', true).forEach(record => {
+        bindings.set(record.key, record);
+    });
+    normalizeEnvironmentScope(Array.isArray(payload?.system) ? payload.system : [], 'system', false).forEach(record => {
+        if (!bindings.has(record.key)) {
+            bindings.set(record.key, record);
+        }
+    });
+    return Array.from(bindings.values()).sort((left, right) =>
+        left.key.localeCompare(right.key, undefined, {
+            sensitivity: 'base',
+        }),
+    );
+}
+
+function normalizeEnvironmentScope(records, fallbackScope, hideAppKeys) {
+    return records
+        .map(record => ({
+            key: String(record?.key || '').trim(),
+            value: String(record?.value || ''),
+            scope: String(record?.scope || fallbackScope).trim() || fallbackScope,
+            value_kind: String(record?.value_kind || 'string').trim() || 'string',
+        }))
+        .filter(record => record.key && (!hideAppKeys || !HIDDEN_APP_ENV_KEYS.has(record.key)));
 }
 
 function createBlankAgentConfig() {
@@ -180,7 +252,7 @@ function renderAgentsList() {
                             </div>
                         </div>
                         <div class="role-record-meta">
-                            <span>${escapeHtml(agent.description || 'No description')}</span>
+                            <span>${escapeHtml(agent.description || t('settings.agents.no_description'))}</span>
                         </div>
                     </div>
                     <div class="role-record-actions">
@@ -272,44 +344,35 @@ function renderBindingRows(kind) {
     if (!container) return;
 
     const rows = kind === 'stdio' ? currentStdioEnv : currentHttpHeaders;
+    container.className = 'agent-binding-list';
     if (!rows.length) {
-        container.innerHTML = `<div class="role-option-empty">No ${kind === 'stdio' ? 'env vars' : 'headers'} configured.</div>`;
+        container.innerHTML = renderEmptyBindingState(kind);
         return;
     }
 
-    container.innerHTML = rows.map((binding, index) => `
-        <div class="role-workspace-row agent-binding-row" data-kind="${kind}" data-index="${index}">
-            <div class="form-group">
-                <label>${kind === 'stdio' ? 'Name' : 'Header'}</label>
-                <input type="text" class="agent-binding-name" data-kind="${kind}" data-index="${index}" value="${escapeHtml(binding.name)}" autocomplete="off">
-            </div>
-            <div class="form-group">
-                <label>Value</label>
-                <input type="${binding.secret ? 'password' : 'text'}" class="agent-binding-value" data-kind="${kind}" data-index="${index}" value="${escapeHtml(binding.value || '')}" autocomplete="off" placeholder="${binding.configured ? 'Configured in keyring' : ''}">
-            </div>
-            <div class="form-group">
-                <label>Secret</label>
-                <select class="agent-binding-secret" data-kind="${kind}" data-index="${index}">
-                    <option value="false"${binding.secret ? '' : ' selected'}>Plain</option>
-                    <option value="true"${binding.secret ? ' selected' : ''}>Keyring</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Action</label>
-                <button class="secondary-btn section-action-btn agent-binding-remove-btn" data-kind="${kind}" data-index="${index}" type="button">Remove</button>
-            </div>
-        </div>
-    `).join('');
+    container.innerHTML = rows
+        .map((binding, index) =>
+            kind === 'stdio'
+                ? renderEnvironmentBindingRow(binding, index)
+                : renderHttpHeaderBindingRow(binding, index),
+        )
+        .join('');
 
-    container.querySelectorAll('.agent-binding-name').forEach(input => {
-        input.oninput = event => updateBindingField(kind, event, 'name');
-    });
-    container.querySelectorAll('.agent-binding-value').forEach(input => {
-        input.oninput = event => updateBindingField(kind, event, 'value');
-    });
-    container.querySelectorAll('.agent-binding-secret').forEach(select => {
-        select.onchange = event => updateBindingField(kind, event, 'secret');
-    });
+    if (kind === 'stdio') {
+        container.querySelectorAll('.agent-binding-name-select').forEach(select => {
+            select.onchange = event => updateBindingField(kind, event, 'name');
+        });
+    } else {
+        container.querySelectorAll('.agent-binding-name-input').forEach(input => {
+            input.oninput = event => updateBindingField(kind, event, 'name');
+        });
+        container.querySelectorAll('.agent-binding-value').forEach(input => {
+            input.oninput = event => updateBindingField(kind, event, 'value');
+        });
+        container.querySelectorAll('.agent-binding-secret-select').forEach(select => {
+            select.onchange = event => updateBindingField(kind, event, 'secret');
+        });
+    }
     container.querySelectorAll('.agent-binding-remove-btn').forEach(button => {
         button.onclick = () => removeBindingRow(kind, button.dataset.index);
     });
@@ -321,11 +384,24 @@ function updateBindingField(kind, event, field) {
     const rows = kind === 'stdio' ? currentStdioEnv : currentHttpHeaders;
     if (index < 0 || index >= rows.length) return;
     const current = rows[index];
+    if (kind === 'stdio' && field === 'name') {
+        const nextName = String(target?.value || '').trim();
+        const matchedBinding = resolveEnvironmentBinding(nextName);
+        rows[index] = matchedBinding
+            ? createEnvironmentBinding(matchedBinding)
+            : {
+                ...current,
+                name: nextName,
+            };
+        renderBindingRows('stdio');
+        return;
+    }
     if (field === 'secret') {
         current.secret = String(target?.value || '').trim() === 'true';
         if (!current.secret) {
             current.configured = false;
         }
+        renderBindingRows(kind);
     } else {
         current[field] = String(target?.value || '');
         if (field === 'value' && current.secret) {
@@ -336,6 +412,23 @@ function updateBindingField(kind, event, field) {
 
 function addBindingRow(kind) {
     const rows = kind === 'stdio' ? currentStdioEnv : currentHttpHeaders;
+    if (kind === 'stdio') {
+        if (!availableEnvironmentBindings.length) {
+            showToast({
+                title: t('settings.agents.no_env_options'),
+                message: t('settings.agents.no_env_options_copy'),
+                tone: 'warning',
+            });
+            renderBindingRows('stdio');
+            return;
+        }
+        const nextBinding = availableEnvironmentBindings.find(option =>
+            !rows.some(item => item.name === option.key),
+        ) || availableEnvironmentBindings[0];
+        rows.push(createEnvironmentBinding(nextBinding));
+        renderBindingRows('stdio');
+        return;
+    }
     rows.push({
         name: '',
         value: '',
@@ -366,8 +459,8 @@ function renderTransportSections() {
 }
 
 function renderEmptyAgentsList(
-    title = 'No external agents found',
-    description = 'Add an ACP-compatible external agent to make it available for role bindings.',
+    title = t('settings.agents.none'),
+    description = t('settings.agents.none_copy'),
 ) {
     const listEl = document.getElementById('agents-list');
     const editorPanel = document.getElementById('agent-editor-panel');
@@ -406,17 +499,17 @@ async function handleSaveAgent() {
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         showToast({
-            title: 'Agent Saved',
-            message: `${saved.agent_id} saved and reloaded.`,
+            title: t('settings.agents.saved'),
+            message: `${saved.agent_id} ${t('settings.agents.saved_message')}`,
             tone: 'success',
         });
         await loadAgentSettingsPanel(saved.agent_id);
-        renderAgentStatus('Saved successfully.', 'success');
+        renderAgentStatus(t('settings.agents.saved_status'), 'success');
     } catch (error) {
-        renderAgentStatus(error.message || 'Save failed.', 'danger');
+        renderAgentStatus(error.message || t('settings.agents.save_failed_message'), 'danger');
         showToast({
-            title: 'Save Failed',
-            message: error.message || 'Failed to save external agent config.',
+            title: t('settings.agents.save_failed'),
+            message: error.message || t('settings.agents.save_failed_message'),
             tone: 'danger',
         });
     }
@@ -431,17 +524,17 @@ async function handleTestAgent() {
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         await loadAgentSettingsPanel(saved.agent_id);
-        renderAgentStatus(result.message || 'Connection succeeded.', 'success');
+        renderAgentStatus(result.message || t('settings.agents.test_passed_message'), 'success');
         showToast({
-            title: 'Agent Test Passed',
-            message: result.message || `${saved.agent_id} responded to ACP initialize.`,
+            title: t('settings.agents.test_passed'),
+            message: result.message || `${saved.agent_id} ${t('settings.agents.test_passed_detail')}`,
             tone: 'success',
         });
     } catch (error) {
-        renderAgentStatus(error.message || 'Connection failed.', 'danger');
+        renderAgentStatus(error.message || t('settings.agents.test_failed_message'), 'danger');
         showToast({
-            title: 'Agent Test Failed',
-            message: error.message || 'Failed to test external agent config.',
+            title: t('settings.agents.test_failed'),
+            message: error.message || t('settings.agents.test_failed_message'),
             tone: 'danger',
         });
     }
@@ -450,7 +543,7 @@ async function handleTestAgent() {
 async function handleDeleteAgent() {
     const agentId = String(selectedSourceAgentId || getInputValue('agent-id-input')).trim();
     if (!agentId) {
-        renderAgentStatus('Select an agent to delete.', 'danger');
+        renderAgentStatus(t('settings.agents.select_to_delete'), 'danger');
         return;
     }
     try {
@@ -458,16 +551,16 @@ async function handleDeleteAgent() {
         selectedAgentId = '';
         selectedSourceAgentId = '';
         showToast({
-            title: 'Agent Deleted',
-            message: `${agentId} removed from settings.`,
+            title: t('settings.agents.deleted'),
+            message: `${agentId} ${t('settings.agents.deleted_message')}`,
             tone: 'success',
         });
         await loadAgentSettingsPanel();
     } catch (error) {
-        renderAgentStatus(error.message || 'Delete failed.', 'danger');
+        renderAgentStatus(error.message || t('settings.agents.delete_failed_message'), 'danger');
         showToast({
-            title: 'Delete Failed',
-            message: error.message || 'Failed to delete external agent config.',
+            title: t('settings.agents.delete_failed'),
+            message: error.message || t('settings.agents.delete_failed_message'),
             tone: 'danger',
         });
     }
@@ -480,18 +573,18 @@ function handleCancelAgent() {
 function buildDraftFromForm() {
     const agentId = String(getInputValue('agent-id-input')).trim();
     if (!agentId) {
-        throw new Error('Agent ID is required.');
+        throw new Error(t('settings.agents.id_required'));
     }
     const name = String(getInputValue('agent-name-input')).trim();
     if (!name) {
-        throw new Error('Agent name is required.');
+        throw new Error(t('settings.agents.name_required'));
     }
     const description = String(getInputValue('agent-description-input')).trim();
     const transport = String(getInputValue('agent-transport-input')).trim() || 'stdio';
     if (transport === 'streamable_http') {
         const url = String(getInputValue('agent-http-url-input')).trim();
         if (!url) {
-            throw new Error('HTTP transport URL is required.');
+            throw new Error(t('settings.agents.http_url_required'));
         }
         return {
             agent_id: agentId,
@@ -508,7 +601,7 @@ function buildDraftFromForm() {
     if (transport === 'custom') {
         const adapterId = String(getInputValue('agent-custom-adapter-id-input')).trim();
         if (!adapterId) {
-            throw new Error('Custom transport adapter ID is required.');
+            throw new Error(t('settings.agents.custom_adapter_required'));
         }
         return {
             agent_id: agentId,
@@ -517,13 +610,16 @@ function buildDraftFromForm() {
             transport: {
                 transport: 'custom',
                 adapter_id: adapterId,
-                config: parseJsonObject(getInputValue('agent-custom-config-input'), 'Custom transport config'),
+                config: parseJsonObject(
+                    getInputValue('agent-custom-config-input'),
+                    t('settings.agents.custom_config'),
+                ),
             },
         };
     }
     const command = String(getInputValue('agent-stdio-command-input')).trim();
     if (!command) {
-        throw new Error('Stdio command is required.');
+        throw new Error(t('settings.agents.stdio_command_required'));
     }
     return {
         agent_id: agentId,
@@ -533,7 +629,7 @@ function buildDraftFromForm() {
             transport: 'stdio',
             command,
             args: parseLineList(getInputValue('agent-stdio-args-input')),
-            env: normalizeBindingsForSave(currentStdioEnv),
+            env: normalizeBindingsForSave(syncEnvironmentBindings(currentStdioEnv)),
         },
     };
 }
@@ -633,15 +729,16 @@ function serializeLines(values) {
 
 function parseJsonObject(raw, label) {
     const source = String(raw || '').trim() || '{}';
+    let parsed;
     try {
-        const parsed = JSON.parse(source);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new Error(`${label} must be a JSON object.`);
-        }
-        return parsed;
-    } catch (error) {
-        throw new Error(error.message || `${label} must be valid JSON.`);
+        parsed = JSON.parse(source);
+    } catch (_) {
+        throw new Error(`${label} ${t('settings.agents.json_invalid')}`);
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${label} ${t('settings.agents.json_object_required')}`);
+    }
+    return parsed;
 }
 
 function parseTriStateValue(value) {
@@ -658,9 +755,140 @@ function serializeTriStateValue(value) {
 }
 
 function formatTransportLabel(transport) {
-    if (transport === 'streamable_http') return 'HTTP';
-    if (transport === 'custom') return 'Custom';
-    return 'Stdio';
+    if (transport === 'streamable_http') return t('settings.agents.transport_http_label');
+    if (transport === 'custom') return t('settings.agents.transport_custom_label');
+    return t('settings.agents.transport_stdio_label');
+}
+
+function renderEmptyBindingState(kind) {
+    if (kind === 'stdio' && !availableEnvironmentBindings.length) {
+        return `
+            <div class="role-option-empty agent-binding-empty">
+                <div>${escapeHtml(t('settings.agents.no_env_options'))}</div>
+                <div class="agent-binding-empty-note">${escapeHtml(t('settings.agents.no_env_options_copy'))}</div>
+            </div>
+        `;
+    }
+    if (kind === 'stdio') {
+        return `<div class="role-option-empty agent-binding-empty">${escapeHtml(t('settings.agents.no_env_bindings'))}</div>`;
+    }
+    return `<div class="role-option-empty agent-binding-empty">${escapeHtml(t('settings.agents.no_headers'))}</div>`;
+}
+
+function renderEnvironmentBindingRow(binding, index) {
+    const selectedName = String(binding?.name || '').trim();
+    return `
+        <div class="agent-binding-row agent-env-binding-row" data-kind="stdio" data-index="${index}">
+            <div class="agent-env-binding-main">
+                <select class="agent-binding-name-select agent-env-binding-select" data-kind="stdio" data-index="${index}" aria-label="${escapeHtml(t('settings.agents.select_env'))}">
+                    ${renderEnvironmentBindingOptions(selectedName)}
+                </select>
+                <div class="agent-env-binding-meta">${escapeHtml(formatEnvironmentBindingMeta(selectedName))}</div>
+            </div>
+            <button class="secondary-btn section-action-btn agent-binding-remove-btn agent-env-binding-remove" data-kind="stdio" data-index="${index}" type="button">${escapeHtml(t('settings.agents.action_remove'))}</button>
+        </div>
+    `;
+}
+
+function renderEnvironmentBindingOptions(selectedName) {
+    const normalizedName = String(selectedName || '').trim();
+    const options = [];
+    if (normalizedName && !resolveEnvironmentBinding(normalizedName)) {
+        options.push(
+            `<option value="${escapeHtml(normalizedName)}" selected>${escapeHtml(`${normalizedName} · ${t('settings.agents.env_missing')}`)}</option>`,
+        );
+    }
+    availableEnvironmentBindings.forEach(binding => {
+        const isSelected = binding.key === normalizedName;
+        options.push(
+            `<option value="${escapeHtml(binding.key)}"${isSelected ? ' selected' : ''}>${escapeHtml(formatEnvironmentBindingOptionLabel(binding))}</option>`,
+        );
+    });
+    return options.join('');
+}
+
+function renderHttpHeaderBindingRow(binding, index) {
+    return `
+        <div class="agent-binding-row" data-kind="http" data-index="${index}">
+            <div class="form-group">
+                <label>${escapeHtml(t('settings.agents.header_name'))}</label>
+                <input type="text" class="agent-binding-name-input" data-kind="http" data-index="${index}" value="${escapeHtml(binding.name)}" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label>${escapeHtml(t('settings.agents.header_value'))}</label>
+                <input type="${binding.secret ? 'password' : 'text'}" class="agent-binding-value" data-kind="http" data-index="${index}" value="${escapeHtml(binding.value || '')}" autocomplete="off" placeholder="${binding.configured ? escapeHtml(t('settings.agents.secret_configured')) : ''}">
+            </div>
+            <div class="form-group">
+                <label>${escapeHtml(t('settings.agents.secret_mode'))}</label>
+                <select class="agent-binding-secret-select" data-kind="http" data-index="${index}">
+                    <option value="false"${binding.secret ? '' : ' selected'}>${escapeHtml(t('settings.agents.secret_plain'))}</option>
+                    <option value="true"${binding.secret ? ' selected' : ''}>${escapeHtml(t('settings.agents.secret_keyring'))}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>${escapeHtml(t('settings.agents.action_label'))}</label>
+                <button class="secondary-btn section-action-btn agent-binding-remove-btn" data-kind="http" data-index="${index}" type="button">${escapeHtml(t('settings.agents.action_remove'))}</button>
+            </div>
+        </div>
+    `;
+}
+
+function resolveEnvironmentBinding(name) {
+    const normalizedName = String(name || '').trim();
+    return availableEnvironmentBindings.find(binding => binding.key === normalizedName) || null;
+}
+
+function createEnvironmentBinding(binding) {
+    return {
+        name: String(binding?.key || '').trim(),
+        value: String(binding?.value || ''),
+        secret: false,
+        configured: false,
+    };
+}
+
+function syncEnvironmentBindings(bindings) {
+    return (Array.isArray(bindings) ? bindings : []).map(binding => {
+        const normalizedBinding = normalizeBinding(binding);
+        const matchedBinding = resolveEnvironmentBinding(normalizedBinding.name);
+        return matchedBinding ? createEnvironmentBinding(matchedBinding) : normalizedBinding;
+    });
+}
+
+function formatEnvironmentBindingMeta(bindingName) {
+    const matchedBinding = resolveEnvironmentBinding(bindingName);
+    if (!matchedBinding) {
+        return t('settings.agents.env_missing_note');
+    }
+    const scopeLabel = matchedBinding.scope === 'system'
+        ? t('settings.agents.env_scope_system')
+        : t('settings.agents.env_scope_app');
+    return `${scopeLabel} · ${formatEnvironmentValueKind(matchedBinding.value_kind)} · ${formatEnvironmentBindingValuePreview(matchedBinding.value)}`;
+}
+
+function formatEnvironmentBindingOptionLabel(binding) {
+    return `${binding.key} = ${formatEnvironmentBindingValuePreview(binding.value)}`;
+}
+
+function formatEnvironmentBindingValuePreview(value) {
+    const normalizedValue = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalizedValue) {
+        return '""';
+    }
+    return normalizedValue.length > 72
+        ? `${normalizedValue.slice(0, 69)}...`
+        : normalizedValue;
+}
+
+function formatEnvironmentValueKind(valueKind) {
+    const normalizedKind = String(valueKind || 'string').trim().toLowerCase();
+    if (normalizedKind === 'secret') {
+        return t('settings.agents.env_value_kind_secret');
+    }
+    if (normalizedKind === 'masked') {
+        return t('settings.agents.env_value_kind_masked');
+    }
+    return t('settings.agents.env_value_kind_string');
 }
 
 function escapeHtml(value) {

@@ -148,7 +148,7 @@ def test_create_provider_factory_uses_role_model_profile_when_present(
         provider_registry=provider_registry,
     )
 
-    provider = factory(_build_role(model_profile="kimi"))
+    provider = factory(_build_role(model_profile="kimi"), None)
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is kimi_config
@@ -173,7 +173,7 @@ def test_create_provider_factory_falls_back_to_default_when_profile_missing(
         provider_registry=provider_registry,
     )
 
-    provider = factory(_build_role(model_profile="kimi"))
+    provider = factory(_build_role(model_profile="kimi"), None)
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is default_config
@@ -207,10 +207,69 @@ def test_create_provider_factory_resolves_default_alias_to_explicit_default_prof
         provider_registry=provider_registry,
     )
 
-    provider = factory(_build_role(model_profile="default"))
+    provider = factory(_build_role(model_profile="default"), None)
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is kimi_config
+
+
+def test_create_provider_factory_uses_session_override_for_default_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_registry = _CapturingProviderRegistry()
+    default_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="default-model",
+        base_url="https://default.example/v1",
+        api_key="default-key",
+    )
+    override_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="override-model",
+        base_url="https://override.example/v1",
+        api_key="override-key",
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "create_default_provider_registry",
+        lambda **kwargs: provider_registry,
+    )
+    factory = create_provider_factory(
+        runtime=_build_runtime(
+            profiles={"default": default_config},
+            default_model_profile="default",
+        ),
+        task_repo=cast(TaskRepository, object()),
+        shared_store=cast(SharedStateRepository, object()),
+        event_log=cast(EventLog, object()),
+        injection_manager=cast(RunInjectionManager, object()),
+        run_event_hub=cast(RunEventHub, object()),
+        agent_repo=cast(AgentInstanceRepository, object()),
+        approval_ticket_repo=cast(ApprovalTicketRepository, object()),
+        run_runtime_repo=cast(RunRuntimeRepository, object()),
+        run_intent_repo=cast(RunIntentRepository, object()),
+        workspace_manager=cast(WorkspaceManager, object()),
+        tool_registry=cast(ToolRegistry, object()),
+        mcp_registry=cast(McpRegistry, object()),
+        skill_registry=cast(SkillRegistry, object()),
+        message_repo=cast(MessageRepository, object()),
+        role_registry=cast(RoleRegistry, object()),
+        get_task_service=lambda: cast(TaskOrchestrationService, object()),
+        run_control_manager=cast(RunControlManager, object()),
+        tool_approval_manager=cast(ToolApprovalManager, object()),
+        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        notification_service=cast(NotificationService | None, None),
+        get_task_execution_service=lambda: cast(TaskExecutionService, object()),
+        token_usage_repo=cast(TokenUsageRepository | None, None),
+        session_model_profile_lookup=lambda session_id: (
+            override_config if session_id == "session-1" else None
+        ),
+    )
+
+    provider = factory(_build_role(model_profile="default"), "session-1")
+
+    assert isinstance(provider, EchoProvider)
+    assert provider_registry.created_config is override_config
 
 
 @pytest.mark.asyncio
@@ -224,7 +283,7 @@ async def test_create_provider_factory_returns_misconfigured_provider_when_no_pr
         provider_registry=provider_registry,
     )
 
-    provider = factory(_build_role(model_profile="default"))
+    provider = factory(_build_role(model_profile="default"), None)
 
     assert isinstance(provider, MisconfiguredProvider)
     with pytest.raises(

@@ -51,6 +51,8 @@ from agent_teams.feishu import (
     FeishuTriggerConfigService,
     FeishuTriggerHandler,
 )
+from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
+from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
@@ -122,6 +124,11 @@ from agent_teams.tools.runtime import (
     ToolApprovalPolicy,
 )
 from agent_teams.triggers import TriggerRepository, TriggerService
+from agent_teams.wechat import (
+    WeChatAccountRepository,
+    WeChatClient,
+    WeChatGatewayService,
+)
 from agent_teams.workspace import (
     WorkspaceManager,
     WorkspaceRepository,
@@ -137,6 +144,8 @@ class ServerContainer:
         roles_dir: Path | None = None,
         db_path: Path | None = None,
         manage_runtime_state: bool = True,
+        session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
+        | None = None,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -146,6 +155,7 @@ class ServerContainer:
         ensure_app_config_bootstrap(config_dir)
         self.config_dir: Path = config_dir
         self.runtime: RuntimeConfig = runtime
+        self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
             config_dir=config_dir
@@ -240,6 +250,9 @@ class ServerContainer:
             ExternalSessionBindingRepository(runtime.paths.db_path)
         )
         self.external_agent_session_repo = ExternalAgentSessionRepository(
+            runtime.paths.db_path
+        )
+        self.gateway_session_repository = GatewaySessionRepository(
             runtime.paths.db_path
         )
         self.orchestration_settings_service: OrchestrationSettingsService = (
@@ -381,7 +394,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -453,6 +466,24 @@ class ServerContainer:
             mcp_registry=self.mcp_registry,
             orchestration_settings_service=self.orchestration_settings_service,
             get_runtime=lambda: self.runtime,
+        )
+        self.gateway_session_service = GatewaySessionService(
+            repository=self.gateway_session_repository,
+            session_service=self.session_service,
+        )
+        self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
+        self.wechat_client = WeChatClient()
+        self.wechat_gateway_service = WeChatGatewayService(
+            config_dir=config_dir,
+            repository=self.wechat_account_repository,
+            secret_store=None,
+            client=self.wechat_client,
+            gateway_session_service=self.gateway_session_service,
+            run_service=self.run_service,
+            run_event_hub=self.run_event_hub,
+            workspace_service=self.workspace_service,
+            role_registry=self.role_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
         )
         self.feishu_inbound_runtime = FeishuInboundRuntime(
             session_service=self.session_service,
@@ -600,6 +631,7 @@ class ServerContainer:
             metric_recorder=self.metric_recorder,
             feishu_tool_service=self.feishu_tool_service,
             external_agent_session_manager=self.external_acp_session_manager,
+            session_model_profile_lookup=self._session_model_profile_lookup,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
@@ -653,6 +685,7 @@ class ServerContainer:
 
     async def start(self) -> None:
         self.run_service.bind_event_loop(asyncio.get_running_loop())
+        self.wechat_gateway_service.start()
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
         self.automation_delivery_worker.start()
@@ -664,6 +697,7 @@ class ServerContainer:
         self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
+        self.wechat_gateway_service.stop()
         await self.external_acp_session_manager.close()
         return None
 
@@ -717,6 +751,7 @@ class ServerContainer:
         clear_llm_http_client_cache()
         self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
         self.feishu_subscription_service.reload()
+        self.wechat_gateway_service.reload()
 
     def _ensure_default_workspace(self) -> None:
         if self.workspace_repo.exists("default"):

@@ -40,6 +40,7 @@ from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.triggers import TriggerService
+from agent_teams.wechat import WeChatGatewayService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
 
@@ -171,3 +172,7 @@ def get_skill_registry(request: Request) -> SkillRegistry:
 
 def get_metrics_service(request: Request) -> MetricsService:
     return get_container(request).metrics_service
+
+
+def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
+    return get_container(request).wechat_gateway_service

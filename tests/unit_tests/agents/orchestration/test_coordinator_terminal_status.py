@@ -120,7 +120,7 @@ def _build_coordinator(
             role_registry=role_registry,
             mcp_registry=McpRegistry(),
         ),
-        provider_factory=lambda _: None,
+        provider_factory=lambda _, __=None: None,
         task_execution_service=task_execution_service,
         run_runtime_repo=run_runtime_repo,
         run_control_manager=run_control_manager,

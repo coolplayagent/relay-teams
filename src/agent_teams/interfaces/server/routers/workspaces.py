@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -160,6 +161,31 @@ def get_workspace_diff_file(
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{workspace_id}/preview-file")
+def get_workspace_preview_file(
+    workspace_id: str,
+    path: Annotated[str, Query(min_length=1)],
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> FileResponse:
+    try:
+        resolved_path, media_type = service.get_workspace_image_preview_file(
+            workspace_id,
+            path=unquote(path),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=resolved_path,
+        filename=resolved_path.name,
+        media_type=media_type,
+    )
 
 
 @router.delete("/{workspace_id}")

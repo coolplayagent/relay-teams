@@ -1,0 +1,50 @@
+name: Publish To PyPI
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: publish-to-pypi-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cool-play-agent-teams/
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install build dependencies
+        run: uv sync --extra dev --no-default-groups
+
+      - name: Generate timestamp release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python src/agent_teams/release/versioning.py --output src/agent_teams/_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build distribution
+        run: uv build
+
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Report published version
+        run: echo "Published version ${{ steps.version.outputs.version }}"

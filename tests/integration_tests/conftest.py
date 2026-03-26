@@ -23,6 +23,17 @@ from integration_tests.support.process_control import (
 
 
 _HOME_ENV_KEYS: tuple[str, ...] = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+_PROXY_ENV_KEYS: tuple[str, ...] = (
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "SSL_VERIFY",
+)
 
 
 def _capture_home_env() -> dict[str, str | None]:
@@ -50,6 +61,11 @@ def _restore_home_env(original_env: dict[str, str | None]) -> None:
         os.environ[key] = value
 
 
+def _clear_proxy_env(env_values: dict[str, str]) -> None:
+    for key in _PROXY_ENV_KEYS:
+        env_values.pop(key, None)
+
+
 @pytest.fixture(scope="session")
 def integration_env(
     tmp_path_factory: pytest.TempPathFactory,
@@ -75,6 +91,7 @@ def integration_env(
     _apply_home_env(runtime_root)
 
     shared_env = os.environ.copy()
+    _clear_proxy_env(shared_env)
     python_paths = [str(repo_root), str(repo_root / "src"), str(repo_root / "tests")]
     existing_pythonpath = shared_env.get("PYTHONPATH", "")
     if existing_pythonpath:
@@ -151,5 +168,9 @@ def integration_env(
 
 @pytest.fixture()
 def api_client(integration_env: IntegrationEnvironment) -> Iterator[httpx.Client]:
-    with httpx.Client(base_url=integration_env.api_base_url, timeout=40.0) as client:
+    with httpx.Client(
+        base_url=integration_env.api_base_url,
+        timeout=40.0,
+        trust_env=False,
+    ) as client:
         yield client

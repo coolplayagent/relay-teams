@@ -7,6 +7,10 @@ Agent Teams supports Feishu app bot integration for:
 - inbound IM trigger delivery through the Feishu SDK long connection
 - outbound notifications back to the originating Feishu chat
 
+The settings UI now groups Feishu and WeChat under a shared Gateway section.
+Backend ownership is unchanged here: Feishu still runs on the `triggers` path, not the
+new conversational `gateway` runtime path used by WeChat.
+
 Inbound and outbound Feishu handling use Feishu's official Python SDK (`lark-oapi`).
 Inbound delivery uses SDK long connection mode, so no public callback URL or reverse
 proxy is required just for Feishu event delivery.
