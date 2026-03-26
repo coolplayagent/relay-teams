@@ -61,7 +61,8 @@ Request field:
 
 ### `GET /system/configs/model`
 
-Returns raw `model.json`.
+Returns the persisted model config with secret-backed profile API keys rehydrated for UI editing.
+Literal profile `api_key` values are migrated out of `model.json` into the unified secret store on read.
 
 ### `GET /system/configs/model/profiles`
 
@@ -87,6 +88,7 @@ If the deleted profile was the current default and other profiles remain, the ba
 ### `PUT /system/configs/model`
 
 Replaces the full model config object.
+Literal profile `api_key` values are moved into the unified secret store before `model.json` is written.
 
 ### `POST /system/configs/model:probe`
 
@@ -108,21 +110,21 @@ Reloads model config into runtime.
 
 ### `GET /system/configs/proxy`
 
-Returns the proxy values currently saved in app `~/.agent-teams/.env`.
+Returns the saved proxy configuration assembled from app `~/.agent-teams/.env` plus the unified secret store.
 Fields: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`, `proxy_username`, `proxy_password`, `ssl_verify`.
 Saved proxy URLs are returned without embedded credentials when the configured proxy URLs share the same username/password pair.
-If the password was persisted through the system keyring, the API rehydrates it into `proxy_password` for editing.
+If the password was persisted through the secret store, the API rehydrates it into `proxy_password` for editing.
 If a user manually forces `user:password@host` into `.env`, runtime loading still supports it and the API can read it back, but the save flow will not write that password back to `.env`.
 
 ### `PUT /system/configs/proxy`
 
-Saves proxy values into app `~/.agent-teams/.env` and reloads runtime proxy state immediately.
+Saves proxy values into app `~/.agent-teams/.env` and the unified secret store, then reloads runtime proxy state immediately.
 Blank values remove the corresponding proxy key.
 `proxy_username` and `proxy_password` are optional shared credentials.
 `ssl_verify` controls the default TLS certificate verification policy for Agent Teams outbound HTTP clients.
 When omitted or `null`, the backend removes `SSL_VERIFY` from `.env` and falls back to strict verification by default.
-On save, proxy passwords are persisted only through a usable system keyring backend. The `.env` file stores proxy URLs without the password portion.
-If no usable keyring backend is available, saving a proxy password fails with a user-facing error instead of falling back to plaintext file storage.
+On save, proxy passwords are persisted through the unified secret store. When a usable system keyring backend exists, the secret store uses keyring; otherwise it falls back to `~/.agent-teams/secrets.json`.
+The `.env` file stores proxy URLs without the password portion.
 Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
 `no_proxy` accepts both comma-separated and semicolon-separated entries. Wildcard host patterns such as `127.*`, `192.168.*`, and the special token `<local>` are supported.
 
@@ -131,7 +133,7 @@ Runtime loading still supports manual `.env` proxy URLs that already contain emb
 Returns the saved web tool configuration.
 Fields:
 - `provider`: currently only `exa`
-- `api_key`: optional value rehydrated from the system keyring when available
+- `api_key`: optional value rehydrated from the unified secret store
 
 The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint, fetch size limit, and temp file location under `~/.agent-teams/.../tmp`.
 
@@ -140,20 +142,21 @@ The web settings UI intentionally stays minimal. All other `websearch` and `webf
 Saves the web tool configuration.
 `provider` is currently fixed to `exa`.
 `api_key` is optional because Exa hosted MCP can be used without a key; providing one only raises the rate-limit ceiling.
-The backend persists the API key only through a usable system keyring backend and does not write it back to `.env`.
+The backend persists the API key only through the unified secret store and does not write it back to `.env`.
 
 ### `GET /system/configs/github`
 
 Returns the saved GitHub CLI configuration.
 Fields:
-- `token`: optional value rehydrated from the system keyring when available, otherwise read from `GH_TOKEN` / `GITHUB_TOKEN` in `.env`
+- `token`: optional value rehydrated from the unified secret store
 
 The GitHub settings UI exists specifically for the bundled `gh` CLI integration used by shell subprocesses. When configured, the runtime injects the token into shell environments as both `GH_TOKEN` and `GITHUB_TOKEN`, and also disables interactive auth/update prompts for non-interactive runs.
+Legacy `GH_TOKEN` / `GITHUB_TOKEN` values still found in `.env` are migrated into the secret store on read and removed from `.env`.
 
 ### `PUT /system/configs/github`
 
 Saves the GitHub CLI configuration.
-`token` is optional. When a usable system keyring backend is available, the backend persists it there and removes any legacy plaintext `GH_TOKEN` / `GITHUB_TOKEN` entries from `.env`. When no keyring backend is available, the backend falls back to writing `GH_TOKEN` into `.env`.
+`token` is optional. The backend persists it through the unified secret store and removes any managed `GH_TOKEN` / `GITHUB_TOKEN` entries from `.env`.
 
 ### `POST /system/configs/github:probe`
 
@@ -201,7 +204,7 @@ Binding items under `env[]` or `headers[]` include:
 - `configured`
 
 Notes:
-- Secret binding values are not returned on read. Instead, `configured=true` tells the UI that a keyring-backed secret exists.
+- Secret binding values are not returned on read. Instead, `configured=true` tells the UI that a secret exists in the unified secret store.
 - Any ACP-compatible external agent may be configured here, including tools such as Claude Code, Codex, or OpenCode, as long as it speaks the expected transport.
 - `stdio` external agents always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in agent config.
 
@@ -211,12 +214,12 @@ Upserts one external ACP agent config.
 
 Rules:
 - Path `agent_id` must match body `agent_id`.
-- Secret env/header values are persisted only through the keyring-backed secret store.
+- Secret env/header values are persisted only through the unified secret store.
 - Sending a secret binding with `configured=false` and no value removes the stored secret for that binding.
 
 ### `DELETE /system/configs/agents/{agent_id}`
 
-Deletes one saved external ACP agent config and its stored keyring secrets.
+Deletes one saved external ACP agent config and its stored secrets.
 
 ### `POST /system/configs/agents/{agent_id}:test`
 
@@ -284,7 +287,8 @@ Rules:
 
 Returns environment variables grouped by `system` and `app` scope.
 `system` is read-only and reflects the effective runtime environment currently visible to the Agent Teams server and newly spawned child processes.
-`app` is editable and stored in `~/.agent-teams/.env`.
+`app` is editable and is stored across `~/.agent-teams/.env` and the unified secret store.
+Sensitive-looking app keys such as `*_API_KEY`, `*_TOKEN`, `*_SECRET`, and `*_PASSWORD` are stored in the secret store and excluded from `.env`.
 Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
 
 ### `PUT /system/configs/environment-variables/{scope}/{key}`
@@ -295,6 +299,7 @@ Request body fields:
 - optional `source_key`: rename from an existing key before saving the new key
 
 `app` writes preserve unrelated `.env` lines and comments where possible.
+Sensitive app keys are written to the secret store instead of `.env`, and any managed plaintext copy is removed from `.env`.
 The backend preserves the existing value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
 `system` scope is read-only and returns a user-facing validation error on mutation.
 
@@ -1170,7 +1175,7 @@ Feishu-specific response additions:
 - `secret_config.app_secret`
 
 Notes:
-- Feishu secrets are stored in keyring, not in the trigger table, and trigger read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
+- Feishu secrets are stored in the unified secret store, not in the trigger table or `.env`, and trigger read/list responses include the current `secret_config` so the settings UI can mask it by default and reveal it on demand.
 - When a Feishu trigger's runtime preset changes, the backend clears that trigger's external chat bindings so the next message creates a session with the new preset.
 - For inbound Feishu chat messages, terminal Feishu replies are owned by the message pool worker, and the generic Feishu `run_completed` / `run_failed` notification path is suppressed to avoid duplicate replies.
 
@@ -1244,7 +1249,7 @@ Response fields:
 - `message`
 
 Notes:
-- On success, the backend stores the returned bot token in keyring and upserts the account into `wechat_accounts`.
+- On success, the backend stores the returned bot token in the unified secret store and upserts the account into `wechat_accounts`.
 - Newly connected accounts default to `workspace_id = "default"` and `session_mode = "normal"` unless a previous record already exists for that account id.
 
 ### `PATCH /gateway/wechat/accounts/{account_id}`
@@ -1278,7 +1283,7 @@ Disables one WeChat account and reloads gateway workers.
 
 ### `DELETE /gateway/wechat/accounts/{account_id}`
 
-Deletes one WeChat account and removes its stored bot token from keyring.
+Deletes one WeChat account and removes its stored bot token from the unified secret store.
 
 ### `POST /gateway/wechat/reload`
 

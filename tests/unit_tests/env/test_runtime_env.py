@@ -23,6 +23,40 @@ def test_load_merged_env_vars_reads_app_env_file(tmp_path: Path) -> None:
     assert merged["APP_ONLY"] == "one"
 
 
+def test_load_merged_env_vars_reads_secret_backed_app_env_values(
+    tmp_path: Path,
+) -> None:
+    user_home = tmp_path / "home"
+    app_env_dir = user_home / ".agent-teams"
+    app_env_dir.mkdir(parents=True)
+    (app_env_dir / ".env").write_text("APP_ONLY=one\n", encoding="utf-8")
+    (app_env_dir / "secrets.json").write_text(
+        (
+            "{\n"
+            '  "version": 1,\n'
+            '  "entries": [\n'
+            "    {\n"
+            '      "namespace": "app_env",\n'
+            '      "owner_id": "app",\n'
+            '      "field_name": "OPENAI_API_KEY",\n'
+            '      "storage": "file",\n'
+            '      "value": "secret-key"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    merged = runtime_env.load_merged_env_vars(
+        user_home_dir=user_home,
+        include_process_env=False,
+    )
+
+    assert merged["APP_ONLY"] == "one"
+    assert merged["OPENAI_API_KEY"] == "secret-key"
+
+
 def test_get_env_var_process_env_has_highest_priority(
     tmp_path: Path,
     monkeypatch,

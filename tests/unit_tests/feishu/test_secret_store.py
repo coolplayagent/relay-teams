@@ -6,12 +6,15 @@ from pathlib import Path
 
 from agent_teams.gateway.feishu.models import FeishuTriggerSecretConfig
 from agent_teams.gateway.feishu.secret_store import FeishuTriggerSecretStore
+from agent_teams.secrets import AppSecretStore
 
 
 def _make_store_file_backend() -> FeishuTriggerSecretStore:
-    store = FeishuTriggerSecretStore()
-    store._has_keyring_backend = lambda: False  # type: ignore[assignment]
-    return store
+    class _FakeFileSecretStore(AppSecretStore):
+        def has_usable_keyring_backend(self) -> bool:
+            return False
+
+    return FeishuTriggerSecretStore(secret_store=_FakeFileSecretStore())
 
 
 class TestFileBackendFallback:
@@ -83,7 +86,7 @@ class TestFileBackendFallback:
 
     def test_corrupted_file_returns_empty(self, tmp_path: Path) -> None:
         store = _make_store_file_backend()
-        secrets_file = tmp_path / "feishu_trigger_secrets.json"
+        secrets_file = tmp_path / "secrets.json"
         secrets_file.write_text("not json", encoding="utf-8")
         got = store.get_secret_config(tmp_path, "t1")
         assert got.app_secret is None
@@ -99,6 +102,10 @@ class TestFileBackendFallback:
             "t1",
             FeishuTriggerSecretConfig(app_secret="s"),
         )
-        secrets_file = tmp_path / "feishu_trigger_secrets.json"
+        secrets_file = tmp_path / "secrets.json"
         data = json.loads(secrets_file.read_text(encoding="utf-8"))
-        assert data["t1"]["app_secret"] == "s"
+        assert data["entries"][0]["namespace"] == "feishu_trigger"
+        assert data["entries"][0]["owner_id"] == "t1"
+        assert data["entries"][0]["field_name"] == "app_secret"
+        assert data["entries"][0]["storage"] == "file"
+        assert data["entries"][0]["value"] == "s"

@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 
 from agent_teams.paths import get_app_config_dir
+from agent_teams.secrets import get_secret_store, is_sensitive_env_key
 
 _ENV_FILE_NAME = ".env"
 _PROCESS_ENV_BASELINE: dict[str, str] = dict(os.environ)
 _SYNCED_APP_ENV_KEYS: set[str] = set()
+_APP_ENV_SECRET_NAMESPACE = "app_env"
 
 
 def get_app_env_file_path(user_home_dir: Path | None = None) -> Path:
@@ -57,6 +59,7 @@ def load_merged_env_vars(
     _ = project_root
     app_env_path = get_app_env_file_path(user_home_dir=user_home_dir)
     merged.update(load_env_file(app_env_path))
+    merged.update(load_secret_env_vars(app_env_path.parent))
 
     for file_path in extra_env_files:
         merged.update(load_env_file(file_path))
@@ -74,6 +77,7 @@ def sync_app_env_to_process_env(env_file_path: Path | None = None) -> dict[str, 
         .resolve()
     )
     app_env = load_env_file(resolved_env_file)
+    app_env.update(load_secret_env_vars(resolved_env_file.parent))
     managed_keys = _SYNCED_APP_ENV_KEYS | set(app_env.keys())
     for key in managed_keys:
         if key in app_env:
@@ -87,6 +91,19 @@ def sync_app_env_to_process_env(env_file_path: Path | None = None) -> dict[str, 
     _SYNCED_APP_ENV_KEYS.clear()
     _SYNCED_APP_ENV_KEYS.update(app_env.keys())
     return app_env.copy()
+
+
+def load_secret_env_vars(config_dir: Path) -> dict[str, str]:
+    secret_store = get_secret_store()
+    return {
+        key: value
+        for key, value in secret_store.get_owner_secrets(
+            config_dir,
+            namespace=_APP_ENV_SECRET_NAMESPACE,
+            owner_id="app",
+        ).items()
+        if is_sensitive_env_key(key)
+    }
 
 
 def get_env_var(

@@ -10,21 +10,35 @@ except Exception:  # pragma: no cover - import availability depends on environme
     keyring = None
 
 from agent_teams.gateway.feishu.models import FeishuTriggerSecretConfig
-from agent_teams.logger import get_logger
+from agent_teams.secrets import AppSecretStore, get_secret_store
 
-logger = get_logger(__name__)
-
-_KEYRING_SERVICE_NAME = "agent-teams.feishu-trigger"
-_SECRETS_FILE_NAME = "feishu_trigger_secrets.json"
+_LEGACY_KEYRING_SERVICE_NAME = "agent-teams.feishu-trigger"
+_LEGACY_FILE_NAME = "feishu_trigger_secrets.json"
+_NAMESPACE = "feishu_trigger"
 
 
 class FeishuTriggerSecretStore:
+    def __init__(self, *, secret_store: AppSecretStore | None = None) -> None:
+        self._secret_store = (
+            get_secret_store() if secret_store is None else secret_store
+        )
+
     def get_secret_config(
         self, config_dir: Path, trigger_id: str
     ) -> FeishuTriggerSecretConfig:
-        if self._has_keyring_backend():
-            return self._get_from_keyring(config_dir, trigger_id)
-        return self._get_from_file(config_dir, trigger_id)
+        self._migrate_legacy_storage(config_dir, trigger_id)
+        secrets_by_field = self._secret_store.get_owner_secrets(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=trigger_id.strip(),
+        )
+        return FeishuTriggerSecretConfig(
+            app_secret=_normalize_secret(secrets_by_field.get("app_secret")),
+            verification_token=_normalize_secret(
+                secrets_by_field.get("verification_token")
+            ),
+            encrypt_key=_normalize_secret(secrets_by_field.get("encrypt_key")),
+        )
 
     def set_secret_config(
         self,
@@ -32,191 +46,111 @@ class FeishuTriggerSecretStore:
         trigger_id: str,
         secret_config: FeishuTriggerSecretConfig,
     ) -> None:
-        if self._has_keyring_backend():
-            self._set_to_keyring(config_dir, trigger_id, secret_config)
-            return
-        self._set_to_file(config_dir, trigger_id, secret_config)
+        owner_id = trigger_id.strip()
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=owner_id,
+            field_name="app_secret",
+            value=_normalize_secret(secret_config.app_secret),
+        )
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=owner_id,
+            field_name="verification_token",
+            value=_normalize_secret(secret_config.verification_token),
+        )
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=owner_id,
+            field_name="encrypt_key",
+            value=_normalize_secret(secret_config.encrypt_key),
+        )
 
     def delete_secret_config(self, config_dir: Path, trigger_id: str) -> None:
-        if self._has_keyring_backend():
-            self._delete_from_keyring(config_dir, trigger_id)
-            return
-        self._delete_from_file(config_dir, trigger_id)
+        self._secret_store.delete_owner(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=trigger_id.strip(),
+        )
 
     def can_persist_secrets(self) -> bool:
         return True
 
-    # -- keyring backend ---------------------------------------------------
+    def _migrate_legacy_storage(self, config_dir: Path, trigger_id: str) -> None:
+        self._migrate_legacy_keyring(config_dir, trigger_id)
+        self._migrate_legacy_file(config_dir, trigger_id)
 
-    def _has_keyring_backend(self) -> bool:
-        backend = self._get_backend()
-        if backend is None:
-            return False
-        try:
-            return float(getattr(backend, "priority", 0.0)) > 0
-        except (TypeError, ValueError):
-            return False
-
-    def _get_from_keyring(
-        self,
-        config_dir: Path,
-        trigger_id: str,
-    ) -> FeishuTriggerSecretConfig:
-        assert keyring is not None
-        account_name = self._account_name(config_dir, trigger_id)
-        try:
-            return FeishuTriggerSecretConfig(
-                app_secret=_normalize_secret(
-                    keyring.get_password(
-                        _KEYRING_SERVICE_NAME, f"{account_name}:app_secret"
-                    )
-                ),
-                verification_token=_normalize_secret(
-                    keyring.get_password(
-                        _KEYRING_SERVICE_NAME,
-                        f"{account_name}:verification_token",
-                    )
-                ),
-                encrypt_key=_normalize_secret(
-                    keyring.get_password(
-                        _KEYRING_SERVICE_NAME, f"{account_name}:encrypt_key"
-                    )
-                ),
+    def _migrate_legacy_keyring(self, config_dir: Path, trigger_id: str) -> None:
+        if keyring is None:
+            return
+        account_name = f"{config_dir.expanduser().resolve()}::{trigger_id}"
+        for field_name in ("app_secret", "verification_token", "encrypt_key"):
+            try:
+                legacy_value = keyring.get_password(
+                    _LEGACY_KEYRING_SERVICE_NAME,
+                    f"{account_name}:{field_name}",
+                )
+            except Exception:
+                continue
+            normalized = _normalize_secret(legacy_value)
+            if normalized is None:
+                continue
+            migrated = self._secret_store.migrate_legacy_secret(
+                config_dir,
+                namespace=_NAMESPACE,
+                owner_id=trigger_id.strip(),
+                field_name=field_name,
+                value=normalized,
             )
-        except Exception:
-            return FeishuTriggerSecretConfig()
-
-    def _set_to_keyring(
-        self,
-        config_dir: Path,
-        trigger_id: str,
-        secret_config: FeishuTriggerSecretConfig,
-    ) -> None:
-        assert keyring is not None
-        account_name = self._account_name(config_dir, trigger_id)
-        try:
-            self._keyring_set_or_delete(
-                f"{account_name}:app_secret",
-                secret_config.app_secret,
-            )
-            self._keyring_set_or_delete(
-                f"{account_name}:verification_token",
-                secret_config.verification_token,
-            )
-            self._keyring_set_or_delete(
-                f"{account_name}:encrypt_key",
-                secret_config.encrypt_key,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to persist Feishu trigger secrets to the system keyring."
-            ) from exc
-
-    def _delete_from_keyring(self, config_dir: Path, trigger_id: str) -> None:
-        assert keyring is not None
-        account_name = self._account_name(config_dir, trigger_id)
-        for suffix in ("app_secret", "verification_token", "encrypt_key"):
+            if not migrated:
+                continue
             try:
                 keyring.delete_password(
-                    _KEYRING_SERVICE_NAME,
-                    f"{account_name}:{suffix}",
+                    _LEGACY_KEYRING_SERVICE_NAME,
+                    f"{account_name}:{field_name}",
                 )
             except Exception:
                 continue
 
-    def _keyring_set_or_delete(self, account_name: str, value: str | None) -> None:
-        assert keyring is not None
-        normalized = _normalize_secret(value)
-        if normalized is None:
-            try:
-                keyring.delete_password(_KEYRING_SERVICE_NAME, account_name)
-            except Exception:
-                return
+    def _migrate_legacy_file(self, config_dir: Path, trigger_id: str) -> None:
+        legacy_file = config_dir.expanduser().resolve() / _LEGACY_FILE_NAME
+        if not legacy_file.exists() or not legacy_file.is_file():
             return
-        keyring.set_password(_KEYRING_SERVICE_NAME, account_name, normalized)
-
-    # -- file backend ------------------------------------------------------
-
-    def _secrets_file_path(self, config_dir: Path) -> Path:
-        return config_dir.expanduser().resolve() / _SECRETS_FILE_NAME
-
-    def _load_all_file_secrets(
-        self, config_dir: Path
-    ) -> dict[str, dict[str, str | None]]:
-        path = self._secrets_file_path(config_dir)
-        if not path.exists():
-            return {}
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(legacy_file.read_text(encoding="utf-8"))
         except Exception:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return data
-
-    def _save_all_file_secrets(
-        self,
-        config_dir: Path,
-        all_secrets: dict[str, dict[str, str | None]],
-    ) -> None:
-        path = self._secrets_file_path(config_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(all_secrets, ensure_ascii=False, indent=2),
+            return
+        if not isinstance(payload, dict):
+            return
+        raw_entry = payload.get(trigger_id)
+        if not isinstance(raw_entry, dict):
+            return
+        changed = False
+        for field_name in ("app_secret", "verification_token", "encrypt_key"):
+            raw_value = raw_entry.get(field_name)
+            normalized = _normalize_secret(
+                raw_value if isinstance(raw_value, str) else None
+            )
+            if normalized is None:
+                continue
+            migrated = self._secret_store.migrate_legacy_secret(
+                config_dir,
+                namespace=_NAMESPACE,
+                owner_id=trigger_id.strip(),
+                field_name=field_name,
+                value=normalized,
+            )
+            changed = changed or migrated
+        if not changed:
+            return
+        payload.pop(trigger_id, None)
+        legacy_file.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-
-    def _get_from_file(
-        self,
-        config_dir: Path,
-        trigger_id: str,
-    ) -> FeishuTriggerSecretConfig:
-        all_secrets = self._load_all_file_secrets(config_dir)
-        entry = all_secrets.get(trigger_id)
-        if not isinstance(entry, dict):
-            return FeishuTriggerSecretConfig()
-        return FeishuTriggerSecretConfig(
-            app_secret=_normalize_secret(entry.get("app_secret")),
-            verification_token=_normalize_secret(entry.get("verification_token")),
-            encrypt_key=_normalize_secret(entry.get("encrypt_key")),
-        )
-
-    def _set_to_file(
-        self,
-        config_dir: Path,
-        trigger_id: str,
-        secret_config: FeishuTriggerSecretConfig,
-    ) -> None:
-        all_secrets = self._load_all_file_secrets(config_dir)
-        all_secrets[trigger_id] = {
-            "app_secret": secret_config.app_secret,
-            "verification_token": secret_config.verification_token,
-            "encrypt_key": secret_config.encrypt_key,
-        }
-        self._save_all_file_secrets(config_dir, all_secrets)
-
-    def _delete_from_file(self, config_dir: Path, trigger_id: str) -> None:
-        all_secrets = self._load_all_file_secrets(config_dir)
-        if trigger_id not in all_secrets:
-            return
-        del all_secrets[trigger_id]
-        self._save_all_file_secrets(config_dir, all_secrets)
-
-    # -- shared helpers ----------------------------------------------------
-
-    def _account_name(self, config_dir: Path, trigger_id: str) -> str:
-        return f"{config_dir.expanduser().resolve()}::{trigger_id}"
-
-    def _get_backend(self) -> object | None:
-        if keyring is None:
-            return None
-        try:
-            backend = keyring.get_keyring()
-        except Exception:
-            return None
-        if backend is None:
-            return None
-        return backend
 
 
 _FEISHU_TRIGGER_SECRET_STORE = FeishuTriggerSecretStore()

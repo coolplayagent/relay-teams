@@ -8,81 +8,74 @@ try:
 except Exception:  # pragma: no cover - import availability depends on environment
     keyring = None
 
-_KEYRING_SERVICE_NAME = "agent-teams.web-api-key"
+from agent_teams.secrets import AppSecretStore, get_secret_store
+
+_LEGACY_KEYRING_SERVICE_NAME = "agent-teams.web-api-key"
+_NAMESPACE = "web_config"
+_OWNER_ID = "default"
+_FIELD_NAME = "api_key"
 
 
 class WebSecretStore:
+    def __init__(self, *, secret_store: AppSecretStore | None = None) -> None:
+        self._secret_store = (
+            get_secret_store() if secret_store is None else secret_store
+        )
+
     def get_api_key(self, config_dir: Path) -> str | None:
-        if not self.can_persist_api_key():
-            return None
-        assert keyring is not None
-        try:
-            return _normalize_secret(
-                keyring.get_password(
-                    _KEYRING_SERVICE_NAME,
-                    self._account_name(config_dir),
-                )
-            )
-        except Exception:
-            return None
+        migrated = self._migrate_legacy_keyring(config_dir)
+        value = self._secret_store.get_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+        )
+        return _normalize_secret(value if value is not None else migrated)
 
     def set_api_key(self, config_dir: Path, api_key: str | None) -> None:
-        normalized_api_key = _normalize_secret(api_key)
-        if normalized_api_key is None:
-            self.delete_api_key(config_dir)
-            return
-
-        if not self.can_persist_api_key():
-            raise RuntimeError(
-                "Web API key persistence requires a usable system keyring backend."
-            )
-
-        assert keyring is not None
-        try:
-            keyring.set_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(config_dir),
-                normalized_api_key,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to persist web API key to the system keyring."
-            ) from exc
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+            value=_normalize_secret(api_key),
+        )
 
     def delete_api_key(self, config_dir: Path) -> None:
-        if not self.can_persist_api_key():
-            return
-        assert keyring is not None
-        try:
-            keyring.delete_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(config_dir),
-            )
-        except Exception:
-            return
+        self._secret_store.delete_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+        )
 
     def can_persist_api_key(self) -> bool:
-        backend = self._get_backend()
-        if backend is None:
-            return False
-        try:
-            return float(getattr(backend, "priority", 0.0)) > 0
-        except (TypeError, ValueError):
-            return False
+        return True
 
-    def _account_name(self, config_dir: Path) -> str:
-        return str(config_dir.expanduser().resolve())
-
-    def _get_backend(self) -> object | None:
+    def _migrate_legacy_keyring(self, config_dir: Path) -> str | None:
         if keyring is None:
             return None
+        account_name = str(config_dir.expanduser().resolve())
         try:
-            backend = keyring.get_keyring()
+            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
         except Exception:
             return None
-        if backend is None:
+        normalized = _normalize_secret(legacy_value)
+        if normalized is None:
             return None
-        return backend
+        migrated = self._secret_store.migrate_legacy_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+            value=normalized,
+        )
+        if migrated:
+            try:
+                keyring.delete_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            except Exception:
+                return normalized
+        return normalized
 
 
 _WEB_SECRET_STORE = WebSecretStore()

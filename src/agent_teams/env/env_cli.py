@@ -4,7 +4,6 @@ from __future__ import annotations
 from enum import Enum
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -25,12 +24,13 @@ from agent_teams.env.runtime_env import (
     get_project_env_file_path,
     get_user_env_file_path,
     load_env_file,
+    load_secret_env_vars,
 )
+from agent_teams.secrets import is_sensitive_env_key as _is_sensitive_env_key
 
 env_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
 MASKED_VALUE = "<masked>"
-SENSITIVE_ENV_TOKENS: tuple[str, ...] = ("KEY", "TOKEN", "SECRET", "PASSWORD")
 TABLE_MAX_KEY_WIDTH = 42
 TABLE_MAX_VALUE_WIDTH = 96
 TABLE_MIN_VALUE_WIDTH = 24
@@ -136,6 +136,7 @@ def collect_env_entries(
 ) -> list[EnvListEntry]:
     _ = (get_user_env_file_path, get_project_env_file_path)
     app_env = load_env_file(get_app_env_file_path())
+    app_env.update(load_secret_env_vars(get_app_env_file_path().parent))
     process_env = dict(os.environ)
 
     merged: dict[str, str] = {}
@@ -149,7 +150,7 @@ def collect_env_entries(
         if prefix and not key.startswith(prefix):
             continue
 
-        is_masked = (not show_secrets) and is_sensitive_env_key(key)
+        is_masked = (not show_secrets) and _is_sensitive_env_key(key)
         displayed_value = MASKED_VALUE if is_masked else merged[key]
         entries.append(
             EnvListEntry(
@@ -174,12 +175,7 @@ def merge_env_source(
 
 
 def is_sensitive_env_key(key: str) -> bool:
-    normalized_key = key.upper()
-    tokens = [token for token in re.split(r"[^A-Z0-9]+", normalized_key) if token]
-    for sensitive_token in SENSITIVE_ENV_TOKENS:
-        if sensitive_token in tokens:
-            return True
-    return False
+    return _is_sensitive_env_key(key)
 
 
 def render_env_table(entries: list[EnvListEntry]) -> None:

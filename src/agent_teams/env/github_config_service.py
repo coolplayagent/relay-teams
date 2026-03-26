@@ -50,15 +50,15 @@ class GitHubConfigService:
         token = self._secret_store.get_token(self._config_dir)
         if token is None:
             token = resolve_github_token_from_env(env_values)
+            if token is not None:
+                self._secret_store.set_token(self._config_dir, token)
+                self._write_env_file(token=None)
         return GitHubConfig(token=token)
 
     def save_github_config(self, config: GitHubConfig) -> None:
         normalized_token = normalize_github_token(config.token)
-        if self._secret_store.can_persist_token():
-            self._write_env_file(token=None)
-            self._secret_store.set_token(self._config_dir, normalized_token)
-        else:
-            self._write_env_file(token=normalized_token)
+        self._write_env_file(token=None)
+        self._secret_store.set_token(self._config_dir, normalized_token)
         sync_app_env_to_process_env(self._config_dir / ".env")
 
     def probe_connectivity(

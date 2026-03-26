@@ -369,7 +369,8 @@ Purpose: trigger definitions and webhook routing configuration.
 
 Notes:
 - Feishu bot secrets are not stored in this table.
-- Feishu `app_secret`, `verification_token`, and `encrypt_key` are stored in keyring and resolved by `trigger_id`.
+- Feishu `app_secret`, `verification_token`, and `encrypt_key` are stored in the unified secret store and resolved by `trigger_id`.
+- Trigger auth secrets such as `header_token.token` and `hmac.secret` are also stored in the unified secret store, while `auth_policies_json` keeps redacted placeholders for required secret fields.
 
 `source_type` values:
 - `schedule`
@@ -563,7 +564,7 @@ CREATE TABLE IF NOT EXISTS wechat_accounts (
 Purpose: persisted account-level configuration and sync cursor state for the WeChat gateway worker.
 
 Notes:
-- bot tokens are stored in keyring, not in this table
+- bot tokens are stored in the unified secret store, not in this table
 - `sync_cursor` stores the last upstream long-poll cursor returned by WeChat
 - `workspace_id`, `session_mode`, `normal_root_role_id`, and `orchestration_preset_id` define the runtime preset applied to new or resolved gateway sessions for that account
 - runtime status fields such as `running` and `last_error` are computed in memory and returned by the API, not persisted in this table

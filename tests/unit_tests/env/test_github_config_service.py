@@ -19,10 +19,6 @@ class _FakeGitHubSecretStore(GitHubSecretStore):
         return self._tokens.get(str(config_dir.resolve()))
 
     def set_token(self, config_dir: Path, token: str | None) -> None:
-        if not self._can_persist:
-            raise RuntimeError(
-                "GitHub token persistence requires a usable system keyring backend."
-            )
         normalized_key = str(config_dir.resolve())
         if token is None:
             self._tokens.pop(normalized_key, None)
@@ -118,7 +114,7 @@ def test_save_github_config_falls_back_to_env_when_keyring_unavailable(
     service.save_github_config(GitHubConfig(token=" ghp_secret "))
 
     assert (config_dir / ".env").read_text(encoding="utf-8") == (
-        "HTTP_PROXY=http://proxy.example:8080\nGH_TOKEN=ghp_secret\n"
+        "HTTP_PROXY=http://proxy.example:8080\n"
     )
     assert service.get_github_config() == GitHubConfig(token="ghp_secret")
-    assert secret_store.get_token(config_dir) is None
+    assert secret_store.get_token(config_dir) == "ghp_secret"

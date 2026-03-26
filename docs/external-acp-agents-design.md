@@ -48,12 +48,13 @@ Secret values for external agents must not be written to `agents.json`.
 
 Rules:
 
-- secret `env[]` and `headers[]` bindings are stored only in the keyring-backed secret store
+- secret `env[]` and `headers[]` bindings are stored only in the unified secret store
 - non-secret bindings are stored directly in `agents.json`
 - read APIs return `configured=true/false` for secrets instead of rehydrating the secret value into the UI payload
 - runtime resolution reattaches secret values only at execution time
 
-This matches the repository rule that secrets live in keyring only.
+When a usable system keyring backend exists, the secret store uses keyring.
+Otherwise it falls back to `~/.agent-teams/secrets.json`.
 
 ## 4. Role Binding
 

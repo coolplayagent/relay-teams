@@ -17,8 +17,10 @@ from agent_teams.env.environment_variable_models import (
 from agent_teams.env.runtime_env import (
     get_app_env_file_path,
     load_env_file,
+    load_secret_env_vars,
     sync_app_env_to_process_env,
 )
+from agent_teams.secrets import get_secret_store, is_sensitive_env_key
 
 _EXPANDABLE_VALUE_PATTERN = re.compile(r"%[^%]+%")
 
@@ -64,6 +66,7 @@ class EnvironmentVariableService:
             if app_env_file_path is None
             else app_env_file_path.expanduser().resolve()
         )
+        self._secret_store = get_secret_store()
 
     def list_environment_variables(self) -> EnvironmentVariableCatalog:
         system_records = self._sort_records(
@@ -91,6 +94,7 @@ class EnvironmentVariableService:
             else _normalize_key(request.source_key)
         )
         app_records = self._build_app_record_map()
+        plaintext_records = self._build_plaintext_app_record_map()
         target_existing = app_records.get(normalized_key)
         source_existing = app_records.get(source_key)
         is_rename = source_key != normalized_key
@@ -107,21 +111,27 @@ class EnvironmentVariableService:
             source_existing=source_existing,
             target_existing=target_existing,
         )
-        app_records[normalized_key] = EnvironmentVariableRecord(
+        next_record = EnvironmentVariableRecord(
             key=normalized_key,
             value=request.value,
             scope=EnvironmentVariableScope.APP,
             value_kind=value_kind,
         )
-        if is_rename and source_existing is not None:
-            app_records.pop(source_key, None)
-        self._write_app_records(app_records)
-        return EnvironmentVariableRecord(
-            key=normalized_key,
-            value=request.value,
-            scope=EnvironmentVariableScope.APP,
-            value_kind=value_kind,
-        )
+        if source_existing is not None:
+            if is_sensitive_env_key(source_key):
+                self._delete_secret_record(source_key)
+            else:
+                plaintext_records.pop(source_key, None)
+
+        if is_sensitive_env_key(normalized_key):
+            plaintext_records.pop(normalized_key, None)
+            self._set_secret_record(next_record)
+        else:
+            self._delete_secret_record(normalized_key)
+            plaintext_records[normalized_key] = next_record
+
+        self._write_app_records(plaintext_records)
+        return next_record
 
     def delete_environment_variable(
         self,
@@ -133,11 +143,15 @@ class EnvironmentVariableService:
             raise ValueError("System environment variables are read-only.")
         normalized_key = _normalize_key(key)
         app_records = self._build_app_record_map()
+        plaintext_records = self._build_plaintext_app_record_map()
         existing = app_records.get(normalized_key)
         if existing is None:
             raise ValueError(f"Environment variable not found in app: {normalized_key}")
-        app_records.pop(normalized_key, None)
-        self._write_app_records(app_records)
+        if is_sensitive_env_key(normalized_key):
+            self._delete_secret_record(normalized_key)
+        else:
+            plaintext_records.pop(normalized_key, None)
+        self._write_app_records(plaintext_records)
 
     def _sort_records(
         self,
@@ -147,6 +161,7 @@ class EnvironmentVariableService:
 
     def _load_app_records(self) -> tuple[EnvironmentVariableRecord, ...]:
         values = load_env_file(self._app_env_file_path)
+        values.update(load_secret_env_vars(self._app_env_file_path.parent))
         records = [
             EnvironmentVariableRecord(
                 key=key,
@@ -164,6 +179,22 @@ class EnvironmentVariableService:
 
     def _build_app_record_map(self) -> dict[str, EnvironmentVariableRecord]:
         return {record.key: record for record in self._load_app_records()}
+
+    def _build_plaintext_app_record_map(self) -> dict[str, EnvironmentVariableRecord]:
+        values = load_env_file(self._app_env_file_path)
+        return {
+            key: EnvironmentVariableRecord(
+                key=key,
+                value=value,
+                scope=EnvironmentVariableScope.APP,
+                value_kind=(
+                    EnvironmentVariableValueKind.EXPANDABLE
+                    if _EXPANDABLE_VALUE_PATTERN.search(value)
+                    else EnvironmentVariableValueKind.STRING
+                ),
+            )
+            for key, value in values.items()
+        }
 
     def _write_app_records(
         self,
@@ -210,6 +241,23 @@ class EnvironmentVariableService:
             serialized = f"{serialized}\n"
         env_file_path.write_text(serialized, encoding="utf-8")
         sync_app_env_to_process_env(env_file_path)
+
+    def _set_secret_record(self, record: EnvironmentVariableRecord) -> None:
+        self._secret_store.set_secret(
+            self._app_env_file_path.parent,
+            namespace="app_env",
+            owner_id="app",
+            field_name=record.key,
+            value=record.value,
+        )
+
+    def _delete_secret_record(self, key: str) -> None:
+        self._secret_store.delete_secret(
+            self._app_env_file_path.parent,
+            namespace="app_env",
+            owner_id="app",
+            field_name=key,
+        )
 
 
 class ProcessEnvironmentVariableBackend:

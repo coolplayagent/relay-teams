@@ -192,3 +192,39 @@ def test_save_environment_variable_rejects_rename_to_existing_key(
                 value="1",
             ),
         )
+
+
+def test_save_sensitive_app_environment_variable_uses_secret_store(
+    tmp_path: Path,
+) -> None:
+    backend = _FakeEnvironmentVariableBackend()
+    app_env_file_path = tmp_path / ".agent-teams" / ".env"
+    app_env_file_path.parent.mkdir(parents=True)
+    app_env_file_path.write_text("PLAIN_TEXT=value\n", encoding="utf-8")
+    service = EnvironmentVariableService(
+        backend=backend,
+        app_env_file_path=app_env_file_path,
+    )
+
+    saved = service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key="OPENAI_API_KEY",
+        request=EnvironmentVariableSaveRequest(value="secret-key"),
+    )
+
+    assert saved.key == "OPENAI_API_KEY"
+    assert "OPENAI_API_KEY" not in app_env_file_path.read_text(encoding="utf-8")
+    assert service.list_environment_variables().app == (
+        EnvironmentVariableRecord(
+            key="OPENAI_API_KEY",
+            value="secret-key",
+            scope=EnvironmentVariableScope.APP,
+            value_kind=EnvironmentVariableValueKind.STRING,
+        ),
+        EnvironmentVariableRecord(
+            key="PLAIN_TEXT",
+            value="value",
+            scope=EnvironmentVariableScope.APP,
+            value_kind=EnvironmentVariableValueKind.STRING,
+        ),
+    )

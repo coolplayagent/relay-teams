@@ -9,6 +9,12 @@ from typing import cast
 
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 from agent_teams.providers.model_config_manager import ModelConfigManager
+from agent_teams.secrets import AppSecretStore
+
+
+class _FileOnlySecretStore(AppSecretStore):
+    def has_usable_keyring_backend(self) -> bool:
+        return False
 
 
 def test_get_model_config_returns_empty_when_file_missing(tmp_path: Path) -> None:
@@ -18,7 +24,10 @@ def test_get_model_config_returns_empty_when_file_missing(tmp_path: Path) -> Non
 
 
 def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
-    manager = ModelConfigManager(config_dir=tmp_path)
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
 
     manager.save_model_profile(
         "default",
@@ -45,6 +54,20 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     assert profiles["default"]["max_tokens"] == 2000
     assert profiles["default"]["context_window"] == 128000
     assert profiles["default"]["connect_timeout_seconds"] == 45.0
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    assert "api_key" not in model_payload["default"]
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    assert secrets_payload["entries"] == [
+        {
+            "namespace": "model_profile",
+            "owner_id": "default",
+            "field_name": "api_key",
+            "storage": "file",
+            "value": "secret-key",
+        }
+    ]
 
 
 def test_get_model_profiles_uses_default_connect_timeout_when_missing(
@@ -231,3 +254,44 @@ def test_save_model_profile_can_switch_default_profile(tmp_path: Path) -> None:
 
     assert cast(dict[str, JsonValue], config["default"])["is_default"] is False
     assert cast(dict[str, JsonValue], config["kimi"])["is_default"] is True
+
+
+def test_get_model_profiles_migrates_legacy_api_key_out_of_model_json(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "legacy-secret",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = manager.get_model_profiles()
+
+    assert profiles["default"]["api_key"] == "legacy-secret"
+    stored_model_payload = json.loads(model_file.read_text(encoding="utf-8"))
+    assert "api_key" not in stored_model_payload["default"]
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    assert secrets_payload["entries"] == [
+        {
+            "namespace": "model_profile",
+            "owner_id": "default",
+            "field_name": "api_key",
+            "storage": "file",
+            "value": "legacy-secret",
+        }
+    ]

@@ -29,6 +29,9 @@ class WebConfigService:
         api_key = self._secret_store.get_api_key(self._config_dir)
         if api_key is None:
             api_key = _normalize_text(env_values.get(_API_KEY_ENV_KEY))
+            if api_key is not None:
+                self._secret_store.set_api_key(self._config_dir, api_key)
+                self._write_env_file(provider=provider)
         return WebConfig(provider=provider, api_key=api_key)
 
     def save_web_config(self, config: WebConfig) -> None:

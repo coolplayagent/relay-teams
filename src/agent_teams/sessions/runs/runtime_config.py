@@ -20,6 +20,10 @@ from agent_teams.providers.model_config import (
     ProviderType,
     SamplingConfig,
 )
+from agent_teams.secrets import get_secret_store
+
+_MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
+_MODEL_PROFILE_SECRET_FIELD = "api_key"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -157,11 +161,11 @@ def load_llm_profile_state(
 
         model = cfg.get("model")
         base_url = cfg.get("base_url")
-        api_key = _resolve_required_config_value(
-            cfg.get("api_key", ""),
-            env_values,
+        api_key = _resolve_profile_api_key(
+            config_dir=config_dir,
             profile_name=name,
-            field_name="api_key",
+            raw_value=cfg.get("api_key"),
+            env_values=env_values,
         )
         provider_raw = cfg.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
         provider = ProviderType(provider_raw)
@@ -280,6 +284,31 @@ def _resolve_required_config_value(
             )
         return resolved_value
     return value
+
+
+def _resolve_profile_api_key(
+    *,
+    config_dir: Path,
+    profile_name: str,
+    raw_value: object,
+    env_values: Mapping[str, str],
+) -> str:
+    if isinstance(raw_value, str) and raw_value.strip():
+        return _resolve_required_config_value(
+            raw_value.strip(),
+            env_values,
+            profile_name=profile_name,
+            field_name="api_key",
+        )
+    secret_value = get_secret_store().get_secret(
+        config_dir,
+        namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+        owner_id=profile_name,
+        field_name=_MODEL_PROFILE_SECRET_FIELD,
+    )
+    if secret_value is None:
+        return ""
+    return secret_value
 
 
 def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | None:

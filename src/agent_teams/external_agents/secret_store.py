@@ -8,18 +8,20 @@ try:
 except Exception:  # pragma: no cover - import availability depends on environment
     keyring = None
 
-_KEYRING_SERVICE_NAME = "agent-teams.external-agents"
+from agent_teams.secrets import AppSecretStore, get_secret_store
+
+_LEGACY_KEYRING_SERVICE_NAME = "agent-teams.external-agents"
+_NAMESPACE = "external_agent"
 
 
 class ExternalAgentSecretStore:
+    def __init__(self, *, secret_store: AppSecretStore | None = None) -> None:
+        self._secret_store = (
+            get_secret_store() if secret_store is None else secret_store
+        )
+
     def can_persist_secrets(self) -> bool:
-        backend = self._get_backend()
-        if backend is None:
-            return False
-        try:
-            return float(getattr(backend, "priority", 0.0)) > 0
-        except (TypeError, ValueError):
-            return False
+        return True
 
     def get_secret(
         self,
@@ -29,23 +31,19 @@ class ExternalAgentSecretStore:
         kind: str,
         name: str,
     ) -> str | None:
-        if not self.can_persist_secrets():
-            return None
-        assert keyring is not None
-        try:
-            return _normalize_secret(
-                keyring.get_password(
-                    _KEYRING_SERVICE_NAME,
-                    self._account_name(
-                        config_dir=config_dir,
-                        agent_id=agent_id,
-                        kind=kind,
-                        name=name,
-                    ),
-                )
-            )
-        except Exception:
-            return None
+        migrated = self._migrate_legacy_keyring(
+            config_dir=config_dir,
+            agent_id=agent_id,
+            kind=kind,
+            name=name,
+        )
+        value = self._secret_store.get_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=agent_id.strip(),
+            field_name=self._field_name(kind=kind, name=name),
+        )
+        return _normalize_secret(value if value is not None else migrated)
 
     def set_secret(
         self,
@@ -56,35 +54,13 @@ class ExternalAgentSecretStore:
         name: str,
         value: str,
     ) -> None:
-        normalized = _normalize_secret(value)
-        if normalized is None:
-            self.delete_secret(
-                config_dir=config_dir,
-                agent_id=agent_id,
-                kind=kind,
-                name=name,
-            )
-            return
-        if not self.can_persist_secrets():
-            raise RuntimeError(
-                "External agent secret persistence requires a usable system keyring backend."
-            )
-        assert keyring is not None
-        try:
-            keyring.set_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(
-                    config_dir=config_dir,
-                    agent_id=agent_id,
-                    kind=kind,
-                    name=name,
-                ),
-                normalized,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to persist external agent secrets to the system keyring."
-            ) from exc
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=agent_id.strip(),
+            field_name=self._field_name(kind=kind, name=name),
+            value=_normalize_secret(value),
+        )
 
     def delete_secret(
         self,
@@ -94,81 +70,57 @@ class ExternalAgentSecretStore:
         kind: str,
         name: str,
     ) -> None:
-        if not self.can_persist_secrets():
-            return
-        assert keyring is not None
-        try:
-            keyring.delete_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(
-                    config_dir=config_dir,
-                    agent_id=agent_id,
-                    kind=kind,
-                    name=name,
-                ),
-            )
-        except Exception:
-            return
+        self._secret_store.delete_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=agent_id.strip(),
+            field_name=self._field_name(kind=kind, name=name),
+        )
 
     def delete_agent(self, *, config_dir: Path, agent_id: str) -> None:
-        if not self.can_persist_secrets():
-            return
-        for kind in ("env", "header"):
-            prefix = f"{self._config_prefix(config_dir, agent_id, kind)}:"
-            backend = self._iter_backend_entries()
-            if backend is None:
-                return
-            for account_name in backend:
-                if not account_name.startswith(prefix):
-                    continue
-                try:
-                    assert keyring is not None
-                    keyring.delete_password(_KEYRING_SERVICE_NAME, account_name)
-                except Exception:
-                    continue
+        self._secret_store.delete_owner(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=agent_id.strip(),
+        )
 
-    def _account_name(
+    def _field_name(self, *, kind: str, name: str) -> str:
+        return f"{kind.strip()}:{name.strip()}"
+
+    def _migrate_legacy_keyring(
         self,
         *,
         config_dir: Path,
         agent_id: str,
         kind: str,
         name: str,
-    ) -> str:
-        return f"{self._config_prefix(config_dir, agent_id, kind)}:{name.strip()}"
-
-    def _config_prefix(self, config_dir: Path, agent_id: str, kind: str) -> str:
-        return (
-            f"{str(config_dir.expanduser().resolve())}:"
-            f"{agent_id.strip()}:{kind.strip()}"
-        )
-
-    def _get_backend(self) -> object | None:
+    ) -> str | None:
         if keyring is None:
             return None
+        account_name = (
+            f"{str(config_dir.expanduser().resolve())}:{agent_id.strip()}:"
+            f"{kind.strip()}:{name.strip()}"
+        )
         try:
-            backend = keyring.get_keyring()
+            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
         except Exception:
             return None
-        if backend is None:
+        normalized = _normalize_secret(legacy_value)
+        if normalized is None:
             return None
-        return backend
-
-    def _iter_backend_entries(self) -> tuple[str, ...] | None:
-        backend = self._get_backend()
-        if backend is None:
-            return None
-        keyring_dict = getattr(backend, "keyring_dict", None)
-        if not isinstance(keyring_dict, dict):
-            return None
-        service_entries = keyring_dict.get(_KEYRING_SERVICE_NAME)
-        if not isinstance(service_entries, dict):
-            return None
-        return tuple(
-            str(account_name)
-            for account_name in service_entries.keys()
-            if isinstance(account_name, str)
+        migrated = self._secret_store.migrate_legacy_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=agent_id.strip(),
+            field_name=self._field_name(kind=kind, name=name),
+            value=normalized,
         )
+        if migrated:
+            try:
+                keyring.delete_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            except Exception:
+                return normalized
+        return normalized
 
 
 _EXTERNAL_AGENT_SECRET_STORE = ExternalAgentSecretStore()

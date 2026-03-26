@@ -41,6 +41,7 @@ At minimum, complete the normal Agent Teams runtime setup first:
 
 - `~/.agent-teams/model.json`
 - optionally `~/.agent-teams/.env`
+- optionally `~/.agent-teams/secrets.json` when the machine has no usable keyring backend
 - optionally `~/.agent-teams/prompts.json`
 - optionally one global instruction file:
   - `~/.agent-teams/AGENTS.md`
@@ -278,7 +279,7 @@ If Zed cannot find `uv`:
 
 If the agent exits immediately:
 
-- check `model.json` and `.env`
+- check `model.json`, `.env`, and `secrets.json`
 - then confirm `uv sync --extra dev` was completed in this repository
 
 ## 10. Current implementation limits

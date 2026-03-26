@@ -4,11 +4,14 @@ from datetime import UTC, datetime
 import hashlib
 import hmac
 from json import JSONDecodeError, loads
+from pathlib import Path
 from secrets import token_urlsafe
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from agent_teams.paths import get_app_config_dir
+from agent_teams.secrets import AppSecretStore, get_secret_store
 from agent_teams.triggers.trigger_models import (
     TriggerAuthMode,
     TriggerAuthPolicy,
@@ -26,6 +29,9 @@ from agent_teams.triggers.trigger_repository import (
     TriggerNameConflictError,
     TriggerRepository,
 )
+
+_TRIGGER_AUTH_SECRET_NAMESPACE = "trigger_auth"
+_REDACTED_TRIGGER_SECRET = "<redacted>"
 
 
 class TriggerAuthRejectedError(PermissionError):
@@ -52,8 +58,22 @@ class _AuthDecision(BaseModel):
 
 
 class TriggerService:
-    def __init__(self, trigger_repo: TriggerRepository) -> None:
+    def __init__(
+        self,
+        trigger_repo: TriggerRepository,
+        *,
+        config_dir: Path | None = None,
+        secret_store: AppSecretStore | None = None,
+    ) -> None:
         self._trigger_repo = trigger_repo
+        self._config_dir = (
+            get_app_config_dir()
+            if config_dir is None
+            else config_dir.expanduser().resolve()
+        )
+        self._secret_store = (
+            get_secret_store() if secret_store is None else secret_store
+        )
 
     def create_trigger(self, trigger: TriggerCreateInput) -> TriggerDefinition:
         now = datetime.now(tz=UTC)
@@ -69,18 +89,25 @@ class TriggerService:
             status=TriggerStatus.ENABLED if trigger.enabled else TriggerStatus.DISABLED,
             public_token=trigger.public_token or self._new_public_token(),
             source_config=trigger.source_config,
-            auth_policies=auth_policies,
+            auth_policies=self._redact_auth_policies(auth_policies),
             target_config=trigger.target_config,
             created_at=now,
             updated_at=now,
         )
-        return self._trigger_repo.create_trigger(definition)
+        created = self._trigger_repo.create_trigger(definition)
+        self._replace_auth_policy_secrets(created.trigger_id, auth_policies)
+        return self._hydrate_trigger(created)
 
     def update_trigger(
         self, trigger_id: str, trigger: TriggerUpdateInput
     ) -> TriggerDefinition:
-        existing = self._trigger_repo.get_trigger(trigger_id)
+        existing = self.get_trigger(trigger_id)
         now = datetime.now(tz=UTC)
+        merged_auth_policies = (
+            trigger.auth_policies
+            if trigger.auth_policies is not None
+            else existing.auth_policies
+        )
 
         merged = TriggerDefinition(
             trigger_id=existing.trigger_id,
@@ -98,11 +125,7 @@ class TriggerService:
                 if trigger.source_config is not None
                 else existing.source_config
             ),
-            auth_policies=(
-                trigger.auth_policies
-                if trigger.auth_policies is not None
-                else existing.auth_policies
-            ),
+            auth_policies=self._redact_auth_policies(merged_auth_policies),
             target_config=(
                 trigger.target_config
                 if trigger.target_config is not None
@@ -111,7 +134,9 @@ class TriggerService:
             created_at=existing.created_at,
             updated_at=now,
         )
-        return self._trigger_repo.update_trigger(merged)
+        updated = self._trigger_repo.update_trigger(merged)
+        self._replace_auth_policy_secrets(updated.trigger_id, merged_auth_policies)
+        return self._hydrate_trigger(updated)
 
     def set_trigger_status(
         self, trigger_id: str, status: TriggerStatus
@@ -123,7 +148,7 @@ class TriggerService:
                 "updated_at": datetime.now(tz=UTC),
             }
         )
-        return self._trigger_repo.update_trigger(updated)
+        return self._hydrate_trigger(self._trigger_repo.update_trigger(updated))
 
     def rotate_public_token(self, trigger_id: str) -> TriggerDefinition:
         existing = self._trigger_repo.get_trigger(trigger_id)
@@ -133,16 +158,21 @@ class TriggerService:
                 "updated_at": datetime.now(tz=UTC),
             }
         )
-        return self._trigger_repo.update_trigger(updated)
+        return self._hydrate_trigger(self._trigger_repo.update_trigger(updated))
 
     def get_trigger(self, trigger_id: str) -> TriggerDefinition:
-        return self._trigger_repo.get_trigger(trigger_id)
+        return self._hydrate_trigger(self._trigger_repo.get_trigger(trigger_id))
 
     def list_triggers(self) -> tuple[TriggerDefinition, ...]:
-        return self._trigger_repo.list_triggers()
+        return tuple(
+            self._hydrate_trigger(trigger)
+            for trigger in self._trigger_repo.list_triggers()
+        )
 
     def get_trigger_by_public_token(self, public_token: str) -> TriggerDefinition:
-        return self._trigger_repo.get_trigger_by_public_token(public_token)
+        return self._hydrate_trigger(
+            self._trigger_repo.get_trigger_by_public_token(public_token)
+        )
 
     def get_event(self, event_id: str) -> TriggerEventRecord:
         return self._trigger_repo.get_event(event_id)
@@ -151,6 +181,11 @@ class TriggerService:
         _ = self._trigger_repo.get_trigger(trigger_id)
         self._trigger_repo.delete_events_by_trigger(trigger_id)
         self._trigger_repo.delete_trigger(trigger_id)
+        self._secret_store.delete_owner(
+            self._config_dir,
+            namespace=_TRIGGER_AUTH_SECRET_NAMESPACE,
+            owner_id=trigger_id,
+        )
 
     def list_events(
         self,
@@ -202,7 +237,7 @@ class TriggerService:
         headers: dict[str, str],
         remote_addr: str | None,
     ) -> TriggerIngestResult:
-        trigger = self._trigger_repo.get_trigger_by_public_token(public_token)
+        trigger = self.get_trigger_by_public_token(public_token)
         envelope = self._parse_webhook_body(raw_body)
         payload = (
             envelope.payload if envelope.payload is not None else envelope.model_dump()
@@ -223,13 +258,13 @@ class TriggerService:
         self, *, trigger_id: str | None, trigger_name: str | None
     ) -> TriggerDefinition:
         if trigger_id is not None:
-            trigger = self._trigger_repo.get_trigger(trigger_id)
+            trigger = self.get_trigger(trigger_id)
             if trigger_name is not None and trigger.name != trigger_name:
                 raise ValueError("trigger_id and trigger_name do not match")
             return trigger
         if trigger_name is None:
             raise ValueError("trigger_id or trigger_name is required")
-        return self._trigger_repo.get_trigger_by_name(trigger_name)
+        return self._hydrate_trigger(self._trigger_repo.get_trigger_by_name(trigger_name))
 
     def _ingest_for_trigger(
         self,
@@ -448,6 +483,124 @@ class TriggerService:
     @staticmethod
     def _new_public_token() -> str:
         return token_urlsafe(24)
+
+    def _hydrate_trigger(self, trigger: TriggerDefinition) -> TriggerDefinition:
+        return trigger.model_copy(
+            update={
+                "auth_policies": self._hydrate_auth_policies(
+                    trigger.trigger_id,
+                    trigger.auth_policies,
+                )
+            }
+        )
+
+    def _hydrate_auth_policies(
+        self,
+        trigger_id: str,
+        policies: tuple[TriggerAuthPolicy, ...],
+    ) -> tuple[TriggerAuthPolicy, ...]:
+        hydrated: list[TriggerAuthPolicy] = []
+        for index, policy in enumerate(policies):
+            token = self._resolve_and_migrate_policy_secret(
+                trigger_id=trigger_id,
+                policy_index=index,
+                field_name="token",
+                legacy_value=policy.token,
+            )
+            secret = self._resolve_and_migrate_policy_secret(
+                trigger_id=trigger_id,
+                policy_index=index,
+                field_name="secret",
+                legacy_value=policy.secret,
+            )
+            hydrated.append(policy.model_copy(update={"token": token, "secret": secret}))
+        return tuple(hydrated)
+
+    def _redact_auth_policies(
+        self,
+        policies: tuple[TriggerAuthPolicy, ...],
+    ) -> tuple[TriggerAuthPolicy, ...]:
+        redacted: list[TriggerAuthPolicy] = []
+        for policy in policies:
+            token = None
+            secret = None
+            if policy.mode == TriggerAuthMode.HEADER_TOKEN and policy.token is not None:
+                token = _REDACTED_TRIGGER_SECRET
+            if policy.mode == TriggerAuthMode.HMAC_SHA256 and policy.secret is not None:
+                secret = _REDACTED_TRIGGER_SECRET
+            redacted.append(policy.model_copy(update={"token": token, "secret": secret}))
+        return tuple(redacted)
+
+    def _replace_auth_policy_secrets(
+        self,
+        trigger_id: str,
+        policies: tuple[TriggerAuthPolicy, ...],
+    ) -> None:
+        self._secret_store.delete_owner(
+            self._config_dir,
+            namespace=_TRIGGER_AUTH_SECRET_NAMESPACE,
+            owner_id=trigger_id,
+        )
+        for index, policy in enumerate(policies):
+            self._set_policy_secret(
+                trigger_id=trigger_id,
+                policy_index=index,
+                field_name="token",
+                value=policy.token,
+            )
+            self._set_policy_secret(
+                trigger_id=trigger_id,
+                policy_index=index,
+                field_name="secret",
+                value=policy.secret,
+            )
+
+    def _set_policy_secret(
+        self,
+        *,
+        trigger_id: str,
+        policy_index: int,
+        field_name: str,
+        value: str | None,
+    ) -> None:
+        self._secret_store.set_secret(
+            self._config_dir,
+            namespace=_TRIGGER_AUTH_SECRET_NAMESPACE,
+            owner_id=trigger_id,
+            field_name=self._policy_secret_field_name(policy_index, field_name),
+            value=value,
+        )
+
+    def _resolve_and_migrate_policy_secret(
+        self,
+        *,
+        trigger_id: str,
+        policy_index: int,
+        field_name: str,
+        legacy_value: str | None,
+    ) -> str | None:
+        value = self._secret_store.get_secret(
+            self._config_dir,
+            namespace=_TRIGGER_AUTH_SECRET_NAMESPACE,
+            owner_id=trigger_id,
+            field_name=self._policy_secret_field_name(policy_index, field_name),
+        )
+        if value is not None:
+            return value
+        if legacy_value is None:
+            return None
+        self._secret_store.migrate_legacy_secret(
+            self._config_dir,
+            namespace=_TRIGGER_AUTH_SECRET_NAMESPACE,
+            owner_id=trigger_id,
+            field_name=self._policy_secret_field_name(policy_index, field_name),
+            value=legacy_value,
+        )
+        return legacy_value
+
+    @staticmethod
+    def _policy_secret_field_name(policy_index: int, field_name: str) -> str:
+        return f"policy:{policy_index}:{field_name}"
 
 
 __all__ = [

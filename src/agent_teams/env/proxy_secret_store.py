@@ -8,89 +8,79 @@ try:
 except Exception:  # pragma: no cover - import availability depends on environment
     keyring = None
 
-_KEYRING_SERVICE_NAME = "agent-teams.proxy-password"
+from agent_teams.secrets import AppSecretStore, get_secret_store
+
+_LEGACY_KEYRING_SERVICE_NAME = "agent-teams.proxy-password"
+_NAMESPACE = "proxy_config"
+_OWNER_ID = "default"
+_FIELD_NAME = "password"
 
 
 class ProxySecretStore:
+    def __init__(self, *, secret_store: AppSecretStore | None = None) -> None:
+        self._secret_store = (
+            get_secret_store() if secret_store is None else secret_store
+        )
+
     def get_password(self, config_dir: Path) -> str | None:
-        if not self.can_persist_password():
-            return None
-        assert keyring is not None
-        try:
-            return _normalize_secret(
-                keyring.get_password(
-                    _KEYRING_SERVICE_NAME,
-                    self._account_name(config_dir),
-                )
-            )
-        except Exception:
-            return None
+        migrated = self._migrate_legacy_keyring(config_dir)
+        value = self._secret_store.get_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+        )
+        return _normalize_secret(value if value is not None else migrated)
 
     def set_password(self, config_dir: Path, password: str | None) -> None:
-        normalized_password = _normalize_secret(password)
-        if normalized_password is None:
-            self.delete_password(config_dir)
-            return
-
-        if not self.can_persist_password():
-            raise RuntimeError(
-                "Proxy password persistence requires a usable system keyring backend. "
-                "Install/configure keyring, or keep the password only in .env/manual runtime input."
-            )
-
-        assert keyring is not None
-        try:
-            keyring.set_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(config_dir),
-                normalized_password,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to persist proxy password to the system keyring. "
-                "Install/configure keyring, or keep the password only in .env/manual runtime input."
-            ) from exc
+        self._secret_store.set_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+            value=_normalize_secret(password),
+        )
 
     def delete_password(self, config_dir: Path) -> None:
-        if not self.can_persist_password():
-            return
-        assert keyring is not None
-        try:
-            keyring.delete_password(
-                _KEYRING_SERVICE_NAME,
-                self._account_name(config_dir),
-            )
-        except Exception:
-            return
+        self._secret_store.delete_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+        )
 
     def can_persist_password(self) -> bool:
-        backend = self._get_backend()
-        if backend is None:
-            return False
-        try:
-            return float(getattr(backend, "priority", 0.0)) > 0
-        except (TypeError, ValueError):
-            return False
+        return True
 
     def backend_name(self) -> str:
-        backend = self._get_backend()
-        if backend is None:
-            return "unavailable"
-        return backend.__class__.__name__
+        if self._secret_store.has_usable_keyring_backend():
+            return "keyring"
+        return "file"
 
-    def _account_name(self, config_dir: Path) -> str:
-        return str(config_dir.expanduser().resolve())
-
-    def _get_backend(self) -> object | None:
+    def _migrate_legacy_keyring(self, config_dir: Path) -> str | None:
         if keyring is None:
             return None
+        account_name = str(config_dir.expanduser().resolve())
         try:
-            backend = keyring.get_keyring()
+            legacy_value = keyring.get_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
         except Exception:
             return None
-        if backend is None:
+        normalized = _normalize_secret(legacy_value)
+        if normalized is None:
             return None
-        return backend
+        migrated = self._secret_store.migrate_legacy_secret(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+            field_name=_FIELD_NAME,
+            value=normalized,
+        )
+        if migrated:
+            try:
+                keyring.delete_password(_LEGACY_KEYRING_SERVICE_NAME, account_name)
+            except Exception:
+                return normalized
+        return normalized
 
 
 _PROXY_SECRET_STORE = ProxySecretStore()

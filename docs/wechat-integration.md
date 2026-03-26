@@ -34,7 +34,9 @@ Each connected WeChat account stores:
 - execution behavior: `yolo`, `thinking`
 - sync state: `sync_cursor`
 
-The bot token is stored in keyring, not in SQLite.
+The bot token is stored in the unified Agent Teams secret store, not in SQLite.
+When a usable system keyring backend exists, that store uses keyring; otherwise
+it falls back to `~/.agent-teams/secrets.json`.
 
 Enabled accounts run a background long-poll worker. For each accepted message:
 

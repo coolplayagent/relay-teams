@@ -56,8 +56,10 @@ Each Feishu trigger stores:
   - `verification_token`
   - `encrypt_key`
 
-Secrets are stored only in the system keyring. They are not written back to the
-trigger table or `.env`.
+Secrets are stored in the unified Agent Teams secret store. When a usable system
+keyring backend exists, that store uses keyring; otherwise it falls back to
+`~/.agent-teams/secrets.json`. They are not written back to the trigger table or
+`.env`.
 
 Read APIs expose both the current `secret_config` payload and `secret_status`.
 The settings UI uses that to render `App Secret` as masked by default and reveal

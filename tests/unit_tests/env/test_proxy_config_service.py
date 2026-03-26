@@ -22,10 +22,6 @@ class _FakeProxySecretStore(ProxySecretStore):
         return self._passwords.get(str(config_dir.resolve()))
 
     def set_password(self, config_dir: Path, password: str | None) -> None:
-        if not self._can_persist:
-            raise RuntimeError(
-                "Proxy password persistence requires a usable system keyring backend."
-            )
         normalized_key = str(config_dir.resolve())
         if password is None:
             self._passwords.pop(normalized_key, None)
@@ -258,33 +254,29 @@ def test_get_saved_proxy_config_reads_password_from_secret_store(
     )
 
 
-def test_save_proxy_config_rejects_password_persistence_without_keyring(
+def test_save_proxy_config_falls_back_to_secret_file_without_keyring(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     _clear_proxy_env(monkeypatch)
     config_dir = tmp_path / ".agent-teams"
     config_dir.mkdir(parents=True)
+    secret_store = _FakeProxySecretStore(can_persist=False)
     service = ProxyConfigService(
         config_dir=config_dir,
         on_proxy_reloaded=lambda _config: None,
-        secret_store=_FakeProxySecretStore(can_persist=False),
+        secret_store=secret_store,
     )
 
-    try:
-        service.save_proxy_config(
-            ProxyEnvInput(
-                https_proxy="http://proxy.example:8443",
-                proxy_username="alice",
-                proxy_password="secret",
-            )
+    service.save_proxy_config(
+        ProxyEnvInput(
+            https_proxy="http://proxy.example:8443",
+            proxy_username="alice",
+            proxy_password="secret",
         )
-    except RuntimeError as exc:
-        assert "system keyring backend" in str(exc)
-    else:
-        raise AssertionError(
-            "Expected save to fail when keyring persistence is unavailable."
-        )
+    )
+
+    assert secret_store.get_password(config_dir) == "secret"
 
 
 def test_save_proxy_config_rejects_multiple_distinct_proxy_passwords(
