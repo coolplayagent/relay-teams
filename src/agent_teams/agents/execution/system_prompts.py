@@ -52,7 +52,9 @@ SKILL_USAGE_PROMPT = (
 )
 FEISHU_GROUP_CONTEXT_PROMPT = (
     "## Feishu Group Chat Rules\n"
-    "当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。"
+    "当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。\n"
+    "你调用 im_send 的发送的消息和本轮对话的最终答案（Final Answer）均会被发送给用户，不要重复发送消息，不要回复“已通过飞书回复用户”之类的消息。\n"
+    "如果最终答案（Final Answer）能够完成用户任务，就不要调用im_send，避免消息过多。"
 )
 AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
