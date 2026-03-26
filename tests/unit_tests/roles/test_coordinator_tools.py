@@ -11,6 +11,7 @@ def test_coordinator_uses_task_tools_and_not_emit_event() -> None:
     tools = set(coordinator.tools)
 
     assert "create_tasks" in tools
+    assert "create_temporary_role" in tools
     assert "update_task" in tools
     assert "list_delegated_tasks" in tools
     assert "dispatch_task" in tools

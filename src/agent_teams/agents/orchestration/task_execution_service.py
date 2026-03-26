@@ -42,6 +42,7 @@ from agent_teams.roles.memory_injection import build_role_with_memory
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -88,6 +89,7 @@ class TaskExecutionService(BaseModel):
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
+    runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
 
@@ -183,7 +185,13 @@ class TaskExecutionService(BaseModel):
             )
         )
 
-        role: RoleDefinition = self.role_registry.get(role_id)
+        if self.runtime_role_resolver is not None:
+            role = self.runtime_role_resolver.get_effective_role(
+                run_id=task.trace_id,
+                role_id=role_id,
+            )
+        else:
+            role = self.role_registry.get(role_id)
         instance_record = self.agent_repo.get_instance(instance_id)
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,

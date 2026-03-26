@@ -17,9 +17,16 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """List worker roles that can be selected for delegated tasks."""
 
         def _action() -> dict[str, JsonValue]:
+            source_roles = (
+                ctx.deps.runtime_role_resolver.list_effective_roles(
+                    run_id=ctx.deps.run_id
+                )
+                if ctx.deps.runtime_role_resolver is not None
+                else ctx.deps.role_registry.list_roles()
+            )
             roles = [
                 role
-                for role in ctx.deps.role_registry.list_roles()
+                for role in source_roles
                 if not ctx.deps.role_registry.is_coordinator_role(role.role_id)
                 and not ctx.deps.role_registry.is_main_agent_role(role.role_id)
             ]
@@ -29,6 +36,14 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                         "role_id": role.role_id,
                         "name": role.name,
                         "tools": list(role.tools),
+                        "source": (
+                            "static"
+                            if any(
+                                r.role_id == role.role_id
+                                for r in ctx.deps.role_registry.list_roles()
+                            )
+                            else "temporary"
+                        ),
                     }
                     for role in roles
                 ],

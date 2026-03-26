@@ -6,6 +6,7 @@ model_profile: default
 version: 1.0.0
 tools:
   - create_tasks
+  - create_temporary_role
   - update_task
   - list_delegated_tasks
   - dispatch_task

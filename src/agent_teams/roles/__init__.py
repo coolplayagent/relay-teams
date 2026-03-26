@@ -19,6 +19,13 @@ from agent_teams.roles.memory_models import (
 from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from agent_teams.roles.temporary_role_models import (
+    TemporaryRoleRecord,
+    TemporaryRoleSource,
+    TemporaryRoleSpec,
+)
+from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
 
 __all__ = [
     "default_memory_profile",
@@ -37,4 +44,9 @@ __all__ = [
     "RoleMemoryService",
     "RoleRegistry",
     "RoleValidationResult",
+    "RuntimeRoleResolver",
+    "TemporaryRoleRecord",
+    "TemporaryRoleRepository",
+    "TemporaryRoleSource",
+    "TemporaryRoleSpec",
 ]

@@ -13,6 +13,7 @@ from agent_teams.providers.provider_contracts import LLMProvider
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -50,6 +51,7 @@ def create_task_execution_service(
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
     role_memory_service: RoleMemoryService | None = None,
+    runtime_role_resolver: RuntimeRoleResolver | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -76,6 +78,7 @@ def create_task_execution_service(
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,
+        runtime_role_resolver=runtime_role_resolver,
         run_intent_repo=run_intent_repo,
         media_asset_service=media_asset_service,
     )

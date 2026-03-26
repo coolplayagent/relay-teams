@@ -102,6 +102,8 @@ from agent_teams.roles import (
     RoleMemoryRepository,
     RoleMemoryService,
     RoleRegistry,
+    RuntimeRoleResolver,
+    TemporaryRoleRepository,
 )
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
@@ -319,6 +321,13 @@ class ServerContainer:
         self.role_memory_service: RoleMemoryService = RoleMemoryService(
             repository=self.role_memory_repo
         )
+        self.temporary_role_repo: TemporaryRoleRepository = TemporaryRoleRepository(
+            runtime.paths.db_path
+        )
+        self.runtime_role_resolver: RuntimeRoleResolver = RuntimeRoleResolver(
+            role_registry=self.role_registry,
+            temporary_role_repository=self.temporary_role_repo,
+        )
         self.subagent_reflection_service = self._build_subagent_reflection_service()
         self._ensure_default_workspace()
 
@@ -469,6 +478,7 @@ class ServerContainer:
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
+            runtime_role_resolver=self.runtime_role_resolver,
         )
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
@@ -688,6 +698,7 @@ class ServerContainer:
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
+            runtime_role_resolver=self.runtime_role_resolver,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
@@ -696,6 +707,7 @@ class ServerContainer:
             task_execution_service=self.task_execution_service,
             message_repo=self.message_repo,
             session_repo=self.session_repo,
+            runtime_role_resolver=self.runtime_role_resolver,
         )
 
     def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
