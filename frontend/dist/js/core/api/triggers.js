@@ -20,7 +20,7 @@ export async function createTrigger(payload) {
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(toGatewayPayload(payload)),
+            body: JSON.stringify(toGatewayPayload(payload, { includeEnabled: true })),
         },
         'Failed to create Feishu gateway account',
     );
@@ -32,7 +32,9 @@ export async function updateTrigger(triggerId, payload) {
         {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(toGatewayPayload(payload)),
+            body: JSON.stringify(
+                toGatewayPayload(payload, { includeEnabled: false }),
+            ),
         },
         'Failed to update Feishu gateway account',
     );
@@ -68,8 +70,8 @@ export async function rotateTriggerToken(triggerId) {
     );
 }
 
-function toGatewayPayload(payload) {
-    return {
+function toGatewayPayload(payload, { includeEnabled = true } = {}) {
+    const gatewayPayload = {
         name: String(payload?.name || '').trim(),
         display_name: payload?.display_name ?? null,
         source_config:
@@ -84,8 +86,11 @@ function toGatewayPayload(payload) {
             payload?.secret_config && typeof payload.secret_config === 'object'
                 ? { ...payload.secret_config }
                 : undefined,
-        enabled: payload?.enabled !== false,
     };
+    if (includeEnabled) {
+        gatewayPayload.enabled = payload?.enabled !== false;
+    }
+    return gatewayPayload;
 }
 
 function normalizeFeishuGatewayAccount(account) {
