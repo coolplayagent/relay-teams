@@ -372,6 +372,7 @@ def _build_manager(
     prompt_text: str,
     workdir: Path,
     config_dir: Path,
+    tool_approval_policy: ToolApprovalPolicy | None = None,
 ) -> ExternalAcpSessionManager:
     return ExternalAcpSessionManager(
         config_dir=config_dir,
@@ -399,7 +400,7 @@ def _build_manager(
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
-        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        tool_approval_policy=tool_approval_policy or ToolApprovalPolicy(),
         get_notification_service=lambda: cast(NotificationService | None, None),
         feishu_tool_service=cast(FeishuToolService | None, None),
     )
@@ -713,6 +714,7 @@ async def test_prompt_uses_image_tool_result_as_timeout_fallback(
         prompt_text="return the image",
         workdir=tmp_path,
         config_dir=tmp_path / "config",
+        tool_approval_policy=ToolApprovalPolicy(timeout_seconds=0.01),
     )
     transport = _HangingPromptTransport()
     request = _build_request()
@@ -801,6 +803,7 @@ async def test_prompt_times_out_when_external_agent_stops_sending_updates(
         prompt_text="return the image",
         workdir=tmp_path,
         config_dir=tmp_path / "config",
+        tool_approval_policy=ToolApprovalPolicy(timeout_seconds=0.01),
     )
     transport = _HangingPromptTransport()
     request = _build_request()
@@ -839,6 +842,73 @@ async def test_prompt_times_out_when_external_agent_stops_sending_updates(
     assert transport.notifications == [
         ("session/cancel", {"sessionId": "external-session-1"})
     ]
+
+
+@pytest.mark.asyncio
+async def test_prompt_waits_for_tool_approval_timeout_before_failing_on_inactivity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(
+        prompt_text="return the image",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        tool_approval_policy=ToolApprovalPolicy(timeout_seconds=0.05),
+    )
+    transport = _SequencedPromptTransport()
+    request = _build_request()
+    key = _conversation_key(
+        session_id=request.session_id,
+        role_id=request.role_id,
+        agent_id="agent-1",
+    )
+    handle = _ConversationHandle(
+        transport=transport,
+        external_session_id="external-session-1",
+        host_tool_bridge=_cast_bridge(_FakeHostToolBridge(has_tools=False)),
+    )
+    manager._conversations[key] = handle
+
+    async def _ensure_conversation(**_: object) -> _ConversationHandle:
+        return handle
+
+    monkeypatch.setattr(manager, "_ensure_conversation", _ensure_conversation)
+    monkeypatch.setattr(
+        provider_module,
+        "_EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    prompt_task = asyncio.create_task(
+        manager.prompt(
+            agent_id="agent-1",
+            role=_build_role(),
+            request=request,
+        )
+    )
+
+    first_attempt = await transport.prompt_started.get()
+    assert first_attempt == 1
+    await asyncio.sleep(0.02)
+    await manager._handle_transport_message(
+        key=key,
+        method="session/update",
+        params={
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": "delayed output",
+                },
+            }
+        },
+        message_id=None,
+    )
+    transport.gates[0].set()
+
+    result = await prompt_task
+
+    assert result == "delayed output"
 
 
 @pytest.mark.asyncio

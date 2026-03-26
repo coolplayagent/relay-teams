@@ -356,11 +356,12 @@ class ExternalAcpSessionManager:
         state: _ActivePromptState,
         request_task: asyncio.Task[dict[str, JsonValue]],
     ) -> None:
+        timeout_seconds = self._prompt_inactivity_timeout_seconds()
         while True:
             activity_task = asyncio.create_task(state.wait_for_activity())
             done, pending = await asyncio.wait(
                 {request_task, activity_task},
-                timeout=_EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if activity_task in pending:
@@ -377,6 +378,7 @@ class ExternalAcpSessionManager:
                 handle=handle,
                 state=state,
                 request_task=request_task,
+                timeout_seconds=timeout_seconds,
             )
             return
 
@@ -387,6 +389,7 @@ class ExternalAcpSessionManager:
         handle: _ConversationHandle,
         state: _ActivePromptState,
         request_task: asyncio.Task[dict[str, JsonValue]],
+        timeout_seconds: float,
     ) -> None:
         with suppress(Exception):
             await self._cancel_prompt(handle)
@@ -421,13 +424,18 @@ class ExternalAcpSessionManager:
                 "agent_id": agent_id,
                 "run_id": state.request.run_id,
                 "session_id": state.request.session_id,
-                "timeout_seconds": _EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS,
+                "timeout_seconds": timeout_seconds,
             },
         )
-        timeout_seconds = _EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS
         raise RuntimeError(
             "External ACP prompt timed out after "
             f"{timeout_seconds:g} seconds without updates"
+        )
+
+    def _prompt_inactivity_timeout_seconds(self) -> float:
+        return max(
+            _EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS,
+            self._tool_approval_policy.timeout_seconds,
         )
 
     async def close(self) -> None:
