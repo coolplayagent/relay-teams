@@ -42,8 +42,12 @@ def build_coordination_agent(
 
     skill_tools = []
     if skill_registry and allowed_skills:
-        skill_registry.validate_known(allowed_skills)
-        skill_tools = skill_registry.get_toolset_tools(allowed_skills)
+        resolved_skills = skill_registry.resolve_known(
+            allowed_skills,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+        skill_tools = skill_registry.get_toolset_tools(resolved_skills)
 
     llm_http_client = build_llm_http_client(
         connect_timeout_seconds=connect_timeout_seconds,

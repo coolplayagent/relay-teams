@@ -8,6 +8,7 @@ import pytest
 from agent_teams.agents.execution import (
     coordination_agent_builder as coordination_agent,
 )
+from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 
 
@@ -34,6 +35,24 @@ class _FakeToolRegistry:
     def require(self, allowed_tools: tuple[str, ...]):
         self.required = allowed_tools
         return ()
+
+
+class _FakeSkillRegistry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], bool, str | None]] = []
+
+    def resolve_known(
+        self,
+        skill_names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        self.calls.append((skill_names, strict, consumer))
+        return ("time",) if "time" in skill_names else ()
+
+    def get_toolset_tools(self, skill_names: tuple[str, ...]) -> list[object]:
+        return [object()] if skill_names else []
 
 
 def test_build_coordination_agent_passes_proxy_http_client(
@@ -115,3 +134,57 @@ def test_build_coordination_agent_passes_proxy_http_client(
     built_agent = cast(_FakeAgent, captured["agent"])
     assert built_agent.kwargs["instructions"] == "system"
     assert "system_prompt" not in built_agent.kwargs
+
+
+def test_build_coordination_agent_ignores_unknown_skills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_skill_registry = _FakeSkillRegistry()
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "OpenAIProvider",
+        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "OpenAIChatModel",
+        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
+            model_name, provider
+        ),
+    )
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_skills=("time", "missing_skill"),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        skill_registry=cast(SkillRegistry, fake_skill_registry),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert len(cast(list[object], built_agent.kwargs["tools"])) == 1
+    assert fake_skill_registry.calls == [
+        (
+            ("time", "missing_skill"),
+            False,
+            "agents.execution.coordination_agent_builder",
+        )
+    ]

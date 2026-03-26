@@ -330,7 +330,7 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
         description="Reports the current time.",
         version="1",
         tools=(),
-        skills=("time",),
+        skills=("time", "missing_skill"),
         system_prompt="You are the time role.",
     )
     role_registry = RoleRegistry()
@@ -379,6 +379,7 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     runtime_record = agent_repo.get_instance(instance_id)
     assert "## Available Skills" in runtime_record.runtime_system_prompt
     assert "- time:" in runtime_record.runtime_system_prompt
+    assert "missing_skill" not in runtime_record.runtime_system_prompt
     tools_snapshot = json.loads(runtime_record.runtime_tools_json)
     assert len(tools_snapshot["skill_tools"]) == 1
     assert tools_snapshot["skill_tools"][0]["name"] == "load_skill"

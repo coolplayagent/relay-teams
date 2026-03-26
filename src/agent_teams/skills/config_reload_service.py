@@ -35,5 +35,9 @@ class SkillsConfigReloadService:
                 app_config_dir=self._config_dir
             )
             for role in self._role_registry.list_roles():
-                skill_registry.validate_known(role.skills)
+                skill_registry.resolve_known(
+                    role.skills,
+                    strict=False,
+                    consumer=f"skills.config_reload.role:{role.role_id}",
+                )
             self._on_skill_reloaded(skill_registry)

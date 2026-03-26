@@ -132,6 +132,37 @@ class SkillRegistry(BaseModel):
         ]
         return tools
 
+    def resolve_known(
+        self,
+        skill_names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        attributes: dict[str, JsonValue] = {
+            "skill_names": list(skill_names),
+            "strict": strict,
+        }
+        if consumer is not None:
+            attributes["consumer"] = consumer
+        with trace_span(
+            LOGGER,
+            component="skills.registry",
+            operation="resolve_known",
+            attributes=attributes,
+        ):
+            _, resolved, missing = self._partition_skill_names(skill_names)
+            if missing and strict:
+                raise ValueError(f"Unknown skills: {list(missing)}")
+            if missing:
+                self._log_ignored_unknown_skills(
+                    skill_names=skill_names,
+                    resolved_names=resolved,
+                    missing_names=missing,
+                    consumer=consumer,
+                )
+            return resolved
+
     def validate_known(self, skill_names: tuple[str, ...]) -> None:
         with trace_span(
             LOGGER,
@@ -139,10 +170,9 @@ class SkillRegistry(BaseModel):
             operation="validate_known",
             attributes={"skill_names": list(skill_names)},
         ):
-            known = set(self._get_effective_skill_map().keys())
-            missing = [name for name in skill_names if name not in known]
+            _, _, missing = self._partition_skill_names(skill_names)
             if missing:
-                raise ValueError(f"Unknown skills: {missing}")
+                raise ValueError(f"Unknown skills: {list(missing)}")
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(skill.metadata.name for skill in self.list_skill_definitions())
@@ -174,10 +204,13 @@ class SkillRegistry(BaseModel):
             operation="get_instruction_entries",
             attributes={"skill_names": list(skill_names)},
         ):
-            self.validate_known(skill_names)
-            skill_map = self._get_effective_skill_map()
+            skill_map, resolved_names, missing = self._partition_skill_names(
+                skill_names
+            )
+            if missing:
+                raise ValueError(f"Unknown skills: {list(missing)}")
             entries: list[SkillInstructionEntry] = []
-            for name in skill_names:
+            for name in resolved_names:
                 skill = skill_map.get(name)
                 if skill is None:
                     continue
@@ -248,6 +281,42 @@ class SkillRegistry(BaseModel):
             tool_name="load_skill",
             args_summary={"name": name},
             action=_action,
+        )
+
+    def _partition_skill_names(
+        self, skill_names: tuple[str, ...]
+    ) -> tuple[dict[str, Skill], tuple[str, ...], tuple[str, ...]]:
+        skill_map = self._get_effective_skill_map()
+        resolved_names: list[str] = []
+        missing_names: list[str] = []
+        for name in skill_names:
+            if name in skill_map:
+                resolved_names.append(name)
+            else:
+                missing_names.append(name)
+        return skill_map, tuple(resolved_names), tuple(missing_names)
+
+    def _log_ignored_unknown_skills(
+        self,
+        *,
+        skill_names: tuple[str, ...],
+        resolved_names: tuple[str, ...],
+        missing_names: tuple[str, ...],
+        consumer: str | None,
+    ) -> None:
+        payload: dict[str, JsonValue] = {
+            "requested_skill_names": list(skill_names),
+            "resolved_skill_names": list(resolved_names),
+            "ignored_skill_names": list(missing_names),
+        }
+        if consumer is not None:
+            payload["consumer"] = consumer
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="skills.registry.unknown_ignored",
+            message="Ignoring unknown skills from existing configuration",
+            payload=payload,
         )
 
     def _get_effective_skill_map(self) -> dict[str, Skill]:

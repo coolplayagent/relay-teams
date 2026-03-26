@@ -216,7 +216,11 @@ class ServerContainer:
         for role in self.role_registry.list_roles():
             self.tool_registry.validate_known(role.tools)
             self.mcp_registry.validate_known(role.mcp_servers)
-            self.skill_registry.validate_known(role.skills)
+            self.skill_registry.resolve_known(
+                role.skills,
+                strict=False,
+                consumer=f"interfaces.server.container.role:{role.role_id}",
+            )
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
         self.shared_store: SharedStateRepository = SharedStateRepository(

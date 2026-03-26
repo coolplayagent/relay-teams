@@ -527,12 +527,17 @@ class TaskExecutionService(BaseModel):
         role: RoleDefinition,
     ) -> tuple[PromptSkillInstruction, ...]:
         skill_registry = cast("SkillRegistry", self.skill_registry)
+        resolved_skills = skill_registry.resolve_known(
+            role.skills,
+            strict=False,
+            consumer="agents.orchestration.task_execution_service.build_skill_instructions",
+        )
         return tuple(
             PromptSkillInstruction(
                 name=entry.name,
                 description=entry.description,
             )
-            for entry in skill_registry.get_instruction_entries(role.skills)
+            for entry in skill_registry.get_instruction_entries(resolved_skills)
         )
 
     def _compose_runtime_system_prompt(
@@ -564,8 +569,13 @@ class TaskExecutionService(BaseModel):
     ) -> RuntimeToolsSnapshot:
         skill_registry = cast("SkillRegistry", self.skill_registry)
         tool_registry = cast("ToolRegistry", self.tool_registry)
+        resolved_skills = skill_registry.resolve_known(
+            role.skills,
+            strict=False,
+            consumer="agents.orchestration.task_execution_service.build_runtime_tools_snapshot",
+        )
         skill_tool_names = frozenset(
-            tool.name for tool in skill_registry.get_toolset_tools(role.skills)
+            tool.name for tool in skill_registry.get_toolset_tools(resolved_skills)
         )
         from agent_teams.agents.execution.coordination_agent_builder import (
             build_coordination_agent,
@@ -583,7 +593,7 @@ class TaskExecutionService(BaseModel):
                 ),
             ),
             allowed_mcp_servers=(),
-            allowed_skills=role.skills,
+            allowed_skills=resolved_skills,
             tool_registry=tool_registry,
             mcp_registry=None,
             skill_registry=skill_registry,

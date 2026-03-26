@@ -312,12 +312,17 @@ class ExternalAcpHostToolBridge:
         session_id: str,
     ) -> tuple[HostedToolDefinition, ...]:
         skill_registry = self._get_skill_registry()
+        resolved_skills = skill_registry.resolve_known(
+            role.skills,
+            strict=False,
+            consumer="external_agents.host_tool_bridge.build_catalog",
+        )
         allowed_tools = self._tool_registry.resolve_names(
             role.tools,
             context=ToolResolutionContext(session_id=session_id),
         )
         skill_tool_names = frozenset(
-            tool.name for tool in skill_registry.get_toolset_tools(role.skills)
+            tool.name for tool in skill_registry.get_toolset_tools(resolved_skills)
         )
         tool_agent = build_coordination_agent(
             model_name="host-tools-model",
@@ -326,7 +331,7 @@ class ExternalAcpHostToolBridge:
             system_prompt="host-tools-catalog",
             allowed_tools=allowed_tools,
             allowed_mcp_servers=(),
-            allowed_skills=role.skills,
+            allowed_skills=resolved_skills,
             tool_registry=self._tool_registry,
             mcp_registry=None,
             skill_registry=skill_registry,

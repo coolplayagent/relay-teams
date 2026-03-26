@@ -50,6 +50,30 @@ def test_get_instruction_entries_returns_structured_data(tmp_path: Path) -> None
     assert entries[0].description == "timezone helper"
 
 
+def test_resolve_known_ignores_unknown_skills_when_strict_is_false(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "time"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: time\n"
+        "description: timezone helper\n"
+        "---\n"
+        "Use UTC for all timestamps.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
+
+    resolved = registry.resolve_known(
+        ("time", "missing_skill"),
+        strict=False,
+        consumer="tests.unit_tests.skills.test_skill_registry",
+    )
+
+    assert resolved == ("time",)
+
+
 def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
     tmp_path: Path,
 ) -> None:
