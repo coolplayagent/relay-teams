@@ -300,7 +300,7 @@ function createModal() {
                                                     </div>
                                                     <div class="form-group form-group-span-2">
                                                         <label for="agent-stdio-args-input" data-i18n="settings.agents.args">Args</label>
-                                                        <textarea class="config-textarea role-prompt-textarea" id="agent-stdio-args-input" placeholder="One argument per line" data-i18n-placeholder="settings.agents.args_placeholder"></textarea>
+                                                        <textarea class="config-textarea role-prompt-textarea agent-args-textarea" id="agent-stdio-args-input" placeholder="One argument per line" data-i18n-placeholder="settings.agents.args_placeholder"></textarea>
                                                     </div>
                                                 </div>
                                                 <div class="role-prompt-header">

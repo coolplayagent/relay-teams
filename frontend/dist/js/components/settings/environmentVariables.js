@@ -191,7 +191,10 @@ function renderAppEnvironmentScope(records) {
 
     return `
         <section class="env-scope-section" data-env-scope="app">
-            <div class="env-scope-heading">${escapeHtml(t('settings.env.app'))}</div>
+            <div class="env-scope-heading-row">
+                <div class="env-scope-heading">${escapeHtml(t('settings.env.app'))}</div>
+                <div class="env-scope-count">${records.length}</div>
+            </div>
             <div class="env-scope-content" style="display:block;">
                 ${recordsMarkup}
             </div>
@@ -205,6 +208,7 @@ function renderSystemEnvironmentScope(records) {
         <section class="env-scope-section" data-env-scope="system">
             <button class="env-scope-toggle" data-env-toggle-scope="system" type="button" aria-expanded="${expanded ? 'true' : 'false'}">
                 <span class="env-scope-toggle-title">${escapeHtml(t('settings.env.system'))}</span>
+                <span class="env-scope-count">${records.length}</span>
                 <span class="env-scope-toggle-icon">${expanded ? escapeHtml(t('settings.env.hide')) : escapeHtml(t('settings.env.show'))}</span>
             </button>
             <div class="env-scope-content" style="display:${expanded ? 'block' : 'none'};">
@@ -228,22 +232,32 @@ function renderEnvironmentEditorRow() {
     return `
         <div class="env-record env-record-editor" data-env-scope="app">
             <input type="hidden" id="env-source-key-input" value="${escapeHtml(environmentState.editor.sourceKey || '')}">
+            <div class="env-record-editor-header">
+                <div class="env-record-badge">APP</div>
+                <div class="env-record-editor-title">${escapeHtml(environmentState.editor.sourceKey ? t('settings.env.edit') : t('settings.action.add_variable'))}</div>
+            </div>
             <div class="env-record-editor-row">
-                <input
-                    type="text"
-                    id="env-key-input"
-                    class="env-record-editor-input env-record-editor-input-key"
-                    placeholder="${escapeHtml(t('settings.env.key'))}"
-                    autocomplete="off"
-                    value="${escapeHtml(environmentState.editor.key || '')}"
-                >
-                <textarea
-                    id="env-value-input"
-                    class="env-record-editor-input env-record-editor-input-value"
-                    placeholder="${escapeHtml(t('settings.env.value'))}"
-                    rows="4"
-                    spellcheck="false"
-                >${escapeHtml(environmentState.editor.value || '')}</textarea>
+                <label class="env-record-editor-field">
+                    <span class="env-record-editor-label">${escapeHtml(t('settings.env.key'))}</span>
+                    <input
+                        type="text"
+                        id="env-key-input"
+                        class="env-record-editor-input env-record-editor-input-key"
+                        placeholder="${escapeHtml(t('settings.env.key'))}"
+                        autocomplete="off"
+                        value="${escapeHtml(environmentState.editor.key || '')}"
+                    >
+                </label>
+                <label class="env-record-editor-field">
+                    <span class="env-record-editor-label">${escapeHtml(t('settings.env.value'))}</span>
+                    <textarea
+                        id="env-value-input"
+                        class="env-record-editor-input env-record-editor-input-value"
+                        placeholder="${escapeHtml(t('settings.env.value'))}"
+                        rows="4"
+                        spellcheck="false"
+                    >${escapeHtml(environmentState.editor.value || '')}</textarea>
+                </label>
             </div>
         </div>
     `;
@@ -256,7 +270,10 @@ function renderEnvironmentRecord(record) {
         <div class="env-record" data-env-key="${escapeHtml(record.key)}" data-env-scope="${escapeHtml(record.scope)}">
             <div class="env-record-main">
                 <div class="env-record-title-row">
-                    <div class="env-record-key" title="${escapeHtml(record.key)}">${escapeHtml(record.key)}</div>
+                    <div class="env-record-key-wrap">
+                        <div class="env-record-key" title="${escapeHtml(record.key)}">${escapeHtml(record.key)}</div>
+                        <div class="env-record-badge">${escapeHtml(record.scope.toUpperCase())}</div>
+                    </div>
                 </div>
                 <div class="env-record-value" title="${escapeHtml(record.value)}">${escapeHtml(valuePreview)}</div>
             </div>

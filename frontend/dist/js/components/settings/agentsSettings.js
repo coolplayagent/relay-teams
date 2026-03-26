@@ -801,7 +801,7 @@ function renderEnvironmentBindingOptions(selectedName) {
     availableEnvironmentBindings.forEach(binding => {
         const isSelected = binding.key === normalizedName;
         options.push(
-            `<option value="${escapeHtml(binding.key)}"${isSelected ? ' selected' : ''}>${escapeHtml(binding.key)}</option>`,
+            `<option value="${escapeHtml(binding.key)}"${isSelected ? ' selected' : ''}>${escapeHtml(formatEnvironmentBindingOptionLabel(binding))}</option>`,
         );
     });
     return options.join('');
@@ -863,7 +863,21 @@ function formatEnvironmentBindingMeta(bindingName) {
     const scopeLabel = matchedBinding.scope === 'system'
         ? t('settings.agents.env_scope_system')
         : t('settings.agents.env_scope_app');
-    return `${scopeLabel} · ${formatEnvironmentValueKind(matchedBinding.value_kind)}`;
+    return `${scopeLabel} · ${formatEnvironmentValueKind(matchedBinding.value_kind)} · ${formatEnvironmentBindingValuePreview(matchedBinding.value)}`;
+}
+
+function formatEnvironmentBindingOptionLabel(binding) {
+    return `${binding.key} = ${formatEnvironmentBindingValuePreview(binding.value)}`;
+}
+
+function formatEnvironmentBindingValuePreview(value) {
+    const normalizedValue = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalizedValue) {
+        return '""';
+    }
+    return normalizedValue.length > 72
+        ? `${normalizedValue.slice(0, 69)}...`
+        : normalizedValue;
 }
 
 function formatEnvironmentValueKind(valueKind) {
