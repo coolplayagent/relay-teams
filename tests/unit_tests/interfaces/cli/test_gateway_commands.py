@@ -20,3 +20,11 @@ def test_gateway_acp_help_lists_stdio_command() -> None:
 
     assert result.exit_code == 0
     assert "stdio" in result.output
+
+
+def test_gateway_wechat_help_lists_management_commands() -> None:
+    result = runner.invoke(cli_app.app, ["gateway", "wechat", "--help"])
+
+    assert result.exit_code == 0
+    assert "connect" in result.output
+    assert "list" in result.output

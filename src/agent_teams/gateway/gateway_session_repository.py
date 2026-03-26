@@ -136,7 +136,9 @@ class GatewaySessionRepository:
         cursor = self._conn.execute(
             """
             UPDATE gateway_sessions
-            SET active_run_id=?,
+            SET external_session_id=?,
+                internal_session_id=?,
+                active_run_id=?,
                 peer_user_id=?,
                 peer_chat_id=?,
                 cwd=?,
@@ -148,6 +150,8 @@ class GatewaySessionRepository:
             WHERE gateway_session_id=?
             """,
             (
+                record.external_session_id,
+                record.internal_session_id,
                 record.active_run_id,
                 record.peer_user_id,
                 record.peer_chat_id,

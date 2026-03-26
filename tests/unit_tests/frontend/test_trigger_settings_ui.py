@@ -380,6 +380,115 @@ console.log(JSON.stringify({
     ]
 
 
+def test_trigger_settings_renders_wechat_gateway_and_starts_qr_login(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[1].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".gateway-wechat-connect-btn")[0].onclick({ stopPropagation() {} });
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    html: document.getElementById("trigger-platform-list").innerHTML,
+    notifications,
+    startCalls: globalThis.__startWeChatLoginCalls.length,
+    waitCalls: globalThis.__waitWeChatLoginCalls,
+}));
+""".strip(),
+    )
+
+    html = cast(str, payload["html"])
+    wait_calls = cast(list[dict[str, JsonValue]], payload["waitCalls"])
+    assert "WeChat" in html
+    assert "wx-account-1" in html
+    assert payload["startCalls"] == 1
+    assert len(wait_calls) == 1
+    assert wait_calls[0]["session_key"] == "wechat-login-1"
+    assert payload["notifications"] == [
+        {
+            "title": "WeChat account connected.",
+            "message": "WeChat account connected.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_trigger_settings_updates_wechat_account_inline(
+    tmp_path: Path,
+) -> None:
+    payload = _run_trigger_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from "./triggerSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindTriggerSettingsHandlers();
+await loadTriggerSettingsPanel();
+await document.getElementById("trigger-platform-list").querySelectorAll(".trigger-platform-open-btn")[1].onclick({ stopPropagation() {} });
+await document.getElementById("trigger-platform-list").querySelectorAll(".gateway-wechat-edit-btn")[0].onclick({ stopPropagation() {} });
+
+document.getElementById("wechat-display-name-input").value = "Ops WeChat";
+document.getElementById("wechat-display-name-input").oninput();
+document.getElementById("wechat-workspace-id-input").value = "workspace-ops";
+document.getElementById("wechat-workspace-id-input").onchange();
+document.getElementById("wechat-session-mode-input").value = "orchestration";
+document.getElementById("wechat-session-mode-input").onchange();
+document.getElementById("wechat-orchestration-preset-id-input").value = "ops";
+document.getElementById("wechat-orchestration-preset-id-input").onchange();
+document.getElementById("wechat-thinking-enabled-input").value = "true";
+document.getElementById("wechat-thinking-enabled-input").onchange();
+document.getElementById("wechat-thinking-effort-input").value = "high";
+document.getElementById("wechat-thinking-effort-input").onchange();
+document.getElementById("wechat-yolo-input").value = "false";
+document.getElementById("wechat-yolo-input").onchange();
+
+await document.getElementById("save-wechat-account-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    updateCalls: globalThis.__updateWeChatAccountCalls,
+}));
+""".strip(),
+    )
+
+    update_calls = cast(list[dict[str, JsonValue]], payload["updateCalls"])
+    assert len(update_calls) == 1
+    assert update_calls[0]["accountId"] == "wx-account-1"
+    assert update_calls[0]["payload"] == {
+        "display_name": "Ops WeChat",
+        "base_url": "https://wechat.example.test",
+        "cdn_base_url": "https://cdn.example.test",
+        "route_tag": "route-a",
+        "workspace_id": "workspace-ops",
+        "session_mode": "orchestration",
+        "yolo": False,
+        "thinking": {"enabled": True, "effort": "high"},
+        "normal_root_role_id": None,
+        "orchestration_preset_id": "ops",
+    }
+    assert payload["notifications"] == [
+        {
+            "title": "WeChat Account Saved",
+            "message": "WeChat account settings saved.",
+            "tone": "success",
+        }
+    ]
+
+
 def _run_trigger_settings_script(
     tmp_path: Path,
     runner_source: str,
@@ -406,6 +515,10 @@ def _run_trigger_settings_script(
         """
 export async function fetchTriggers() {
     return globalThis.__triggerFixtures;
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return globalThis.__wechatAccountFixtures;
 }
 
 export async function fetchWorkspaces() {
@@ -443,6 +556,43 @@ export async function enableTrigger(triggerId) {
 export async function disableTrigger(triggerId) {
     globalThis.__disableTriggerCalls.push(triggerId);
     return { status: "disabled" };
+}
+
+export async function startWeChatGatewayLogin() {
+    globalThis.__startWeChatLoginCalls.push(true);
+    return {
+        session_key: "wechat-login-1",
+        qr_code_url: "https://example.test/wechat-qr.png",
+    };
+}
+
+export async function waitWeChatGatewayLogin(payload) {
+    globalThis.__waitWeChatLoginCalls.push(payload);
+    return {
+        connected: true,
+        account_id: "wx-account-new",
+        message: "WeChat account connected.",
+    };
+}
+
+export async function updateWeChatGatewayAccount(accountId, payload) {
+    globalThis.__updateWeChatAccountCalls.push({ accountId, payload });
+    return { account_id: accountId, ...payload };
+}
+
+export async function enableWeChatGatewayAccount(accountId) {
+    globalThis.__enableWeChatAccountCalls.push(accountId);
+    return { status: "enabled" };
+}
+
+export async function disableWeChatGatewayAccount(accountId) {
+    globalThis.__disableWeChatAccountCalls.push(accountId);
+    return { status: "disabled" };
+}
+
+export async function deleteWeChatGatewayAccount(accountId) {
+    globalThis.__deleteWeChatAccountCalls.push(accountId);
+    return { status: "ok" };
 }
 """.strip(),
         encoding="utf-8",
@@ -514,6 +664,40 @@ const translations = {
     "settings.triggers.no_workspaces": "No workspaces",
     "settings.triggers.option_enabled": "Enabled",
     "settings.triggers.option_disabled": "Disabled",
+    "settings.gateway.wechat": "WeChat",
+    "settings.gateway.gateway_count": "{count} accounts",
+    "settings.gateway.running_count": "{count} running",
+    "settings.gateway.wechat_none": "No WeChat accounts",
+    "settings.gateway.wechat_none_copy": "Connect a WeChat account by scanning the QR code.",
+    "settings.gateway.connect_wechat": "Connect WeChat",
+    "settings.gateway.connecting": "Connecting",
+    "settings.gateway.qr_title": "Scan To Connect",
+    "settings.gateway.qr_copy": "Scan this QR code in WeChat. The account will appear here after login succeeds.",
+    "settings.gateway.login_waiting": "Waiting for QR scan confirmation...",
+    "settings.gateway.login_success": "WeChat account connected.",
+    "settings.gateway.login_failed": "WeChat login failed.",
+    "settings.gateway.account_editor": "WeChat Account",
+    "settings.gateway.account_id": "Account ID",
+    "settings.gateway.display_name": "Display Name",
+    "settings.gateway.base_url": "Base URL",
+    "settings.gateway.cdn_base_url": "CDN Base URL",
+    "settings.gateway.route_tag": "Route Tag",
+    "settings.gateway.status_running": "Running",
+    "settings.gateway.last_error": "Last Error",
+    "settings.gateway.enable_account": "Enable account",
+    "settings.gateway.disable_account": "Disable account",
+    "settings.gateway.delete_account": "Delete account",
+    "settings.gateway.delete_confirm_title": "Delete account",
+    "settings.gateway.delete_confirm_message": "Delete account {name}?",
+    "settings.gateway.saved": "WeChat Account Saved",
+    "settings.gateway.saved_message": "WeChat account settings saved.",
+    "settings.gateway.deleted": "WeChat Account Deleted",
+    "settings.gateway.deleted_message": "WeChat account deleted.",
+    "settings.gateway.save_failed": "Save Failed",
+    "settings.gateway.delete_failed": "Delete Failed",
+    "settings.gateway.missing_display_name": "Display name is required.",
+    "settings.gateway.missing_workspace": "Workspace is required.",
+    "settings.gateway.missing_orchestration_preset_id": "Preset is required in orchestration mode.",
     "composer.mode_normal": "Normal Mode",
     "composer.mode_orchestration": "Orchestrated Mode",
     "composer.no_roles": "No roles",
@@ -608,6 +792,10 @@ function parseSelector(html, selector) {{
         ".trigger-record-edit-btn": /class="[^"]*trigger-record-edit-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
         ".trigger-record-toggle-btn": /class="[^"]*trigger-record-toggle-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
         ".trigger-record-delete-btn": /class="[^"]*trigger-record-delete-btn[^"]*"[^>]*data-trigger-id="([^"]+)"/g,
+        ".gateway-wechat-connect-btn": /class="[^"]*gateway-wechat-connect-btn[^"]*"/g,
+        ".gateway-wechat-edit-btn": /class="[^"]*gateway-wechat-edit-btn[^"]*"[^>]*data-account-id="([^"]+)"/g,
+        ".gateway-wechat-toggle-btn": /class="[^"]*gateway-wechat-toggle-btn[^"]*"[^>]*data-account-id="([^"]+)"/g,
+        ".gateway-wechat-delete-btn": /class="[^"]*gateway-wechat-delete-btn[^"]*"[^>]*data-account-id="([^"]+)"/g,
     }};
     const config = configs[selector];
     if (!config) {{
@@ -618,8 +806,14 @@ function parseSelector(html, selector) {{
         const child = createElement();
         if (selector === ".trigger-platform-open-btn" || selector === ".trigger-platform-record") {{
             child.dataset.triggerPlatform = match[1];
+        }} else if (selector === ".gateway-wechat-connect-btn") {{
+            child.dataset.accountId = "";
         }} else {{
-            child.dataset.triggerId = match[1];
+            if (selector.startsWith(".gateway-wechat-")) {{
+                child.dataset.accountId = match[1];
+            }} else {{
+                child.dataset.triggerId = match[1];
+            }}
         }}
         matches.push(child);
     }}
@@ -645,6 +839,15 @@ function createElements() {{
         "feishu-normal-role-field",
         "feishu-preset-field",
         "feishu-thinking-effort-field",
+        "save-wechat-account-btn",
+        "cancel-wechat-account-btn",
+        "wechat-display-name-input",
+        "wechat-base-url-input",
+        "wechat-cdn-base-url-input",
+        "wechat-route-tag-input",
+        "wechat-normal-role-field",
+        "wechat-preset-field",
+        "wechat-thinking-effort-field",
     ].forEach(id => elements.set(id, createElement(id === "settings-actions-bar" ? "flex" : "none")));
 
     [
@@ -656,6 +859,13 @@ function createElements() {{
         "feishu-orchestration-preset-id-input",
         "feishu-trigger-yolo-input",
         "feishu-trigger-thinking-enabled-input",
+        "wechat-workspace-id-input",
+        "wechat-session-mode-input",
+        "wechat-normal-root-role-id-input",
+        "wechat-orchestration-preset-id-input",
+        "wechat-yolo-input",
+        "wechat-thinking-enabled-input",
+        "wechat-thinking-effort-input",
     ].forEach(id => {{
         const element = elements.get(id) || createElement("none");
         element.tagName = "SELECT";
@@ -673,6 +883,12 @@ function installGlobals(elements, notifications) {{
     globalThis.__updateTriggerCalls = [];
     globalThis.__enableTriggerCalls = [];
     globalThis.__disableTriggerCalls = [];
+    globalThis.__startWeChatLoginCalls = [];
+    globalThis.__waitWeChatLoginCalls = [];
+    globalThis.__updateWeChatAccountCalls = [];
+    globalThis.__enableWeChatAccountCalls = [];
+    globalThis.__disableWeChatAccountCalls = [];
+    globalThis.__deleteWeChatAccountCalls = [];
     globalThis.__workspaceFixtures = [
         {{
             workspace_id: "default",
@@ -735,6 +951,24 @@ function installGlobals(elements, notifications) {{
             target_config: {{
                 workspace_id: "default"
             }}
+        }}
+    ];
+    globalThis.__wechatAccountFixtures = [
+        {{
+            account_id: "wx-account-1",
+            display_name: "WeChat Main",
+            base_url: "https://wechat.example.test",
+            cdn_base_url: "https://cdn.example.test",
+            route_tag: "route-a",
+            status: "enabled",
+            workspace_id: "default",
+            session_mode: "normal",
+            normal_root_role_id: "MainAgent",
+            orchestration_preset_id: "",
+            yolo: true,
+            thinking: {{ enabled: false, effort: null }},
+            running: true,
+            last_error: "",
         }}
     ];
     globalThis.document = {{

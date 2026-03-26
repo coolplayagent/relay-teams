@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 class GatewayChannelType(str, Enum):
     ACP_STDIO = "acp_stdio"
+    WECHAT = "wechat"
 
 
 class GatewayMcpConnectionStatus(str, Enum):

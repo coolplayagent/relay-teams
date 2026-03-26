@@ -113,7 +113,7 @@ function createModal() {
                         <span class="settings-tab-label" data-i18n="settings.tab.orchestration">Orchestration</span>
                     </button>
                     <button class="settings-tab" data-tab="triggers">
-                        <span class="settings-tab-label" data-i18n="settings.tab.triggers">Triggers</span>
+                        <span class="settings-tab-label" data-i18n="settings.tab.triggers">Gateway</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label" data-i18n="settings.tab.notifications">Notifications</span>

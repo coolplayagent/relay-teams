@@ -73,3 +73,27 @@ def test_gateway_session_repository_updates_active_run(tmp_path: Path) -> None:
 
     loaded = repository.get("gws_456")
     assert loaded.active_run_id == "run_456"
+
+
+def test_gateway_session_repository_updates_session_bindings(tmp_path: Path) -> None:
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    created = repository.create(
+        GatewaySessionRecord(
+            gateway_session_id="gws_wechat",
+            channel_type=GatewayChannelType.WECHAT,
+            external_session_id="wechat:wx_1:user_1",
+            internal_session_id="session_1",
+        )
+    )
+
+    updated = created.model_copy(
+        update={
+            "external_session_id": "wechat:wx_1:user_2",
+            "internal_session_id": "session_2",
+        }
+    )
+    repository.update(updated)
+
+    loaded = repository.get("gws_wechat")
+    assert loaded.external_session_id == "wechat:wx_1:user_2"
+    assert loaded.internal_session_id == "session_2"

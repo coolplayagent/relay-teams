@@ -89,6 +89,17 @@ export {
 } from './triggers.js';
 
 export {
+    deleteWeChatGatewayAccount,
+    disableWeChatGatewayAccount,
+    enableWeChatGatewayAccount,
+    fetchWeChatGatewayAccounts,
+    reloadWeChatGateway,
+    startWeChatGatewayLogin,
+    updateWeChatGatewayAccount,
+    waitWeChatGatewayLogin,
+} from './gateway.js';
+
+export {
     fetchRunTokenUsage,
     fetchSessionTokenUsage,
 } from './token_usage.js';

@@ -192,7 +192,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">Web</span>" in tabs_html
     assert ">GitHub</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
-    assert ">Triggers</span>" in tabs_html
+    assert ">Gateway</span>" in tabs_html
     assert ">Model Profiles</span>" not in tabs_html
     assert ">MCP Config</span>" not in tabs_html
 
@@ -533,8 +533,8 @@ export function t(key) {
         'settings.panel.roles.description': 'Edit role metadata, allowed tools, memory profile, and prompt text.',
         'settings.panel.orchestration.title': 'Orchestration',
         'settings.panel.orchestration.description': 'Manage orchestrations for Orchestrated Mode. Main Agent and Coordinator base prompts are edited in Roles.',
-        'settings.panel.triggers.title': 'Triggers',
-        'settings.panel.triggers.description': 'Manage inbound trigger providers, shared credentials, and provider-specific trigger records.',
+        'settings.panel.triggers.title': 'Gateway',
+        'settings.panel.triggers.description': 'Manage conversational gateways and provider-specific inbound channel accounts.',
         'settings.panel.notifications.title': 'Notifications',
         'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
         'settings.panel.web.title': 'Web',

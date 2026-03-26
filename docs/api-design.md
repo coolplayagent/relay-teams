@@ -1182,6 +1182,108 @@ Lists persisted trigger events.
 
 Gets one persisted trigger event.
 
+## Gateway APIs
+
+### `GET /gateway/wechat/accounts`
+
+Lists all persisted WeChat gateway accounts.
+
+Each record includes:
+- `account_id`
+- `display_name`
+- `base_url`
+- `cdn_base_url`
+- `route_tag`
+- `status`: `enabled` or `disabled`
+- `remote_user_id`
+- `sync_cursor`
+- `workspace_id`
+- `session_mode`
+- `normal_root_role_id`
+- `orchestration_preset_id`
+- `yolo`
+- `thinking`
+- `last_login_at`
+- `running`
+- `last_error`
+- `last_event_at`
+- `last_inbound_at`
+- `last_outbound_at`
+- `created_at`
+- `updated_at`
+
+Notes:
+- WeChat is managed as a long-lived conversational gateway, not as a trigger.
+- Current implementation handles direct chat only. Group chat routing is reserved for later expansion.
+
+### `POST /gateway/wechat/login/start`
+
+Starts a QR-code login flow for one WeChat account.
+
+Request fields:
+- `base_url` optional
+- `route_tag` optional
+- `bot_type` optional, defaults to `3`
+
+Response fields:
+- `session_key`
+- `qr_code_url`
+- `message`
+
+### `POST /gateway/wechat/login/wait`
+
+Waits for a previously started QR login flow to finish.
+
+Request fields:
+- `session_key`
+- `timeout_ms`
+
+Response fields:
+- `connected`
+- `account_id`
+- `message`
+
+Notes:
+- On success, the backend stores the returned bot token in keyring and upserts the account into `wechat_accounts`.
+- Newly connected accounts default to `workspace_id = "default"` and `session_mode = "normal"` unless a previous record already exists for that account id.
+
+### `PATCH /gateway/wechat/accounts/{account_id}`
+
+Updates mutable WeChat gateway account settings.
+
+Mutable fields:
+- `display_name`
+- `base_url`
+- `cdn_base_url`
+- `route_tag`
+- `enabled`
+- `workspace_id`
+- `session_mode`
+- `normal_root_role_id`
+- `orchestration_preset_id`
+- `yolo`
+- `thinking`
+
+Notes:
+- `session_mode = "orchestration"` requires `orchestration_preset_id` or a configured default orchestration preset.
+- Saving account settings immediately reloads the WeChat gateway workers.
+
+### `POST /gateway/wechat/accounts/{account_id}:enable`
+
+Enables one WeChat account and reloads gateway workers.
+
+### `POST /gateway/wechat/accounts/{account_id}:disable`
+
+Disables one WeChat account and reloads gateway workers.
+
+### `DELETE /gateway/wechat/accounts/{account_id}`
+
+Deletes one WeChat account and removes its stored bot token from keyring.
+
+### `POST /gateway/wechat/reload`
+
+Reloads all WeChat gateway workers against the current persisted account set.
+
 ## Memory Notes
 
 - `workspace` now means execution workspace only.

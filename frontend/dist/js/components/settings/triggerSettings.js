@@ -4,19 +4,27 @@
 import {
     createTrigger,
     deleteTrigger,
+    deleteWeChatGatewayAccount,
     disableTrigger,
+    disableWeChatGatewayAccount,
     enableTrigger,
+    enableWeChatGatewayAccount,
     fetchOrchestrationConfig,
     fetchRoleConfigOptions,
     fetchTriggers,
+    fetchWeChatGatewayAccounts,
     fetchWorkspaces,
+    startWeChatGatewayLogin,
     updateTrigger,
+    updateWeChatGatewayAccount,
+    waitWeChatGatewayLogin,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const FEISHU_PLATFORM = 'feishu';
+const WECHAT_PLATFORM = 'wechat';
 const FEISHU_SOURCE_TYPE = 'im';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
 const DEFAULT_WORKSPACE_ID = 'default';
@@ -43,19 +51,23 @@ export function bindTriggerSettingsHandlers() {
 
 export async function loadTriggerSettingsPanel(options = {}) {
     try {
-        const [triggers, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+        const [triggers, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
             fetchTriggers(),
+            fetchWeChatGatewayAccounts(),
             fetchWorkspaces(),
             fetchRoleConfigOptions(),
             fetchOrchestrationConfig(),
         ]);
         state = {
             ...createInitialState(),
-            providerExpanded: options.openProvider === FEISHU_PLATFORM,
+            expandedProvider: normalizeExpandedProvider(options.openProvider),
             feishuTriggers: normalizeFeishuTriggers(triggers),
+            wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
             workspaces: normalizeWorkspaces(workspaces),
             normalRoles: normalizeNormalRoles(roleOptions),
             orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
+            wechatStatusMessage: String(options.wechatStatusMessage || '').trim(),
+            wechatStatusTone: String(options.wechatStatusTone || '').trim(),
         };
         renderTriggerSettingsPanel();
     } catch (error) {
@@ -70,10 +82,17 @@ export async function loadTriggerSettingsPanel(options = {}) {
 
 function createInitialState() {
     return {
-        providerExpanded: false,
+        expandedProvider: '',
         feishuTriggers: [],
+        wechatAccounts: [],
         editingTriggerId: '',
         editingTriggerDraft: null,
+        editingWeChatAccountId: '',
+        editingWeChatDraft: null,
+        wechatLoginSession: null,
+        wechatStatusMessage: '',
+        wechatStatusTone: '',
+        wechatConnecting: false,
         workspaces: [],
         normalRoles: [],
         orchestrationPresets: [],
@@ -107,6 +126,33 @@ function normalizeFeishuTriggers(payload) {
             secret_config: trigger?.secret_config && typeof trigger.secret_config === 'object' ? { ...trigger.secret_config } : {},
             secret_status: trigger?.secret_status && typeof trigger.secret_status === 'object' ? { ...trigger.secret_status } : {},
         }));
+}
+
+function normalizeWeChatAccounts(payload) {
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows
+        .map(account => ({
+            account_id: String(account?.account_id || '').trim(),
+            display_name: String(account?.display_name || account?.account_id || '').trim(),
+            base_url: String(account?.base_url || '').trim(),
+            cdn_base_url: String(account?.cdn_base_url || '').trim(),
+            route_tag: account?.route_tag == null ? '' : String(account.route_tag).trim(),
+            status: String(account?.status || 'disabled').trim() || 'disabled',
+            workspace_id: String(account?.workspace_id || DEFAULT_WORKSPACE_ID).trim() || DEFAULT_WORKSPACE_ID,
+            session_mode: String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE,
+            normal_root_role_id: String(account?.normal_root_role_id || '').trim(),
+            orchestration_preset_id: String(account?.orchestration_preset_id || '').trim(),
+            yolo: account?.yolo !== false,
+            thinking: account?.thinking && typeof account.thinking === 'object'
+                ? { ...account.thinking }
+                : { enabled: false, effort: null },
+            running: account?.running === true,
+            last_error: account?.last_error == null ? '' : String(account.last_error),
+            last_event_at: account?.last_event_at || null,
+            last_inbound_at: account?.last_inbound_at || null,
+            last_outbound_at: account?.last_outbound_at || null,
+        }))
+        .filter(account => account.account_id);
 }
 
 function normalizeWorkspaces(payload) {
@@ -159,10 +205,10 @@ function renderPlatformList() {
     host.style.display = 'block';
     host.innerHTML = `
         <div class="trigger-platform-shell">
-            <div class="role-record trigger-platform-record${state.providerExpanded ? ' trigger-platform-record-expanded' : ''}" data-trigger-platform="${FEISHU_PLATFORM}">
+            <div class="role-record trigger-platform-record${isProviderExpanded(FEISHU_PLATFORM) ? ' trigger-platform-record-expanded' : ''}" data-trigger-platform="${FEISHU_PLATFORM}">
                 <div class="role-record-main">
                     <div class="role-record-title-row trigger-platform-title-row">
-                        <div class="trigger-platform-chevron" aria-hidden="true">${state.providerExpanded ? '&#9662;' : '&#9656;'}</div>
+                        <div class="trigger-platform-chevron" aria-hidden="true">${isProviderExpanded(FEISHU_PLATFORM) ? '&#9662;' : '&#9656;'}</div>
                         <div class="trigger-platform-title-block">
                             <div class="trigger-platform-title-line">
                                 <div class="role-record-title">${escapeHtml(t('settings.triggers.feishu'))}</div>
@@ -179,16 +225,40 @@ function renderPlatformList() {
                     </div>
                 </div>
                 <div class="role-record-actions">
-                    <button class="settings-inline-action settings-list-action trigger-platform-open-btn" data-trigger-platform="${FEISHU_PLATFORM}" type="button">${escapeHtml(state.providerExpanded ? t('settings.triggers.collapse') : t('settings.triggers.configure'))}</button>
+                    <button class="settings-inline-action settings-list-action trigger-platform-open-btn" data-trigger-platform="${FEISHU_PLATFORM}" type="button">${escapeHtml(isProviderExpanded(FEISHU_PLATFORM) ? t('settings.triggers.collapse') : t('settings.triggers.configure'))}</button>
                 </div>
             </div>
-            ${state.providerExpanded && !state.editingTriggerDraft ? `<div class="trigger-platform-body"><div class="trigger-platform-children">${renderRecords()}</div></div>` : ''}
+            ${isProviderExpanded(FEISHU_PLATFORM) && !state.editingTriggerDraft ? `<div class="trigger-platform-body"><div class="trigger-platform-children">${renderRecords()}</div></div>` : ''}
+            <div class="role-record trigger-platform-record${isProviderExpanded(WECHAT_PLATFORM) ? ' trigger-platform-record-expanded' : ''}" data-trigger-platform="${WECHAT_PLATFORM}">
+                <div class="role-record-main">
+                    <div class="role-record-title-row trigger-platform-title-row">
+                        <div class="trigger-platform-chevron" aria-hidden="true">${isProviderExpanded(WECHAT_PLATFORM) ? '&#9662;' : '&#9656;'}</div>
+                        <div class="trigger-platform-title-block">
+                            <div class="trigger-platform-title-line">
+                                <div class="role-record-title">${escapeHtml(t('settings.gateway.wechat'))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(state.wechatConnecting ? t('settings.gateway.connecting') : t('settings.triggers.ready'))}</span>
+                                </div>
+                            </div>
+                            <div class="trigger-platform-summary">
+                                <span class="profile-card-chip">${escapeHtml(t('settings.gateway.gateway_count').replace('{count}', String(state.wechatAccounts.length)))}</span>
+                                <span class="profile-card-chip">${escapeHtml(t('settings.triggers.enabled_count').replace('{count}', String(state.wechatAccounts.filter(isEnabled).length)))}</span>
+                                <span class="profile-card-chip">${escapeHtml(t('settings.gateway.running_count').replace('{count}', String(state.wechatAccounts.filter(account => account.running).length)))}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="role-record-actions">
+                    <button class="settings-inline-action settings-list-action trigger-platform-open-btn" data-trigger-platform="${WECHAT_PLATFORM}" type="button">${escapeHtml(isProviderExpanded(WECHAT_PLATFORM) ? t('settings.triggers.collapse') : t('settings.triggers.configure'))}</button>
+                </div>
+            </div>
+            ${isProviderExpanded(WECHAT_PLATFORM) ? `<div class="trigger-platform-body"><div class="trigger-platform-children">${renderWeChatBody()}</div></div>` : ''}
         </div>
     `;
     host.querySelectorAll('.trigger-platform-open-btn').forEach(button => {
         button.onclick = event => {
             event?.stopPropagation?.();
-            toggleProviderExpanded();
+            toggleProviderExpanded(button.dataset.triggerPlatform);
         };
     });
     host.querySelectorAll('.trigger-platform-record').forEach(record => {
@@ -197,7 +267,7 @@ function renderPlatformList() {
                 event?.stopPropagation?.();
                 return;
             }
-            toggleProviderExpanded();
+            toggleProviderExpanded(record.dataset.triggerPlatform);
         };
     });
     host.querySelectorAll('.trigger-record').forEach(button => {
@@ -221,6 +291,39 @@ function renderPlatformList() {
             await handleDeleteTrigger(button.dataset.triggerId);
         };
     });
+    host.querySelectorAll('.gateway-wechat-connect-btn').forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await handleStartWeChatLogin();
+        };
+    });
+    host.querySelectorAll('.gateway-wechat-edit-btn').forEach(button => {
+        button.onclick = event => {
+            event?.stopPropagation?.();
+            openWeChatEditor(button.dataset.accountId);
+        };
+    });
+    host.querySelectorAll('.gateway-wechat-toggle-btn').forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await handleToggleWeChatAccount(button.dataset.accountId);
+        };
+    });
+    host.querySelectorAll('.gateway-wechat-delete-btn').forEach(button => {
+        button.onclick = async event => {
+            event?.stopPropagation?.();
+            await handleDeleteWeChatAccount(button.dataset.accountId);
+        };
+    });
+    const saveWeChatBtn = document.getElementById('save-wechat-account-btn');
+    if (saveWeChatBtn) {
+        saveWeChatBtn.onclick = handleSaveWeChatAccount;
+    }
+    const cancelWeChatBtn = document.getElementById('cancel-wechat-account-btn');
+    if (cancelWeChatBtn) {
+        cancelWeChatBtn.onclick = handleCancelWeChatEditor;
+    }
+    bindWeChatDraftInputs();
 }
 
 function renderRecords() {
@@ -254,6 +357,198 @@ function renderTriggerRecord(trigger) {
                 <button class="settings-inline-action settings-list-action trigger-record-toggle-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(enabled ? t('settings.triggers.disable_trigger') : t('settings.triggers.enable_trigger'))}</button>
                 <button class="settings-inline-action settings-list-action trigger-record-edit-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
                 <button class="settings-inline-action settings-list-action trigger-record-delete-btn" data-trigger-id="${triggerId}" type="button">${escapeHtml(t('settings.triggers.delete_trigger'))}</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderWeChatBody() {
+    return `
+        <div class="gateway-wechat-shell">
+            ${renderWeChatStatus()}
+            <div class="role-record gateway-wechat-connect-card">
+                <div class="role-record-main">
+                    <div class="role-record-title-row">
+                        <div class="role-record-title">${escapeHtml(t('settings.gateway.connect_wechat'))}</div>
+                    </div>
+                    <div class="role-record-meta">
+                        <span>${escapeHtml(t('settings.gateway.wechat_none_copy'))}</span>
+                    </div>
+                </div>
+                <div class="role-record-actions">
+                    <button class="settings-inline-action settings-list-action gateway-wechat-connect-btn" type="button">${escapeHtml(state.wechatConnecting ? t('settings.gateway.connecting') : t('settings.gateway.connect_wechat'))}</button>
+                </div>
+            </div>
+            ${renderWeChatLoginPanel()}
+            ${renderWeChatAccounts()}
+            ${renderWeChatEditor()}
+        </div>
+    `;
+}
+
+function renderWeChatStatus() {
+    if (!state.wechatStatusMessage) {
+        return '';
+    }
+    const toneClass = state.wechatStatusTone ? ` role-editor-status-${escapeHtml(state.wechatStatusTone)}` : '';
+    return `<div class="role-editor-status${toneClass}" style="display:block;">${escapeHtml(state.wechatStatusMessage)}</div>`;
+}
+
+function renderWeChatLoginPanel() {
+    const session = state.wechatLoginSession;
+    if (!session?.qr_code_url) {
+        return '';
+    }
+    return `
+        <div class="role-record gateway-wechat-login-panel">
+            <div class="role-record-main">
+                <div class="role-record-title-row">
+                    <div class="role-record-title">${escapeHtml(t('settings.gateway.qr_title'))}</div>
+                </div>
+                <div class="role-record-meta">
+                    <span>${escapeHtml(t('settings.gateway.qr_copy'))}</span>
+                </div>
+                <div class="gateway-wechat-qr-shell">
+                    <img class="gateway-wechat-qr-image" src="${escapeHtml(session.qr_code_url)}" alt="${escapeHtml(t('settings.gateway.qr_title'))}">
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderWeChatAccounts() {
+    if (state.wechatAccounts.length === 0) {
+        return `<div class="settings-empty-state"><h4>${escapeHtml(t('settings.gateway.wechat_none'))}</h4><p>${escapeHtml(t('settings.gateway.wechat_none_copy'))}</p></div>`;
+    }
+    return `
+        <div class="role-records trigger-records gateway-wechat-records">
+            ${state.wechatAccounts.map(account => renderWeChatAccountRecord(account)).join('')}
+        </div>
+    `;
+}
+
+function renderWeChatAccountRecord(account) {
+    const accountId = escapeHtml(account.account_id);
+    const runningLabel = account.running ? t('settings.gateway.status_running') : (isEnabled(account) ? t('settings.field.enabled') : t('settings.roles.disabled'));
+    return `
+        <div class="role-record gateway-wechat-record" data-account-id="${accountId}">
+            <div class="role-record-main">
+                <div class="role-record-title-row trigger-record-title-row">
+                    <div class="role-record-title">${escapeHtml(account.display_name || account.account_id)}</div>
+                    <div class="profile-card-chips role-record-chips">
+                        <span class="profile-card-chip">${escapeHtml(runningLabel)}</span>
+                        <span class="profile-card-chip">${escapeHtml(account.account_id)}</span>
+                    </div>
+                </div>
+                <div class="role-record-meta trigger-record-meta">
+                    <span>${escapeHtml(account.workspace_id)}</span>
+                    ${account.last_error ? `<span>${escapeHtml(`${t('settings.gateway.last_error')}: ${account.last_error}`)}</span>` : ''}
+                </div>
+            </div>
+            <div class="role-record-actions trigger-record-actions">
+                <button class="settings-inline-action settings-list-action gateway-wechat-toggle-btn" data-account-id="${accountId}" type="button">${escapeHtml(isEnabled(account) ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
+                <button class="settings-inline-action settings-list-action gateway-wechat-edit-btn" data-account-id="${accountId}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
+                <button class="settings-inline-action settings-list-action gateway-wechat-delete-btn" data-account-id="${accountId}" type="button">${escapeHtml(t('settings.gateway.delete_account'))}</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderWeChatEditor() {
+    const draft = state.editingWeChatDraft;
+    if (!draft) {
+        return '';
+    }
+    const sessionMode = resolveSessionMode(draft);
+    const thinkingEnabled = resolveThinkingEnabled(draft);
+    return `
+        <div class="role-editor-panel gateway-wechat-editor-panel">
+            <div class="role-editor-form">
+                <div class="role-editor-header">
+                    <div>
+                        <h4>${escapeHtml(t('settings.gateway.account_editor'))}</h4>
+                        <p>${escapeHtml(`${t('settings.gateway.account_id')}: ${draft.account_id}`)}</p>
+                    </div>
+                </div>
+                <div class="role-editor-sections">
+                    <section class="role-editor-section">
+                        <h5>${escapeHtml(t('settings.gateway.account_editor'))}</h5>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="wechat-display-name-input">${escapeHtml(t('settings.gateway.display_name'))}</label>
+                                <input id="wechat-display-name-input" value="${escapeHtml(draft.display_name)}">
+                            </div>
+                            <div class="form-group">
+                                <label for="wechat-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
+                                <select id="wechat-workspace-id-input">
+                                    ${renderWorkspaceOptions(resolveWorkspaceId(draft))}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="wechat-base-url-input">${escapeHtml(t('settings.gateway.base_url'))}</label>
+                                <input id="wechat-base-url-input" value="${escapeHtml(String(draft.base_url || ''))}">
+                            </div>
+                            <div class="form-group">
+                                <label for="wechat-cdn-base-url-input">${escapeHtml(t('settings.gateway.cdn_base_url'))}</label>
+                                <input id="wechat-cdn-base-url-input" value="${escapeHtml(String(draft.cdn_base_url || ''))}">
+                            </div>
+                            <div class="form-group">
+                                <label for="wechat-route-tag-input">${escapeHtml(t('settings.gateway.route_tag'))}</label>
+                                <input id="wechat-route-tag-input" value="${escapeHtml(String(draft.route_tag || ''))}">
+                            </div>
+                        </div>
+                    </section>
+                    <section class="role-editor-section">
+                        <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="wechat-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
+                                <select id="wechat-session-mode-input">
+                                    <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
+                                    <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="wechat-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
+                                <label for="wechat-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
+                                <select id="wechat-normal-root-role-id-input">
+                                    ${renderNormalRoleOptions(resolveNormalRootRoleId(draft))}
+                                </select>
+                            </div>
+                            <div class="form-group" id="wechat-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
+                                <label for="wechat-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
+                                <select id="wechat-orchestration-preset-id-input">
+                                    ${renderOrchestrationPresetOptions(resolveOrchestrationPresetId(draft))}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="wechat-yolo-input">${escapeHtml(t('settings.triggers.yolo'))}</label>
+                                <select id="wechat-yolo-input">
+                                    ${renderBooleanOptions(resolveYolo(draft))}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="wechat-thinking-enabled-input">${escapeHtml(t('settings.triggers.thinking_enabled'))}</label>
+                                <select id="wechat-thinking-enabled-input">
+                                    ${renderBooleanOptions(thinkingEnabled)}
+                                </select>
+                            </div>
+                            <div class="form-group" id="wechat-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
+                                <label for="wechat-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
+                                <select id="wechat-thinking-effort-input">
+                                    ${['minimal', 'low', 'medium', 'high'].map(effort => `<option value="${effort}"${resolveThinkingEffort(draft) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+                <div class="role-record-actions gateway-wechat-editor-actions">
+                    <button class="secondary-btn section-action-btn" id="cancel-wechat-account-btn" type="button">${escapeHtml(t('settings.action.cancel'))}</button>
+                    <button class="primary-btn section-action-btn" id="save-wechat-account-btn" type="button">${escapeHtml(t('settings.action.save'))}</button>
+                </div>
             </div>
         </div>
     `;
@@ -422,25 +717,62 @@ function bindDraftInputs() {
     renderDraftAppSecretField();
 }
 
+function bindWeChatDraftInputs() {
+    [
+        'wechat-display-name-input',
+        'wechat-base-url-input',
+        'wechat-cdn-base-url-input',
+        'wechat-route-tag-input',
+        'wechat-workspace-id-input',
+        'wechat-session-mode-input',
+        'wechat-normal-root-role-id-input',
+        'wechat-orchestration-preset-id-input',
+        'wechat-thinking-enabled-input',
+        'wechat-thinking-effort-input',
+        'wechat-yolo-input',
+    ].forEach(id => {
+        const input = document.getElementById(id);
+        if (!input) {
+            return;
+        }
+        input.oninput = syncWeChatEditorVisibility;
+        input.onchange = syncWeChatEditorVisibility;
+    });
+}
+
 function syncEditorVisibility() {
     renderActions();
     syncSessionModeVisibility();
     syncThinkingVisibility();
 }
 
-function toggleProviderExpanded() {
-    state.providerExpanded = !state.providerExpanded;
-    if (!state.providerExpanded) {
+function syncWeChatEditorVisibility() {
+    syncWeChatSessionModeVisibility();
+    syncWeChatThinkingVisibility();
+}
+
+function toggleProviderExpanded(provider) {
+    const normalizedProvider = String(provider || '').trim();
+    state.expandedProvider = state.expandedProvider === normalizedProvider ? '' : normalizedProvider;
+    if (!isFeishuExpanded()) {
         state.editingTriggerId = '';
         state.editingTriggerDraft = null;
         state.statusMessage = '';
         state.statusTone = '';
     }
+    if (!isProviderExpanded(WECHAT_PLATFORM)) {
+        state.editingWeChatAccountId = '';
+        state.editingWeChatDraft = null;
+        state.wechatLoginSession = null;
+        state.wechatStatusMessage = '';
+        state.wechatStatusTone = '';
+        state.wechatConnecting = false;
+    }
     renderTriggerSettingsPanel();
 }
 
 function handleAddTrigger() {
-    if (!state.providerExpanded) {
+    if (!isFeishuExpanded()) {
         return;
     }
     state.statusMessage = '';
@@ -487,6 +819,21 @@ function openTriggerEditor(triggerId) {
         target_config: { ...trigger.target_config },
         secret_config: { ...trigger.secret_config },
         secret_status: { ...trigger.secret_status },
+    };
+    renderTriggerSettingsPanel();
+}
+
+function openWeChatEditor(accountId) {
+    const account = state.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    state.editingWeChatAccountId = account.account_id;
+    state.editingWeChatDraft = {
+        ...account,
+        thinking: account.thinking && typeof account.thinking === 'object'
+            ? { ...account.thinking }
+            : { enabled: false, effort: null },
     };
     renderTriggerSettingsPanel();
 }
@@ -571,11 +918,150 @@ async function handleDeleteTrigger(triggerId) {
     }
 }
 
+async function handleStartWeChatLogin() {
+    state.wechatStatusMessage = t('settings.gateway.login_waiting');
+    state.wechatStatusTone = '';
+    state.wechatConnecting = true;
+    renderTriggerSettingsPanel();
+    try {
+        const result = await startWeChatGatewayLogin({});
+        state.wechatLoginSession = {
+            session_key: String(result?.session_key || '').trim(),
+            qr_code_url: String(result?.qr_code_url || '').trim(),
+        };
+        renderTriggerSettingsPanel();
+        void finalizeWeChatLogin(state.wechatLoginSession.session_key);
+    } catch (error) {
+        state.wechatConnecting = false;
+        state.wechatStatusMessage = error?.message || t('settings.gateway.login_failed');
+        state.wechatStatusTone = 'danger';
+        renderTriggerSettingsPanel();
+    }
+}
+
+async function finalizeWeChatLogin(sessionKey) {
+    try {
+        const result = await waitWeChatGatewayLogin({
+            session_key: sessionKey,
+            timeout_ms: 480000,
+        });
+        if (String(state.wechatLoginSession?.session_key || '') !== String(sessionKey || '')) {
+            return;
+        }
+        state.wechatConnecting = false;
+        if (result?.connected === true) {
+            showToast({
+                title: t('settings.gateway.login_success'),
+                message: String(result?.message || t('settings.gateway.login_success')),
+                tone: 'success',
+            });
+            await loadTriggerSettingsPanel({
+                openProvider: WECHAT_PLATFORM,
+                wechatStatusMessage: String(result?.message || t('settings.gateway.login_success')),
+                wechatStatusTone: 'success',
+            });
+            return;
+        }
+        state.wechatStatusMessage = String(result?.message || t('settings.gateway.login_failed'));
+        state.wechatStatusTone = 'danger';
+        state.wechatLoginSession = null;
+        renderTriggerSettingsPanel();
+    } catch (error) {
+        state.wechatConnecting = false;
+        state.wechatStatusMessage = error?.message || t('settings.gateway.login_failed');
+        state.wechatStatusTone = 'danger';
+        renderTriggerSettingsPanel();
+    }
+}
+
+async function handleToggleWeChatAccount(accountId) {
+    const account = state.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    try {
+        if (isEnabled(account)) {
+            await disableWeChatGatewayAccount(account.account_id);
+        } else {
+            await enableWeChatGatewayAccount(account.account_id);
+        }
+        await loadTriggerSettingsPanel({ openProvider: WECHAT_PLATFORM });
+    } catch (error) {
+        state.wechatStatusMessage = error?.message || t('settings.gateway.save_failed');
+        state.wechatStatusTone = 'danger';
+        renderTriggerSettingsPanel();
+    }
+}
+
+async function handleSaveWeChatAccount() {
+    if (!state.editingWeChatDraft) {
+        return;
+    }
+    try {
+        const payload = readWeChatDraftFromInputs();
+        await updateWeChatGatewayAccount(state.editingWeChatDraft.account_id, payload);
+        showToast({
+            title: t('settings.gateway.saved'),
+            message: t('settings.gateway.saved_message'),
+            tone: 'success',
+        });
+        await loadTriggerSettingsPanel({
+            openProvider: WECHAT_PLATFORM,
+            wechatStatusMessage: t('settings.gateway.saved_message'),
+            wechatStatusTone: 'success',
+        });
+    } catch (error) {
+        state.wechatStatusMessage = error?.message || t('settings.gateway.save_failed');
+        state.wechatStatusTone = 'danger';
+        renderTriggerSettingsPanel();
+    }
+}
+
+async function handleDeleteWeChatAccount(accountId) {
+    const account = state.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.gateway.delete_confirm_title'),
+        message: t('settings.gateway.delete_confirm_message').replace('{name}', account.display_name || account.account_id),
+        tone: 'warning',
+        confirmLabel: t('settings.gateway.delete_account'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    try {
+        await deleteWeChatGatewayAccount(account.account_id);
+        showToast({
+            title: t('settings.gateway.deleted'),
+            message: t('settings.gateway.deleted_message'),
+            tone: 'success',
+        });
+        await loadTriggerSettingsPanel({
+            openProvider: WECHAT_PLATFORM,
+            wechatStatusMessage: t('settings.gateway.deleted_message'),
+            wechatStatusTone: 'success',
+        });
+    } catch (error) {
+        state.wechatStatusMessage = error?.message || t('settings.gateway.delete_failed');
+        state.wechatStatusTone = 'danger';
+        renderTriggerSettingsPanel();
+    }
+}
+
 function handleCancelTriggerSettings() {
     state.editingTriggerId = '';
     state.editingTriggerDraft = null;
     state.statusMessage = '';
     state.statusTone = '';
+    renderTriggerSettingsPanel();
+}
+
+function handleCancelWeChatEditor() {
+    state.editingWeChatAccountId = '';
+    state.editingWeChatDraft = null;
     renderTriggerSettingsPanel();
 }
 
@@ -670,12 +1156,59 @@ function readDraftFromInputs() {
     };
 }
 
+function readWeChatDraftFromInputs() {
+    if (!state.editingWeChatDraft) {
+        throw new Error(t('settings.gateway.save_failed'));
+    }
+    const displayName = readValue('wechat-display-name-input');
+    const workspaceId = readValue('wechat-workspace-id-input');
+    const sessionMode = readValue('wechat-session-mode-input') || DEFAULT_SESSION_MODE;
+    const orchestrationPresetId = readValue('wechat-orchestration-preset-id-input');
+    const thinkingEnabled = readBooleanSelect('wechat-thinking-enabled-input', false);
+
+    if (!displayName) {
+        throw new Error(t('settings.gateway.missing_display_name'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    if (sessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.gateway.missing_orchestration_preset_id'));
+    }
+
+    const payload = {
+        display_name: displayName,
+        base_url: readValue('wechat-base-url-input') || String(state.editingWeChatDraft.base_url || ''),
+        cdn_base_url: readValue('wechat-cdn-base-url-input') || String(state.editingWeChatDraft.cdn_base_url || ''),
+        route_tag: readValue('wechat-route-tag-input') || String(state.editingWeChatDraft.route_tag || ''),
+        workspace_id: workspaceId,
+        session_mode: sessionMode,
+        yolo: readBooleanSelect('wechat-yolo-input', true),
+        thinking: {
+            enabled: thinkingEnabled,
+            effort: thinkingEnabled
+                ? (readValue('wechat-thinking-effort-input') || DEFAULT_THINKING_EFFORT)
+                : null,
+        },
+    };
+
+    const normalRootRoleId = readValue('wechat-normal-root-role-id-input');
+    if (sessionMode === 'normal') {
+        payload.normal_root_role_id = normalRootRoleId || null;
+        payload.orchestration_preset_id = null;
+    } else {
+        payload.normal_root_role_id = null;
+        payload.orchestration_preset_id = orchestrationPresetId;
+    }
+    return payload;
+}
+
 function renderActions() {
     const bar = document.getElementById('settings-actions-bar');
     if (bar) {
-        bar.style.display = state.providerExpanded ? 'flex' : 'none';
+        bar.style.display = isFeishuExpanded() ? 'flex' : 'none';
     }
-    setVisible('add-trigger-btn', state.providerExpanded && state.editingTriggerDraft === null);
+    setVisible('add-trigger-btn', isFeishuExpanded() && state.editingTriggerDraft === null);
     setVisible('save-trigger-btn', state.editingTriggerDraft !== null);
     setVisible('cancel-trigger-btn', state.editingTriggerDraft !== null);
 }
@@ -862,6 +1395,42 @@ function syncThinkingVisibility() {
     if (effortField) {
         effortField.style.display = enabled ? 'block' : 'none';
     }
+}
+
+function syncWeChatSessionModeVisibility() {
+    const mode = readValue('wechat-session-mode-input') || DEFAULT_SESSION_MODE;
+    const normalField = document.getElementById('wechat-normal-role-field');
+    const presetField = document.getElementById('wechat-preset-field');
+    if (normalField) {
+        normalField.style.display = mode === 'normal' ? 'block' : 'none';
+    }
+    if (presetField) {
+        presetField.style.display = mode === 'orchestration' ? 'block' : 'none';
+    }
+}
+
+function syncWeChatThinkingVisibility() {
+    const enabled = readBooleanSelect('wechat-thinking-enabled-input', false);
+    const effortField = document.getElementById('wechat-thinking-effort-field');
+    if (effortField) {
+        effortField.style.display = enabled ? 'block' : 'none';
+    }
+}
+
+function normalizeExpandedProvider(provider) {
+    const value = String(provider || '').trim().toLowerCase();
+    if (value === FEISHU_PLATFORM || value === WECHAT_PLATFORM) {
+        return value;
+    }
+    return '';
+}
+
+function isProviderExpanded(provider) {
+    return state.expandedProvider === provider;
+}
+
+function isFeishuExpanded() {
+    return isProviderExpanded(FEISHU_PLATFORM);
 }
 
 function createDraftAppSecretState(secretConfig, secretStatus) {
