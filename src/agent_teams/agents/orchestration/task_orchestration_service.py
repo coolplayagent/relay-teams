@@ -9,6 +9,7 @@ from agent_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.session_repository import SessionRepository
@@ -52,6 +53,7 @@ class TaskOrchestrationService:
         task_execution_service: TaskExecutionService,
         message_repo: MessageRepository,
         session_repo: SessionRepository | None = None,
+        runtime_role_resolver: RuntimeRoleResolver | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
@@ -59,6 +61,7 @@ class TaskOrchestrationService:
         self._task_execution_service = task_execution_service
         self._message_repo = message_repo
         self._session_repo = session_repo
+        self._runtime_role_resolver = runtime_role_resolver
 
     async def create_tasks(
         self,
@@ -174,7 +177,13 @@ class TaskOrchestrationService:
         normalized_role_id = str(role_id).strip()
         if not normalized_role_id:
             raise ValueError("role_id must not be empty")
-        self._role_registry.get(normalized_role_id)
+        if self._runtime_role_resolver is not None:
+            self._runtime_role_resolver.get_effective_role(
+                run_id=resolved_run_id,
+                role_id=normalized_role_id,
+            )
+        else:
+            self._role_registry.get(normalized_role_id)
 
         normalized_prompt = prompt.strip()
         bound_role_id = str(record.envelope.role_id or "").strip()

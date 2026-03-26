@@ -1,0 +1,2 @@
+Create a run-scoped temporary role that can be selected in `dispatch_task` during orchestration.
+Use this when no existing role is a good fit for a delegated subtask.

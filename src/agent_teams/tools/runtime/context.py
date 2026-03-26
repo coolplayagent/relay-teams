@@ -22,6 +22,7 @@ from agent_teams.notifications import NotificationService
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -117,6 +118,7 @@ class ToolDeps(BaseModel):
     instance_id: str
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
+    runtime_role_resolver: SkipValidation[RuntimeRoleResolver | None] = None
     mcp_registry: SkipValidation[McpRegistry]
     task_service: SkipValidation[TaskOrchestrationServiceLike]
     task_execution_service: SkipValidation[TaskExecutionServiceLike]

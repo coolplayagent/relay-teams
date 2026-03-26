@@ -321,6 +321,9 @@ class AgentLlmSession:
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._role_registry,
+            runtime_role_resolver=getattr(
+                self._task_execution_service, "runtime_role_resolver", None
+            ),
             mcp_registry=self._mcp_registry,
             task_service=self._task_service,
             task_execution_service=self._task_execution_service,

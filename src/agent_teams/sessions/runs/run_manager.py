@@ -38,6 +38,7 @@ from agent_teams.providers.provider_contracts import (
 )
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -104,6 +105,7 @@ class RunManager:
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
+        runtime_role_resolver: RuntimeRoleResolver | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -129,6 +131,7 @@ class RunManager:
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
+        self._runtime_role_resolver = runtime_role_resolver
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -920,6 +923,8 @@ class RunManager:
         if runtime is not None and runtime.is_recoverable:
             self._remember_active_run(session_id, run_id)
             return
+        if self._runtime_role_resolver is not None:
+            self._runtime_role_resolver.cleanup_run(run_id=run_id)
         self._drop_active_run(session_id, run_id)
 
     def _safe_finalize_run(self, *, run_id: str, session_id: str) -> None:
