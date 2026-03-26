@@ -136,6 +136,7 @@ class ServerContainer:
         config_dir: Path,
         roles_dir: Path | None = None,
         db_path: Path | None = None,
+        manage_runtime_state: bool = True,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -300,8 +301,9 @@ class ServerContainer:
         self.subagent_reflection_service = self._build_subagent_reflection_service()
         self._ensure_default_workspace()
 
-        self.agent_repo.mark_running_instances_failed()
-        _ = self.run_runtime_repo.mark_transient_runs_interrupted()
+        if manage_runtime_state:
+            self.agent_repo.mark_running_instances_failed()
+            _ = self.run_runtime_repo.mark_transient_runs_interrupted()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
@@ -341,12 +343,33 @@ class ServerContainer:
         self.tool_approval_manager: ToolApprovalManager = ToolApprovalManager()
         self.tool_approval_policy: ToolApprovalPolicy = ToolApprovalPolicy()
         self.external_acp_session_manager = ExternalAcpSessionManager(
+            config_dir=self.config_dir,
             config_service=self.external_agent_config_service,
             session_repo=self.external_agent_session_repo,
             message_repo=self.message_repo,
             run_event_hub=self.run_event_hub,
             workspace_manager=self.workspace_manager,
-            mcp_registry=self.mcp_registry,
+            task_repo=self.task_repo,
+            shared_store=self.shared_store,
+            event_bus=self.event_log,
+            injection_manager=self.injection_manager,
+            agent_repo=self.agent_repo,
+            approval_ticket_repo=self.approval_ticket_repo,
+            run_runtime_repo=self.run_runtime_repo,
+            run_intent_repo=self.run_intent_repo,
+            role_memory_service=self.role_memory_service,
+            tool_registry=self.tool_registry,
+            get_mcp_registry=lambda: self.mcp_registry,
+            get_skill_registry=lambda: self.skill_registry,
+            get_role_registry=lambda: self.role_registry,
+            get_task_execution_service=lambda: self.task_execution_service,
+            get_task_service=lambda: self.task_service,
+            run_control_manager=self.run_control_manager,
+            tool_approval_manager=self.tool_approval_manager,
+            tool_approval_policy=self.tool_approval_policy,
+            get_notification_service=lambda: self.notification_service,
+            metric_recorder=self.metric_recorder,
+            feishu_tool_service=self.feishu_tool_service,
         )
         self.run_control_manager.bind_runtime(
             run_event_hub=self.run_event_hub,
