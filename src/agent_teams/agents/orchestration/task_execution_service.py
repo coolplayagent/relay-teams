@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
 from agent_teams.agents.execution.subagent_runner import SubAgentRunner
 from agent_teams.agents.execution.prompt_instruction_state import (
@@ -17,6 +17,7 @@ from agent_teams.agents.execution.prompt_instruction_state import (
 )
 from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
+    PromptSkillInstruction,
     RuntimePromptBuilder,
     RuntimePromptSections,
     compose_provider_system_prompt,
@@ -65,6 +66,7 @@ from agent_teams.tools.registry.registry import ToolResolutionContext
 
 if TYPE_CHECKING:
     from agent_teams.skills.skill_registry import SkillRegistry
+    from agent_teams.skills.skill_models import SkillInstructionEntry
     from agent_teams.skills.skill_routing_service import SkillRuntimeService
     from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -72,6 +74,7 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.workspace import WorkspaceManager
 
 LOGGER = get_logger(__name__)
+ProviderUserPromptContent = str | tuple[UserContent, ...]
 
 
 class TaskExecutionService(BaseModel):
@@ -247,6 +250,7 @@ class TaskExecutionService(BaseModel):
             runtime_system_prompt = self._compose_runtime_system_prompt(
                 role=role_for_run,
                 runtime_prompt_sections=runtime_prompt_sections,
+                skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
             self.agent_repo.update_runtime_snapshot(
                 instance_id,
@@ -256,6 +260,7 @@ class TaskExecutionService(BaseModel):
             provider_system_prompt = self._compose_provider_system_prompt(
                 role=role_for_run,
                 runtime_prompt_sections=runtime_prompt_sections,
+                skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
             result = await runner.run(
                 task=task,
@@ -572,6 +577,15 @@ class TaskExecutionService(BaseModel):
             paths=prompt_sections.local_instruction_paths,
         )
         runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
+        user_prompt, skill_instructions = self._build_user_prompt(
+            role=role,
+            objective=objective,
+            shared_state_snapshot=shared_state_snapshot,
+            conversation_context=conversation_context,
+            orchestration_prompt=(
+                "" if topology is None else topology.orchestration_prompt
+            ),
+        )
         return PreparedRuntimeSnapshot(
             prompt_sections=prompt_sections,
             runtime_tools_json=json.dumps(
@@ -579,15 +593,8 @@ class TaskExecutionService(BaseModel):
                 ensure_ascii=False,
                 indent=2,
             ),
-            user_prompt=self._build_user_prompt(
-                role=role,
-                objective=objective,
-                shared_state_snapshot=shared_state_snapshot,
-                conversation_context=conversation_context,
-                orchestration_prompt=(
-                    "" if topology is None else topology.orchestration_prompt
-                ),
-            ),
+            user_prompt=user_prompt,
+            skill_instructions=skill_instructions,
         )
 
     def _compose_runtime_system_prompt(
@@ -595,18 +602,26 @@ class TaskExecutionService(BaseModel):
         *,
         role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
+        skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
         del role
-        return compose_runtime_system_prompt(runtime_prompt_sections)
+        return compose_runtime_system_prompt(
+            runtime_prompt_sections,
+            skill_instructions=skill_instructions,
+        )
 
     def _compose_provider_system_prompt(
         self,
         *,
         role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
+        skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
         del role
-        return compose_provider_system_prompt(runtime_prompt_sections)
+        return compose_provider_system_prompt(
+            runtime_prompt_sections,
+            skill_instructions=skill_instructions,
+        )
 
     async def _build_runtime_tools_snapshot(
         self,
@@ -804,6 +819,10 @@ class TaskExecutionService(BaseModel):
                         parts=run_intent.input
                     )
                 )
+                merged_provider_content = self._merge_provider_prompt_content(
+                    provider_content=provider_content,
+                    user_prompt_text=prompt,
+                )
                 self.message_repo.prune_conversation_history_to_safe_boundary(
                     conversation_id
                 )
@@ -816,7 +835,9 @@ class TaskExecutionService(BaseModel):
                     task_id=task.task_id,
                     trace_id=task.trace_id,
                     messages=[
-                        ModelRequest(parts=[UserPromptPart(content=provider_content)])
+                        ModelRequest(
+                            parts=[UserPromptPart(content=merged_provider_content)]
+                        )
                     ],
                 )
                 return
@@ -851,10 +872,13 @@ class TaskExecutionService(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         conversation_context: RuntimePromptConversationContext | None,
         orchestration_prompt: str,
-    ) -> str:
+    ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
         resolved_objective = objective.strip()
         if self.skill_runtime_service is None:
-            return build_user_prompt(UserPromptBuildInput(objective=resolved_objective))
+            return (
+                build_user_prompt(UserPromptBuildInput(objective=resolved_objective)),
+                (),
+            )
         skill_runtime_service = cast(
             "SkillRuntimeService",
             self.skill_runtime_service,
@@ -867,7 +891,45 @@ class TaskExecutionService(BaseModel):
             orchestration_prompt=orchestration_prompt,
             consumer="agents.orchestration.task_execution_service.prepare_prompt",
         )
-        return prepared_prompt.user_prompt
+        return (
+            prepared_prompt.user_prompt,
+            self._to_prompt_skill_instructions(
+                prepared_prompt.system_prompt_skill_instructions
+            ),
+        )
+
+    def _to_prompt_skill_instructions(
+        self,
+        entries: tuple["SkillInstructionEntry", ...],
+    ) -> tuple[PromptSkillInstruction, ...]:
+        return tuple(
+            PromptSkillInstruction(name=entry.name, description=entry.description)
+            for entry in entries
+        )
+
+    def _merge_provider_prompt_content(
+        self,
+        *,
+        provider_content: ProviderUserPromptContent,
+        user_prompt_text: str,
+    ) -> ProviderUserPromptContent:
+        appendix = self._user_prompt_skill_appendix(user_prompt_text)
+        if not appendix:
+            return provider_content
+        if isinstance(provider_content, str):
+            if not provider_content.strip():
+                return appendix
+            return f"{provider_content.rstrip()}\n\n{appendix}"
+        if isinstance(provider_content, tuple):
+            return (*provider_content, appendix)
+        return provider_content
+
+    def _user_prompt_skill_appendix(self, user_prompt_text: str) -> str:
+        prompt = user_prompt_text.strip()
+        heading = "## Skill Candidates"
+        if heading not in prompt:
+            return ""
+        return prompt[prompt.index(heading) :].strip()
 
     def _resolve_turn_objective(
         self,
@@ -887,3 +949,4 @@ class PreparedRuntimeSnapshot(BaseModel):
     prompt_sections: RuntimePromptSections
     runtime_tools_json: str
     user_prompt: str
+    skill_instructions: tuple[PromptSkillInstruction, ...] = ()

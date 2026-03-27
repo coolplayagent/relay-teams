@@ -428,4 +428,4 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
     assert isinstance(provider, _CapturingOpenAICompatibleProvider)
     assert provider.kwargs["allowed_tools"] == ("read",)
     assert provider.kwargs["allowed_mcp_servers"] == ("docs",)
-    assert provider.kwargs["allowed_skills"] == ("time",)
+    assert provider.kwargs["allowed_skills"] == ("app:time",)

@@ -59,7 +59,8 @@
 - Initial setup:
   - Windows: `setup.bat`
   - Linux/macOS: `sh setup.sh`
-  - Then: `uv sync --extra dev`
+  - If you skip the setup script, run: `uv sync --extra dev && uv pip install -e .`
+  - Prefer `uv run --extra dev ...` for local tooling so commands use the project environment instead of the system Python.
 
 ## Coding Standards
 - Prefer enums and Pydantic models over loose dictionaries.
@@ -74,11 +75,11 @@
 - Interface layers must not access backend repositories directly.
 
 ## Pre-Commit Self-Check
-1. `uv run ruff check --fix`
-2. `uv run ruff format --no-cache --force-exclude`
-3. `uv run basedpyright`
-4. `uv run pytest -q tests/unit_tests`
-5. `uv run pytest -q tests/integration_tests`
+1. `uv run --extra dev ruff check --fix`
+2. `uv run --extra dev ruff format --no-cache --force-exclude`
+3. `uv run --extra dev basedpyright`
+4. `uv run --extra dev pytest -q tests/unit_tests`
+5. `uv run --extra dev pytest -q tests/integration_tests`
 
 ## Security
 - Secrets only in keyring.

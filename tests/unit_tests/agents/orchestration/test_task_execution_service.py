@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from agent_teams.media import content_parts_from_text
+from agent_teams.media import (
+    MediaAssetRepository,
+    MediaAssetService,
+    content_parts_from_text,
+)
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
@@ -142,6 +146,15 @@ def _build_service(
         run_intent_repo=RunIntentRepository(db_path),
     )
     return service, task_repo, agent_repo, message_repo
+
+
+def _write_skill(app_config_dir: Path, *, name: str, description: str) -> None:
+    skill_dir = app_config_dir / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{description}\n",
+        encoding="utf-8",
+    )
 
 
 def _build_service_with_control(
@@ -434,11 +447,11 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     assert isinstance(history[0], ModelRequest)
     prompt_content = history[0].parts[0].content
     assert isinstance(prompt_content, str)
-    assert "## Skill Candidates" in prompt_content
-    assert "- time:" in prompt_content
+    assert prompt_content == "query time"
     assert "missing_skill" not in prompt_content
     runtime_record = agent_repo.get_instance(instance_id)
-    assert "## Available Skills" not in runtime_record.runtime_system_prompt
+    assert "## Available Skills" in runtime_record.runtime_system_prompt
+    assert "- time:" in runtime_record.runtime_system_prompt
     assert "missing_skill" not in runtime_record.runtime_system_prompt
     tools_snapshot = json.loads(runtime_record.runtime_tools_json)
     assert len(tools_snapshot["skill_tools"]) == 1
@@ -508,6 +521,141 @@ async def test_execute_passes_run_thinking_config_to_provider(tmp_path: Path) ->
 
     assert provider.thinking_enabled == [True]
     assert provider.thinking_efforts == ["high"]
+
+
+@pytest.mark.asyncio
+async def test_execute_root_intent_input_appends_routed_skill_candidates(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    role = RoleDefinition(
+        role_id="time",
+        name="time",
+        description="Reports the current time.",
+        version="1",
+        tools=(),
+        skills=(
+            "time",
+            "planner",
+            "sql",
+            "docs",
+            "api",
+            "tests",
+            "frontend",
+            "ops",
+            "calendar",
+        ),
+        system_prompt="You are the time role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+    db_path = tmp_path / "task_execution_service_root_input_routing.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    for name in (
+        "time",
+        "planner",
+        "sql",
+        "docs",
+        "api",
+        "tests",
+        "frontend",
+        "ops",
+        "calendar",
+    ):
+        _write_skill(
+            db_path.parent,
+            name=name,
+            description=f"{name} helper",
+        )
+    skill_registry = SkillRegistry.from_config_dirs(app_config_dir=db_path.parent)
+    run_intent_repo = RunIntentRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=lambda _, __=None: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=skill_registry,
+        skill_runtime_service=SkillRuntimeService(
+            skill_registry=skill_registry,
+            retrieval_service=RetrievalService(
+                store=SqliteFts5RetrievalStore(db_path),
+            ),
+        ),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=run_intent_repo,
+        media_asset_service=MediaAssetService(
+            repository=MediaAssetRepository(db_path),
+            workspace_manager=WorkspaceManager(
+                project_root=Path("."), shared_store=shared_store
+            ),
+        ),
+    )
+    workspace_id = "default"
+    conversation_id = build_conversation_id("session-1", "time")
+    instance = create_subagent_instance(
+        "time",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="time",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    run_intent_repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("query time"),
+        ),
+    )
+
+    result = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result == "ok"
+    history = message_repo.get_history_for_task(instance.instance_id, "task-1")
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    prompt_content = history[0].parts[0].content
+    assert isinstance(prompt_content, str)
+    assert prompt_content.startswith("query time")
+    assert "## Skill Candidates" in prompt_content
+    assert "- time:" in prompt_content
 
 
 @pytest.mark.asyncio

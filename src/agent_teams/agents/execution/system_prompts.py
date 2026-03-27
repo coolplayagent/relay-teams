@@ -350,6 +350,9 @@ def build_skill_instructions_prompt(
 
 def compose_system_prompt(data: SystemPromptSectionsInput) -> str:
     sections: list[str] = [data.base_instructions]
+    skill_prompt = build_skill_instructions_prompt(data.skill_instructions)
+    if skill_prompt:
+        sections.append(skill_prompt)
     if data.capability_summary:
         sections.append(data.capability_summary)
     if data.workspace_context:

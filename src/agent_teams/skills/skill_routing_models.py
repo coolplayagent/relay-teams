@@ -6,6 +6,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
+from agent_teams.skills.skill_models import SkillInstructionEntry
 
 
 class SkillRoutingMode(str, Enum):
@@ -63,4 +64,5 @@ class SkillPromptResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     user_prompt: str = ""
+    system_prompt_skill_instructions: tuple[SkillInstructionEntry, ...] = ()
     routing: SkillRoutingResult

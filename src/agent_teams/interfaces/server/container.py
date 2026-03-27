@@ -348,8 +348,8 @@ class ServerContainer:
         self.automation_delivery_repo: AutomationDeliveryRepository = (
             AutomationDeliveryRepository(runtime.paths.db_path)
         )
-        self.automation_bound_session_queue_repo: AutomationBoundSessionQueueRepository = (
-            AutomationBoundSessionQueueRepository(runtime.paths.db_path)
+        self.automation_bound_session_queue_repo: AutomationBoundSessionQueueRepository = AutomationBoundSessionQueueRepository(
+            runtime.paths.db_path
         )
         self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
             runtime.paths.db_path
@@ -612,15 +612,17 @@ class ServerContainer:
         self.automation_delivery_worker = AutomationDeliveryWorker(
             delivery_service=self.automation_delivery_service
         )
-        self.automation_bound_session_queue_service = AutomationBoundSessionQueueService(
-            repository=self.automation_bound_session_queue_repo,
-            session_lookup=self.session_service,
-            run_service=self.run_service,
-            run_runtime_repo=self.run_runtime_repo,
-            delivery_service=self.automation_delivery_service,
-            runtime_config_lookup=self.feishu_gateway_service,
-            feishu_client=self.feishu_client,
-            project_repository=self.automation_repo,
+        self.automation_bound_session_queue_service = (
+            AutomationBoundSessionQueueService(
+                repository=self.automation_bound_session_queue_repo,
+                session_lookup=self.session_service,
+                run_service=self.run_service,
+                run_runtime_repo=self.run_runtime_repo,
+                delivery_service=self.automation_delivery_service,
+                runtime_config_lookup=self.feishu_gateway_service,
+                feishu_client=self.feishu_client,
+                project_repository=self.automation_repo,
+            )
         )
         self.automation_bound_session_queue_worker = AutomationBoundSessionQueueWorker(
             queue_service=self.automation_bound_session_queue_service

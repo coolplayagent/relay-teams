@@ -374,7 +374,9 @@ console.log(JSON.stringify({
 
     skills_html = cast(str, payload["skillsHtml"])
     assert "diff" in skills_html
-    assert "diff" in skills_html and "BUILTIN" not in skills_html.split("diff", 1)[1][:20]
+    assert (
+        "diff" in skills_html and "BUILTIN" not in skills_html.split("diff", 1)[1][:20]
+    )
     assert "time" in skills_html
     assert "BUILTIN" in skills_html
     assert "APP" in skills_html

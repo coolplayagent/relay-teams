@@ -25,14 +25,12 @@ Windows:
 
 ```powershell
 .\setup.bat
-uv sync --extra dev
 ```
 
 Linux/macOS:
 
 ```bash
 sh setup.sh
-uv sync --extra dev
 ```
 
 ### 3.2 Configure runtime files
@@ -285,7 +283,7 @@ If Zed cannot find `uv`:
 If the agent exits immediately:
 
 - check `model.json`, `.env`, and `secrets.json`
-- then confirm `uv sync --extra dev` was completed in this repository
+- then prefer `uv run --extra dev ...` for repository commands so Zed uses the project environment
 
 ## 10. Current implementation limits
 

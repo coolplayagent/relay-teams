@@ -16,6 +16,7 @@ from agent_teams.skills import (
     SkillsDirectory,
     build_skill_routing_query_text,
 )
+from agent_teams.skills.skill_models import SkillInstructionEntry
 
 
 def test_skill_index_documents_include_instruction_script_and_resource_summaries(
@@ -117,9 +118,17 @@ def test_skill_runtime_service_passthrough_when_authorized_count_is_small(
 
     assert result.routing.diagnostics.mode == SkillRoutingMode.PASSTHROUGH
     assert result.routing.visible_skills == ("time", "planner")
-    assert "## Skill Candidates" in result.user_prompt
-    assert "- time: Normalize timestamps to UTC." in result.user_prompt
-    assert "- planner: Break work into executable steps." in result.user_prompt
+    assert result.user_prompt == "Fix the timestamp bug."
+    assert result.system_prompt_skill_instructions == (
+        SkillInstructionEntry(
+            name="time",
+            description="Normalize timestamps to UTC.",
+        ),
+        SkillInstructionEntry(
+            name="planner",
+            description="Break work into executable steps.",
+        ),
+    )
 
 
 def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
@@ -170,6 +179,7 @@ def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
     assert result.routing.diagnostics.mode == SkillRoutingMode.SEARCH
     assert result.routing.visible_skills[0] == "time"
     assert len(result.routing.visible_skills) == 8
+    assert result.system_prompt_skill_instructions == ()
     assert set(result.routing.visible_skills).issubset(
         set(result.routing.authorized_skills)
     )
@@ -228,6 +238,50 @@ def test_skill_runtime_service_falls_back_when_search_has_no_hits(
         result.routing.diagnostics.fallback_reason == SkillRoutingFallbackReason.NO_HITS
     )
     assert result.routing.visible_skills == result.routing.authorized_skills
+
+
+def test_skill_runtime_service_prefers_app_variant_for_duplicate_display_name(
+    tmp_path: Path,
+) -> None:
+    app_skill_dir = tmp_path / ".agent-teams" / "skills" / "time"
+    builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
+    _write_skill(
+        app_skill_dir,
+        name="time",
+        description="App timezone helper.",
+    )
+    _write_skill(
+        builtin_skill_dir,
+        name="time",
+        description="Builtin timezone helper.",
+    )
+    registry = SkillRegistry.from_skill_dirs(
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
+        builtin_skills_dir=tmp_path / "builtin" / "skills",
+    )
+    service = SkillRuntimeService(
+        skill_registry=registry,
+        retrieval_service=_build_retrieval_service(tmp_path),
+    )
+    _ = service.rebuild_index()
+    role = _build_role(("app:time", "builtin:time"))
+
+    result = service.prepare_prompt(
+        role=role,
+        objective="Fix the timestamp bug.",
+        shared_state_snapshot=(),
+        conversation_context=None,
+        consumer="tests.skills.duplicate_preference",
+    )
+
+    assert result.routing.authorized_skills == ("time",)
+    assert result.routing.visible_skills == ("time",)
+    assert result.system_prompt_skill_instructions == (
+        SkillInstructionEntry(
+            name="time",
+            description="App timezone helper.",
+        ),
+    )
 
 
 def _build_registry(

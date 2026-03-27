@@ -155,7 +155,7 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert run_manager.started_run_ids == ["run-1"]
     assert (
         getattr(run_manager.create_calls[0], "intent")
-        == '触发定时任务 “nightly-report”：\nDraft a nightly report.'
+        == "触发定时任务 “nightly-report”：\nDraft a nightly report."
     )
 
 
@@ -189,7 +189,7 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
     assert run_manager.started_run_ids == ["run-1"]
     assert (
         getattr(run_manager.create_calls[0], "intent")
-        == '触发定时任务 “one-shot-report”：\nRun once.'
+        == "触发定时任务 “one-shot-report”：\nRun once."
     )
 
 

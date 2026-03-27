@@ -450,7 +450,9 @@ class AutomationService:
         if project.delivery_binding is None:
             return None
         if self._bound_session_queue_service is None:
-            raise RuntimeError("Automation bound session execution service is unavailable")
+            raise RuntimeError(
+                "Automation bound session execution service is unavailable"
+            )
         return self._bound_session_queue_service.materialize_execution(
             project=project,
             reason=reason,

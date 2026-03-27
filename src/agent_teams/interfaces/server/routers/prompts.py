@@ -18,6 +18,7 @@ from agent_teams.interfaces.server.deps import (
     get_workspace_service,
 )
 from agent_teams.agents.execution.system_prompts import (
+    PromptSkillInstruction,
     RuntimePromptBuildInput,
     RuntimePromptBuilder,
     compose_provider_system_prompt,
@@ -161,15 +162,25 @@ async def preview_prompts(
         skill_names=resolved_skills,
         consumer="interfaces.server.routers.prompts.preview",
     )
-    runtime_system_prompt = compose_runtime_system_prompt(runtime_prompt_sections)
-    provider_system_prompt = compose_provider_system_prompt(runtime_prompt_sections)
+    skill_instructions = tuple(
+        PromptSkillInstruction(name=entry.name, description=entry.description)
+        for entry in skill_prompt_result.system_prompt_skill_instructions
+    )
+    runtime_system_prompt = compose_runtime_system_prompt(
+        runtime_prompt_sections,
+        skill_instructions=skill_instructions,
+    )
+    provider_system_prompt = compose_provider_system_prompt(
+        runtime_prompt_sections,
+        skill_instructions=skill_instructions,
+    )
     user_prompt = skill_prompt_result.user_prompt
 
     return PromptPreviewResponse(
         role_id=role.role_id,
         objective=objective,
         tools=resolved_tools,
-        skills=resolved_skills,
+        skills=skill_prompt_result.routing.authorized_skills,
         runtime_system_prompt=runtime_system_prompt,
         provider_system_prompt=provider_system_prompt,
         user_prompt=user_prompt,

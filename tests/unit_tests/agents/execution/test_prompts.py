@@ -391,7 +391,7 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     )
 
 
-def test_compose_system_prompt_keeps_system_prompt_free_of_skill_catalog() -> None:
+def test_compose_system_prompt_renders_skill_catalog_when_provided() -> None:
     prompt = compose_system_prompt(
         SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
@@ -405,13 +405,12 @@ def test_compose_system_prompt_keeps_system_prompt_free_of_skill_catalog() -> No
     )
 
     assert "## Tool Rules" not in prompt
-    assert "## Available Skills" not in prompt
-    assert "- time: Normalize all times to UTC." not in prompt
+    assert "## Available Skills" in prompt
+    assert "- time: Normalize all times to UTC." in prompt
+    assert "Use `load_skill` when a listed skill is relevant" in prompt
 
 
-def test_compose_system_prompt_keeps_capability_summary_before_workspace_context() -> (
-    None
-):
+def test_compose_system_prompt_places_skill_catalog_before_capability_summary() -> None:
     prompt = compose_system_prompt(
         SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
@@ -428,10 +427,10 @@ def test_compose_system_prompt_keeps_capability_summary_before_workspace_context
         )
     )
 
+    assert prompt.index("## Available Skills") < prompt.index("## Available Roles")
     assert prompt.index("## Available Roles") < prompt.index(
         "## Runtime Environment Information"
     )
-    assert "## Available Skills" not in prompt
 
 
 def test_user_prompt_builder_returns_raw_objective() -> None:

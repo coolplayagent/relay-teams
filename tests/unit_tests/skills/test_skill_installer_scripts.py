@@ -227,7 +227,7 @@ def test_bind_skill_script_updates_main_agent_role(tmp_path: Path) -> None:
     role_path = tmp_path / ".agent-teams" / "roles" / "MainAgent.md"
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
-    assert "- demo-skill" in role_text
+    assert "- app:demo-skill" in role_text
     assert "Updated roles: MainAgent" in result.stdout
     assert result.stderr == ""
 
@@ -257,7 +257,7 @@ def test_bind_skill_script_defaults_to_current_role_env(tmp_path: Path) -> None:
     role_path = tmp_path / ".agent-teams" / "roles" / "Crafter.md"
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
-    assert "- demo-skill" in role_text
+    assert "- app:demo-skill" in role_text
     assert "Updated roles: Crafter" in result.stdout
 
 
@@ -293,8 +293,8 @@ def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> No
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
     assert "role_id: MainAgent" in role_text
-    assert "- skill-installer" in role_text
-    assert "- demo-skill" in role_text
+    assert "- builtin:skill-installer" in role_text
+    assert "- app:demo-skill" in role_text
 
 
 def test_resolve_role_mount_targets_defaults_to_current_role_env(

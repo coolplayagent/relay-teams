@@ -157,14 +157,18 @@ class _FakeSkillRuntimeService:
         consumer: str,
     ) -> SkillPromptResult:
         _ = conversation_context
-        visible_skills = role.skills if skill_names is None else skill_names
+        resolved_skills = role.skills if skill_names is None else skill_names
+        visible_skills = tuple(
+            name.removeprefix("builtin:").removeprefix("app:")
+            for name in resolved_skills
+        )
         self.calls.append(
             {
                 "role_id": role.role_id,
                 "objective": objective,
                 "shared_state_snapshot": shared_state_snapshot,
                 "orchestration_prompt": orchestration_prompt,
-                "skill_names": visible_skills,
+                "skill_names": resolved_skills,
                 "consumer": consumer,
             }
         )
@@ -173,23 +177,33 @@ class _FakeSkillRuntimeService:
             "planner": "Break objectives into executable plans.",
         }
         user_prompt = objective.strip()
-        if user_prompt and visible_skills:
+        system_prompt_skill_instructions: tuple[SkillInstructionEntry, ...] = ()
+        mode = SkillRoutingMode.PASSTHROUGH
+        if len(visible_skills) <= 8:
+            system_prompt_skill_instructions = tuple(
+                SkillInstructionEntry(
+                    name=name,
+                    description=descriptions[name],
+                )
+                for name in visible_skills
+            )
+        elif user_prompt and visible_skills:
+            mode = SkillRoutingMode.SEARCH
             user_prompt = (
                 user_prompt
                 + "\n\n## Skill Candidates\n"
                 + "\n".join(
-                    f"- {name.removeprefix('builtin:').removeprefix('app:')}: "
-                    f"{descriptions[name.removeprefix('builtin:').removeprefix('app:')]}"
-                    for name in visible_skills
+                    f"- {name}: {descriptions[name]}" for name in visible_skills
                 )
             )
         return SkillPromptResult(
             user_prompt=user_prompt,
+            system_prompt_skill_instructions=system_prompt_skill_instructions,
             routing=SkillRoutingResult(
                 authorized_skills=visible_skills,
                 visible_skills=visible_skills,
                 diagnostics=SkillRoutingDiagnostics(
-                    mode=SkillRoutingMode.PASSTHROUGH,
+                    mode=mode,
                     query_text=(
                         ""
                         if not objective.strip()
@@ -301,7 +315,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     payload = response.json()
     assert payload["role_id"] == "coordinator_agent"
     assert payload["tools"] == ["dispatch_task"]
-    assert payload["skills"] == ["builtin:time"]
+    assert payload["skills"] == ["time"]
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
     assert "## Runtime Rules" in payload["runtime_system_prompt"]
     assert "## Available Roles" in payload["runtime_system_prompt"]
@@ -330,14 +344,13 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     )
     assert "- Skills: planner" in payload["runtime_system_prompt"]
     assert "priority" not in payload["runtime_system_prompt"]
-    assert "## Available Skills" not in payload["runtime_system_prompt"]
-    assert "## Available Skills" not in payload["provider_system_prompt"]
+    assert "## Available Skills" in payload["runtime_system_prompt"]
+    assert "- time: Normalize all times to UTC." in payload["runtime_system_prompt"]
+    assert "## Available Skills" in payload["provider_system_prompt"]
     assert payload["provider_system_prompt"] == payload["runtime_system_prompt"]
-    assert payload["user_prompt"].startswith("Deliver summary")
-    assert "## Skill Candidates" in payload["user_prompt"]
-    assert "- time: Normalize all times to UTC." in payload["user_prompt"]
+    assert payload["user_prompt"] == "Deliver summary"
     assert payload["skill_routing"]["mode"] == "passthrough"
-    assert payload["skill_routing"]["visible_skills"] == ["builtin:time"]
+    assert payload["skill_routing"]["visible_skills"] == ["time"]
     assert "## Available Roles" in payload["provider_system_prompt"]
 
 
@@ -440,10 +453,10 @@ def test_prompts_preview_skill_override_replaces_role_default() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["objective"] == ""
-    assert payload["skills"] == ["builtin:planner"]
+    assert payload["skills"] == ["planner"]
     assert payload["user_prompt"] == ""
-    assert payload["skill_routing"]["visible_skills"] == ["builtin:planner"]
-    assert "## Available Skills" not in payload["runtime_system_prompt"]
+    assert payload["skill_routing"]["visible_skills"] == ["planner"]
+    assert "## Available Skills" in payload["runtime_system_prompt"]
 
 
 def test_prompts_preview_passes_orchestration_prompt_to_skill_runtime_service() -> None:

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 import re
+from collections.abc import Sequence
 
 from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
@@ -21,7 +21,7 @@ from agent_teams.retrieval import (
 )
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from agent_teams.skills.skill_models import Skill
+from agent_teams.skills.skill_models import Skill, SkillInstructionEntry, SkillScope
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.skills.skill_routing_models import (
     SkillPromptResult,
@@ -72,7 +72,7 @@ class SkillIndexService:
     ) -> tuple[RetrievalDocument, ...]:
         return tuple(
             _build_skill_document(skill=skill, scope_config=self._scope_config)
-            for skill in skill_registry.list_skill_definitions()
+            for skill in _preferred_skills(skill_registry.list_skill_definitions())
         )
 
 
@@ -230,19 +230,43 @@ class SkillRuntimeService:
         skill_names: tuple[str, ...] | None = None,
         consumer: str,
     ) -> SkillPromptResult:
-        routing = self.route_for_role(
+        authorized_skills = self._resolve_authorized_skills(
+            skill_names=role.skills if skill_names is None else skill_names,
+            consumer=consumer,
+        )
+        routing = self._route_for_authorized_skills(
             role=role,
             objective=objective,
             shared_state_snapshot=shared_state_snapshot,
             conversation_context=conversation_context,
             orchestration_prompt=orchestration_prompt,
-            skill_names=skill_names,
-            consumer=consumer,
+            authorized_skills=authorized_skills,
         )
+        authorized_skill_map = _skill_map_by_name(authorized_skills)
+        instruction_entries = self._instruction_entries_for_names(
+            skill_names=routing.authorized_skills,
+            skill_map=authorized_skill_map,
+        )
+        if routing.diagnostics.mode == SkillRoutingMode.PASSTHROUGH:
+            return SkillPromptResult(
+                user_prompt=build_user_prompt(
+                    UserPromptBuildInput(objective=objective.strip())
+                ),
+                system_prompt_skill_instructions=instruction_entries,
+                routing=routing,
+            )
+
         resolved_objective = objective.strip()
         if not resolved_objective:
-            return SkillPromptResult(user_prompt="", routing=routing)
-        entries = self._skill_registry.get_instruction_entries(routing.visible_skills)
+            return SkillPromptResult(
+                user_prompt="",
+                system_prompt_skill_instructions=(),
+                routing=routing,
+            )
+        visible_entries = self._instruction_entries_for_names(
+            skill_names=routing.visible_skills,
+            skill_map=authorized_skill_map,
+        )
         user_prompt = build_user_prompt(
             UserPromptBuildInput(
                 objective=resolved_objective,
@@ -251,11 +275,15 @@ class SkillRuntimeService:
                         name=entry.name,
                         description=entry.description,
                     )
-                    for entry in entries
+                    for entry in visible_entries
                 ),
             )
         )
-        return SkillPromptResult(user_prompt=user_prompt, routing=routing)
+        return SkillPromptResult(
+            user_prompt=user_prompt,
+            system_prompt_skill_instructions=(),
+            routing=routing,
+        )
 
     def route_for_role(
         self,
@@ -268,10 +296,31 @@ class SkillRuntimeService:
         skill_names: tuple[str, ...] | None = None,
         consumer: str,
     ) -> SkillRoutingResult:
-        authorized_skills = self._skill_registry.resolve_known(
-            role.skills if skill_names is None else skill_names,
-            strict=False,
+        authorized_skills = self._resolve_authorized_skills(
+            skill_names=role.skills if skill_names is None else skill_names,
             consumer=consumer,
+        )
+        return self._route_for_authorized_skills(
+            role=role,
+            objective=objective,
+            shared_state_snapshot=shared_state_snapshot,
+            conversation_context=conversation_context,
+            orchestration_prompt=orchestration_prompt,
+            authorized_skills=authorized_skills,
+        )
+
+    def _route_for_authorized_skills(
+        self,
+        *,
+        role: RoleDefinition,
+        objective: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        conversation_context: RuntimePromptConversationContext | None,
+        orchestration_prompt: str,
+        authorized_skills: tuple[Skill, ...],
+    ) -> SkillRoutingResult:
+        authorized_skill_names = tuple(
+            skill.metadata.name for skill in authorized_skills
         )
         with trace_span(
             LOGGER,
@@ -279,11 +328,11 @@ class SkillRuntimeService:
             operation="route_for_role",
             attributes={
                 "role_id": role.role_id,
-                "authorized_count": len(authorized_skills),
+                "authorized_count": len(authorized_skill_names),
             },
         ):
             result = self._routing_service.route(
-                authorized_skills=authorized_skills,
+                authorized_skills=authorized_skill_names,
                 context=SkillRoutingContext(
                     objective=objective.strip(),
                     role_name=role.name,
@@ -315,6 +364,55 @@ class SkillRuntimeService:
         )
         return result
 
+    def _resolve_authorized_skills(
+        self,
+        *,
+        skill_names: tuple[str, ...],
+        consumer: str,
+    ) -> tuple[Skill, ...]:
+        resolved_refs = self._skill_registry.resolve_known(
+            skill_names,
+            strict=False,
+            consumer=consumer,
+        )
+        ordered_names: list[str] = []
+        preferred_by_name: dict[str, Skill] = {}
+        for ref in resolved_refs:
+            skill = self._skill_registry.get_skill_definition(ref)
+            if skill is None:
+                continue
+            name = skill.metadata.name
+            if name not in preferred_by_name:
+                ordered_names.append(name)
+                preferred_by_name[name] = skill
+                continue
+            current = preferred_by_name[name]
+            if _skill_display_sort_key(skill) < _skill_display_sort_key(current):
+                preferred_by_name[name] = skill
+        return tuple(preferred_by_name[name] for name in ordered_names)
+
+    def _instruction_entries_for_names(
+        self,
+        *,
+        skill_names: tuple[str, ...],
+        skill_map: dict[str, Skill],
+    ) -> tuple[SkillInstructionEntry, ...]:
+        entries: list[SkillInstructionEntry] = []
+        for name in skill_names:
+            skill = skill_map.get(name)
+            if skill is None:
+                continue
+            description = skill.metadata.description.strip()
+            if not description:
+                continue
+            entries.append(
+                SkillInstructionEntry(
+                    name=skill.metadata.name,
+                    description=description,
+                )
+            )
+        return tuple(entries)
+
 
 def build_skill_routing_query_text(context: SkillRoutingContext) -> str:
     sections: list[str] = []
@@ -334,9 +432,7 @@ def build_skill_routing_query_text(context: SkillRoutingContext) -> str:
         ]
         if shared_state_lines:
             sections.append("Shared State:\n" + "\n".join(shared_state_lines))
-    conversation_lines = _conversation_context_lines(
-        context=context,
-    )
+    conversation_lines = _conversation_context_lines(context=context)
     if conversation_lines:
         sections.append("Conversation Context:\n" + "\n".join(conversation_lines))
     if context.orchestration_prompt.strip():
@@ -452,3 +548,19 @@ def _select_visible_skills(
         if len(visible_skills) == top_k:
             break
     return tuple(visible_skills)
+
+
+def _preferred_skills(skills: Sequence[Skill]) -> tuple[Skill, ...]:
+    preferred_by_name: dict[str, Skill] = {}
+    for skill in sorted(skills, key=_skill_display_sort_key):
+        preferred_by_name.setdefault(skill.metadata.name, skill)
+    return tuple(preferred_by_name[name] for name in sorted(preferred_by_name))
+
+
+def _skill_map_by_name(skills: Sequence[Skill]) -> dict[str, Skill]:
+    return {skill.metadata.name: skill for skill in skills}
+
+
+def _skill_display_sort_key(skill: Skill) -> tuple[str, int, str]:
+    scope_priority = 0 if skill.scope == SkillScope.APP else 1
+    return (skill.metadata.name, scope_priority, skill.ref)

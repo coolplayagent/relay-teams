@@ -309,19 +309,23 @@ class SkillRegistry(BaseModel):
                 role_id=ctx.deps.role_id,
                 tool_call_id=ctx.tool_call_id,
             ):
+                role = _get_effective_role_for_skill_load(
+                    skill_registry=self,
+                    ctx=ctx,
+                )
                 _raise_if_skill_unauthorized(
                     skill_registry=self,
                     ctx=ctx,
                     skill_name=name,
                 )
-                resolved_names = self.resolve_known(
-                    (name,),
-                    strict=False,
-                    consumer="skills.registry.load_skill",
+                resolved_name = _resolve_skill_ref_for_role(
+                    skill_registry=self,
+                    role=role,
+                    requested_name=name,
                 )
-                if not resolved_names:
+                if resolved_name is None:
                     raise KeyError(f"Skill not found: {name}")
-                skill = self.get_skill_definition(resolved_names[0])
+                skill = self.get_skill_definition(resolved_name)
                 if skill is None:
                     raise KeyError(f"Skill not found: {name}")
                 result = _skill_to_json(skill)
@@ -362,7 +366,9 @@ class SkillRegistry(BaseModel):
         *,
         strict: bool,
         consumer: str | None,
-    ) -> tuple[dict[str, Skill], tuple[str, ...], tuple[str, ...], dict[str, tuple[str, ...]]]:
+    ) -> tuple[
+        dict[str, Skill], tuple[str, ...], tuple[str, ...], dict[str, tuple[str, ...]]
+    ]:
         skill_map = self._get_effective_skill_map()
         skill_name_index = self._get_skill_name_index(skill_map)
         resolved_names: list[str] = []
@@ -409,10 +415,7 @@ class SkillRegistry(BaseModel):
         indexed: dict[str, list[Skill]] = {}
         for skill in sorted(skill_map.values(), key=_skill_sort_key):
             indexed.setdefault(skill.metadata.name, []).append(skill)
-        return {
-            name: tuple(skills)
-            for name, skills in indexed.items()
-        }
+        return {name: tuple(skills) for name, skills in indexed.items()}
 
     def _log_ignored_unknown_skills(
         self,
@@ -594,19 +597,14 @@ def _raise_if_skill_unauthorized(
         skill_registry=skill_registry,
         ctx=ctx,
     )
-    authorized_skills = skill_registry.resolve_known(
-        role.skills,
-        strict=False,
-        consumer="skills.registry.load_skill.authorization",
-    )
-    requested_skills = skill_registry.resolve_known(
-        (skill_name,),
-        strict=False,
-        consumer="skills.registry.load_skill.authorization.requested",
-    )
-    if requested_skills and requested_skills[0] in authorized_skills:
-        return
-    if skill_name in authorized_skills:
+    if (
+        _resolve_skill_ref_for_role(
+            skill_registry=skill_registry,
+            role=role,
+            requested_name=skill_name,
+        )
+        is not None
+    ):
         return
     raise PermissionError(
         f"Role {role.role_id} is not authorized to load skill: {skill_name}"
@@ -628,6 +626,36 @@ def _get_effective_role_for_skill_load(
         except KeyError:
             pass
     return ctx.deps.role_registry.get(ctx.deps.role_id)
+
+
+def _resolve_skill_ref_for_role(
+    *,
+    skill_registry: SkillRegistry,
+    role: object,
+    requested_name: str,
+) -> str | None:
+    requested = requested_name.strip()
+    if not requested:
+        return None
+    authorized_refs = skill_registry.resolve_known(
+        tuple(str(item) for item in getattr(role, "skills", ())),
+        strict=False,
+        consumer="skills.registry.load_skill.authorization",
+    )
+    authorized_set = set(authorized_refs)
+    skill_map = skill_registry._get_effective_skill_map()
+    if requested in skill_map:
+        return requested if requested in authorized_set else None
+    parsed_ref = parse_skill_ref(requested)
+    if parsed_ref is not None:
+        return None
+    candidates = skill_registry._get_skill_name_index(skill_map).get(requested, ())
+    for candidate in candidates:
+        if candidate.ref in authorized_set:
+            return candidate.ref
+    if requested in authorized_set:
+        return requested
+    return None
 
 
 def _skill_sort_key(skill: Skill) -> tuple[str, int, str]:
