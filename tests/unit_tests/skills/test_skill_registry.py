@@ -308,6 +308,71 @@ def test_load_skill_rejects_role_unauthorized_skill(tmp_path: Path) -> None:
     )
     registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
 
+
+def test_load_skill_prefers_app_scope_for_ambiguous_plain_name(
+    tmp_path: Path,
+) -> None:
+    app_skill_dir = tmp_path / ".agent-teams" / "skills" / "deepresearch"
+    builtin_skill_dir = tmp_path / "builtin" / "skills" / "deepresearch"
+    app_skill_dir.mkdir(parents=True)
+    builtin_skill_dir.mkdir(parents=True)
+    (app_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: deepresearch\n"
+        "description: app deepresearch\n"
+        "---\n"
+        "Use app deepresearch.\n",
+        encoding="utf-8",
+    )
+    (builtin_skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: deepresearch\n"
+        "description: builtin deepresearch\n"
+        "---\n"
+        "Use builtin deepresearch.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry.from_skill_dirs(
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
+        builtin_skills_dir=tmp_path / "builtin" / "skills",
+    )
+    ctx = _FakeCtx()
+    ctx.deps.role_registry = RoleRegistry()
+    ctx.deps.role_registry.register(
+        RoleDefinition(
+            role_id="spec_coder",
+            name="Spec Coder",
+            description="Implements requested changes.",
+            version="1",
+            tools=(),
+            skills=("deepresearch",),
+            system_prompt="Implement tasks.",
+        )
+    )
+
+    result = asyncio.run(
+        registry.load_skill(
+            cast(ToolContext, cast(object, ctx)),
+            name="deepresearch",
+        )
+    )
+
+    assert result["ok"] is True
+    data = cast(dict[str, JsonValue], result["data"])
+    assert data["ref"] == "app:deepresearch"
+    assert data["description"] == "app deepresearch"
+    assert data["instructions"] == "Use app deepresearch."
+
+
+def test_load_skill_rejects_role_unauthorized_skill(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "planner"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: planner\ndescription: planning helper\n---\nPlan the work.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
+
     result = asyncio.run(
         registry.load_skill(
             cast(ToolContext, cast(object, _FakeCtx())),

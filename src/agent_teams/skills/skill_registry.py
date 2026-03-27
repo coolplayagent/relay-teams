@@ -134,7 +134,9 @@ class SkillRegistry(BaseModel):
                 self.load_skill,
                 name="load_skill",
                 description=(
-                    "Load a specific skill by canonical ref or unique name, "
+                    "Load a specific skill by canonical ref or name. "
+                    "If multiple scopes share the same name, the app-scoped skill "
+                    "is preferred. "
                     "including its instructions and selected absolute file paths."
                 ),
             ),
