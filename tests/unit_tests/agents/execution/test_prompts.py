@@ -18,6 +18,7 @@ from agent_teams.agents.execution.system_prompts import (
 )
 from agent_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
+    UserPromptSkillCandidate,
     build_user_prompt,
 )
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -390,7 +391,7 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     )
 
 
-def test_compose_system_prompt_renders_tools_and_skills() -> None:
+def test_compose_system_prompt_keeps_system_prompt_free_of_skill_catalog() -> None:
     prompt = compose_system_prompt(
         SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
@@ -404,15 +405,13 @@ def test_compose_system_prompt_renders_tools_and_skills() -> None:
     )
 
     assert "## Tool Rules" not in prompt
-    assert "## Available Skills" in prompt
-    assert "- time: Normalize all times to UTC." in prompt
-    assert "Use `load_skill` when a listed skill is relevant" in prompt
-    assert "selected absolute file paths for the skill directory" in prompt
-    assert "Use `read_skill_resource`" not in prompt
-    assert "Use `run_skill_script`" not in prompt
+    assert "## Available Skills" not in prompt
+    assert "- time: Normalize all times to UTC." not in prompt
 
 
-def test_compose_system_prompt_places_skill_catalog_before_workspace_context() -> None:
+def test_compose_system_prompt_keeps_capability_summary_before_workspace_context() -> (
+    None
+):
     prompt = compose_system_prompt(
         SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
@@ -429,9 +428,10 @@ def test_compose_system_prompt_places_skill_catalog_before_workspace_context() -
         )
     )
 
-    assert prompt.index("## Available Skills") < prompt.index(
+    assert prompt.index("## Available Roles") < prompt.index(
         "## Runtime Environment Information"
     )
+    assert "## Available Skills" not in prompt
 
 
 def test_user_prompt_builder_returns_raw_objective() -> None:
@@ -440,6 +440,24 @@ def test_user_prompt_builder_returns_raw_objective() -> None:
     )
 
     assert prompt == "Draft the release notes."
+
+
+def test_user_prompt_builder_appends_skill_candidates() -> None:
+    prompt = build_user_prompt(
+        UserPromptBuildInput(
+            objective="Draft the release notes.",
+            skill_candidates=(
+                UserPromptSkillCandidate(
+                    name="planner",
+                    description="Break objectives into executable plans.",
+                ),
+            ),
+        )
+    )
+
+    assert prompt.startswith("Draft the release notes.")
+    assert "## Skill Candidates" in prompt
+    assert "- planner: Break objectives into executable plans." in prompt
 
 
 def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> None:

@@ -13,6 +13,7 @@ from agent_teams.metrics.models import (
     ObservabilityBreakdownRow,
     ObservabilityKpiSet,
     ObservabilityOverview,
+    ObservabilityRoleBreakdownRow,
     ObservabilityTrendPoint,
 )
 from agent_teams.metrics.query_service import MetricsQueryService
@@ -47,6 +48,7 @@ __all__ = [
     "ObservabilityBreakdownRow",
     "ObservabilityKpiSet",
     "ObservabilityOverview",
+    "ObservabilityRoleBreakdownRow",
     "ObservabilityTrendPoint",
     "PrettyLogSink",
     "SqliteMetricAggregateStore",

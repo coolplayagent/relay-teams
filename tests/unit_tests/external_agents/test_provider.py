@@ -631,6 +631,50 @@ async def test_external_acp_prompt_includes_system_prompt_and_host_server(
 
 
 @pytest.mark.asyncio
+async def test_external_acp_prompt_keeps_skill_candidates_in_user_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text=(
+            "Summarize the architecture.\n\n"
+            "## Skill Candidates\n"
+            "- time: Normalize all times to UTC."
+        ),
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    prompt_payload = transport.requests[2][1]
+    prompt_parts = cast(list[dict[str, object]], prompt_payload["prompt"])
+    prompt_text = str(prompt_parts[0]["text"])
+    assert "## Role Prompt\nProvider system prompt text." in prompt_text
+    assert "## Skill Candidates" in prompt_text
+    assert (
+        "## User Prompt\nSummarize the architecture.\n\n## Skill Candidates\n- time: Normalize all times to UTC."
+        in prompt_text
+    )
+
+
+@pytest.mark.asyncio
 async def test_external_acp_refreshes_remote_session_when_prompt_scoped_mcp_signature_changes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

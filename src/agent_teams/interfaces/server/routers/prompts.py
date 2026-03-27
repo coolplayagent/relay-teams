@@ -12,28 +12,30 @@ from agent_teams.interfaces.server.deps import (
     get_mcp_registry,
     get_role_registry,
     get_skill_registry,
+    get_skill_runtime_service,
     get_tool_registry,
     get_workspace_manager,
     get_workspace_service,
 )
 from agent_teams.agents.execution.system_prompts import (
-    PromptSkillInstruction,
     RuntimePromptBuildInput,
     RuntimePromptBuilder,
     compose_provider_system_prompt,
     compose_runtime_system_prompt,
 )
-from agent_teams.agents.execution.user_prompts import (
-    UserPromptBuildInput,
-    build_user_prompt,
-)
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.paths import get_app_config_dir
+from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.role_registry import is_coordinator_role_definition
 
 from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.skills.skill_routing_models import SkillRoutingDiagnostics
+from agent_teams.skills.skill_routing_service import SkillRuntimeService
 from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from agent_teams.tools.registry import ToolRegistry
+from agent_teams.sessions.runs.run_models import RunTopologySnapshot
+from agent_teams.sessions.session_models import SessionMode
+from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
@@ -49,6 +51,7 @@ class PromptPreviewRequest(BaseModel):
     tools: tuple[str, ...] | None = None
     skills: tuple[str, ...] | None = None
     conversation_context: RuntimePromptConversationContext | None = None
+    orchestration_prompt: str | None = None
 
 
 class PromptPreviewResponse(BaseModel):
@@ -61,6 +64,7 @@ class PromptPreviewResponse(BaseModel):
     runtime_system_prompt: str
     provider_system_prompt: str
     user_prompt: str
+    skill_routing: SkillRoutingDiagnostics | None = None
 
 
 @router.post(":preview", response_model=PromptPreviewResponse)
@@ -70,6 +74,9 @@ async def preview_prompts(
     tool_registry: Annotated[ToolRegistry, Depends(get_tool_registry)],
     mcp_registry: Annotated[McpRegistry, Depends(get_mcp_registry)],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
+    skill_runtime_service: Annotated[
+        SkillRuntimeService, Depends(get_skill_runtime_service)
+    ],
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
     workspace_manager: Annotated[WorkspaceManager, Depends(get_workspace_manager)],
 ) -> PromptPreviewResponse:
@@ -78,19 +85,33 @@ async def preview_prompts(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    resolved_tools = req.tools if req.tools is not None else role.tools
-    resolved_skills = req.skills if req.skills is not None else role.skills
+    if req.tools is not None:
+        resolved_tools = req.tools
+        try:
+            tool_registry.validate_known(resolved_tools)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        resolved_tools = tool_registry.resolve_known(
+            role.tools,
+            context=ToolResolutionContext(session_id="prompt-preview"),
+            strict=False,
+            consumer="interfaces.server.routers.prompts.preview",
+        )
+    if req.skills is not None:
+        resolved_skills = req.skills
+        try:
+            skill_registry.validate_known(resolved_skills)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        resolved_skills = skill_registry.resolve_known(
+            role.skills,
+            strict=False,
+            consumer="interfaces.server.routers.prompts.preview",
+        )
     objective = req.objective.strip() if req.objective else ""
-
-    try:
-        tool_registry.validate_known(resolved_tools)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    try:
-        skill_registry.validate_known(resolved_skills)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    shared_state_snapshot = _to_shared_state_snapshot(req.shared_state)
 
     working_directory = None
     worktree_root = None
@@ -118,29 +139,28 @@ async def preview_prompts(
     ).build_details(
         RuntimePromptBuildInput(
             role=role,
-            shared_state_snapshot=_to_shared_state_snapshot(req.shared_state),
+            topology=_preview_topology(
+                role=role,
+                orchestration_prompt=req.orchestration_prompt,
+            ),
+            shared_state_snapshot=shared_state_snapshot,
             working_directory=working_directory,
             worktree_root=worktree_root,
             conversation_context=req.conversation_context,
         )
     )
-    skill_instructions = tuple(
-        PromptSkillInstruction(name=entry.name, description=entry.description)
-        for entry in skill_registry.get_instruction_entries(resolved_skills)
+    skill_prompt_result = skill_runtime_service.prepare_prompt(
+        role=role,
+        objective=objective,
+        shared_state_snapshot=shared_state_snapshot,
+        conversation_context=req.conversation_context,
+        orchestration_prompt=str(req.orchestration_prompt or "").strip(),
+        skill_names=resolved_skills,
+        consumer="interfaces.server.routers.prompts.preview",
     )
-    runtime_system_prompt = compose_runtime_system_prompt(
-        runtime_prompt_sections,
-        skill_instructions=skill_instructions,
-    )
-    provider_system_prompt = compose_provider_system_prompt(
-        runtime_prompt_sections,
-        skill_instructions=skill_instructions,
-    )
-    user_prompt = (
-        build_user_prompt(UserPromptBuildInput(objective=objective))
-        if objective
-        else ""
-    )
+    runtime_system_prompt = compose_runtime_system_prompt(runtime_prompt_sections)
+    provider_system_prompt = compose_provider_system_prompt(runtime_prompt_sections)
+    user_prompt = skill_prompt_result.user_prompt
 
     return PromptPreviewResponse(
         role_id=role.role_id,
@@ -150,6 +170,7 @@ async def preview_prompts(
         runtime_system_prompt=runtime_system_prompt,
         provider_system_prompt=provider_system_prompt,
         user_prompt=user_prompt,
+        skill_routing=skill_prompt_result.routing.diagnostics,
     )
 
 
@@ -177,3 +198,20 @@ def _json_value_to_text(value: JsonValue) -> str:
     if isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def _preview_topology(
+    *,
+    role: RoleDefinition,
+    orchestration_prompt: str | None,
+) -> RunTopologySnapshot | None:
+    resolved_orchestration_prompt = str(orchestration_prompt or "").strip()
+    if not resolved_orchestration_prompt or not is_coordinator_role_definition(role):
+        return None
+    return RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id=role.role_id,
+        normal_root_role_id=role.role_id,
+        coordinator_role_id=role.role_id,
+        orchestration_prompt=resolved_orchestration_prompt,
+    )
