@@ -213,6 +213,8 @@ Zed renders your own user message itself, so the gateway does not send a second 
 
 Formatting of streamed assistant text is preserved. Multi-line answers, indentation, and blank lines should render correctly in a new thread after upgrading.
 
+If a run is interrupted and later resumed through ACP `session/resume`, the resumed stream should continue from the last visible breakpoint. Already rendered text must not be replayed from the top again.
+
 ## 8. Verifying MCP-over-ACP in Zed
 
 The shortest manual verification flow is:
@@ -232,6 +234,7 @@ When MCP-over-ACP is working, you should see:
 - the MCP tool name appear in the thread
 - the raw tool input rendered in Zed
 - the tool result streamed back into the reply
+- resumed follow-up output continue from the interruption point rather than replaying the whole prior answer
 
 For example, a Zed-provided Context7 server should surface runtime tool names such as `mcp-server-context7_resolve-library-id` and `mcp-server-context7_query-docs` inside an `agent-teams` thread.
 

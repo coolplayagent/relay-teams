@@ -32,6 +32,8 @@ class FakeSessionService:
         self._counter = 0
         self._sessions: dict[str, SessionRecord] = {}
         self.messages_by_session: dict[str, list[dict[str, object]]] = {}
+        self.global_events_by_session: dict[str, list[dict[str, object]]] = {}
+        self.recovery_snapshot_by_session: dict[str, dict[str, object]] = {}
         self.usage_by_run: dict[str, RunTokenUsage] = {}
 
     def create_session(
@@ -60,6 +62,20 @@ class FakeSessionService:
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
         return list(self.messages_by_session.get(session_id, []))
 
+    def get_global_events(self, session_id: str) -> list[dict[str, object]]:
+        return list(self.global_events_by_session.get(session_id, []))
+
+    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
+        return self.recovery_snapshot_by_session.get(
+            session_id,
+            {
+                "active_run": None,
+                "pending_tool_approvals": [],
+                "paused_subagent": None,
+                "round_snapshot": None,
+            },
+        )
+
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return self.usage_by_run[run_id]
 
@@ -72,6 +88,7 @@ class FakeRunManager:
         self.ensure_started_calls: list[str] = []
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
+        self.stream_calls: list[tuple[str, int]] = []
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
         self._counter += 1
@@ -79,8 +96,19 @@ class FakeRunManager:
         self.create_calls.append(intent.model_copy(deep=True))
         return run_id, run_id
 
-    async def stream_run_events(self, run_id: str) -> AsyncIterator[RunEvent]:
+    async def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+    ) -> AsyncIterator[RunEvent]:
+        self.stream_calls.append((run_id, after_event_id))
         for event in self.events_by_run.get(run_id, ()):
+            if (
+                after_event_id > 0
+                and event.event_id is not None
+                and event.event_id <= after_event_id
+            ):
+                continue
             yield event
 
     def ensure_run_started(self, run_id: str) -> None:
@@ -336,6 +364,174 @@ async def test_session_resume_restarts_active_run_and_returns_result(
     assert run_manager.resume_calls == ["run-9"]
     assert run_manager.ensure_started_calls == ["run-9"]
     assert repository.get(session_id).active_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_session_resume_streams_only_new_events_after_last_seen_event(
+    tmp_path: Path,
+) -> None:
+    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-9"}))
+    session_service.recovery_snapshot_by_session["session-1"] = {
+        "active_run": {
+            "run_id": "run-9",
+            "last_event_id": 3,
+        },
+        "pending_tool_approvals": [],
+        "paused_subagent": None,
+        "round_snapshot": None,
+    }
+    run_manager.events_by_run["run-9"] = (
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.TEXT_DELTA,
+            {"text": "old output"},
+            event_id=1,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.RUN_STOPPED,
+            {},
+            event_id=3,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.TEXT_DELTA,
+            {"text": "new output"},
+            event_id=4,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.RUN_COMPLETED,
+            {},
+            event_id=5,
+        ),
+    )
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/resume",
+            "params": {"sessionId": session_id},
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-9",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
+    assert run_manager.stream_calls == [("run-9", 3)]
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == ["agent_message_chunk"]
+    update = _session_update_payload(notifications[0])
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert content["text"] == "new output"
+
+
+@pytest.mark.asyncio
+async def test_session_resume_suppresses_replayed_text_prefix_from_resumed_stream(
+    tmp_path: Path,
+) -> None:
+    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-9"}))
+    session_service.recovery_snapshot_by_session["session-1"] = {
+        "active_run": {
+            "run_id": "run-9",
+            "last_event_id": 3,
+        },
+        "pending_tool_approvals": [],
+        "paused_subagent": None,
+        "round_snapshot": None,
+    }
+    session_service.global_events_by_session["session-1"] = [
+        {
+            "trace_id": "run-9",
+            "event_type": RunEventType.TEXT_DELTA.value,
+            "payload_json": json.dumps({"text": "LINE0001LINE0002"}),
+        }
+    ]
+    run_manager.events_by_run["run-9"] = (
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.RUN_RESUMED,
+            {"reason": "resume"},
+            event_id=4,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.TEXT_DELTA,
+            {"text": "LINE0001LINE0002"},
+            event_id=5,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.TEXT_DELTA,
+            {"text": "LINE0003"},
+            event_id=6,
+        ),
+        _event(
+            "session-1",
+            "run-9",
+            RunEventType.RUN_COMPLETED,
+            {},
+            event_id=7,
+        ),
+    )
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/resume",
+            "params": {"sessionId": session_id},
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-9",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == ["agent_message_chunk"]
+    update = _session_update_payload(notifications[0])
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert content["text"] == "LINE0003"
 
 
 @pytest.mark.asyncio
@@ -940,6 +1136,8 @@ def _event(
     run_id: str,
     event_type: RunEventType,
     payload: dict[str, JsonValue],
+    *,
+    event_id: int | None = None,
 ) -> RunEvent:
     return RunEvent(
         session_id=session_id,
@@ -947,6 +1145,7 @@ def _event(
         trace_id=run_id,
         event_type=event_type,
         payload_json=json.dumps(payload, ensure_ascii=False),
+        event_id=event_id,
     )
 
 

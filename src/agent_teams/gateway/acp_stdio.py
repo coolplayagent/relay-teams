@@ -60,6 +60,27 @@ class _AcpRunStopResult(BaseModel):
     clear_active_run: bool = True
 
 
+class _ResumeTextSuppressor:
+    def __init__(self, prefix: str) -> None:
+        self._remaining = prefix
+
+    def strip(self, text: str) -> str:
+        if not text or not self._remaining:
+            return text
+        max_common = min(len(self._remaining), len(text))
+        matched = 0
+        while matched < max_common and self._remaining[matched] == text[matched]:
+            matched += 1
+        if matched == 0:
+            self._remaining = ""
+            return text
+        self._remaining = self._remaining[matched:]
+        remainder = text[matched:]
+        if remainder and self._remaining:
+            self._remaining = ""
+        return remainder
+
+
 class AcpGatewayServer:
     def __init__(
         self,
@@ -330,6 +351,16 @@ class AcpGatewayServer:
         run_id = str(record.active_run_id or "").strip()
         if not run_id:
             raise AcpProtocolError(-32602, "Session has no active run to resume")
+        after_event_id = self._resume_after_event_id(
+            internal_session_id=record.internal_session_id,
+            run_id=run_id,
+        )
+        text_suppressor = _ResumeTextSuppressor(
+            self._resume_text_prefix(
+                internal_session_id=record.internal_session_id,
+                run_id=run_id,
+            )
+        )
         with self._mcp_relay.session_scope(gateway_session_id):
             self._run_service.resume_run(run_id)
             self._run_service.ensure_run_started(run_id)
@@ -340,6 +371,8 @@ class AcpGatewayServer:
             result = await self._await_run_stop(
                 gateway_session_id=gateway_session_id,
                 run_id=run_id,
+                after_event_id=after_event_id,
+                text_suppressor=text_suppressor,
             )
 
         self._finalize_active_run_binding(
@@ -361,6 +394,8 @@ class AcpGatewayServer:
         *,
         gateway_session_id: str,
         run_id: str,
+        after_event_id: int = 0,
+        text_suppressor: _ResumeTextSuppressor | None = None,
     ) -> _AcpRunStopResult:
         stop_reason = "end_turn"
         run_status = "running"
@@ -368,10 +403,13 @@ class AcpGatewayServer:
         terminal_error: str | None = None
         clear_active_run = True
 
-        async for event in self._run_service.stream_run_events(run_id):
+        async for event in self._run_service.stream_run_events(
+            run_id, after_event_id=after_event_id
+        ):
             maybe_result = await self._map_run_event(
                 gateway_session_id=gateway_session_id,
                 event=event,
+                text_suppressor=text_suppressor,
             )
             if maybe_result is None:
                 continue
@@ -390,15 +428,63 @@ class AcpGatewayServer:
             )
         raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
 
+    def _resume_after_event_id(self, *, internal_session_id: str, run_id: str) -> int:
+        recovery_snapshot = self._session_service.get_recovery_snapshot(
+            internal_session_id
+        )
+        active_run = recovery_snapshot.get("active_run")
+        if not isinstance(active_run, Mapping):
+            return 0
+        active_run_id = str(active_run.get("run_id") or "").strip()
+        if active_run_id != run_id:
+            return 0
+        last_event_id = active_run.get("last_event_id")
+        if not isinstance(last_event_id, int) or last_event_id < 0:
+            return 0
+        return last_event_id
+
+    def _resume_text_prefix(self, *, internal_session_id: str, run_id: str) -> str:
+        collected: list[str] = []
+        for raw_event in self._session_service.get_global_events(internal_session_id):
+            if not isinstance(raw_event, Mapping):
+                continue
+            if str(raw_event.get("trace_id") or "").strip() != run_id:
+                continue
+            try:
+                event_type = RunEventType(str(raw_event.get("event_type") or ""))
+            except ValueError:
+                continue
+            payload_json = raw_event.get("payload_json")
+            if not isinstance(payload_json, str):
+                continue
+            payload = _load_payload(payload_json)
+            if event_type == RunEventType.TEXT_DELTA:
+                text = _optional_text(payload, "text")
+                if text:
+                    collected.append(text)
+                continue
+            if event_type != RunEventType.OUTPUT_DELTA:
+                continue
+            for content in _typed_output_payload_to_acp_content(payload):
+                if content.get("type") != "text":
+                    continue
+                text = content.get("text")
+                if isinstance(text, str) and text:
+                    collected.append(text)
+        return "".join(collected)
+
     async def _map_run_event(
         self,
         *,
         gateway_session_id: str,
         event: RunEvent,
+        text_suppressor: _ResumeTextSuppressor | None = None,
     ) -> _AcpRunStopResult | None:
         payload = _load_payload(event.payload_json)
         if event.event_type == RunEventType.TEXT_DELTA:
             text = _optional_text(payload, "text")
+            if text_suppressor is not None and text:
+                text = text_suppressor.strip(text)
             if text:
                 await self._publish_session_update(
                     gateway_session_id,
@@ -413,6 +499,13 @@ class AcpGatewayServer:
             return None
         if event.event_type == RunEventType.OUTPUT_DELTA:
             for content in _typed_output_payload_to_acp_content(payload):
+                if text_suppressor is not None and content.get("type") == "text":
+                    block_text = content.get("text")
+                    if isinstance(block_text, str):
+                        filtered_text = text_suppressor.strip(block_text)
+                        if not filtered_text:
+                            continue
+                        content = {**content, "text": filtered_text}
                 await self._publish_session_update(
                     gateway_session_id,
                     {
@@ -525,7 +618,7 @@ class AcpGatewayServer:
                 run_status="stopped",
                 recoverable=True,
                 error_message=None,
-                clear_active_run=True,
+                clear_active_run=False,
             )
         if event.event_type == RunEventType.RUN_FAILED:
             error_text = _optional_str(payload, "error") or "Run failed"

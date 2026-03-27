@@ -376,6 +376,8 @@ ACP-specific paused run behavior:
 - `session/prompt` should treat `run_paused` as the end of the current turn, not as a protocol error.
 - gateway session state must keep `active_run_id` while a run is paused for `awaiting_recovery`.
 - `session/resume` resumes the gateway session's active recoverable run and starts a new event watch cycle.
+- if the runtime replays already-emitted text while re-attaching the resumed watcher, the ACP bridge must suppress the previously delivered prefix and only forward the new continuation tail to the host.
+- the resume stream contract is "continue from the interruption point", not "re-send the already rendered answer".
 
 ### 11.2 Event Sources
 
