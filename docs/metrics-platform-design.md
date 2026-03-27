@@ -86,3 +86,6 @@ HTTP API:
 
 Frontend:
 - topbar `Observability` view
+  - cached vs uncached input token split
+  - retrieval search volume/failure/latency/index-size KPIs
+  - tool breakdown and role breakdown panels

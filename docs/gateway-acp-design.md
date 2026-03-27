@@ -337,6 +337,12 @@ This affects at least:
 - provider factory wiring
 - task execution runtime
 
+Skill-routing note:
+
+- gateway ACP stdio continues to reuse the internal runtime prompt pipeline
+- routed skill candidates therefore appear only in the per-turn user prompt appendix
+- gateway ACP must not add protocol fields just to carry skill-routing metadata
+
 ## 10. Bridge Strategy for MCP-over-ACP
 
 The current execution stack is not ACP-native.

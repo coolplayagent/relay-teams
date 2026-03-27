@@ -17,11 +17,14 @@ from agent_teams.agents.execution.prompt_instruction_state import (
 )
 from agent_teams.agents.execution.system_prompts import (
     PromptBuildInput,
-    PromptSkillInstruction,
     RuntimePromptBuilder,
     RuntimePromptSections,
     compose_provider_system_prompt,
     compose_runtime_system_prompt,
+)
+from agent_teams.agents.execution.user_prompts import (
+    UserPromptBuildInput,
+    build_user_prompt,
 )
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import (
@@ -62,6 +65,7 @@ from agent_teams.tools.registry.registry import ToolResolutionContext
 
 if TYPE_CHECKING:
     from agent_teams.skills.skill_registry import SkillRegistry
+    from agent_teams.skills.skill_routing_service import SkillRuntimeService
     from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -86,6 +90,7 @@ class TaskExecutionService(BaseModel):
     provider_factory: Callable[[RoleDefinition, str | None], object]
     tool_registry: object
     skill_registry: object
+    skill_runtime_service: object | None = None
     mcp_registry: McpRegistry
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
@@ -217,24 +222,28 @@ class TaskExecutionService(BaseModel):
             conversation_id=workspace.ref.conversation_id,
         )
         try:
+            prepared_runtime_snapshot = await self._prepare_runtime_snapshot(
+                role=role_for_run,
+                task=task,
+                working_directory=workspace.resolve_workdir(),
+                worktree_root=workspace.locations.worktree_root or workspace.root_path,
+                shared_state_snapshot=snapshot,
+                objective=self._resolve_turn_objective(
+                    task=task,
+                    user_prompt_override=user_prompt_override,
+                ),
+            )
             self._ensure_committed_task_prompt(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
                 instance_id=instance_id,
                 task=task,
+                user_prompt_text=prepared_runtime_snapshot.user_prompt,
                 user_prompt_override=user_prompt_override,
             )
-            (
-                runtime_prompt_sections,
-                runtime_tools_json,
-            ) = await self._prepare_runtime_snapshot(
-                role=role_for_run,
-                task=task,
-                working_directory=workspace.resolve_workdir(),
-                worktree_root=workspace.locations.worktree_root or workspace.root_path,
-                shared_state_snapshot=snapshot,
-            )
+            runtime_prompt_sections = prepared_runtime_snapshot.prompt_sections
+            runtime_tools_json = prepared_runtime_snapshot.runtime_tools_json
             runtime_system_prompt = self._compose_runtime_system_prompt(
                 role=role_for_run,
                 runtime_prompt_sections=runtime_prompt_sections,
@@ -542,16 +551,19 @@ class TaskExecutionService(BaseModel):
         working_directory: Path | None,
         worktree_root: Path | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
-    ) -> tuple[RuntimePromptSections, str]:
+        objective: str,
+    ) -> PreparedRuntimeSnapshot:
+        topology = self._topology_for_run(task.trace_id)
+        conversation_context = self._conversation_context_for_run(task.trace_id)
         prompt_sections = await self.prompt_builder.build_sections(
             PromptBuildInput(
                 role=role,
                 task=task,
-                topology=self._topology_for_run(task.trace_id),
+                topology=topology,
                 shared_state_snapshot=shared_state_snapshot,
                 working_directory=working_directory,
                 worktree_root=worktree_root,
-                conversation_context=self._conversation_context_for_run(task.trace_id),
+                conversation_context=conversation_context,
             )
         )
         record_prompt_instruction_paths_loaded(
@@ -560,29 +572,22 @@ class TaskExecutionService(BaseModel):
             paths=prompt_sections.local_instruction_paths,
         )
         runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
-        return prompt_sections, json.dumps(
-            runtime_tools.model_dump(mode="json"),
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    def _build_skill_instructions(
-        self,
-        *,
-        role: RoleDefinition,
-    ) -> tuple[PromptSkillInstruction, ...]:
-        skill_registry = cast("SkillRegistry", self.skill_registry)
-        resolved_skills = skill_registry.resolve_known(
-            role.skills,
-            strict=False,
-            consumer="agents.orchestration.task_execution_service.build_skill_instructions",
-        )
-        return tuple(
-            PromptSkillInstruction(
-                name=entry.name,
-                description=entry.description,
-            )
-            for entry in skill_registry.get_instruction_entries(resolved_skills)
+        return PreparedRuntimeSnapshot(
+            prompt_sections=prompt_sections,
+            runtime_tools_json=json.dumps(
+                runtime_tools.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            user_prompt=self._build_user_prompt(
+                role=role,
+                objective=objective,
+                shared_state_snapshot=shared_state_snapshot,
+                conversation_context=conversation_context,
+                orchestration_prompt=(
+                    "" if topology is None else topology.orchestration_prompt
+                ),
+            ),
         )
 
     def _compose_runtime_system_prompt(
@@ -591,10 +596,8 @@ class TaskExecutionService(BaseModel):
         role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
     ) -> str:
-        return compose_runtime_system_prompt(
-            runtime_prompt_sections,
-            skill_instructions=self._build_skill_instructions(role=role),
-        )
+        del role
+        return compose_runtime_system_prompt(runtime_prompt_sections)
 
     def _compose_provider_system_prompt(
         self,
@@ -602,10 +605,8 @@ class TaskExecutionService(BaseModel):
         role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
     ) -> str:
-        return compose_provider_system_prompt(
-            runtime_prompt_sections,
-            skill_instructions=self._build_skill_instructions(role=role),
-        )
+        del role
+        return compose_provider_system_prompt(runtime_prompt_sections)
 
     async def _build_runtime_tools_snapshot(
         self,
@@ -764,10 +765,12 @@ class TaskExecutionService(BaseModel):
         conversation_id: str,
         instance_id: str,
         task: TaskEnvelope,
+        user_prompt_text: str,
         user_prompt_override: str | None,
     ) -> None:
-        prompt = str(user_prompt_override or "").strip()
-        if prompt:
+        prompt = user_prompt_text.strip()
+        override_prompt = str(user_prompt_override or "").strip()
+        if override_prompt:
             self.message_repo.append_user_prompt_if_missing(
                 session_id=task.session_id,
                 workspace_id=workspace_id,
@@ -817,6 +820,18 @@ class TaskExecutionService(BaseModel):
                     ],
                 )
                 return
+        if prompt:
+            self.message_repo.append_user_prompt_if_missing(
+                session_id=task.session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=role_id,
+                instance_id=instance_id,
+                task_id=task.task_id,
+                trace_id=task.trace_id,
+                content=prompt,
+            )
+            return
         self.message_repo.append_user_prompt_if_missing(
             session_id=task.session_id,
             workspace_id=workspace_id,
@@ -827,3 +842,48 @@ class TaskExecutionService(BaseModel):
             trace_id=task.trace_id,
             content=task.objective,
         )
+
+    def _build_user_prompt(
+        self,
+        *,
+        role: RoleDefinition,
+        objective: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        conversation_context: RuntimePromptConversationContext | None,
+        orchestration_prompt: str,
+    ) -> str:
+        resolved_objective = objective.strip()
+        if self.skill_runtime_service is None:
+            return build_user_prompt(UserPromptBuildInput(objective=resolved_objective))
+        skill_runtime_service = cast(
+            "SkillRuntimeService",
+            self.skill_runtime_service,
+        )
+        prepared_prompt = skill_runtime_service.prepare_prompt(
+            role=role,
+            objective=resolved_objective,
+            shared_state_snapshot=shared_state_snapshot,
+            conversation_context=conversation_context,
+            orchestration_prompt=orchestration_prompt,
+            consumer="agents.orchestration.task_execution_service.prepare_prompt",
+        )
+        return prepared_prompt.user_prompt
+
+    def _resolve_turn_objective(
+        self,
+        *,
+        task: TaskEnvelope,
+        user_prompt_override: str | None,
+    ) -> str:
+        prompt_override = str(user_prompt_override or "").strip()
+        if prompt_override:
+            return prompt_override
+        return task.objective.strip()
+
+
+class PreparedRuntimeSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt_sections: RuntimePromptSections
+    runtime_tools_json: str
+    user_prompt: str

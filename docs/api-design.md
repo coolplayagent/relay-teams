@@ -1108,6 +1108,7 @@ Request:
   "role_id": "Coordinator",
   "workspace_id": "default",
   "objective": "Draft release note",
+  "orchestration_prompt": "Delegate by capability and finalize yourself.",
   "shared_state": {"lang": "zh-CN", "priority": 1},
   "conversation_context": {
     "source_provider": "feishu",
@@ -1122,6 +1123,7 @@ Request:
 Notes:
 - `objective` is optional.
 - `workspace_id` is optional.
+- `orchestration_prompt` is optional and participates in skill routing; coordinator preview also renders it into the prompt layers that normally receive runtime orchestration prompt context.
 - `conversation_context` is optional.
 - When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
 - `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `~/.agent-teams/prompts.json`.
@@ -1129,7 +1131,8 @@ Notes:
   `当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。`
 - Other contexts leave the role system prompt unchanged.
 - When `workspace_id` does not exist, the endpoint returns `404`.
-- When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`.
+- Routed skill candidates do not appear in `runtime_system_prompt` or `provider_system_prompt`; they only appear in `user_prompt`.
+- When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`, but `skill_routing` may still report the effective authorized and visible skill sets.
 
 Response:
 
@@ -1141,7 +1144,15 @@ Response:
   "skills": ["time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",
-  "user_prompt": "..."
+  "user_prompt": "...",
+  "skill_routing": {
+    "mode": "passthrough",
+    "query_text": "Objective: Draft release note",
+    "authorized_count": 1,
+    "visible_skills": ["time"],
+    "candidates": [],
+    "fallback_reason": null
+  }
 }
 ```
 
@@ -1388,9 +1399,30 @@ Reloads all WeChat gateway workers against the current persisted account set.
 
 Returns observability KPIs and trend buckets for `scope=global|session|run`. Non-global scopes require `scope_id`.
 
+Overview KPIs include:
+- `steps`
+- `input_tokens`
+- `cached_input_tokens`
+- `uncached_input_tokens`
+- `output_tokens`
+- `cached_token_ratio`
+- `tool_calls`
+- `tool_success_rate`
+- `tool_avg_duration_ms`
+- `skill_calls`
+- `mcp_calls`
+- `retrieval_searches`
+- `retrieval_failure_rate`
+- `retrieval_avg_duration_ms`
+- `retrieval_document_count`
+
 ### `GET /observability/breakdowns`
 
 Returns tool-level breakdown rows for `scope=global|session|run`. Non-global scopes require `scope_id`.
+
+Breakdown payload includes:
+- `rows`: tool-level call/failure/latency breakdown
+- `role_rows`: role-level token/cache/tool-failure breakdown
 
 ## Automation APIs
 

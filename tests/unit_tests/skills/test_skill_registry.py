@@ -287,6 +287,29 @@ def test_load_skill_returns_manifest_and_selected_absolute_file_paths(
     )
 
 
+def test_load_skill_rejects_role_unauthorized_skill(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "planner"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: planner\ndescription: planning helper\n---\nPlan the work.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
+
+    result = asyncio.run(
+        registry.load_skill(
+            cast(ToolContext, cast(object, _FakeCtx())),
+            name="planner",
+        )
+    )
+
+    assert result["ok"] is False
+    error = cast(dict[str, JsonValue], result["error"])
+    assert (
+        error["message"] == "Role spec_coder is not authorized to load skill: planner"
+    )
+
+
 def test_load_skill_omits_large_dependency_trees_from_file_listing(
     tmp_path: Path,
 ) -> None:
@@ -407,9 +430,11 @@ class _FakeDeps:
                 description="Implements requested changes.",
                 version="1",
                 tools=(),
+                skills=("time", "deck"),
                 system_prompt="Implement tasks.",
             )
         )
+        self.runtime_role_resolver = None
         self.run_event_hub = _FakeRunEventHub()
         self.run_control_manager = _FakeRunControlManager()
         self.tool_approval_manager = _FakeApprovalManager()

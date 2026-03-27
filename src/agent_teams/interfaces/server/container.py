@@ -86,6 +86,7 @@ from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from agent_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from agent_teams.providers.model_config_manager import ModelConfigManager
 from agent_teams.providers.model_config_service import ModelConfigService
@@ -122,6 +123,7 @@ from agent_teams.sessions import (
 )
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.skills.skill_routing_service import SkillRuntimeService
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -320,6 +322,14 @@ class ServerContainer:
                 PrettyLogSink(),
                 GrafanaExporterSink(),
             ),
+        )
+        self.retrieval_store = SqliteFts5RetrievalStore(runtime.paths.db_path)
+        self.retrieval_service = RetrievalService(
+            store=self.retrieval_store,
+            metric_recorder=self.metric_recorder,
+        )
+        self.skill_runtime_service = self._build_skill_runtime_service(
+            skill_registry=self.skill_registry
         )
         self.metrics_query_service: MetricsQueryService = MetricsQueryService(
             store=self.metrics_store
@@ -735,6 +745,7 @@ class ServerContainer:
             provider_factory=self._provider_factory,
             tool_registry=self.tool_registry,
             skill_registry=self.skill_registry,
+            skill_runtime_service=self.skill_runtime_service,
             mcp_registry=self.mcp_registry,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
@@ -866,7 +877,11 @@ class ServerContainer:
         self._refresh_coordinator_runtime()
 
     def _on_skill_reloaded(self, skill_registry: SkillRegistry) -> None:
+        skill_runtime_service = self._build_skill_runtime_service(
+            skill_registry=skill_registry
+        )
         self.skill_registry = skill_registry
+        self.skill_runtime_service = skill_runtime_service
         self._refresh_coordinator_runtime()
 
     def _on_proxy_reloaded(self, proxy_config: ProxyEnvConfig) -> None:
@@ -897,3 +912,15 @@ class ServerContainer:
             workspace_id="default",
             root_path=Path.cwd(),
         )
+
+    def _build_skill_runtime_service(
+        self,
+        *,
+        skill_registry: SkillRegistry,
+    ) -> SkillRuntimeService:
+        skill_runtime_service = SkillRuntimeService(
+            skill_registry=skill_registry,
+            retrieval_service=self.retrieval_service,
+        )
+        skill_runtime_service.rebuild_index()
+        return skill_runtime_service

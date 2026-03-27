@@ -115,9 +115,15 @@ The outbound prompt text is packaged as:
 
 - `Role Prompt`: current `request.system_prompt`
 - `Host Tools`: host-tool usage guidance when Agent Teams exposes local tools to the remote agent
-- `User Prompt`: the current user/task prompt text
+- `User Prompt`: the current user/task prompt text, including any routed `## Skill Candidates` appendix
 
 This keeps the remote ACP session aligned with the active runtime role instructions even when the remote session itself is reused across turns.
+
+Cache-safety constraint:
+
+- routed skill candidates must never be injected into `Role Prompt`
+- objective-dependent skill routing text only appears in `User Prompt`
+- this preserves a stable provider system prompt prefix for the bound role while still surfacing relevant skills per turn
 
 ### 6.2 Host Tool Bridge
 

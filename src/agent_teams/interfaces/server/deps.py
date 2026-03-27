@@ -39,6 +39,7 @@ from agent_teams.sessions import SessionService
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
 from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.skills.skill_routing_service import SkillRuntimeService
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.gateway.wechat import WeChatGatewayService
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
@@ -168,6 +169,10 @@ def get_tool_registry(request: Request) -> ToolRegistry:
 
 def get_skill_registry(request: Request) -> SkillRegistry:
     return get_container(request).skill_registry
+
+
+def get_skill_runtime_service(request: Request) -> SkillRuntimeService:
+    return get_container(request).skill_runtime_service
 
 
 def get_metrics_service(request: Request) -> MetricsService:

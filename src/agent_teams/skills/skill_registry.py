@@ -249,6 +249,11 @@ class SkillRegistry(BaseModel):
                 role_id=ctx.deps.role_id,
                 tool_call_id=ctx.tool_call_id,
             ):
+                _raise_if_skill_unauthorized(
+                    skill_registry=self,
+                    ctx=ctx,
+                    skill_name=name,
+                )
                 skill = self.get_skill_definition(name)
                 if skill is None:
                     raise KeyError(f"Skill not found: {name}")
@@ -442,3 +447,42 @@ def _skill_file_sort_key(*, skill_dir: Path, path: Path) -> tuple[int, int, str]
     elif relative_path.parts and relative_path.parts[0] in {"resources", "scripts"}:
         priority = 1
     return (priority, len(relative_path.parts), relative_path.as_posix())
+
+
+def _raise_if_skill_unauthorized(
+    *,
+    skill_registry: SkillRegistry,
+    ctx: ToolContext,
+    skill_name: str,
+) -> None:
+    role = _get_effective_role_for_skill_load(
+        skill_registry=skill_registry,
+        ctx=ctx,
+    )
+    authorized_skills = skill_registry.resolve_known(
+        role.skills,
+        strict=False,
+        consumer="skills.registry.load_skill.authorization",
+    )
+    if skill_name in authorized_skills:
+        return
+    raise PermissionError(
+        f"Role {role.role_id} is not authorized to load skill: {skill_name}"
+    )
+
+
+def _get_effective_role_for_skill_load(
+    *,
+    skill_registry: SkillRegistry,
+    ctx: ToolContext,
+):
+    runtime_role_resolver = getattr(ctx.deps, "runtime_role_resolver", None)
+    if runtime_role_resolver is not None:
+        try:
+            return runtime_role_resolver.get_effective_role(
+                run_id=ctx.deps.run_id,
+                role_id=ctx.deps.role_id,
+            )
+        except KeyError:
+            pass
+    return ctx.deps.role_registry.get(ctx.deps.role_id)

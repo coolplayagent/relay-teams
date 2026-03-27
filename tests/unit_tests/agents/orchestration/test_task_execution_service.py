@@ -14,6 +14,7 @@ from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
@@ -39,6 +40,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.skills.skill_registry import SkillRegistry
+from agent_teams.skills.skill_routing_service import SkillRuntimeService
 from agent_teams.tools.registry import build_default_registry
 from agent_teams.workspace import (
     WorkspaceManager,
@@ -363,6 +365,7 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
+    skill_registry = SkillRegistry.from_config_dirs(app_config_dir=db_path.parent)
     service = TaskExecutionService(
         role_registry=role_registry,
         task_repo=task_repo,
@@ -381,15 +384,43 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
         ),
         provider_factory=lambda _, __=None: provider,
         tool_registry=build_default_registry(),
-        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        skill_registry=skill_registry,
+        skill_runtime_service=SkillRuntimeService(
+            skill_registry=skill_registry,
+            retrieval_service=RetrievalService(
+                store=SqliteFts5RetrievalStore(db_path),
+            ),
+        ),
         mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
     )
-    task, instance_id = _seed_task(
-        task_repo=task_repo,
-        agent_repo=agent_repo,
-        message_repo=message_repo,
+    workspace_id = "default"
+    conversation_id = build_conversation_id("session-1", "time")
+    instance = create_subagent_instance(
+        "time",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
     )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="time",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    instance_id = instance.instance_id
 
     result = await service.execute(
         instance_id=instance_id,
@@ -398,9 +429,16 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     )
 
     assert result == "ok"
+    history = message_repo.get_history_for_task(instance_id, "task-1")
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    prompt_content = history[0].parts[0].content
+    assert isinstance(prompt_content, str)
+    assert "## Skill Candidates" in prompt_content
+    assert "- time:" in prompt_content
+    assert "missing_skill" not in prompt_content
     runtime_record = agent_repo.get_instance(instance_id)
-    assert "## Available Skills" in runtime_record.runtime_system_prompt
-    assert "- time:" in runtime_record.runtime_system_prompt
+    assert "## Available Skills" not in runtime_record.runtime_system_prompt
     assert "missing_skill" not in runtime_record.runtime_system_prompt
     tools_snapshot = json.loads(runtime_record.runtime_tools_json)
     assert len(tools_snapshot["skill_tools"]) == 1

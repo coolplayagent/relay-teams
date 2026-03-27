@@ -86,6 +86,7 @@ class ObservabilityKpiSet(BaseModel):
     steps: float = 0
     input_tokens: float = 0
     cached_input_tokens: float = 0
+    uncached_input_tokens: float = 0
     output_tokens: float = 0
     cached_token_ratio: float = 0
     tool_calls: float = 0
@@ -93,6 +94,10 @@ class ObservabilityKpiSet(BaseModel):
     tool_avg_duration_ms: float = 0
     skill_calls: float = 0
     mcp_calls: float = 0
+    retrieval_searches: float = 0
+    retrieval_failure_rate: float = 0
+    retrieval_avg_duration_ms: float = 0
+    retrieval_document_count: float = 0
 
 
 class ObservabilityTrendPoint(BaseModel):
@@ -117,6 +122,20 @@ class ObservabilityBreakdownRow(BaseModel):
     avg_duration_ms: float = 0
 
 
+class ObservabilityRoleBreakdownRow(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    role_id: str = Field(min_length=1)
+    input_tokens: float = 0
+    cached_input_tokens: float = 0
+    uncached_input_tokens: float = 0
+    output_tokens: float = 0
+    tool_calls: float = 0
+    tool_failures: float = 0
+    tool_success_rate: float = 0
+    cached_token_ratio: float = 0
+
+
 class ObservabilityOverview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -136,3 +155,4 @@ class ObservabilityBreakdown(BaseModel):
     time_window_minutes: int = Field(ge=1)
     updated_at: str | None = None
     rows: tuple[ObservabilityBreakdownRow, ...] = ()
+    role_rows: tuple[ObservabilityRoleBreakdownRow, ...] = ()

@@ -142,11 +142,17 @@ function renderOverview(payload, breakdownPayload, safeScope) {
         <section class="observability-metric-grid">
             ${buildMetricChartCard('observability-metric-steps-chart', t('observability.kpi.steps'), formatNumber(kpis.steps), t('observability.metric.note.steps'))}
             ${buildMetricChartCard('observability-metric-input-chart', t('observability.kpi.input_tokens'), formatCompactNumber(kpis.input_tokens), t('observability.metric.note.input_tokens'))}
+            ${buildMetricChartCard('observability-metric-cached-input-chart', t('observability.kpi.cached_input_tokens'), formatCompactNumber(kpis.cached_input_tokens), t('observability.metric.note.cached_input_tokens'))}
+            ${buildMetricChartCard('observability-metric-uncached-input-chart', t('observability.kpi.uncached_input_tokens'), formatCompactNumber(kpis.uncached_input_tokens), t('observability.metric.note.uncached_input_tokens'))}
             ${buildMetricChartCard('observability-metric-output-chart', t('observability.kpi.output_tokens'), formatCompactNumber(kpis.output_tokens), t('observability.metric.note.output_tokens'))}
             ${buildMetricChartCard('observability-metric-tool-calls-chart', t('observability.kpi.tool_calls'), formatNumber(kpis.tool_calls), t('observability.metric.note.tool_calls'))}
             ${buildMetricChartCard('observability-metric-cached-chart', t('observability.kpi.cached_ratio'), formatPercent(kpis.cached_token_ratio), t('observability.metric.note.cached_ratio'))}
             ${buildMetricChartCard('observability-metric-success-chart', t('observability.kpi.tool_success'), formatPercent(kpis.tool_success_rate), t('observability.metric.note.tool_success'))}
             ${buildMetricChartCard('observability-metric-duration-chart', t('observability.kpi.avg_tool_ms'), formatNumber(kpis.tool_avg_duration_ms), t('observability.metric.note.avg_duration'))}
+            ${buildMetricChartCard('observability-metric-retrieval-searches-chart', t('observability.kpi.retrieval_searches'), formatNumber(kpis.retrieval_searches), t('observability.metric.note.retrieval_searches'))}
+            ${buildMetricChartCard('observability-metric-retrieval-failures-chart', t('observability.kpi.retrieval_failure_rate'), formatPercent(kpis.retrieval_failure_rate), t('observability.metric.note.retrieval_failure_rate'))}
+            ${buildMetricChartCard('observability-metric-retrieval-duration-chart', t('observability.kpi.avg_retrieval_ms'), formatNumber(kpis.retrieval_avg_duration_ms), t('observability.metric.note.avg_retrieval_ms'))}
+            ${buildMetricChartCard('observability-metric-retrieval-documents-chart', t('observability.kpi.retrieval_document_count'), formatNumber(kpis.retrieval_document_count), t('observability.metric.note.retrieval_document_count'))}
             ${buildMetricChartCard('observability-metric-integrations-chart', `${t('observability.kpi.skill_calls')} / ${t('observability.kpi.mcp_calls')}`, `${formatNumber(kpis.skill_calls)} / ${formatNumber(kpis.mcp_calls)}`, `${t('observability.source.skill')} + ${t('observability.source.mcp')}`)}
         </section>
     `;
@@ -183,6 +189,7 @@ function renderBreakdowns(payload, overview) {
     }
 
     const rows = Array.isArray(payload?.rows) ? payload.rows.slice(0, 8) : [];
+    const roleRows = Array.isArray(payload?.role_rows) ? payload.role_rows.slice(0, 8) : [];
     host.innerHTML = `
         <section class="observability-section-card">
             <div class="observability-section-heading">
@@ -200,10 +207,28 @@ function renderBreakdowns(payload, overview) {
                 </div>
             `}
         </section>
+        <section class="observability-section-card">
+            <div class="observability-section-heading">
+                <div>
+                    <h4>${escapeHtml(t('observability.section.role_breakdowns'))}</h4>
+                    <p>${escapeHtml(t('observability.section.role_breakdowns_copy'))}</p>
+                </div>
+            </div>
+            ${roleRows.length === 0 ? `<div class="observability-empty">${escapeHtml(t('observability.role_breakdowns.empty'))}</div>` : `
+                <div class="observability-breakdown-grid">
+                    ${buildChartCard('observability-role-breakdown-input-chart', t('observability.role_breakdowns.input_chart_title'), resolveUpdatedAtCopy(overview?.updated_at), 'observability-breakdown-stage')}
+                    ${buildChartCard('observability-role-breakdown-cache-chart', t('observability.role_breakdowns.cache_chart_title'), resolveUpdatedAtCopy(overview?.updated_at), 'observability-breakdown-stage')}
+                    ${buildChartCard('observability-role-breakdown-failures-chart', t('observability.role_breakdowns.failures_chart_title'), resolveUpdatedAtCopy(overview?.updated_at), 'observability-breakdown-stage')}
+                </div>
+            `}
+        </section>
     `;
 
     if (rows.length > 0) {
         renderBreakdownCharts(rows);
+    }
+    if (roleRows.length > 0) {
+        renderRoleBreakdownCharts(roleRows);
     }
 }
 
@@ -243,11 +268,17 @@ function renderMetricCharts({ kpis, trends, rows, safeScope }) {
     const ids = [
         'observability-metric-steps-chart',
         'observability-metric-input-chart',
+        'observability-metric-cached-input-chart',
+        'observability-metric-uncached-input-chart',
         'observability-metric-output-chart',
         'observability-metric-tool-calls-chart',
         'observability-metric-cached-chart',
         'observability-metric-success-chart',
         'observability-metric-duration-chart',
+        'observability-metric-retrieval-searches-chart',
+        'observability-metric-retrieval-failures-chart',
+        'observability-metric-retrieval-duration-chart',
+        'observability-metric-retrieval-documents-chart',
         'observability-metric-integrations-chart',
     ];
     if (!ChartCtor) {
@@ -264,6 +295,7 @@ function renderMetricCharts({ kpis, trends, rows, safeScope }) {
         ...rows.map(row => Number(row.avg_duration_ms || 0)),
         1000,
     );
+    const retrievalDurationMax = Math.max(Number(kpis.retrieval_avg_duration_ms || 0), 1000);
 
     createSeriesMetricChart('observability-metric-steps-chart', {
         labels: trendLabels,
@@ -285,6 +317,24 @@ function renderMetricCharts({ kpis, trends, rows, safeScope }) {
         yTitle: t('observability.kpi.input_tokens'),
         fallbackValue: Number(kpis.input_tokens || 0),
     });
+    createChart('observability-metric-cached-input-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.cached_input_tokens'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.cached_input_tokens || 0),
+        color: [8, 145, 178],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.cached_input_tokens'),
+        tickMode: 'compact',
+    }));
+    createChart('observability-metric-uncached-input-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.uncached_input_tokens'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.uncached_input_tokens || 0),
+        color: [225, 29, 72],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.uncached_input_tokens'),
+        tickMode: 'compact',
+    }));
     createSeriesMetricChart('observability-metric-output-chart', {
         labels: trendLabels,
         values: trends.map(row => Number(row.output_tokens || 0)),
@@ -334,6 +384,44 @@ function renderMetricCharts({ kpis, trends, rows, safeScope }) {
         yTitle: resolveDurationAxisTitle(),
         maxValue: durationMax,
         tickMode: 'number',
+    }));
+    createChart('observability-metric-retrieval-searches-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.retrieval_searches'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.retrieval_searches || 0),
+        color: [14, 116, 144],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.retrieval_searches'),
+        tickMode: 'compact',
+    }));
+    createChart('observability-metric-retrieval-failures-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.retrieval_failure_rate'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.retrieval_failure_rate || 0) * 100,
+        color: [190, 24, 93],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.retrieval_failure_rate'),
+        maxValue: 100,
+        tickMode: 'percentage',
+    }));
+    createChart('observability-metric-retrieval-duration-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.avg_retrieval_ms'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.retrieval_avg_duration_ms || 0),
+        color: [124, 58, 237],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.avg_retrieval_ms'),
+        maxValue: retrievalDurationMax,
+        tickMode: 'number',
+    }));
+    createChart('observability-metric-retrieval-documents-chart', buildSingleMetricBarChartConfig({
+        label: t('observability.kpi.retrieval_document_count'),
+        categoryLabel: scopeLabel,
+        value: Number(kpis.retrieval_document_count || 0),
+        color: [22, 163, 74],
+        xTitle: resolveScopeAxisTitle(),
+        yTitle: t('observability.kpi.retrieval_document_count'),
+        tickMode: 'compact',
     }));
     createChart('observability-metric-integrations-chart', buildGroupedMetricBarChartConfig({
         labels: [t('observability.kpi.skill_calls'), t('observability.kpi.mcp_calls')],
@@ -444,6 +532,48 @@ function renderBreakdownCharts(rows) {
         datasetLabel: t('observability.breakdowns.source_chart_title'),
         xTitle: resolveSourceAxisTitle(),
         yTitle: resolveCallsAxisTitle(),
+    }));
+}
+
+function renderRoleBreakdownCharts(rows) {
+    const ChartCtor = getChartConstructor();
+    if (!ChartCtor) {
+        showChartUnavailable([
+            'observability-role-breakdown-input-chart',
+            'observability-role-breakdown-cache-chart',
+            'observability-role-breakdown-failures-chart',
+        ]);
+        return;
+    }
+
+    const labels = rows.map(row => resolveRoleLabel(row.role_id));
+    createChart('observability-role-breakdown-input-chart', buildHorizontalBarChartConfig({
+        labels,
+        values: rows.map(row => Number(row.input_tokens || 0)),
+        seriesLabel: t('observability.kpi.input_tokens'),
+        colorValues: rows.map((_, index) => pickPalette(index, 0.88)),
+        xTitle: t('observability.kpi.input_tokens'),
+        yTitle: resolveRoleAxisTitle(),
+        tickMode: 'compact',
+    }));
+    createChart('observability-role-breakdown-cache-chart', buildHorizontalBarChartConfig({
+        labels,
+        values: rows.map(row => Number(row.cached_token_ratio || 0) * 100),
+        seriesLabel: t('observability.kpi.cached_ratio'),
+        colorValues: rows.map((_, index) => pickPalette(index + 2, 0.84)),
+        xTitle: resolvePercentageAxisTitle(),
+        yTitle: resolveRoleAxisTitle(),
+        tickMode: 'percentage',
+        maxValue: 100,
+    }));
+    createChart('observability-role-breakdown-failures-chart', buildHorizontalBarChartConfig({
+        labels,
+        values: rows.map(row => Number(row.tool_failures || 0)),
+        seriesLabel: t('observability.metric.failures'),
+        colorValues: rows.map((_, index) => pickPalette(index + 4, 0.84)),
+        xTitle: t('observability.metric.failures'),
+        yTitle: resolveRoleAxisTitle(),
+        tickMode: 'compact',
     }));
 }
 
@@ -855,6 +985,14 @@ function resolveSourceLabel(source) {
     return t('observability.source.local');
 }
 
+function resolveRoleLabel(roleId) {
+    const normalizedRoleId = String(roleId || '').trim();
+    if (!normalizedRoleId || normalizedRoleId === 'unknown') {
+        return t('observability.role.unknown');
+    }
+    return normalizedRoleId;
+}
+
 function resolveTimeAxisTitle() {
     return getCurrentLanguage() === 'zh-CN' ? '\u65f6\u95f4' : 'Time';
 }
@@ -869,6 +1007,10 @@ function resolveSourceAxisTitle() {
 
 function resolveToolAxisTitle() {
     return getCurrentLanguage() === 'zh-CN' ? '\u5de5\u5177' : 'Tool';
+}
+
+function resolveRoleAxisTitle() {
+    return getCurrentLanguage() === 'zh-CN' ? '\u89d2\u8272' : 'Role';
 }
 
 function resolveCallsAxisTitle() { return t('observability.metric.calls'); }

@@ -11,6 +11,7 @@ from agent_teams.metrics import (
     ObservabilityBreakdownRow,
     ObservabilityKpiSet,
     ObservabilityOverview,
+    ObservabilityRoleBreakdownRow,
     ObservabilityTrendPoint,
 )
 
@@ -24,7 +25,13 @@ class _FakeMetricsService:
             scope_id=scope_id,
             time_window_minutes=time_window_minutes,
             updated_at="2026-03-23T10:00:00+00:00",
-            kpis=ObservabilityKpiSet(steps=3, tool_calls=2),
+            kpis=ObservabilityKpiSet(
+                steps=3,
+                tool_calls=2,
+                uncached_input_tokens=9,
+                retrieval_searches=4,
+                retrieval_failure_rate=0.25,
+            ),
             trends=(
                 ObservabilityTrendPoint(
                     bucket_start="2026-03-23T10:00:00+00:00", steps=3, tool_calls=2
@@ -45,6 +52,16 @@ class _FakeMetricsService:
                     tool_name="shell", tool_source="local", calls=2, success_rate=1.0
                 ),
             ),
+            role_rows=(
+                ObservabilityRoleBreakdownRow(
+                    role_id="coordinator",
+                    input_tokens=10,
+                    cached_input_tokens=4,
+                    uncached_input_tokens=6,
+                    tool_calls=2,
+                    tool_success_rate=1.0,
+                ),
+            ),
         )
 
 
@@ -63,6 +80,18 @@ def test_observability_overview_route_returns_payload() -> None:
     assert response.status_code == 200
     assert response.json()["scope"] == "session"
     assert response.json()["kpis"]["steps"] == 3
+    assert response.json()["kpis"]["retrieval_searches"] == 4
+    assert response.json()["kpis"]["uncached_input_tokens"] == 9
+
+
+def test_observability_breakdowns_route_returns_role_rows() -> None:
+    client = _create_client()
+    response = client.get(
+        "/api/observability/breakdowns?scope=global&time_window_minutes=60"
+    )
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["tool_name"] == "shell"
+    assert response.json()["role_rows"][0]["role_id"] == "coordinator"
 
 
 def test_observability_breakdowns_route_requires_scope_id() -> None:
