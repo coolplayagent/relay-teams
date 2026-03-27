@@ -30,3 +30,5 @@ package.json
 .agent_teams/evals/datasets/*
 !.agent_teams/evals/datasets/*.jsonl
 logs/
+src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/dist/
+src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/node/dist/
