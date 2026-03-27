@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -21,7 +21,14 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="topbar-section topbar-section-left">
-          <button id="toggle-sidebar" class="icon-btn" title="Toggle Sidebar">
+          <button
+            id="toggle-sidebar"
+            class="icon-btn"
+            title="切换侧边栏"
+            aria-label="切换侧边栏"
+            data-i18n-title="topbar.toggle_sidebar"
+            data-i18n-aria-label="topbar.toggle_sidebar"
+          >
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -48,7 +55,7 @@
             title="Switch language"
             aria-label="Switch language"
           >
-            EN
+            中文
           </button>
           <button
             id="observability-btn"
@@ -166,7 +173,8 @@
         <div
           class="sidebar-resizer"
           id="sidebar-resizer"
-          title="Drag to resize sidebar"
+          title="拖动调整侧边栏宽度"
+          data-i18n-title="sidebar.resize"
         ></div>
 
         <!-- Main Workspace -->
@@ -486,10 +494,10 @@
                         id="thinking-effort-select"
                         class="composer-mode-inline-select"
                       >
-                        <option value="minimal">Minimal</option>
-                        <option value="low">Low</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="high">High</option>
+                    <option value="minimal" data-i18n="composer.effort.minimal">最少</option>
+                    <option value="low" data-i18n="composer.effort.low">低</option>
+                    <option value="medium" selected data-i18n="composer.effort.medium">中</option>
+                    <option value="high" data-i18n="composer.effort.high">高</option>
                       </select>
                     </span>
                   </span>
@@ -510,7 +518,8 @@
         <div
           class="right-rail-resizer"
           id="right-rail-resizer"
-          title="Drag to resize right rail"
+          title="拖动调整侧边栏宽度"
+          data-i18n-title="sidebar.resize"
         ></div>
 
         <aside class="right-rail" id="right-rail">

@@ -5,10 +5,10 @@
 import { fetchSessionTokenUsage } from '../core/api.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
+import { formatMessage, getCurrentLanguage, t } from '../utils/i18n.js';
 
 const REFRESH_DEBOUNCE_MS = 160;
-const EMPTY_TEXT = 'Tokens --';
-const numberFormatter = new Intl.NumberFormat('en-US');
+const EMPTY_TEXT = () => t('token_usage.empty');
 
 const refreshState = {
     timerId: 0,
@@ -89,7 +89,7 @@ function renderUsage(usage) {
     if (!target) return;
     target.dataset.state = 'ready';
     target.innerHTML = `
-        <span class="session-token-usage-label">Tokens</span>
+        <span class="session-token-usage-label">${t('token_usage.label')}</span>
         <span class="session-token-usage-value">${formatCompact(usage.total_input_tokens)} / ${formatCompact(usage.total_output_tokens)}</span>
     `;
     target.title = buildDetailTitle(usage);
@@ -99,8 +99,8 @@ function renderIdle() {
     const target = els.sessionTokenUsage;
     if (!target) return;
     target.dataset.state = 'idle';
-    target.textContent = EMPTY_TEXT;
-    target.title = 'Session token usage';
+    target.textContent = EMPTY_TEXT();
+    target.title = t('token_usage.title');
 }
 
 function renderLoading() {
@@ -108,25 +108,25 @@ function renderLoading() {
     if (!target) return;
     target.dataset.state = 'loading';
     if (!target.textContent) {
-        target.textContent = EMPTY_TEXT;
+        target.textContent = EMPTY_TEXT();
     }
-    target.title = 'Loading session token usage';
+    target.title = t('token_usage.loading_title');
 }
 
 function renderEmpty(sessionId) {
     const target = els.sessionTokenUsage;
     if (!target) return;
     target.dataset.state = 'idle';
-    target.textContent = EMPTY_TEXT;
-    target.title = `Session token usage: no recorded usage yet for ${sessionId}`;
+    target.textContent = EMPTY_TEXT();
+    target.title = formatMessage('token_usage.empty_title', { session_id: sessionId });
 }
 
 function renderError() {
     const target = els.sessionTokenUsage;
     if (!target) return;
     target.dataset.state = 'error';
-    target.textContent = EMPTY_TEXT;
-    target.title = 'Session token usage unavailable';
+    target.textContent = EMPTY_TEXT();
+    target.title = t('token_usage.unavailable_title');
 }
 
 function buildDetailTitle(usage) {
@@ -135,15 +135,19 @@ function buildDetailTitle(usage) {
     const cached = formatInteger(usage.total_cached_input_tokens);
     const output = formatInteger(usage.total_output_tokens);
     const reasoning = formatInteger(usage.total_reasoning_output_tokens);
-    let detail = `Token usage: total=${total} input=${input}`;
-    if (Number(usage.total_cached_input_tokens) > 0) {
-        detail += ` (+ ${cached} cached)`;
-    }
-    detail += ` output=${output}`;
-    if (Number(usage.total_reasoning_output_tokens) > 0) {
-        detail += ` (reasoning ${reasoning})`;
-    }
-    return detail;
+    const cachedSuffix = Number(usage.total_cached_input_tokens) > 0
+        ? formatMessage('token_usage.cached_suffix', { cached })
+        : '';
+    const reasoningSuffix = Number(usage.total_reasoning_output_tokens) > 0
+        ? formatMessage('token_usage.reasoning_suffix', { reasoning })
+        : '';
+    return formatMessage('token_usage.detail', {
+        total,
+        input,
+        cached: cachedSuffix,
+        output,
+        reasoning: reasoningSuffix,
+    });
 }
 
 function hasUsage(usage) {
@@ -153,7 +157,7 @@ function hasUsage(usage) {
 }
 
 function formatInteger(value) {
-    return numberFormatter.format(safeNumber(value));
+    return new Intl.NumberFormat(getCurrentLanguage()).format(safeNumber(value));
 }
 
 function formatCompact(value) {

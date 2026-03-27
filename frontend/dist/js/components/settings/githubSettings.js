@@ -8,7 +8,7 @@ import {
     saveGitHubConfig,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let lastProbeState = null;
@@ -45,7 +45,7 @@ export async function loadGitHubSettingsPanel() {
         );
         showToast({
             title: t('settings.github.load_failed'),
-            message: `Failed to load GitHub config: ${e.message}`,
+            message: formatMessage('settings.github.load_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }
@@ -63,7 +63,7 @@ async function handleSaveGitHub() {
     } catch (e) {
         showToast({
             title: t('settings.github.save_failed'),
-            message: `Failed to save GitHub config: ${e.message}`,
+            message: formatMessage('settings.github.save_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }
@@ -92,7 +92,7 @@ async function handleProbeGitHub() {
     } catch (e) {
         lastProbeState = {
             status: 'failed',
-            message: `Probe failed: ${e.message}`,
+            message: formatMessage('settings.github.probe_failed', { error: e.message }),
         };
     }
 
@@ -105,7 +105,11 @@ function buildProbeState(result) {
         const version = result.gh_version ? `gh ${result.gh_version}` : 'gh';
         return {
             status: 'success',
-            message: `${username} via ${version} in ${result.latency_ms}ms`,
+            message: formatMessage('settings.github.probe_success', {
+                username,
+                version,
+                latency_ms: result.latency_ms,
+            }),
         };
     }
 
@@ -113,7 +117,7 @@ function buildProbeState(result) {
     const version = result.gh_version ? `gh ${result.gh_version}. ` : '';
     return {
         status: 'failed',
-        message: `${version}${reason}`,
+        message: formatMessage('settings.github.probe_reason', { version, reason }),
     };
 }
 

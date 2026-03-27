@@ -8,7 +8,7 @@ import {
     saveProxyConfig,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let lastProbeState = null;
@@ -45,7 +45,7 @@ export async function loadProxyStatusPanel() {
         );
         showToast({
             title: t('settings.proxy.load_failed'),
-            message: `Failed to load proxy config: ${e.message}`,
+            message: formatMessage('settings.proxy.load_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }
@@ -63,7 +63,7 @@ async function handleSaveProxy() {
     } catch (e) {
         showToast({
             title: t('settings.proxy.save_failed'),
-            message: `Failed to save proxy config: ${e.message}`,
+            message: formatMessage('settings.proxy.save_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }
@@ -103,7 +103,7 @@ async function handleProbeWeb() {
     } catch (e) {
         lastProbeState = {
             status: 'failed',
-            message: `Probe failed: ${e.message}`,
+            message: formatMessage('settings.proxy.probe_failed', { error: e.message }),
         };
     }
 
@@ -114,7 +114,11 @@ function buildProbeState(result) {
     if (result.ok) {
         return {
             status: 'success',
-            message: `${result.used_method} ${result.status_code} in ${result.latency_ms}ms`,
+            message: formatMessage('settings.proxy.probe_success', {
+                method: result.used_method,
+                status_code: result.status_code,
+                latency_ms: result.latency_ms,
+            }),
         };
     }
 
@@ -122,7 +126,7 @@ function buildProbeState(result) {
     const statusText = result.status_code ? ` HTTP ${result.status_code}.` : '';
     return {
         status: 'failed',
-        message: `${reason}${statusText}`,
+        message: formatMessage('settings.proxy.probe_reason', { reason, status_text: statusText }),
     };
 }
 

@@ -44,17 +44,12 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     ).read_text(encoding="utf-8")
 
     assert "Connect Stream" not in recovery_script
-    assert "The live stream reconnects automatically." in recovery_script
-    assert (
-        "Run is still stopping. Wait for it to stop before resuming." in recovery_script
-    )
+    assert "t('recovery.recoverable_run_active')" in recovery_script
+    assert "t('recovery.run_still_stopping')" in recovery_script
     assert "activeRun.status === 'paused'" in recovery_script
     assert "activeRun.phase === 'awaiting_recovery'" in recovery_script
-    assert "label: 'Resume Run'" in recovery_script
-    assert (
-        "Stop requested. Wait for the active worker to exit before attempting recovery."
-        in recovery_script
-    )
+    assert "label: t('recovery.action.resume_run')" in recovery_script
+    assert "t('recovery.stop_requested')" in recovery_script
     assert "isPrimaryOrReservedRoleId(roleId)" in recovery_script
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script

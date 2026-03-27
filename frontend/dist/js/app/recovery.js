@@ -20,6 +20,7 @@ import {
 } from '../core/state.js';
 import { resumeRunStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
+import { formatMessage, t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
 let recoveryActionBusy = false;
@@ -232,7 +233,7 @@ export async function resumeRecoverableRun(
         && (activeRun.status === 'stopping' || activeRun.phase === 'stopping')
     ) {
         if (!quiet) {
-            sysLog('Run is still stopping. Wait for it to stop before resuming.', 'log-error');
+            sysLog(t('recovery.run_still_stopping'), 'log-error');
         }
         return false;
     }
@@ -255,7 +256,7 @@ export async function resumeRecoverableRun(
         return true;
     } catch (e) {
         if (!quiet) {
-            sysLog(e.message || 'Failed to resume run', 'log-error');
+            sysLog(e.message || t('recovery.resume_failed'), 'log-error');
         }
         if (safeSessionId) {
             await refreshSessionRecovery(safeSessionId, { quiet: true });
@@ -845,7 +846,7 @@ function renderRecoveryBanner() {
     host.innerHTML = `
         <div class="recovery-banner recovery-tone-${pillTone}">
             <div class="recovery-banner-copy">
-                <div class="recovery-banner-label">Session Recovery</div>
+                <div class="recovery-banner-label">${t('recovery.banner_label')}</div>
                 <div class="recovery-banner-title">
                     <span>Run ${shortRunId(activeRun.run_id)}</span>
                     <span class="recovery-status-pill recovery-status-${pillTone}">
@@ -957,21 +958,21 @@ function getFooterActions(activeRun, approvals, pausedSubagent) {
     ) {
         actions.push({
             action: 'resume-run',
-            label: 'Resume Run',
+            label: t('recovery.action.resume_run'),
             kind: 'primary',
         });
     }
     if (pausedSubagent?.instanceId) {
         actions.push({
             action: 'open-subagent',
-            label: 'Open Subagent',
+            label: t('recovery.action.open_subagent'),
             kind: 'secondary',
         });
     }
     if (approvals.length > 0) {
         actions.push({
             action: 'review-round',
-            label: 'View Round',
+            label: t('recovery.action.view_round'),
             kind: 'secondary',
         });
     }
@@ -1030,7 +1031,7 @@ async function handleApprovalAction(runId, approval, action) {
                 quiet: true,
             });
             if (!resumed) {
-                throw new Error('Failed to resume run before approval');
+                throw new Error(t('recovery.resume_before_approval_failed'));
             }
             approvalWillResolveViaLiveRun = true;
             await waitForFreshApprovalRequest(safeRunId, safeToolCallId);
@@ -1052,9 +1053,9 @@ async function handleApprovalAction(runId, approval, action) {
         approvalActionBusyIds.delete(safeToolCallId);
         approvalActionErrors.set(
             safeToolCallId,
-            e?.message || 'Failed to resolve tool approval',
+            e?.message || t('recovery.resolve_tool_approval_failed'),
         );
-        sysLog(e?.message || 'Failed to resolve tool approval', 'log-error');
+        sysLog(e?.message || t('recovery.resolve_tool_approval_failed'), 'log-error');
         renderRecoveryBanner();
     }
 }
@@ -1093,61 +1094,64 @@ function snapshotRoundFor(runId) {
 
 function describeRecoveryState(activeRun, approvals, pausedSubagent) {
     if (pausedSubagent) {
-        return `Paused at ${pausedSubagent.roleId || pausedSubagent.instanceId}. Open that subagent and send a follow-up to continue this run.`;
+        return formatMessage('recovery.paused_state', {
+            actor: pausedSubagent.roleId || pausedSubagent.instanceId,
+        });
     }
     if (activeRun.status === 'stopping' || activeRun.phase === 'stopping') {
-        return 'Stop requested. Wait for the active worker to exit before attempting recovery.';
+        return t('recovery.stop_requested');
     }
     if (approvals.length > 0) {
-        const noun = approvals.length === 1 ? 'approval' : 'approvals';
-        return `Waiting for ${approvals.length} tool ${noun}. Resolve them here, then the run will continue from the latest checkpoint.`;
+        return approvals.length === 1
+            ? t('recovery.waiting_approval_one')
+            : formatMessage('recovery.waiting_approval_many', { count: approvals.length });
     }
     if (activeRun.status === 'running' || activeRun.status === 'queued') {
         return isLocallyStreaming(activeRun.run_id)
-            ? 'This tab is following the live stream.'
-            : 'A recoverable run is active for this session. The live stream reconnects automatically.';
+            ? t('recovery.following_live_stream')
+            : t('recovery.recoverable_run_active');
     }
     if (activeRun.status === 'stopped') {
-        return 'Execution stopped at a durable checkpoint. Resume from the latest persisted state.';
+        return t('recovery.execution_stopped');
     }
-    return 'A recoverable run is available for this session.';
+    return t('recovery.recoverable_run_available');
 }
 
 function stateLabel(activeRun) {
-    if (!activeRun) return 'Unknown';
+    if (!activeRun) return t('recovery.state.unknown');
     switch (activeRun.phase) {
         case 'awaiting_tool_approval':
-            return 'Awaiting Approval';
+            return t('recovery.state.awaiting_approval');
         case 'awaiting_subagent_followup':
-            return 'Awaiting Follow-up';
+            return t('recovery.state.awaiting_followup');
         case 'running':
-            return 'Running';
+            return t('recovery.state.running');
         case 'stopping':
-            return 'Stopping';
+            return t('recovery.state.stopping');
         case 'stopped':
-            return 'Stopped';
+            return t('recovery.state.stopped');
         case 'queued':
-            return 'Queued';
+            return t('recovery.state.queued');
         default:
             break;
     }
     switch (activeRun.status) {
         case 'running':
-            return 'Running';
+            return t('recovery.state.running');
         case 'stopping':
-            return 'Stopping';
+            return t('recovery.state.stopping');
         case 'paused':
-            return 'Paused';
+            return t('recovery.state.paused');
         case 'stopped':
-            return 'Stopped';
+            return t('recovery.state.stopped');
         case 'queued':
-            return 'Queued';
+            return t('recovery.state.queued');
         case 'completed':
-            return 'Completed';
+            return t('recovery.state.completed');
         case 'failed':
-            return 'Failed';
+            return t('recovery.state.failed');
         default:
-            return 'Recoverable';
+            return t('recovery.state.recoverable');
     }
 }
 
@@ -1189,10 +1193,10 @@ function renderApprovalItem(activeRun, approval) {
     const busy = approvalActionBusyIds.has(toolCallId);
     const error = approvalActionErrors.get(toolCallId) || '';
     const statusClass = error ? 'is-error' : busy ? 'is-busy' : '';
-    const statusText = error || (busy ? 'Applying...' : '');
+    const statusText = error || (busy ? t('recovery.applying') : '');
     const actor = humanizeRoleLabel(approval?.role_id || approval?.instance_id || 'Agent');
     const title = approvalTitle(approval);
-    const subtitle = `Requested by ${actor}`;
+    const subtitle = formatMessage('recovery.requested_by', { actor });
 
     return `
         <section class="recovery-approval-item">
@@ -1213,7 +1217,7 @@ function renderApprovalItem(activeRun, approval) {
                         data-tool-call-id="${escapeAttribute(toolCallId)}"
                         ${busy || recoveryActionBusy ? 'disabled' : ''}
                     >
-                        Approve
+                        ${escapeHtml(t('recovery.approve'))}
                     </button>
                     <button
                         type="button"
@@ -1222,7 +1226,7 @@ function renderApprovalItem(activeRun, approval) {
                         data-tool-call-id="${escapeAttribute(toolCallId)}"
                         ${busy || recoveryActionBusy ? 'disabled' : ''}
                     >
-                        Deny
+                        ${escapeHtml(t('recovery.deny'))}
                     </button>
                 </div>
             </div>
@@ -1235,8 +1239,8 @@ function renderPausedSubagentCallout(pausedSubagent) {
     return `
         <div class="recovery-subagent-callout">
             <div class="recovery-subagent-copy">
-                <div class="recovery-subagent-title">${escapeHtml(actor || 'Paused subagent')}</div>
-                <div class="recovery-subagent-text">This run is waiting for a follow-up inside the paused subagent panel.</div>
+                <div class="recovery-subagent-title">${escapeHtml(actor || t('recovery.paused_subagent'))}</div>
+                <div class="recovery-subagent-text">${escapeHtml(t('recovery.waiting_followup_paused_subagent'))}</div>
             </div>
         </div>
     `;
@@ -1246,18 +1250,18 @@ function approvalTitle(approval) {
     const toolName = String(approval?.tool_name || '');
     const args = parseApprovalArgs(approval?.args_preview);
     if (toolName === 'list_available_roles') {
-        return 'List available roles';
+        return t('recovery.tool.list_available_roles');
     }
     if (toolName === 'create_tasks') {
         const taskCount = normalizeCount(args.task_count);
         return taskCount > 0
-            ? `Create ${taskCount} delegated task${taskCount === 1 ? '' : 's'}`
-            : 'Create delegated tasks';
+            ? formatMessage('recovery.tool.create_tasks_count', { count: taskCount })
+            : t('recovery.tool.create_tasks');
     }
     if (toolName === 'dispatch_task') {
-        return 'Dispatch task';
+        return t('recovery.tool.dispatch_task');
     }
-    return `Run ${humanizeToolName(toolName || 'tool')}`;
+    return formatMessage('recovery.tool.run', { tool: humanizeToolName(toolName || 'tool') });
 }
 
 function parseApprovalArgs(argsPreview) {
@@ -1276,7 +1280,7 @@ function normalizeCount(value) {
 }
 
 function humanizeRoleLabel(value) {
-    return humanizeRoleId(value, { coordinatorLabel: 'Coordinator Agent' });
+    return humanizeRoleId(value, { coordinatorLabel: t('recovery.coordinator_agent') });
 }
 
 function humanizeToolName(value) {

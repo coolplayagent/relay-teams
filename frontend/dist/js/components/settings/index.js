@@ -656,22 +656,22 @@ function createModal() {
                                 <div class="proxy-editor-form">
                                     <section class="proxy-form-section">
                                         <div class="proxy-form-section-header">
-                                            <h5 data-i18n="settings.web.section">Web Search</h5>
+                                            <h5 data-i18n="settings.web.section">网页搜索</h5>
                                         </div>
                                         <div class="proxy-form-grid">
                                             <div class="form-group proxy-inline-field">
-                                                <label for="web-provider" data-i18n="settings.web.provider">Provider</label>
+                                                <label for="web-provider" data-i18n="settings.web.provider">提供商</label>
                                                 <select id="web-provider">
                                                     <option value="exa">Exa</option>
                                                 </select>
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="web-api-key" data-i18n="settings.web.api_key">API Key</label>
-                                                <input type="password" id="web-api-key" placeholder="Optional for higher rate limits" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                                <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
                                             </div>
                                         </div>
                                         <p class="notifications-help">
-                                            <span data-i18n="settings.web.provider_site">Provider website:</span>
+                                            <span data-i18n="settings.web.provider_site">提供商网站：</span>
                                             <a href="https://exa.ai" target="_blank" rel="noreferrer">https://exa.ai</a>
                                         </p>
                                     </section>

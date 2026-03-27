@@ -3,6 +3,7 @@
  * Tracks backend availability and reflects it in the sidebar status indicator.
  */
 import { els } from './dom.js';
+import { t } from './i18n.js';
 
 const HEALTH_POLL_MS = 15000;
 const HEALTH_TIMEOUT_MS = 4000;
@@ -12,7 +13,7 @@ let inFlightHealthCheck = null;
 let backendStatus = 'checking';
 
 export function initBackendStatusMonitor() {
-    applyBackendStatus('checking', 'Checking backend...');
+    applyBackendStatus('checking', t('backend.status.checking'));
     void refreshBackendStatus({ force: true });
     if (healthPollTimer) return;
     healthPollTimer = window.setInterval(() => {
@@ -20,11 +21,11 @@ export function initBackendStatusMonitor() {
     }, HEALTH_POLL_MS);
 }
 
-export function markBackendOnline(label = 'Backend Connected') {
+export function markBackendOnline(label = t('backend.status.connected')) {
     applyBackendStatus('online', label);
 }
 
-export function markBackendOffline(label = 'Backend Offline') {
+export function markBackendOffline(label = t('backend.status.offline')) {
     applyBackendStatus('offline', label);
 }
 
@@ -52,19 +53,19 @@ async function probeBackendHealth() {
             signal: controller.signal,
         });
         if (!response.ok) {
-            markBackendOffline('Backend Unavailable');
+            markBackendOffline(t('backend.status.unavailable'));
             return false;
         }
         const payload = await response.json();
         const safeStatus = String(payload?.status || '').trim().toLowerCase();
         if (safeStatus === 'ok') {
-            markBackendOnline('Backend Connected');
+            markBackendOnline(t('backend.status.connected'));
             return true;
         }
-        markBackendOffline('Backend Unavailable');
+        markBackendOffline(t('backend.status.unavailable'));
         return false;
     } catch (_) {
-        markBackendOffline('Backend Offline');
+        markBackendOffline(t('backend.status.offline'));
         return false;
     } finally {
         window.clearTimeout(timeoutId);
@@ -87,9 +88,9 @@ function applyBackendStatus(nextStatus, label) {
 }
 
 function defaultLabelForStatus(status) {
-    if (status === 'online') return 'Backend Connected';
-    if (status === 'offline') return 'Backend Offline';
-    return 'Checking backend...';
+    if (status === 'online') return t('backend.status.connected');
+    if (status === 'offline') return t('backend.status.offline');
+    return t('backend.status.checking');
 }
 
 export function getBackendStatus() {

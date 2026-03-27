@@ -14,4 +14,4 @@ class UiLanguage(str, Enum):
 class UiLanguageSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    language: UiLanguage = UiLanguage.EN_US
+    language: UiLanguage = UiLanguage.ZH_CN

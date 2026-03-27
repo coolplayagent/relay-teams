@@ -10,6 +10,13 @@ import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
+
 export function bindWebSettingsHandlers() {
     const saveBtn = document.getElementById('save-web-btn');
     if (saveBtn) {
@@ -29,7 +36,7 @@ export async function loadWebSettingsPanel() {
         );
         showToast({
             title: t('settings.web.load_failed'),
-            message: `Failed to load web config: ${e.message}`,
+            message: formatMessage('settings.web.load_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }
@@ -47,7 +54,7 @@ async function handleSaveWeb() {
     } catch (e) {
         showToast({
             title: t('settings.web.save_failed'),
-            message: `Failed to save web config: ${e.message}`,
+            message: formatMessage('settings.web.save_failed_detail', { error: e.message }),
             tone: 'danger',
         });
     }

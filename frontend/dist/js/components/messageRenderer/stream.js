@@ -16,6 +16,7 @@ import {
     updateThinkingText,
     updateMessageText,
 } from './helpers.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 
 const streamState = new Map();
 const overlayState = new Map();
@@ -415,7 +416,7 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
     if (body) body.classList.add('open');
 
     const stateEl = approvalEl.querySelector('.tool-approval-state');
-    if (stateEl) stateEl.textContent = 'Approval required';
+    if (stateEl) stateEl.textContent = t('stream.approval_required');
 
     updateOverlayToolApproval(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, payload, 'requested');
     scrollBottom((st && st.container) || container);
@@ -446,15 +447,17 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
     const approvalEl = ensureApprovalState(toolBlock);
     const action = String(payload.action || 'resolved').toUpperCase();
     const stateEl = approvalEl.querySelector('.tool-approval-state');
-    if (stateEl) stateEl.textContent = `Approval ${action}`;
+    if (stateEl) {
+        stateEl.textContent = formatMessage('stream.approval_action', { action });
+    }
     const resultEl = toolBlock.querySelector('.tool-result');
     if (resultEl) {
         resultEl.classList.remove('error-text');
         resultEl.classList.add('warning-text');
         if (String(payload.action || '').toLowerCase() === 'deny') {
-            resultEl.innerHTML = 'Approval denied. Tool will not execute.';
+            resultEl.innerHTML = t('stream.approval_denied');
         } else {
-            resultEl.innerHTML = 'Approval submitted. Waiting for tool result...';
+            resultEl.innerHTML = t('stream.approval_waiting');
         }
     }
     scrollBottom((st && st.container) || container);
@@ -561,7 +564,7 @@ function ensureApprovalState(toolBlock) {
 
     approvalEl = document.createElement('div');
     approvalEl.className = 'tool-approval-inline';
-    approvalEl.innerHTML = '<div class="tool-approval-state">Approval required</div>';
+    approvalEl.innerHTML = `<div class="tool-approval-state">${escapeHtml(t('approval.state.required'))}</div>`;
     const body = toolBlock.querySelector('.tool-body');
     const resultEl = toolBlock.querySelector('.tool-result');
     if (body && resultEl) {

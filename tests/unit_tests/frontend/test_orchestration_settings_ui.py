@@ -91,6 +91,7 @@ def _run_orchestration_settings_script(
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "orchestrationSettings.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -172,12 +173,69 @@ export function logError() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "settings.orchestration.empty_title": "No orchestrations",
+    "settings.orchestration.empty_copy": "Add an orchestration to choose roles and orchestration-specific coordinator instructions.",
+    "settings.orchestration.default_badge": "Default",
+    "settings.orchestration.no_description": "No description",
+    "settings.orchestration.edit": "Edit",
+    "settings.orchestration.no_roles_title": "No Roles Available",
+    "settings.orchestration.no_roles_message": "Create at least one normal role before adding an orchestration.",
+    "settings.orchestration.new_name": "New Orchestration",
+    "settings.orchestration.fallback_name": "Orchestration",
+    "settings.orchestration.file_meta_default": "Orchestration configuration",
+    "settings.orchestration.file_meta_existing": "Orchestration: {orchestration_id}",
+    "settings.orchestration.file_meta_new": "New orchestration",
+    "settings.orchestration.field.id": "Orchestration ID",
+    "settings.orchestration.field.name": "Orchestration Name",
+    "settings.orchestration.field.description": "Description",
+    "settings.orchestration.field.default": "Set as default orchestration",
+    "settings.orchestration.allowed_roles": "Allowed Roles",
+    "settings.orchestration.prompt_title": "Orchestration Prompt",
+    "settings.orchestration.prompt_placeholder": "Explain how Coordinator should split work, choose roles, and drive work to completion.",
+    "settings.orchestration.no_roles_available": "No normal roles available.",
+    "settings.orchestration.saved_title": "Orchestration Saved",
+    "settings.orchestration.saved_message_detail": "Orchestration settings were saved.",
+    "settings.orchestration.save_failed_title": "Save Failed",
+    "settings.orchestration.save_failed_detail": "Failed to save orchestration settings.",
+    "settings.orchestration.delete_title": "Delete Orchestration",
+    "settings.orchestration.delete_message": "Delete orchestration \\"{name}\\"?",
+    "settings.orchestration.required_title": "Orchestration Required",
+    "settings.orchestration.required_message": "At least one orchestration must remain configured.",
+    "settings.orchestration.deleted_title": "Orchestration Deleted",
+    "settings.orchestration.deleted_message_detail": "The orchestration was deleted.",
+    "settings.orchestration.delete_failed_title": "Delete Failed",
+    "settings.orchestration.delete_failed_detail": "Failed to delete orchestration.",
+    "settings.orchestration.role_count": "Roles: {count}",
+    "settings.orchestration.no_current_edit": "No orchestration is currently being edited.",
+    "settings.orchestration.id_required": "Orchestration ID is required.",
+    "settings.orchestration.name_required": "Orchestration name is required.",
+    "settings.orchestration.role_required": "At least one role is required.",
+    "settings.orchestration.prompt_required": "Orchestration prompt is required.",
+    "settings.orchestration.default_required": "Default orchestration is required.",
+    "settings.orchestration.default_existing_required": "Default orchestration must match an existing orchestration.",
+    "settings.orchestration.ids_unique": "Orchestration IDs must be unique.",
+    "settings.orchestration.load_failed_title": "Load failed",
+    "settings.orchestration.load_failed_message": "Unable to load orchestration settings.",
+    "settings.action.delete": "Delete",
+    "settings.action.cancel": "Cancel",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/feedback.js", "./mockFeedback.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 

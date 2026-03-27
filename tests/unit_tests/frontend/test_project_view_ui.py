@@ -722,13 +722,14 @@ export const state = {
 
     mock_i18n_path.write_text(
         """
-const translations = {
-    "workspace_view.title": "{workspace} Project",
-    "workspace_view.tree": "Files",
-    "workspace_view.diffs": "Changes",
-    "workspace_view.reload": "Reload",
-    "workspace_view.back": "Back",
-    "workspace_view.loading": "Loading project snapshot...",
+    const translations = {
+        "workspace_view.title": "{workspace} Project",
+        "workspace_view.bindings": "Bindings",
+        "workspace_view.tree": "Files",
+        "workspace_view.diffs": "Changes",
+        "workspace_view.reload": "Reload",
+        "workspace_view.back": "Back",
+        "workspace_view.loading": "Loading project snapshot...",
     "workspace_view.loading_tree": "Loading files...",
     "workspace_view.loading_directory": "Loading folder...",
     "workspace_view.loading_diffs": "Loading changes...",
@@ -738,10 +739,20 @@ const translations = {
     "workspace_view.no_diffs": "No diffs",
     "workspace_view.not_git_repository": "Not a git repository",
     "workspace_view.binary_diff": "Binary diff",
-    "workspace_view.empty_diff": "Empty diff",
-    "workspace_view.diff_summary": "{count} changed files",
-    "workspace_view.change.modified": "Modified",
-};
+        "workspace_view.empty_diff": "Empty diff",
+        "workspace_view.diff_summary": "{count} changed files",
+        "workspace_view.change.modified": "Modified",
+        "workspace_view.delivery_disabled": "Disabled",
+        "workspace_view.delivery_events": "Delivery events",
+        "workspace_view.feishu_trigger": "Feishu trigger",
+        "workspace_view.feishu_chat": "Feishu chat",
+        "workspace_view.chat_type": "Chat type",
+        "workspace_view.delivery_help_feishu": "Automation updates will be pushed to the selected Feishu chat.",
+        "automation.field.workspace": "Workspace",
+        "automation.workspace.directory": "Workspace directory",
+        "automation.workspace.help": "Automation notifications are currently disabled.",
+        "sidebar.log.started_bound_session": "Started automation run in bound IM session: {session_id}",
+    };
 
 export function t(key) {
     return translations[key] || key;

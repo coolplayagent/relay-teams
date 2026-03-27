@@ -9,6 +9,7 @@ import {
     saveOrchestrationConfig,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
+import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let orchestrationConfig = {
@@ -19,6 +20,13 @@ let orchestrationRoleOptions = [];
 let editingDraft = null;
 let editingSourceId = '';
 let handlersBound = false;
+
+function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
 
 export function bindOrchestrationSettingsHandlers() {
     if (handlersBound) {
@@ -78,8 +86,8 @@ function renderOrchestrationList() {
     if (orchestrations.length === 0) {
         host.innerHTML = `
             <div class="settings-empty-state">
-                <h4>No orchestrations</h4>
-                <p>Add an orchestration to choose roles and orchestration-specific coordinator instructions.</p>
+                <h4>${t('settings.orchestration.empty_title')}</h4>
+                <p>${t('settings.orchestration.empty_copy')}</p>
             </div>
         `;
         return;
@@ -107,7 +115,7 @@ function renderOrchestrationList() {
 function renderOrchestrationRecord(orchestration) {
     const orchestrationId = String(orchestration?.preset_id || '').trim();
     const orchestrationName = String(
-        orchestration?.name || orchestrationId || 'Orchestration',
+        orchestration?.name || orchestrationId || t('settings.orchestration.fallback_name'),
     ).trim();
     const isDefault = orchestrationId === String(
         orchestrationConfig.default_orchestration_preset_id || '',
@@ -116,7 +124,7 @@ function renderOrchestrationRecord(orchestration) {
         ? orchestration.role_ids.length
         : 0;
     const defaultChip = isDefault
-        ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
+        ? `<span class="profile-card-chip profile-card-chip-accent">${escapeHtml(t('settings.orchestration.default_badge'))}</span>`
         : '';
     return `
         <div class="role-record" data-orchestration-id="${escapeHtml(orchestrationId)}">
@@ -127,12 +135,12 @@ function renderOrchestrationRecord(orchestration) {
                     <div class="profile-card-chips role-record-chips">${defaultChip}</div>
                 </div>
                 <div class="role-record-meta">
-                    <span>${escapeHtml(roleCount)} role${roleCount === 1 ? '' : 's'}</span>
-                    <span>${escapeHtml(String(orchestration?.description || '').trim() || 'No description')}</span>
+                    <span>${escapeHtml(formatMessage('settings.orchestration.role_count', { count: roleCount }))}</span>
+                    <span>${escapeHtml(String(orchestration?.description || '').trim() || t('settings.orchestration.no_description'))}</span>
                 </div>
             </div>
             <div class="role-record-actions">
-                <button class="settings-inline-action settings-list-action orchestration-edit-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button">Edit</button>
+                <button class="settings-inline-action settings-list-action orchestration-edit-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button">${escapeHtml(t('settings.orchestration.edit'))}</button>
             </div>
         </div>
     `;
@@ -155,8 +163,8 @@ function openOrchestrationEditor(orchestrationId) {
 function handleAddOrchestration() {
     if (orchestrationRoleOptions.length === 0) {
         showToast({
-            title: 'No Roles Available',
-            message: 'Create at least one normal role before adding an orchestration.',
+            title: t('settings.orchestration.no_roles_title'),
+            message: t('settings.orchestration.no_roles_message'),
             tone: 'warning',
         });
         return;
@@ -164,7 +172,7 @@ function handleAddOrchestration() {
     editingSourceId = '';
     editingDraft = {
         preset_id: createOrchestrationId(),
-        name: 'New Orchestration',
+        name: t('settings.orchestration.new_name'),
         description: '',
         role_ids: [orchestrationRoleOptions[0].role_id],
         orchestration_prompt: '',
@@ -188,7 +196,7 @@ function renderOrchestrationEditor() {
     if (!editingDraft) {
         host.innerHTML = '';
         if (fileMeta) {
-            fileMeta.textContent = 'Orchestration configuration';
+            fileMeta.textContent = t('settings.orchestration.file_meta_default');
         }
         if (deleteButton) {
             deleteButton.disabled = true;
@@ -200,8 +208,8 @@ function renderOrchestrationEditor() {
 
     if (fileMeta) {
         fileMeta.textContent = editingSourceId
-            ? `Orchestration: ${editingSourceId}`
-            : 'New orchestration';
+            ? formatMessage('settings.orchestration.file_meta_existing', { orchestration_id: editingSourceId })
+            : t('settings.orchestration.file_meta_new');
     }
     if (deleteButton) {
         deleteButton.disabled = editingSourceId === '';
@@ -215,34 +223,34 @@ function renderOrchestrationEditor() {
             <section class="role-editor-section">
                 <div class="profile-editor-grid role-editor-grid">
                     <div class="form-group">
-                        <label for="orchestration-id-input">Orchestration ID</label>
+                        <label for="orchestration-id-input">${t('settings.orchestration.field.id')}</label>
                         <input type="text" id="orchestration-id-input" value="${escapeHtml(editingDraft.preset_id)}" autocomplete="off">
                     </div>
                     <div class="form-group">
-                        <label for="orchestration-name-input">Orchestration Name</label>
+                        <label for="orchestration-name-input">${t('settings.orchestration.field.name')}</label>
                         <input type="text" id="orchestration-name-input" value="${escapeHtml(editingDraft.name)}" autocomplete="off">
                     </div>
                     <div class="form-group form-group-span-2">
-                        <label for="orchestration-description-input">Description</label>
+                        <label for="orchestration-description-input">${t('settings.orchestration.field.description')}</label>
                         <input type="text" id="orchestration-description-input" value="${escapeHtml(editingDraft.description)}" autocomplete="off">
                     </div>
                 </div>
                 <div class="profile-default-row orchestration-default-row">
                     <input type="checkbox" id="orchestration-default-input"${editingDraft.is_default ? ' checked' : ''}>
-                    <label for="orchestration-default-input">Set as default orchestration</label>
+                    <label for="orchestration-default-input">${t('settings.orchestration.field.default')}</label>
                 </div>
             </section>
             <section class="role-editor-section orchestration-role-section">
-                <h5>Allowed Roles</h5>
+                <h5>${t('settings.orchestration.allowed_roles')}</h5>
                 <div class="role-option-picker role-option-picker-single" id="orchestration-role-picker">
                     ${renderRolePickerOptions(editingDraft.role_ids)}
                 </div>
             </section>
             <section class="role-editor-section">
                 <div class="role-prompt-header">
-                    <h5>Orchestration Prompt</h5>
+                    <h5>${t('settings.orchestration.prompt_title')}</h5>
                 </div>
-                <textarea id="orchestration-prompt-input" class="config-textarea orchestration-prompt-textarea" placeholder="Explain how Coordinator should split work, choose roles, and drive work to completion.">${escapeHtml(editingDraft.orchestration_prompt)}</textarea>
+                <textarea id="orchestration-prompt-input" class="config-textarea orchestration-prompt-textarea" placeholder="${escapeHtml(t('settings.orchestration.prompt_placeholder'))}">${escapeHtml(editingDraft.orchestration_prompt)}</textarea>
             </section>
         </div>
     `;
@@ -251,7 +259,7 @@ function renderOrchestrationEditor() {
 
 function renderRolePickerOptions(selectedRoleIds) {
     if (orchestrationRoleOptions.length === 0) {
-        return '<div class="role-option-empty">No normal roles available.</div>';
+        return `<div class="role-option-empty">${escapeHtml(t('settings.orchestration.no_roles_available'))}</div>`;
     }
     const selectedSet = new Set(
         Array.isArray(selectedRoleIds)
@@ -273,17 +281,17 @@ async function handleSaveOrchestration() {
         const nextConfig = buildSavedConfig(draft);
         await saveOrchestrationConfig(nextConfig);
         showToast({
-            title: 'Orchestration Saved',
-            message: 'Orchestration settings were saved.',
+            title: t('settings.orchestration.saved_title'),
+            message: t('settings.orchestration.saved_message_detail'),
             tone: 'success',
         });
         document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
         await loadOrchestrationSettingsPanel();
     } catch (error) {
-        renderStatus(error.message || 'Failed to save orchestration settings.', 'danger');
+        renderStatus(error.message || t('settings.orchestration.save_failed_detail'), 'danger');
         showToast({
-            title: 'Save Failed',
-            message: error.message || 'Failed to save orchestration settings.',
+            title: t('settings.orchestration.save_failed_title'),
+            message: error.message || t('settings.orchestration.save_failed_detail'),
             tone: 'danger',
         });
     }
@@ -294,11 +302,11 @@ async function handleDeleteOrchestration() {
         return;
     }
     const confirmed = await showConfirmDialog({
-        title: 'Delete Orchestration',
-        message: `Delete orchestration "${editingSourceId}"?`,
+        title: t('settings.orchestration.delete_title'),
+        message: formatMessage('settings.orchestration.delete_message', { name: editingSourceId }),
         tone: 'warning',
-        confirmLabel: 'Delete',
-        cancelLabel: 'Cancel',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
     });
     if (!confirmed) {
         return;
@@ -309,8 +317,8 @@ async function handleDeleteOrchestration() {
     );
     if (nextPresets.length === 0) {
         showToast({
-            title: 'Orchestration Required',
-            message: 'At least one orchestration must remain configured.',
+            title: t('settings.orchestration.required_title'),
+            message: t('settings.orchestration.required_message'),
             tone: 'warning',
         });
         return;
@@ -326,17 +334,17 @@ async function handleDeleteOrchestration() {
             presets: nextPresets.map(item => serializeOrchestration(item)),
         });
         showToast({
-            title: 'Orchestration Deleted',
-            message: 'The orchestration was deleted.',
+            title: t('settings.orchestration.deleted_title'),
+            message: t('settings.orchestration.deleted_message_detail'),
             tone: 'success',
         });
         document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
         await loadOrchestrationSettingsPanel();
     } catch (error) {
-        renderStatus(error.message || 'Failed to delete orchestration.', 'danger');
+        renderStatus(error.message || t('settings.orchestration.delete_failed_detail'), 'danger');
         showToast({
-            title: 'Delete Failed',
-            message: error.message || 'Failed to delete orchestration.',
+            title: t('settings.orchestration.delete_failed_title'),
+            message: error.message || t('settings.orchestration.delete_failed_detail'),
             tone: 'danger',
         });
     }
@@ -351,7 +359,7 @@ function handleCancelOrchestrationEdit() {
 
 function readDraftFromForm() {
     if (!editingDraft) {
-        throw new Error('No orchestration is currently being edited.');
+        throw new Error(t('settings.orchestration.no_current_edit'));
     }
     const orchestrationId = String(
         document.getElementById('orchestration-id-input')?.value || editingDraft.preset_id,
@@ -376,16 +384,16 @@ function readDraftFromForm() {
     const isDefault = document.getElementById('orchestration-default-input')?.checked === true;
 
     if (!orchestrationId) {
-        throw new Error('Orchestration ID is required.');
+        throw new Error(t('settings.orchestration.id_required'));
     }
     if (!orchestrationName) {
-        throw new Error('Orchestration name is required.');
+        throw new Error(t('settings.orchestration.name_required'));
     }
     if (roleIds.length === 0) {
-        throw new Error('At least one role is required.');
+        throw new Error(t('settings.orchestration.role_required'));
     }
     if (!orchestrationPrompt) {
-        throw new Error('Orchestration prompt is required.');
+        throw new Error(t('settings.orchestration.prompt_required'));
     }
 
     editingDraft = {
@@ -415,13 +423,13 @@ function buildSavedConfig(draft) {
         });
 
     if (!defaultOrchestrationId) {
-        throw new Error('Default orchestration is required.');
+        throw new Error(t('settings.orchestration.default_required'));
     }
     if (!normalizedPresets.some(item => item.preset_id === defaultOrchestrationId)) {
-        throw new Error('Default orchestration must match an existing orchestration.');
+        throw new Error(t('settings.orchestration.default_existing_required'));
     }
     if (hasDuplicateIds(normalizedPresets)) {
-        throw new Error('Orchestration IDs must be unique.');
+        throw new Error(t('settings.orchestration.ids_unique'));
     }
     return {
         default_orchestration_preset_id: defaultOrchestrationId,
@@ -532,11 +540,11 @@ function renderStatus(message, tone) {
 function renderLoadError(error) {
     const listHost = document.getElementById('orchestration-preset-list');
     const panel = document.getElementById('orchestration-editor-panel');
-    const message = error?.message || 'Unable to load orchestration settings.';
+    const message = error?.message || t('settings.orchestration.load_failed_message');
     if (listHost) {
         listHost.innerHTML = `
             <div class="settings-empty-state">
-                <h4>Load failed</h4>
+                <h4>${t('settings.orchestration.load_failed_title')}</h4>
                 <p>${escapeHtml(message)}</p>
             </div>
         `;

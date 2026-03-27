@@ -28,6 +28,13 @@ const PROVIDER_DEFAULT_BASE_URLS = {
     minimax: 'https://api.minimaxi.com/v1',
 };
 
+function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
+
 export function bindModelProfileHandlers() {
     const addProfileBtn = document.getElementById('add-profile-btn');
     if (addProfileBtn) {
@@ -120,8 +127,8 @@ function renderProfiles() {
     if (Object.keys(profiles).length === 0) {
         listEl.innerHTML = `
             <div class="settings-empty-state">
-                <h4>No profiles configured</h4>
-                <p>Create a profile to define the model endpoint, request limits, and sampling defaults.</p>
+                <h4>${t('settings.model.empty_title')}</h4>
+                <p>${t('settings.model.empty_copy')}</p>
             </div>
         `;
         return;
@@ -242,22 +249,22 @@ async function handleSaveProfile() {
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
     if (!name) {
-        showToast({ title: 'Profile Required', message: 'Profile name is required.', tone: 'warning' });
+        showToast({ title: t('settings.model.profile_required_title'), message: t('settings.model.profile_required_message'), tone: 'warning' });
         return;
     }
 
     if (!model) {
-        showToast({ title: 'Model Required', message: 'Choose or enter a model before saving.', tone: 'warning' });
+        showToast({ title: t('settings.model.model_required_title'), message: t('settings.model.model_required_message'), tone: 'warning' });
         return;
     }
 
     if (!baseUrl) {
-        showToast({ title: 'Base URL Required', message: 'Base URL is required.', tone: 'warning' });
+        showToast({ title: t('settings.model.base_url_required_title'), message: t('settings.model.base_url_required_message'), tone: 'warning' });
         return;
     }
 
     if (!editingProfile && !apiKey) {
-        showToast({ title: 'API Key Required', message: 'API key is required for a new profile.', tone: 'warning' });
+        showToast({ title: t('settings.model.api_key_required_title'), message: t('settings.model.api_key_required_message'), tone: 'warning' });
         return;
     }
 
@@ -291,10 +298,10 @@ async function handleSaveProfile() {
         renderDraftModelDiscoveryState();
         renderDiscoveredModels();
         setModelMenuOpen(false);
-        showToast({ title: 'Profile Saved', message: 'Profile saved and reloaded.', tone: 'success' });
+        showToast({ title: t('settings.model.saved_title'), message: t('settings.model.saved_message_detail'), tone: 'success' });
         await loadModelProfilesPanel();
     } catch (e) {
-        showToast({ title: 'Save Failed', message: `Failed to save: ${e.message}`, tone: 'danger' });
+        showToast({ title: t('settings.model.save_failed_title'), message: formatMessage('settings.model.save_failed_detail', { error: e.message }), tone: 'danger' });
     }
 }
 
@@ -305,7 +312,7 @@ async function handleTestProfile(name) {
 
     profileProbeStates[name] = {
         status: 'probing',
-        message: 'Testing connection...',
+        message: t('settings.model.testing'),
     };
     renderProfileProbeState(name);
 
@@ -318,7 +325,7 @@ async function handleTestProfile(name) {
     } catch (e) {
         profileProbeStates[name] = {
             status: 'failed',
-            message: `Probe failed: ${e.message}`,
+            message: formatMessage('settings.model.probe_failed', { error: e.message }),
         };
     }
 
@@ -333,7 +340,7 @@ async function handleTestDraftProfile() {
 
     draftProbeState = {
         status: 'probing',
-        message: 'Testing connection...',
+        message: t('settings.model.testing'),
     };
     renderDraftProbeState();
 
@@ -343,7 +350,7 @@ async function handleTestDraftProfile() {
     } catch (e) {
         draftProbeState = {
             status: 'failed',
-            message: `Probe failed: ${e.message}`,
+            message: formatMessage('settings.model.probe_failed', { error: e.message }),
         };
     }
 
@@ -352,11 +359,11 @@ async function handleTestDraftProfile() {
 
 async function handleDeleteProfile(name) {
     const shouldDelete = await showConfirmDialog({
-        title: 'Delete Profile',
-        message: `Delete profile "${name}"?`,
+        title: t('settings.model.delete_title'),
+        message: formatMessage('settings.model.delete_message', { name }),
         tone: 'warning',
-        confirmLabel: 'Delete',
-        cancelLabel: 'Cancel',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
     });
     if (!shouldDelete) {
         return;
@@ -366,10 +373,10 @@ async function handleDeleteProfile(name) {
         await deleteModelProfile(name);
         await reloadModelConfig();
         delete profileProbeStates[name];
-        showToast({ title: 'Profile Deleted', message: 'Profile deleted and reloaded.', tone: 'success' });
+        showToast({ title: t('settings.model.deleted_title'), message: t('settings.model.deleted_message_detail'), tone: 'success' });
         await loadModelProfilesPanel();
     } catch (e) {
-        showToast({ title: 'Delete Failed', message: `Failed to delete: ${e.message}`, tone: 'danger' });
+        showToast({ title: t('settings.model.delete_failed_title'), message: formatMessage('settings.model.delete_failed_detail', { error: e.message }), tone: 'danger' });
     }
 }
 
@@ -381,7 +388,7 @@ async function handleDiscoverDraftModels() {
 
     draftModelDiscoveryState = {
         status: 'probing',
-        message: 'Fetching models...',
+        message: t('settings.model.fetching_models'),
     };
     renderDraftModelDiscoveryState();
 
@@ -391,7 +398,9 @@ async function handleDiscoverDraftModels() {
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
                 status: 'failed',
-                message: `Fetch failed: ${result.error_message || result.error_code || 'Unknown error'}`,
+                message: formatMessage('settings.model.fetch_failed', {
+                    error: result.error_message || result.error_code || t('settings.model.unknown'),
+                }),
             };
         } else {
             draftDiscoveredModels = normalizeDiscoveredModels(result);
@@ -406,7 +415,7 @@ async function handleDiscoverDraftModels() {
         draftDiscoveredModels = [];
         draftModelDiscoveryState = {
             status: 'failed',
-            message: `Fetch failed: ${e.message}`,
+            message: formatMessage('settings.model.fetch_failed', { error: e.message }),
         };
     }
 
@@ -428,7 +437,7 @@ function buildDraftProbePayload() {
     if (!model || !baseUrl || (!apiKey && !editingProfile)) {
         draftProbeState = {
             status: 'failed',
-            message: 'Model, base URL, and API key are required before testing a new profile.',
+            message: t('settings.model.validation_test_new'),
         };
         renderDraftProbeState();
         return null;
@@ -471,7 +480,7 @@ function buildDraftModelDiscoveryPayload() {
         draftDiscoveredModels = [];
         draftModelDiscoveryState = {
             status: 'failed',
-            message: 'Base URL and API key are required before fetching models for a new profile.',
+            message: t('settings.model.validation_fetch_models'),
         };
         renderDiscoveredModels();
         renderDraftModelDiscoveryState();
@@ -501,17 +510,22 @@ function buildDraftModelDiscoveryPayload() {
 
 function buildProbeState(result) {
     if (result.ok) {
-        const usageText = result.token_usage ? ` · ${result.token_usage.total_tokens} tokens` : '';
+        const usageText = result.token_usage
+            ? formatMessage('settings.model.usage_tokens', { tokens: result.token_usage.total_tokens })
+            : '';
         return {
             status: 'success',
-            message: `Connected in ${result.latency_ms}ms${usageText}`,
+            message: formatMessage('settings.model.probe_success', {
+                latency_ms: result.latency_ms,
+                usage_text: usageText,
+            }),
         };
     }
 
-    const reason = result.error_message || result.error_code || 'Unknown error';
+    const reason = result.error_message || result.error_code || t('settings.model.unknown');
     return {
         status: 'failed',
-        message: `Connection failed: ${reason}`,
+        message: formatMessage('settings.model.connection_failed', { reason }),
     };
 }
 
@@ -527,7 +541,7 @@ function renderDraftProbeState() {
         statusEl.textContent = '';
         statusEl.className = 'profile-probe-status';
         testBtn.disabled = false;
-        testBtn.textContent = 'Test';
+        testBtn.textContent = t('settings.action.test');
         return;
     }
 
@@ -535,7 +549,7 @@ function renderDraftProbeState() {
     statusEl.textContent = draftProbeState.message;
     statusEl.className = `profile-probe-status probe-status probe-status-${draftProbeState.status}`;
     testBtn.disabled = draftProbeState.status === 'probing';
-    testBtn.textContent = draftProbeState.status === 'probing' ? 'Testing...' : 'Test';
+    testBtn.textContent = draftProbeState.status === 'probing' ? t('settings.model.testing') : t('settings.action.test');
 }
 
 function renderDraftModelDiscoveryState() {
@@ -551,11 +565,11 @@ function renderDraftModelDiscoveryState() {
         statusEl.className = 'profile-model-discovery-status';
         fetchBtn.disabled = false;
         fetchBtn.className = 'secure-input-btn profile-discovery-btn';
-        fetchBtn.title = 'Fetch Models';
+        fetchBtn.title = t('settings.model.fetch_models');
         if (typeof fetchBtn.setAttribute === 'function') {
-            fetchBtn.setAttribute('aria-label', 'Fetch Models');
+            fetchBtn.setAttribute('aria-label', t('settings.model.fetch_models'));
         } else {
-            fetchBtn.ariaLabel = 'Fetch Models';
+            fetchBtn.ariaLabel = t('settings.model.fetch_models');
         }
         return;
     }
@@ -568,8 +582,8 @@ function renderDraftModelDiscoveryState() {
         ? 'secure-input-btn profile-discovery-btn is-loading'
         : 'secure-input-btn profile-discovery-btn';
     fetchBtn.title = draftModelDiscoveryState.status === 'probing'
-        ? 'Fetching Models'
-        : 'Fetch Models';
+        ? t('settings.model.fetching_models')
+        : t('settings.model.fetch_models');
     if (typeof fetchBtn.setAttribute === 'function') {
         fetchBtn.setAttribute('aria-label', fetchBtn.title);
     } else {
@@ -610,7 +624,9 @@ function renderDiscoveredModels() {
         button.onclick = () => handleDiscoveredModelPicked(button.dataset.modelName);
     });
     openModelMenuBtn.disabled = draftDiscoveredModels.length === 0;
-    openModelMenuBtn.title = draftDiscoveredModels.length === 0 ? 'No Models Loaded' : 'Show Models';
+    openModelMenuBtn.title = draftDiscoveredModels.length === 0
+        ? t('settings.model.no_models_loaded')
+        : t('settings.model.show_models');
     if (typeof openModelMenuBtn.setAttribute === 'function') {
         openModelMenuBtn.setAttribute('aria-label', openModelMenuBtn.title);
     } else {
@@ -755,10 +771,12 @@ function setModelMenuOpen(open) {
 function buildDiscoveredModelsMessage(result) {
     const modelCount = normalizeDiscoveredModels(result).length;
     if (modelCount === 0) {
-        return `Connected in ${result.latency_ms}ms, but the endpoint returned no models.`;
+        return formatMessage('settings.model.probe_no_models', { latency_ms: result.latency_ms });
     }
-    const noun = modelCount === 1 ? 'model' : 'models';
-    return `Fetched ${modelCount} ${noun} in ${result.latency_ms}ms.`;
+    return formatMessage('settings.model.models_fetched', {
+        count: modelCount,
+        latency_ms: result.latency_ms,
+    });
 }
 
 function normalizeDiscoveredModels(result) {
@@ -879,7 +897,9 @@ function renderDraftApiKeyToggle() {
     const hasValue = draftApiKeyState.hasPersistedValue || Boolean(draftApiKeyState.draftValue.trim()) || Boolean(inputValue);
     toggleApiKeyBtn.style.display = hasValue ? 'inline-flex' : 'none';
     toggleApiKeyBtn.className = draftApiKeyState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
-    toggleApiKeyBtn.title = draftApiKeyState.revealed ? 'Hide API key' : 'Show API key';
+    toggleApiKeyBtn.title = draftApiKeyState.revealed
+        ? t('settings.model.hide_api_key')
+        : t('settings.model.show_api_key');
     if (typeof toggleApiKeyBtn.setAttribute === 'function') {
         toggleApiKeyBtn.setAttribute('aria-label', toggleApiKeyBtn.title);
     } else {
@@ -939,13 +959,13 @@ function renderProbeStatusMarkup(state) {
 
 function renderProfileCard(name, profile, index) {
     const probeState = profileProbeStates[name] || null;
-    const testButtonLabel = probeState?.status === 'probing' ? 'Testing...' : 'Test';
+    const testButtonLabel = probeState?.status === 'probing' ? t('settings.model.testing') : t('settings.action.test');
     const providerLabel = formatProviderLabel(profile.provider);
     const defaultChip = profile.is_default === true
-        ? '<span class="profile-card-chip profile-card-chip-accent">Default</span>'
+        ? `<span class="profile-card-chip profile-card-chip-accent">${escapeHtml(t('settings.model.default_badge'))}</span>`
         : '';
-    const modelLabel = profile.model || 'No model';
-    const baseUrlLabel = profile.base_url || 'No endpoint';
+    const modelLabel = profile.model || t('settings.model.no_model');
+    const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
 
     return `
         <div class="profile-record profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
@@ -967,9 +987,9 @@ function renderProfileCard(name, profile, index) {
                     </div>
                 </div>
                 <div class="profile-card-actions">
-                    <button class="settings-inline-action settings-list-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="Test" ${probeState?.status === 'probing' ? 'disabled' : ''}>${testButtonLabel}</button>
-                    <button class="settings-inline-action settings-list-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="Edit">Edit</button>
-                    <button class="settings-inline-action settings-list-action settings-list-action-danger profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="Delete">Delete</button>
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.test'))}" ${probeState?.status === 'probing' ? 'disabled' : ''}>${escapeHtml(testButtonLabel)}</button>
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.edit'))}">${escapeHtml(t('settings.action.edit'))}</button>
+                    <button class="settings-inline-action settings-list-action settings-list-action-danger profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.delete'))}">${escapeHtml(t('settings.action.delete'))}</button>
                 </div>
             </div>
             <div class="profile-card-inline-status" data-profile-probe-container="${escapeHtml(name)}">
@@ -991,7 +1011,8 @@ function renderProfileProbeState(name) {
 
     if (testButton) {
         testButton.disabled = state?.status === 'probing';
-        testButton.textContent = state?.status === 'probing' ? 'Testing...' : 'Test';
+        testButton.textContent = state?.status === 'probing' ? t('settings.model.testing') : t('settings.action.test');
+        testButton.title = t('settings.action.test');
     }
 
     if (probeContainer) {
@@ -1010,7 +1031,7 @@ function formatProviderLabel(provider) {
     if (provider === 'echo') {
         return 'Echo';
     }
-    return provider || 'Unknown';
+    return provider || t('settings.model.unknown');
 }
 
 function escapeHtml(value) {

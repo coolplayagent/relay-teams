@@ -2,6 +2,7 @@
  * utils/feedback.js
  * Unified in-app toast and dialog feedback helpers.
  */
+import { t } from './i18n.js';
 
 let toastStack = null;
 let dialogRoot = null;
@@ -27,9 +28,9 @@ export function showToast({
     toast.innerHTML = `
         <div class="feedback-toast-body">
             ${title ? `<div class="feedback-toast-title">${escapeHtml(title)}</div>` : ''}
-            <div class="feedback-toast-message">${escapeHtml(message || title || 'Notification')}</div>
+            <div class="feedback-toast-message">${escapeHtml(message || title || t('feedback.notification'))}</div>
         </div>
-        <button type="button" class="feedback-toast-close" aria-label="Dismiss notification">Close</button>
+        <button type="button" class="feedback-toast-close" aria-label="${escapeHtml(t('feedback.dismiss_notification'))}">${escapeHtml(t('feedback.close'))}</button>
     `;
 
     const closeBtn = toast.querySelector('.feedback-toast-close');
@@ -50,10 +51,10 @@ export function showToast({
 }
 
 export function showAlertDialog({
-    title = 'Notice',
+    title = t('feedback.notice'),
     message = '',
     tone = 'info',
-    confirmLabel = 'OK',
+    confirmLabel = t('feedback.ok'),
 } = {}) {
     return enqueueDialog({
         kind: 'alert',
@@ -66,11 +67,11 @@ export function showAlertDialog({
 }
 
 export function showConfirmDialog({
-    title = 'Confirm Action',
+    title = t('feedback.confirm_action'),
     message = '',
     tone = 'warning',
-    confirmLabel = 'Confirm',
-    cancelLabel = 'Cancel',
+    confirmLabel = t('feedback.confirm'),
+    cancelLabel = t('feedback.cancel'),
 } = {}) {
     return enqueueDialog({
         kind: 'confirm',
@@ -83,11 +84,11 @@ export function showConfirmDialog({
 }
 
 export function showTextInputDialog({
-    title = 'Input Required',
+    title = t('feedback.input_required'),
     message = '',
     tone = 'info',
-    confirmLabel = 'Confirm',
-    cancelLabel = 'Cancel',
+    confirmLabel = t('feedback.confirm'),
+    cancelLabel = t('feedback.cancel'),
     placeholder = '',
     value = '',
 } = {}) {
@@ -104,11 +105,11 @@ export function showTextInputDialog({
 }
 
 export function showFormDialog({
-    title = 'Form',
+    title = t('feedback.form'),
     message = '',
     tone = 'info',
-    confirmLabel = 'Confirm',
-    cancelLabel = 'Cancel',
+    confirmLabel = t('feedback.confirm'),
+    cancelLabel = t('feedback.cancel'),
     fields = [],
 } = {}) {
     return enqueueDialog({
@@ -140,7 +141,7 @@ function renderNextDialog() {
         <div class="feedback-dialog-backdrop">
             <div class="feedback-dialog feedback-tone-${normalizeTone(activeDialog.tone)}" role="alertdialog" aria-modal="true">
                 <div class="feedback-dialog-header">
-                    <h3>${escapeHtml(activeDialog.title || 'Notice')}</h3>
+                    <h3>${escapeHtml(activeDialog.title || t('feedback.notice'))}</h3>
                 </div>
                 <div class="feedback-dialog-body">${escapeHtml(activeDialog.message || '')}</div>
                 ${activeDialog.kind === 'prompt'
@@ -172,7 +173,7 @@ function renderNextDialog() {
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             <span class="feedback-dialog-checkbox">
                                                 <input type="checkbox" class="feedback-dialog-checkbox-input" data-feedback-form-input="${escapeHtml(fieldId)}" ${fieldValue === true ? 'checked' : ''} />
-                                                <span class="feedback-dialog-checkbox-copy">${escapeHtml(field.description || 'Enable this automation after creation.')}</span>
+                                                <span class="feedback-dialog-checkbox-copy">${escapeHtml(field.description || t('feedback.enable_after_creation'))}</span>
                                             </span>
                                         </label>
                                     `;
@@ -220,10 +221,10 @@ function renderNextDialog() {
                 }
                 <div class="feedback-dialog-actions">
                     ${activeDialog.kind !== 'alert'
-                        ? `<button type="button" class="secondary-btn feedback-action-btn" data-feedback-cancel>${escapeHtml(activeDialog.cancelLabel || 'Cancel')}</button>`
+                        ? `<button type="button" class="secondary-btn feedback-action-btn" data-feedback-cancel>${escapeHtml(activeDialog.cancelLabel || t('feedback.cancel'))}</button>`
                         : ''
                     }
-                    <button type="button" class="primary-btn feedback-action-btn" data-feedback-confirm>${escapeHtml(activeDialog.confirmLabel || 'OK')}</button>
+                    <button type="button" class="primary-btn feedback-action-btn" data-feedback-confirm>${escapeHtml(activeDialog.confirmLabel || t('feedback.ok'))}</button>
                 </div>
             </div>
         </div>

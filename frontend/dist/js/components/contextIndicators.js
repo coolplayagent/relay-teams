@@ -5,6 +5,7 @@
 import { fetchModelProfiles, fetchRunTokenUsage } from '../core/api.js';
 import { state, getPrimaryRoleId } from '../core/state.js';
 import { els } from '../utils/dom.js';
+import { formatMessage, t } from '../utils/i18n.js';
 import { currentRounds } from './rounds.js';
 import {
     getActiveInstanceId,
@@ -213,15 +214,20 @@ function renderUsage(indicator, usage, contextWindow) {
         : '--';
     indicator.textContent = `${formatTokenCount(usage.input_tokens)} / ${upper}`;
     indicator.title = typeof contextWindow === 'number' && contextWindow > 0
-        ? `Latest provider context usage: ${usage.input_tokens} / ${contextWindow} tokens`
-        : `Latest provider context usage: ${usage.input_tokens} tokens`;
+        ? formatMessage('context_indicator.latest_with_window', {
+            input_tokens: usage.input_tokens,
+            context_window: contextWindow,
+        })
+        : formatMessage('context_indicator.latest_without_window', {
+            input_tokens: usage.input_tokens,
+        });
 }
 
 function renderIdle(indicator, { hidden = false } = {}) {
     if (!indicator) return;
     indicator.dataset.state = 'idle';
     indicator.textContent = EMPTY_LABEL;
-    indicator.title = 'Latest provider context usage';
+    indicator.title = t('context_indicator.latest_title');
     indicator.style.display = hidden ? 'none' : 'inline-flex';
 }
 
@@ -229,7 +235,7 @@ function renderLoading(indicator) {
     if (!indicator) return;
     indicator.style.display = 'inline-flex';
     indicator.dataset.state = 'loading';
-    indicator.title = 'Loading provider context usage';
+    indicator.title = t('context_indicator.loading_title');
     if (!indicator.textContent || indicator.textContent === EMPTY_LABEL) {
         indicator.textContent = EMPTY_LABEL;
     }
@@ -240,7 +246,7 @@ function renderError(indicator) {
     indicator.style.display = 'inline-flex';
     indicator.dataset.state = 'error';
     indicator.textContent = EMPTY_LABEL;
-    indicator.title = 'Provider context usage unavailable';
+    indicator.title = t('context_indicator.unavailable_title');
 }
 
 function resolveUsageRunId() {

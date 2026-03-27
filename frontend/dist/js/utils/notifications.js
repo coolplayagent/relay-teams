@@ -3,6 +3,7 @@
  * Unified in-app notification helpers.
  */
 import { initUiFeedback, showToast } from './feedback.js';
+import { formatMessage, t } from './i18n.js';
 
 const notifiedApprovalToolCalls = new Set();
 const notifiedKeys = new Set();
@@ -17,7 +18,7 @@ export function primeNotificationPermission() {
 export function notifyToolApprovalRequested(payload = {}) {
     return notifyFromRequest({
         notification_type: 'tool_approval_requested',
-        title: 'Approval Required',
+        title: t('notifications.approval_required'),
         body: buildApprovalBody(payload),
         channels: ['browser', 'toast'],
         dedupe_key: String(payload?.tool_call_id || ''),
@@ -38,7 +39,7 @@ export function notifyFromRequest(payload = {}) {
         return false;
     }
 
-    const title = String(payload?.title || 'Notification');
+    const title = String(payload?.title || t('notifications.notification'));
     const body = String(payload?.body || buildApprovalBody(payload?.context || payload));
     const channels = Array.isArray(payload?.channels) ? payload.channels : ['toast'];
 
@@ -71,8 +72,13 @@ function buildApprovalBody(payload = {}) {
     const toolName = String(payload?.tool_name || 'tool');
     const roleId = String(payload?.role_id || '');
     return roleId
-        ? `${roleId} requests approval for ${toolName}.`
-        : `A tool call (${toolName}) is waiting for your approval.`;
+        ? formatMessage('notifications.approval_body_with_role', {
+            role_id: roleId,
+            tool_name: toolName,
+        })
+        : formatMessage('notifications.approval_body_generic', {
+            tool_name: toolName,
+        });
 }
 
 function startTitleFlash(alertTitle) {

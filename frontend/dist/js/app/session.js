@@ -21,6 +21,7 @@ import {
     resumeRunStream,
 } from '../core/stream.js';
 import { els } from '../utils/dom.js';
+import { formatMessage } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 import { refreshSessionTopologyControls } from './prompt.js';
 
@@ -96,7 +97,9 @@ export async function selectSession(sessionId) {
             detail: { sessionId },
         }),
     );
-    sysLog(`${isSameSession ? 'Reloaded' : 'Switched to'} session: ${sessionId}`);
+    sysLog(formatMessage(isSameSession ? 'session.reloaded' : 'session.switched', {
+        session_id: sessionId,
+    }));
 }
 
 function autoConnectRunningStream(sessionId) {

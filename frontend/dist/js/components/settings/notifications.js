@@ -4,7 +4,7 @@
  */
 import { fetchNotificationConfig, saveNotificationConfig } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
 
 const NOTIFICATION_TYPES = [
@@ -29,14 +29,14 @@ export function bindNotificationSettingsHandlers() {
                     message: t('settings.notifications.saved_message'),
                     tone: 'success',
                 });
-                sysLog('Notification settings saved.');
+                sysLog(t('settings.notifications.log_saved'));
             } catch (e) {
                 showToast({
                     title: t('settings.notifications.save_failed'),
-                    message: `Failed to save notification settings: ${e.message}`,
+                    message: formatMessage('settings.notifications.save_failed_detail', { error: e.message }),
                     tone: 'danger',
                 });
-                sysLog(`Failed to save notification settings: ${e.message}`, 'log-error');
+                sysLog(formatMessage('settings.notifications.log_save_failed', { error: e.message }), 'log-error');
             }
         };
     }
@@ -64,7 +64,7 @@ export async function loadNotificationSettingsPanel() {
         const config = await fetchNotificationConfig();
         applyNotificationConfigToPanel(config);
     } catch (e) {
-        sysLog(`Failed to load notification settings: ${e.message}`, 'log-error');
+        sysLog(formatMessage('settings.notifications.log_load_failed', { error: e.message }), 'log-error');
     }
 }
 

@@ -352,8 +352,8 @@ async function handleCopyCodeBlock(button) {
     const copyText = codeEl ? String(codeEl.textContent || '').trimEnd() : '';
     if (!copyText) {
         showToast({
-            title: 'Copy Failed',
-            message: 'No code content was found in this block.',
+            title: t('markdown.copy_failed_title'),
+            message: t('markdown.copy_empty_message'),
             tone: 'warning',
         });
         return;
@@ -363,15 +363,15 @@ async function handleCopyCodeBlock(button) {
         await navigator.clipboard.writeText(copyText);
         indicateCopySuccess(button);
         showToast({
-            title: 'Code Copied',
-            message: 'The code block has been copied to your clipboard.',
+            title: t('markdown.copy_success_title'),
+            message: t('markdown.copy_success_message'),
             tone: 'success',
             durationMs: 1800,
         });
     } catch (error) {
         showToast({
-            title: 'Copy Failed',
-            message: 'Clipboard access is not available right now.',
+            title: t('markdown.copy_failed_title'),
+            message: t('markdown.copy_unavailable_message'),
             tone: 'danger',
         });
     }

@@ -331,13 +331,13 @@ function humanizeStatus(value) {
 
 function shortInstanceId(instanceId) {
     const safe = String(instanceId || '').trim();
-    if (!safe) return 'No instance';
+    if (!safe) return t('subagent_rail.no_instance');
     return safe.length > 14 ? `${safe.slice(0, 8)}...${safe.slice(-4)}` : safe;
 }
 
 function formatTimestamp(value) {
     const safe = String(value || '').trim();
-    if (!safe) return 'No activity yet';
+    if (!safe) return t('subagent_rail.no_activity');
     const parsed = new Date(safe);
     if (Number.isNaN(parsed.getTime())) return safe;
     return parsed.toLocaleString();

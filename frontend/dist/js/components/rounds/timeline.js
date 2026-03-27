@@ -23,6 +23,7 @@ import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './
 import { roundsState } from './state.js';
 import { roundSectionId, esc, roundStateLabel, roundStateTone } from './utils.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 
 export let currentRounds = [];
 export let currentRound = null;
@@ -403,7 +404,7 @@ function renderRoundSection(round, index) {
             </div>
             <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
         </div>
-        <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
+        <div class="round-detail-intent">${esc(round.intent || t('rounds.no_intent'))}</div>`;
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
     if (round.compaction_marker_before) {
@@ -434,7 +435,9 @@ function renderRoundSection(round, index) {
     } else if (!round.has_user_messages) {
         const empty = document.createElement('div');
         empty.className = 'panel-empty';
-        empty.textContent = `No ${primaryRoleLabel.toLowerCase()} messages in this round.`;
+        empty.textContent = formatMessage('rounds.no_messages', {
+            role: primaryRoleLabel.toLowerCase(),
+        });
         section.appendChild(empty);
     }
 
@@ -445,11 +448,15 @@ function renderRoundSection(round, index) {
             const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
             const pill = document.createElement('div');
             pill.className = 'round-token-summary';
-            pill.title = `Input: ${usage.total_input_tokens} | Output: ${usage.total_output_tokens} | Requests: ${usage.total_requests}`;
+            pill.title = formatMessage('rounds.token_title', {
+                input: usage.total_input_tokens,
+                output: usage.total_output_tokens,
+                requests: usage.total_requests,
+            });
             pill.innerHTML = `
-                <span class="token-in">In ${fmt(usage.total_input_tokens)}</span>
-                <span class="token-out">Out ${fmt(usage.total_output_tokens)}</span>
-                ${usage.total_tool_calls > 0 ? `<span class="token-tools">Tools ${usage.total_tool_calls}</span>` : ''}
+                <span class="token-in">${esc(formatMessage('rounds.token_in', { value: fmt(usage.total_input_tokens) }))}</span>
+                <span class="token-out">${esc(formatMessage('rounds.token_out', { value: fmt(usage.total_output_tokens) }))}</span>
+                ${usage.total_tool_calls > 0 ? `<span class="token-tools">${esc(formatMessage('rounds.token_tools', { value: usage.total_tool_calls }))}</span>` : ''}
             `;
             const tokenHost = headerEl.querySelector('.round-detail-token-host');
             if (tokenHost) {
@@ -522,7 +529,7 @@ function renderRoundHistoryDivider(marker) {
     divider.dataset.markerType = String(marker?.marker_type || '');
     divider.innerHTML = `
         <span class="round-history-divider-line" aria-hidden="true"></span>
-        <span class="round-history-divider-chip">${esc(String(marker?.label || 'History compacted'))}</span>
+        <span class="round-history-divider-chip">${esc(String(marker?.label || t('rounds.history_compacted')))}</span>
         <span class="round-history-divider-line" aria-hidden="true"></span>
     `;
     return divider;
@@ -761,7 +768,7 @@ function patchAllActiveRetryEvents() {
 function renderRoundBadges(round, stateLabel, stateTone, approvalCount) {
     return `
         ${stateLabel ? `<span class="round-state-pill round-state-${stateTone}">${esc(stateLabel)}</span>` : ''}
-        ${approvalCount > 0 ? `<span class="round-state-pill round-state-warning">${approvalCount} approval${approvalCount === 1 ? '' : 's'}</span>` : ''}
+        ${approvalCount > 0 ? `<span class="round-state-pill round-state-warning">${esc(t('rounds.pending_approvals').replace('{count}', String(approvalCount)))}</span>` : ''}
     `;
 }
 

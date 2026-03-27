@@ -3,6 +3,7 @@
  * Floating round navigator rendering and active-state sync.
  */
 import { esc, roundStateLabel, roundStateTone } from './utils.js';
+import { t } from '../../utils/i18n.js';
 
 let navRounds = [];
 let navActiveRunId = null;
@@ -124,10 +125,10 @@ function renderNavigatorDom(nav) {
         item.innerHTML = `
             <span class="idx">${idx + 1}</span>
             <span class="round-nav-copy">
-                <span class="txt">${esc(round.intent || 'No intent')}</span>
+                <span class="txt">${esc(round.intent || t('rounds.no_intent'))}</span>
                 <span class="round-nav-meta">
                     ${stateLabel ? `<span class="round-nav-state round-nav-state-${roundStateTone(round)}">${esc(stateLabel)}</span>` : ''}
-                    ${approvalCount > 0 ? `<span class="round-nav-state round-nav-state-warning">${approvalCount} approval${approvalCount === 1 ? '' : 's'}</span>` : ''}
+                    ${approvalCount > 0 ? `<span class="round-nav-state round-nav-state-warning">${esc(t('rounds.pending_approvals').replace('{count}', String(approvalCount)))}</span>` : ''}
                 </span>
             </span>
         `;

@@ -17,7 +17,7 @@ import { state } from "../core/state.js";
 import { setupNavbarBindings } from "../components/navbar.js";
 import { initBackendStatusMonitor } from "../utils/backendStatus.js";
 import { initUiFeedback } from "../utils/feedback.js";
-import { initializeLanguage, toggleLanguage } from "../utils/i18n.js";
+import { initializeLanguage, toggleLanguage, t } from "../utils/i18n.js";
 import { resumeRecoverableRun } from "./recovery.js";
 import {
   handlePromptComposerInput,
@@ -98,7 +98,7 @@ export async function initApp(selectSession, handleSend) {
   installGlobalErrorLogging();
   logInfo("frontend.bootstrap.started", "Frontend bootstrap started");
   await initializeLanguage();
-  sysLog("System Initialized");
+  sysLog(t("app.system_initialized"));
   initUiFeedback();
   initBackendStatusMonitor();
   setupNavbarBindings();

@@ -3,6 +3,7 @@
  * Approval rendering and status helpers.
  */
 import { parseMarkdown } from '../../../utils/markdown.js';
+import { t } from '../../../utils/i18n.js';
 
 export function decoratePendingApprovalBlock(toolBlock, approval) {
     if (approval?.tool_call_id) {
@@ -78,24 +79,24 @@ export function syncApprovalStateFromEnvelope(toolBlock, envelope) {
 
 function historicalApprovalLabel(status) {
     const normalized = String(status || 'requested').toLowerCase();
-    if (normalized === 'approve') return 'Approval APPROVE';
-    if (normalized === 'deny') return 'Approval DENY';
-    if (normalized === 'timeout') return 'Approval TIMEOUT';
-    return 'Approval requested';
+    if (normalized === 'approve') return t('approval.state.approve');
+    if (normalized === 'deny') return t('approval.state.deny');
+    if (normalized === 'timeout') return t('approval.state.timeout');
+    return t('approval.state.requested');
 }
 
 function formatPendingApprovalResult(approval) {
     const status = String(approval?.status || 'requested').toLowerCase();
     if (status === 'deny') {
-        return 'Approval denied. Tool was not executed.';
+        return t('approval.result.denied');
     }
     if (status === 'timeout') {
-        return 'Approval timed out. Tool was not executed.';
+        return t('approval.result.timeout');
     }
     if (status === 'approve') {
-        return 'Approval approved, but no tool result was recorded. Run may have been interrupted.';
+        return t('approval.result.approved_no_result');
     }
-    return 'Approval is pending. Approve or deny to continue.';
+    return t('approval.result.pending');
 }
 
 function extractApprovalMeta(envelope) {
@@ -109,9 +110,9 @@ function extractApprovalMeta(envelope) {
 }
 
 function approvalStateLabel(status) {
-    if (status === 'approve') return 'Approval APPROVE';
-    if (status === 'deny') return 'Approval DENY';
-    if (status === 'timeout') return 'Approval TIMEOUT';
-    if (status === 'not_required') return 'Approval not required';
-    return 'Approval required';
+    if (status === 'approve') return t('approval.state.approve');
+    if (status === 'deny') return t('approval.state.deny');
+    if (status === 'timeout') return t('approval.state.timeout');
+    if (status === 'not_required') return t('approval.state.not_required');
+    return t('approval.state.required');
 }

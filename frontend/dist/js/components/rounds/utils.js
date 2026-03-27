@@ -2,6 +2,7 @@
  * components/rounds/utils.js
  * Shared utility helpers for rounds timeline rendering.
  */
+import { t } from '../../utils/i18n.js';
 
 export function roundSectionId(runId) {
     return `round-${String(runId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
@@ -37,21 +38,21 @@ export function roundStateTone(round) {
 export function roundStateLabel(round) {
     const phase = String(round?.run_phase || '');
     const status = String(round?.run_status || '');
-    if (phase === 'awaiting_tool_approval') return 'Awaiting Approval';
-    if (phase === 'awaiting_subagent_followup') return 'Awaiting Follow-up';
+    if (phase === 'awaiting_tool_approval') return t('rounds.state.awaiting_approval');
+    if (phase === 'awaiting_subagent_followup') return t('rounds.state.awaiting_followup');
     switch (status) {
         case 'queued':
-            return 'Queued';
+            return t('rounds.state.queued');
         case 'running':
-            return 'Running';
+            return t('rounds.state.running');
         case 'paused':
-            return 'Paused';
+            return t('rounds.state.paused');
         case 'stopped':
-            return 'Stopped';
+            return t('rounds.state.stopped');
         case 'completed':
-            return 'Completed';
+            return t('rounds.state.completed');
         case 'failed':
-            return 'Failed';
+            return t('rounds.state.failed');
         default:
             return '';
     }

@@ -23,7 +23,7 @@ import {
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
-import { t } from '../utils/i18n.js';
+import { formatMessage, t } from '../utils/i18n.js';
 import { hideProjectView, openAutomationProjectView, openWorkspaceProjectView } from './projectView.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
@@ -113,17 +113,17 @@ function formatRelativeTime(value) {
     const timestamp = timestampValue(value);
     if (!timestamp) return '';
     const diffMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
-    if (diffMinutes < 1) return 'now';
-    if (diffMinutes < 60) return `${diffMinutes}m`;
+    if (diffMinutes < 1) return t('time.just_now');
+    if (diffMinutes < 60) return `${diffMinutes}${t('time.minute_short')}`;
     const diffHours = Math.round(diffMinutes / 60);
-    if (diffHours < 24) return `${diffHours}h`;
+    if (diffHours < 24) return `${diffHours}${t('time.hour_short')}`;
     const diffDays = Math.round(diffHours / 24);
-    if (diffDays < 7) return `${diffDays}d`;
+    if (diffDays < 7) return `${diffDays}${t('time.day_short')}`;
     const diffWeeks = Math.round(diffDays / 7);
-    if (diffWeeks < 5) return `${diffWeeks}w`;
+    if (diffWeeks < 5) return `${diffWeeks}${t('time.week_short')}`;
     const diffMonths = Math.round(diffDays / 30);
-    if (diffMonths < 12) return `${diffMonths}mo`;
-    return `${Math.round(diffDays / 365)}y`;
+    if (diffMonths < 12) return `${diffMonths}${t('time.month_short')}`;
+    return `${Math.round(diffDays / 365)}${t('time.year_short')}`;
 }
 
 function formatWorkspaceLabel(workspace) {
@@ -156,7 +156,7 @@ function formatWorkspaceOptionLabel(workspace) {
 
 function formatWorkspaceOptionDescription(workspace) {
     const rootPath = String(workspace?.root_path || '').trim();
-    return rootPath || 'Use this workspace directory for automation runs.';
+    return rootPath || t('automation.workspace.help');
 }
 
 function buildFeishuBindingKey(binding) {
@@ -175,8 +175,8 @@ function buildFeishuBindingOptions(bindings) {
     const options = [
         {
             value: '',
-            label: 'No Feishu delivery',
-            description: 'Do not send automation updates to Feishu.',
+            label: t('sidebar.feishu_delivery_none'),
+            description: t('sidebar.feishu_delivery_none_copy'),
         },
     ];
     safeBindings.forEach(binding => {
@@ -339,7 +339,7 @@ function renderProjectsToolbar() {
     toolbar.innerHTML = `
         <div class="projects-toolbar-title">${escapeHtml(t('sidebar.workspace'))}</div>
         <div class="projects-toolbar-actions">
-            <button class="sidebar-header-btn projects-toolbar-new-automation-btn" type="button" title="New automation" aria-label="New automation">
+            <button class="sidebar-header-btn projects-toolbar-new-automation-btn" type="button" title="${escapeHtml(t('sidebar.new_automation'))}" aria-label="${escapeHtml(t('sidebar.new_automation'))}">
                 <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                     <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.8 6.8l2.1 2.1M15.1 15.1l2.1 2.1M6.8 17.2l2.1-2.1M15.1 8.9l2.1-2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                     <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/>
@@ -370,8 +370,8 @@ function isNativeDirectoryPickerUnavailable(error) {
 
 async function requestWorkspaceRootPath() {
     const enteredPath = await showTextInputDialog({
-        title: 'Enter Project Path',
-        message: 'Native directory picker is unavailable. Enter an existing project directory path.',
+        title: t('sidebar.enter_project_path_title'),
+        message: t('sidebar.enter_project_path_message'),
         tone: 'info',
         confirmLabel: t('sidebar.new_project'),
         cancelLabel: t('settings.action.cancel'),
@@ -394,41 +394,41 @@ async function requestAutomationProjectInput() {
     const bindingOptions = buildFeishuBindingOptions(feishuBindings);
     if (workspaceOptions.length === 0) return null;
     const values = await showFormDialog({
-        title: 'New Automation Project',
-        message: 'Create an automation project and schedule it in one step.',
+        title: t('sidebar.new_automation_title'),
+        message: t('sidebar.new_automation_message'),
         tone: 'info',
-        confirmLabel: 'Create',
-        cancelLabel: 'Cancel',
+        confirmLabel: t('sidebar.new_automation_create'),
+        cancelLabel: t('settings.action.cancel'),
         fields: [
             {
                 id: 'display_name',
-                label: 'Project Name',
+                label: t('sidebar.automation_project_name'),
                 placeholder: 'Daily Briefing',
                 value: '',
             },
             {
                 id: 'workspace_id',
-                label: 'Workspace Directory',
+                label: t('sidebar.workspace_directory'),
                 type: 'select',
                 value: workspaceOptions[0]?.value || '',
                 options: workspaceOptions,
             },
             {
                 id: 'prompt',
-                label: 'Prompt',
-                placeholder: 'Summarize the latest project changes.',
+                label: t('sidebar.prompt'),
+                placeholder: t('sidebar.prompt_placeholder'),
                 value: '',
                 multiline: true,
             },
             {
                 id: 'cron_expression',
-                label: 'Cron Schedule',
+                label: t('sidebar.cron_schedule'),
                 placeholder: '0 9 * * *',
                 value: '0 9 * * *',
             },
             {
                 id: 'timezone',
-                label: 'Timezone',
+                label: t('sidebar.timezone'),
                 type: 'select',
                 value: 'UTC',
                 options: [
@@ -441,38 +441,38 @@ async function requestAutomationProjectInput() {
             },
             {
                 id: 'enabled',
-                label: 'Enable Automation',
+                label: t('sidebar.enable_automation'),
                 type: 'checkbox',
                 value: true,
-                description: 'Turn on the schedule immediately after creation.',
+                description: t('sidebar.enable_automation_copy'),
             },
             {
                 id: 'delivery_binding_key',
-                label: 'Feishu Chat',
+                label: t('sidebar.feishu_chat'),
                 type: 'select',
                 value: '',
                 options: bindingOptions,
             },
             {
                 id: 'delivery_event_started',
-                label: 'Notify on start',
+                label: t('sidebar.notify_on_start'),
                 type: 'checkbox',
                 value: true,
-                description: 'Send a start message to the selected Feishu chat.',
+                description: t('sidebar.notify_on_start_copy'),
             },
             {
                 id: 'delivery_event_completed',
-                label: 'Notify on completion',
+                label: t('sidebar.notify_on_completion'),
                 type: 'checkbox',
                 value: true,
-                description: 'Send the final success result to Feishu.',
+                description: t('sidebar.notify_on_completion_copy'),
             },
             {
                 id: 'delivery_event_failed',
-                label: 'Notify on failure',
+                label: t('sidebar.notify_on_failure'),
                 type: 'checkbox',
                 value: true,
-                description: 'Send the failure reason to Feishu.',
+                description: t('sidebar.notify_on_failure_copy'),
             },
         ],
     });
@@ -614,12 +614,12 @@ function bindProjectCard(card, group) {
             try { metadata = JSON.parse(String(button.getAttribute('data-session-metadata') || '{}')); } catch (_) {}
             const currentTitle = String(metadata.title || '').trim();
             const nextTitle = await showTextInputDialog({
-                title: 'Rename Session',
-                message: 'Enter a new session name.',
+                title: t('sidebar.rename_session_title'),
+                message: t('sidebar.rename_session_message'),
                 tone: 'info',
-                confirmLabel: 'Save',
-                cancelLabel: 'Cancel',
-                placeholder: 'Session name',
+                confirmLabel: t('settings.action.save'),
+                cancelLabel: t('settings.action.cancel'),
+                placeholder: t('sidebar.session_name_placeholder'),
                 value: currentTitle || sessionId,
             });
             if (nextTitle === null) return;
@@ -637,7 +637,13 @@ function bindProjectCard(card, group) {
             event.stopPropagation();
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             if (!sessionId) return;
-            const shouldDelete = await showConfirmDialog({ title: 'Delete Session', message: `Delete session ${sessionId}?`, tone: 'warning', confirmLabel: 'Delete', cancelLabel: 'Cancel' });
+            const shouldDelete = await showConfirmDialog({
+                title: t('sidebar.delete_session_title'),
+                message: formatMessage('sidebar.delete_session_message', { session_id: sessionId }),
+                tone: 'warning',
+                confirmLabel: t('settings.action.delete'),
+                cancelLabel: t('settings.action.cancel'),
+            });
             if (!shouldDelete) return;
             await deleteSession(sessionId);
             await loadProjects();
@@ -702,14 +708,14 @@ function renderProjectCard(group) {
                                     <span class="session-meta">
                                         <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
                                         <span class="session-actions">
-                                            <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="Rename session" aria-label="Rename session">
+                                            <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="${escapeHtml(t('sidebar.rename_session'))}" aria-label="${escapeHtml(t('sidebar.rename_session'))}">
                                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                     <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
                                                     <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                                                     <path d="M12 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
                                                 </svg>
                                             </button>
-                                            <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="Delete session" aria-label="Delete session">
+                                            <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="${escapeHtml(t('sidebar.delete_session'))}" aria-label="${escapeHtml(t('sidebar.delete_session'))}">
                                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                     <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                                                 </svg>
@@ -726,7 +732,7 @@ function renderProjectCard(group) {
                         `
                 }
             </div>
-            ${hasHiddenSessions ? `<button class="project-session-visibility-btn" type="button">${sessionsExpanded ? 'Collapse' : `Show all (${group.sessions.length})`}</button>` : ''}
+            ${hasHiddenSessions ? `<button class="project-session-visibility-btn" type="button">${sessionsExpanded ? escapeHtml(t('sidebar.collapse')) : escapeHtml(formatMessage('sidebar.show_all', { count: group.sessions.length }))}</button>` : ''}
         </div>
     `;
     bindProjectCard(card, group);
@@ -766,7 +772,7 @@ export async function loadProjects() {
         }
         groups.forEach(group => els.projectsList.appendChild(renderProjectCard(group)));
     } catch (error) {
-        sysLog(`Error loading projects: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');
     }
 }
 
@@ -811,11 +817,11 @@ export async function handleNewProjectClick() {
         if (!workspace) return;
         expandedProjectIds.add(groupKey('workspace', workspace.workspace_id));
         state.currentWorkspaceId = workspace.workspace_id;
-        sysLog(`Added project: ${workspace.workspace_id}`);
+        sysLog(formatMessage('sidebar.log.added_project', { workspace_id: workspace.workspace_id }));
         await loadProjects();
         await handleNewSessionClick(workspace.workspace_id, true);
     } catch (error) {
-        sysLog(`Error creating project: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.creating_project', { error: error.message }), 'log-error');
     }
 }
 
@@ -827,11 +833,11 @@ export async function handleNewAutomationProjectClick() {
         expandedProjectIds.add(groupKey('automation', project.automation_project_id));
         expandedProjectSessionIds.add(groupKey('automation', project.automation_project_id));
         state.currentWorkspaceId = String(project?.workspace_id || '').trim() || AUTOMATION_INTERNAL_WORKSPACE_ID;
-        sysLog(`Created automation project: ${project.automation_project_id}`);
+        sysLog(formatMessage('sidebar.log.created_automation_project', { project_id: project.automation_project_id }));
         await loadProjects();
         await handleRunAutomationProject(project, true);
     } catch (error) {
-        sysLog(`Error creating automation project: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.creating_automation_project', { error: error.message }), 'log-error');
     }
 }
 
@@ -856,11 +862,11 @@ export async function handleForkWorkspaceClick(workspace) {
         expandedProjectSessionIds.add(groupKey('workspace', forkedWorkspace.workspace_id));
         state.currentWorkspaceId = forkedWorkspace.workspace_id;
         openProjectMenuId = null;
-        sysLog(`Forked project: ${forkedWorkspace.workspace_id}`);
+        sysLog(formatMessage('sidebar.log.forked_project', { workspace_id: forkedWorkspace.workspace_id }));
         await loadProjects();
         await handleNewSessionClick(forkedWorkspace.workspace_id, true);
     } catch (error) {
-        sysLog(`Error forking project: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.forking_project', { error: error.message }), 'log-error');
     }
 }
 
@@ -901,7 +907,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         if (state.currentWorkspaceId === workspaceId) state.currentWorkspaceId = null;
         await loadProjects();
     } catch (error) {
-        sysLog(`Error removing project: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.removing_project', { error: error.message }), 'log-error');
     }
 }
 
@@ -909,7 +915,13 @@ async function handleRemoveAutomationProjectClick(project) {
     const projectId = String(project?.automation_project_id || '').trim();
     const projectLabel = String(project?.display_name || project?.name || projectId).trim() || projectId;
     if (!projectId) return;
-    const shouldDelete = await showConfirmDialog({ title: 'Remove Automation Project', message: `Remove automation project ${projectLabel}?`, tone: 'warning', confirmLabel: 'Remove', cancelLabel: 'Cancel' });
+    const shouldDelete = await showConfirmDialog({
+        title: t('sidebar.remove_automation_title'),
+        message: formatMessage('sidebar.remove_automation_message', { project: projectLabel }),
+        tone: 'warning',
+        confirmLabel: t('sidebar.remove'),
+        cancelLabel: t('settings.action.cancel'),
+    });
     if (!shouldDelete) return;
     await deleteAutomationProject(projectId);
     expandedProjectIds.delete(groupKey('automation', projectId));
@@ -925,10 +937,10 @@ async function handleToggleAutomationProject(project) {
     if (!projectId) return;
     if (status === 'enabled') {
         await disableAutomationProject(projectId);
-        sysLog(`Disabled automation project: ${projectId}`);
+        sysLog(formatMessage('sidebar.log.disabled_automation_project', { project_id: projectId }));
     } else {
         await enableAutomationProject(projectId);
-        sysLog(`Enabled automation project: ${projectId}`);
+        sysLog(formatMessage('sidebar.log.enabled_automation_project', { project_id: projectId }));
     }
     openProjectMenuId = null;
     await loadProjects();
@@ -943,32 +955,32 @@ async function handleRunAutomationProject(project, manualClick = true) {
     await loadProjects();
     if (data?.reused_bound_session === true) {
         const logMessage = data?.queued === true
-            ? `Queued automation run in bound IM session: ${data.session_id}`
-            : `Started automation run in bound IM session: ${data.session_id}`;
+            ? formatMessage('sidebar.log.queued_bound_session', { session_id: data.session_id })
+            : formatMessage('sidebar.log.started_bound_session', { session_id: data.session_id });
         sysLog(logMessage);
         await openAutomationProjectView(project);
         return;
     }
-    sysLog(`Started automation run: ${data.session_id}`);
+    sysLog(formatMessage('sidebar.log.started_automation_run', { session_id: data.session_id }));
     await selectSessionById(data.session_id);
 }
 
 export async function handleNewSessionClick(workspaceId, manualClick = true) {
     const targetWorkspaceId = String(workspaceId || state.currentWorkspaceId || '').trim();
     if (!targetWorkspaceId) {
-        sysLog('No project selected. Create a project first.', 'log-error');
+        sysLog(t('sidebar.error.no_project_selected'), 'log-error');
         return;
     }
     try {
         expandedProjectSessionIds.add(groupKey('workspace', targetWorkspaceId));
         const data = await startNewSession(targetWorkspaceId);
         state.currentWorkspaceId = targetWorkspaceId;
-        sysLog(`Created new session: ${data.session_id}`);
+        sysLog(formatMessage('sidebar.log.created_session', { session_id: data.session_id }));
         if (manualClick) els.chatMessages.innerHTML = '';
         await loadProjects();
         await selectSessionById(data.session_id);
     } catch (error) {
-        sysLog(`Error creating session: ${error.message}`, 'log-error');
+        sysLog(formatMessage('sidebar.error.creating_session', { error: error.message }), 'log-error');
     }
 }
 

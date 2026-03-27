@@ -16,6 +16,13 @@ import {
     getPendingApprovalsForPanel,
 } from './state.js';
 
+function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
+
 function renderTokenBadge(panelEl, instanceId, runUsage) {
     const badgeEl = panelEl.querySelector(
         `.agent-token-usage[data-instance-id="${instanceId}"]`
@@ -27,9 +34,13 @@ function renderTokenBadge(panelEl, instanceId, runUsage) {
         if (agent && agent.total_tokens !== 0) {
             const fmt = n => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
             html = `
-        <span class="token-badge" title="Input: ${agent.input_tokens} | Output: ${agent.output_tokens} | Requests: ${agent.requests}">
-            <span class="token-in">In ${fmt(agent.input_tokens)}</span>
-            <span class="token-out">Out ${fmt(agent.output_tokens)}</span>
+        <span class="token-badge" title="${escapeAttribute(formatMessage('agent_panel.history.token_title', {
+            input: agent.input_tokens,
+            output: agent.output_tokens,
+            requests: agent.requests,
+        }))}">
+            <span class="token-in">${escapeHtml(formatMessage('agent_panel.history.token_in', { count: fmt(agent.input_tokens) }))}</span>
+            <span class="token-out">${escapeHtml(formatMessage('agent_panel.history.token_out', { count: fmt(agent.output_tokens) }))}</span>
         </span>
     `;
         }
@@ -212,7 +223,7 @@ export async function loadAgentHistory(instanceId, roleId = null) {
     const scrollEl = panel.scrollEl;
     const runId = state.activeRunId || getActiveRoundRunId();
     try {
-        scrollEl.innerHTML = '<div class="panel-loading">Loading history...</div>';
+        scrollEl.innerHTML = `<div class="panel-loading">${escapeHtml(t('agent_panel.history.loading'))}</div>`;
         const [messages, runUsage, reflection] = await Promise.all([
             fetchAgentMessages(state.currentSessionId, instanceId),
             runId && runId !== '__live__'
@@ -239,7 +250,7 @@ export async function loadAgentHistory(instanceId, roleId = null) {
             && pendingToolApprovals.length === 0
             && !streamOverlayEntry
         ) {
-            scrollEl.innerHTML = '<div class="panel-empty">No messages yet.</div>';
+            scrollEl.innerHTML = `<div class="panel-empty">${escapeHtml(t('agent_panel.history.empty'))}</div>`;
         } else {
             renderHistoricalMessageList(scrollEl, messages, {
                 pendingToolApprovals,
@@ -255,6 +266,6 @@ export async function loadAgentHistory(instanceId, roleId = null) {
         renderReflection(panel.panelEl, reflection);
     } catch (e) {
         scrollEl.innerHTML =
-            '<div class="panel-empty" style="color:var(--danger)">Failed to load history.</div>';
+            `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(t('agent_panel.history.load_failed'))}</div>`;
     }
 }

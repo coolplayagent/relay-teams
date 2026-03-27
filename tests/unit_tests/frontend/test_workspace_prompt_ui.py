@@ -131,7 +131,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "emphasizeRoundSection" in timeline_script
     assert "round-nav-toggle" in navigator_script
     assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
-    assert "item.title = String(round.intent || 'No intent');" in navigator_script
+    assert "round.intent || t('rounds.no_intent')" in navigator_script
     assert "alert(" not in model_profiles_script
     assert "confirm(" not in model_profiles_script
     assert "alert(" not in system_status_script
@@ -158,12 +158,12 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'id="cancel-orchestration-btn"' in settings_index_script
     assert "main_agent_prompt" not in orchestration_settings_script
     assert "default_orchestration_preset_id" in orchestration_settings_script
-    assert "Set as default orchestration" in orchestration_settings_script
+    assert "t('settings.orchestration.field.default')" in orchestration_settings_script
     assert "showOrchestrationList" in orchestration_settings_script
     assert "showOrchestrationEditor" in orchestration_settings_script
     assert "showConfirmDialog" in orchestration_settings_script
     assert "fetchSessionTokenUsage" in session_token_usage_script
-    assert "Token usage: total=" in session_token_usage_script
+    assert "token_usage.detail" in session_token_usage_script
     assert "session-token-usage" in session_token_usage_script
     assert "markBackendOnline" in request_script
     assert "markBackendOffline" in request_script
@@ -188,7 +188,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "formatCodeLanguage" in markdown_script
     assert "markdown-code-copy" in markdown_script
     assert "navigator.clipboard.writeText" in markdown_script
-    assert "Code Copied" in markdown_script
+    assert "markdown.copy_success_title" in markdown_script
     assert ".msg-content blockquote," in components_css
     assert ".markdown-table-wrap {" in components_css
     assert ".markdown-code-block {" in components_css

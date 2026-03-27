@@ -12,7 +12,7 @@ import {
 import { refreshSessionRecovery, resumeRecoverableRun } from '../../app/recovery.js';
 import { bindPanelContextIndicator, schedulePanelContextPreview } from '../contextIndicators.js';
 import { state } from '../../core/state.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
 import { getDrawer } from './dom.js';
 import { loadAgentHistory } from './history.js';
@@ -109,9 +109,9 @@ export function createPanel(instanceId, roleId, onClose) {
             try {
                 await stopRun(state.activeRunId, { scope: 'subagent', instanceId });
                 state.pausedSubagent = { runId: state.activeRunId, instanceId, roleId };
-                sysLog(`Subagent paused: ${roleId || instanceId}`, 'log-info');
+                sysLog(formatMessage('subagent.log.paused', { agent: roleId || instanceId }), 'log-info');
             } catch (e) {
-                sysLog(`Failed to pause subagent: ${e.message}`, 'log-error');
+                sysLog(formatMessage('subagent.error.pause_failed', { error: e.message }), 'log-error');
             }
         };
     }
@@ -157,9 +157,9 @@ export function createPanel(instanceId, roleId, onClose) {
             try {
                 const reflection = await deleteAgentReflection(state.currentSessionId, instanceId);
                 await syncReflectionState(instanceId, roleId, reflection, panelEl);
-                sysLog(`Deleted reflection memory for ${roleId || instanceId}`, 'log-info');
+                sysLog(formatMessage('subagent.log.deleted_reflection', { agent: roleId || instanceId }), 'log-info');
             } catch (e) {
-                sysLog(`Failed to delete reflection memory: ${e.message}`, 'log-error');
+                sysLog(formatMessage('subagent.error.delete_reflection_failed', { error: e.message }), 'log-error');
             } finally {
                 setReflectionActionButtonsDisabled(panelEl, false);
             }
@@ -196,7 +196,7 @@ export function createPanel(instanceId, roleId, onClose) {
             }
             schedulePanelContextPreview(instanceId, { immediate: true });
         } catch (e) {
-            sysLog(`Failed to message subagent: ${e.message}`, 'log-error');
+            sysLog(formatMessage('subagent.error.message_failed', { error: e.message }), 'log-error');
         }
     }
     textarea.addEventListener('input', () => {
@@ -310,7 +310,7 @@ function openReflectionEditor(panelEl, instanceId, roleId) {
 
     cancelBtn.onclick = () => {
         resetReflectionBody(panelEl);
-        bodyEl.textContent = currentSummary || 'No reflection memory yet.';
+            bodyEl.textContent = currentSummary || t('subagent.no_reflection_memory');
     };
 
     saveBtn.onclick = async () => {
@@ -324,11 +324,11 @@ function openReflectionEditor(panelEl, instanceId, roleId) {
                 editorInput.value,
             );
             await syncReflectionState(instanceId, roleId, reflection, panelEl);
-            sysLog(`Updated reflection memory for ${roleId || instanceId}`, 'log-info');
+            sysLog(formatMessage('subagent.log.updated_reflection', { agent: roleId || instanceId }), 'log-info');
         } catch (e) {
             saveBtn.disabled = false;
             cancelBtn.disabled = false;
-            sysLog(`Failed to update reflection memory: ${e.message}`, 'log-error');
+            sysLog(formatMessage('subagent.error.update_reflection_failed', { error: e.message }), 'log-error');
         }
     };
 }
@@ -368,26 +368,26 @@ function setReflectionButtonState(button, stateName) {
     button.dataset.state = nextState;
     if (nextState === 'loading') {
         button.disabled = true;
-        button.textContent = 'Reflecting...';
-        button.title = 'Refreshing reflection memory';
+        button.textContent = t('subagent.reflecting');
+        button.title = t('subagent.reflecting_title');
         return;
     }
     if (nextState === 'success') {
         button.disabled = false;
-        button.textContent = 'Reflected';
-        button.title = 'Reflection memory refreshed';
+        button.textContent = t('subagent.reflected');
+        button.title = t('subagent.reflected_title');
         return;
     }
     if (nextState === 'error') {
         button.disabled = false;
-        button.textContent = 'Retry Reflect';
-        button.title = 'Reflection refresh failed';
+        button.textContent = t('subagent.retry_reflect');
+        button.title = t('subagent.reflect_failed_title');
         return;
     }
-    button.disabled = false;
-    button.textContent = 'Reflect';
-    button.title = 'Refresh reflection memory';
-}
+      button.disabled = false;
+      button.textContent = t('subagent.reflect');
+      button.title = t('subagent.reflect_title');
+  }
 
 function scheduleReflectionButtonReset(button) {
     return window.setTimeout(() => {

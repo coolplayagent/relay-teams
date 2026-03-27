@@ -8,7 +8,7 @@ import {
     saveEnvironmentVariable,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const DEFAULT_EXPANDED_SCOPES = {
@@ -83,7 +83,7 @@ export async function loadEnvironmentVariablesPanel() {
         );
         showToast({
             title: t('settings.proxy.load_failed'),
-            message: `Failed to load environment variables: ${error.message}`,
+            message: formatMessage('settings.env.load_failed_detail', { error: error.message }),
             tone: 'danger',
         });
     }
@@ -379,14 +379,14 @@ async function handleSaveEnvironmentVariable() {
         });
         showToast({
             title: t('settings.env.saved'),
-            message: `${key} saved in app scope.`,
+            message: formatMessage('settings.env.saved_detail', { key }),
             tone: 'success',
         });
         await loadEnvironmentVariablesPanel();
     } catch (error) {
         showToast({
             title: t('settings.env.save_failed'),
-            message: `Failed to save environment variable: ${error.message}`,
+            message: formatMessage('settings.env.save_failed_detail', { error: error.message }),
             tone: 'danger',
         });
     }
@@ -400,7 +400,7 @@ async function handleDeleteEnvironmentVariable(recordRef) {
 
     const confirmed = await showConfirmDialog({
         title: t('settings.env.delete_title'),
-        message: `Delete ${key} from ${scope} scope?`,
+        message: formatMessage('settings.env.delete_confirm_message', { key, scope }),
         tone: 'warning',
         confirmLabel: t('settings.env.delete'),
     });
@@ -412,14 +412,14 @@ async function handleDeleteEnvironmentVariable(recordRef) {
         await deleteEnvironmentVariable(scope, key);
         showToast({
             title: t('settings.env.deleted'),
-            message: `${key} removed from ${scope} scope.`,
+            message: formatMessage('settings.env.deleted_detail', { key, scope }),
             tone: 'success',
         });
         await loadEnvironmentVariablesPanel();
     } catch (error) {
         showToast({
             title: t('settings.env.delete_failed'),
-            message: `Failed to delete environment variable: ${error.message}`,
+            message: formatMessage('settings.env.delete_failed_detail', { error: error.message }),
             tone: 'danger',
         });
     }

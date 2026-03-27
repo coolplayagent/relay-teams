@@ -28,7 +28,7 @@ import {
 import { startIntentStream } from "../core/stream.js";
 import { els } from "../utils/dom.js";
 import { showToast } from "../utils/feedback.js";
-import { t } from "../utils/i18n.js";
+import { formatMessage, t } from "../utils/i18n.js";
 import { sysLog } from "../utils/logger.js";
 
 const YOLO_STORAGE_KEY = "agent_teams_yolo";
@@ -166,7 +166,7 @@ export async function refreshOrchestrationConfig({
   } catch (error) {
     orchestrationConfig = normalizeOrchestrationConfig(null);
     sysLog(
-      error.message || "Failed to load orchestration settings",
+      error.message || t("composer.error.orchestration_load_failed"),
       "log-error",
     );
   }
@@ -185,7 +185,7 @@ async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
     setCoordinatorRoleId("");
     setMainAgentRoleId("");
     setNormalModeRoles([]);
-    sysLog(error.message || "Failed to load role options", "log-error");
+    sysLog(error.message || t("composer.error.role_options_load_failed"), "log-error");
   }
   handlePromptComposerInput();
   if (refreshControls) {
@@ -198,14 +198,14 @@ export async function handleSend() {
   if (!rawText) return;
   if (state.isGenerating) {
     sysLog(
-      "A run is still in progress. Please wait for completion before sending the next message.",
+      t("composer.warning.run_in_progress"),
       "log-info",
     );
     return;
   }
   if (!state.currentSessionId) {
     sysLog(
-      "No active session selected. Please select or create a session first.",
+      t("composer.error.no_active_session"),
       "log-error",
     );
     return;
@@ -213,7 +213,9 @@ export async function handleSend() {
   if (state.pausedSubagent) {
     const paused = state.pausedSubagent;
     sysLog(
-      `Subagent is paused (${paused.roleId || paused.instanceId}). Send a follow-up in that subagent panel first.`,
+      formatMessage("composer.error.paused_subagent", {
+        agent: paused.roleId || paused.instanceId,
+      }),
       "log-error",
     );
     return;
@@ -226,7 +228,7 @@ export async function handleSend() {
   }
   const text = mention.promptText || rawText;
   if (!text) {
-    sysLog("Prompt is empty after removing the role mention.", "log-error");
+    sysLog(t("composer.error.empty_after_mention"), "log-error");
     return;
   }
   const targetRoleId = mention.roleId || null;
@@ -252,7 +254,7 @@ export async function handleSend() {
   refreshVisibleContextIndicators({ immediate: true });
   clearAllStreamState({ preserveOverlay: true });
 
-  sysLog("Sending prompt");
+  sysLog(t("composer.log.sending_prompt"));
   startSessionContinuity(state.currentSessionId);
   await startIntentStream(
     text,
@@ -399,7 +401,7 @@ async function handleTopologyModeChange(nextMode) {
   }
   if (normalizedMode === "orchestration" && !resolveSelectedPresetId()) {
     showToast({
-      title: "No Preset Available",
+      title: t("composer.toast.no_preset_title"),
       message: resolveMissingPresetMessage(),
       tone: "warning",
     });
@@ -440,8 +442,8 @@ async function persistSessionTopology(
   } catch (error) {
     refreshSessionTopologyControls();
     showToast({
-      title: "Mode Update Failed",
-      message: error.message || "Failed to update session mode.",
+      title: t("composer.toast.mode_update_failed_title"),
+      message: error.message || t("composer.error.mode_update_failed"),
       tone: "danger",
     });
   }
@@ -452,15 +454,15 @@ function resolveTopologyDisabledReason({ canSwitch, hasPresets }) {
     return t("composer.session_mode_title");
   }
   if (state.isGenerating) {
-    return "The session mode is locked while a run is active.";
+    return t("composer.disabled.active_run");
   }
   if (!canSwitch) {
-    return "Only sessions that have not started their first run can switch mode.";
+    return t("composer.disabled.started_session");
   }
   if (!hasPresets) {
     return resolveMissingPresetMessage();
   }
-  return "Only sessions that have not started their first run can switch mode.";
+  return t("composer.disabled.started_session");
 }
 
 function resolveSelectedPresetId() {
@@ -540,7 +542,7 @@ function buildPresetOptions(selectedPresetId) {
 }
 
 function resolveMissingPresetMessage() {
-  return "Create an orchestration preset in Settings before switching to Orchestrated Mode.";
+  return t("composer.disabled.no_preset");
 }
 
 function syncSessionTopologyFieldVisibility(mode) {
@@ -637,7 +639,7 @@ function parseLeadingRoleMention(text) {
     return {
       roleId: null,
       promptText: source,
-      error: "Role mention did not match any configured role.",
+      error: t("composer.error.mention_not_found"),
     };
   }
   matched.sort((left, right) => right.term.length - left.term.length);
@@ -649,7 +651,9 @@ function parseLeadingRoleMention(text) {
     return {
       roleId: null,
       promptText: source,
-      error: `Role mention is ambiguous: ${conflicts.map((item) => item.term).join(", ")}`,
+      error: formatMessage("composer.error.mention_ambiguous", {
+        roles: conflicts.map((item) => item.term).join(", "),
+      }),
     };
   }
   return {
@@ -895,7 +899,7 @@ function renderPromptMentionAutocomplete() {
                                   option.displayName,
                                   promptMentionQuery,
                                 )}</span>
-                                <span class="prompt-mention-item-enter" aria-hidden="true">Enter</span>
+                                <span class="prompt-mention-item-enter" aria-hidden="true">${escapeHtml(t("composer.mention_action_enter"))}</span>
                             </span>
                             ${descriptionMeta}
                             ${roleIdMeta}
