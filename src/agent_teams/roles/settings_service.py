@@ -54,7 +54,10 @@ class RoleSettingsService:
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
         documents = [
             self._summary_from_definition(definition)
-            for definition in self._load_registry().list_roles()
+            for definition in self._load_registry(
+                strict_capability_validation=False,
+                consumer_prefix="roles.settings_service.list_role_documents",
+            ).list_roles()
         ]
         return tuple(documents)
 
@@ -79,11 +82,15 @@ class RoleSettingsService:
             content,
             source_name=f"{normalized.role_id}.md",
         )
-        self._validate_definition(role)
+        validated_role = self._validate_definition(
+            role,
+            strict_capability_validation=True,
+            consumer=f"roles.settings_service.validate_role_document.role:{normalized.role_id}",
+        )
         return RoleValidationResult(
             valid=True,
             role=self._record_from_definition(
-                definition=role,
+                definition=validated_role,
                 file_name=f"{normalized.role_id}.md",
                 content=content,
                 source_role_id=normalized.source_role_id,
@@ -129,12 +136,18 @@ class RoleSettingsService:
         ):
             source_path.unlink()
 
-        registry = self._load_registry()
+        registry = self._load_registry(
+            strict_capability_validation=False,
+            consumer_prefix="roles.settings_service.save_role_document",
+        )
         self._on_roles_reloaded(registry)
         return self.get_role_document(normalized.role_id)
 
     def validate_all_roles(self) -> dict[str, int | bool]:
-        registry = self._load_registry()
+        registry = self._load_registry(
+            strict_capability_validation=True,
+            consumer_prefix="roles.settings_service.validate_all_roles",
+        )
         return {
             "valid": True,
             "loaded_count": len(registry.list_roles()),
@@ -225,19 +238,64 @@ class RoleSettingsService:
         ).strip()
         return f"---\n{serialized_front_matter}\n---\n\n{draft.system_prompt.strip()}\n"
 
-    def _load_registry(self) -> RoleRegistry:
+    def _load_registry(
+        self,
+        *,
+        strict_capability_validation: bool,
+        consumer_prefix: str,
+    ) -> RoleRegistry:
         registry = self._loader.load_builtin_and_app(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
         )
+        sanitized_registry = RoleRegistry()
         for definition in registry.list_roles():
-            self._validate_definition(definition)
-        return registry
+            consumer = f"{consumer_prefix}.role:{definition.role_id}"
+            validated_definition = self._validate_definition(
+                definition,
+                strict_capability_validation=strict_capability_validation,
+                consumer=consumer,
+            )
+            sanitized_registry.register(validated_definition)
+        return sanitized_registry
 
-    def _validate_definition(self, definition: RoleDefinition) -> None:
-        self._get_tool_registry().validate_known(definition.tools)
-        self._get_mcp_registry().validate_known(definition.mcp_servers)
-        self._get_skill_registry().validate_known(definition.skills)
+    def _validate_definition(
+        self,
+        definition: RoleDefinition,
+        *,
+        strict_capability_validation: bool,
+        consumer: str,
+    ) -> RoleDefinition:
+        if strict_capability_validation:
+            tools = definition.tools
+            mcp_servers = definition.mcp_servers
+            skills = definition.skills
+            self._get_tool_registry().validate_known(tools)
+            self._get_mcp_registry().validate_known(mcp_servers)
+            self._get_skill_registry().validate_known(skills)
+        else:
+            tools = self._get_tool_registry().resolve_known(
+                definition.tools,
+                strict=False,
+                consumer=consumer,
+            )
+            mcp_servers = self._get_mcp_registry().resolve_server_names(
+                definition.mcp_servers,
+                strict=False,
+                consumer=consumer,
+            )
+            skills = self._get_skill_registry().resolve_known(
+                definition.skills,
+                strict=False,
+                consumer=consumer,
+            )
+            definition = definition.model_copy(
+                update={
+                    "tools": tools,
+                    "mcp_servers": mcp_servers,
+                    "skills": skills,
+                }
+            )
         if definition.bound_agent_id:
             if self._get_external_agent_service is None:
                 raise ValueError(
@@ -256,6 +314,7 @@ class RoleSettingsService:
                 raise ValueError(
                     f"Coordinator role must keep required tools: {missing}"
                 )
+        return definition
 
     def _validate_reserved_role_mutation(
         self,

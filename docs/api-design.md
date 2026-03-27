@@ -808,6 +808,10 @@ Response fields:
 
 Lists editable role document summaries for the settings UI.
 
+Existing saved role files are still listed when they contain unknown `tools`,
+`mcp_servers`, or `skills`. Those stale capability references are ignored for
+read/reload flows so the settings UI can still load.
+
 Response fields:
 - `role_id`
 - `name`
@@ -867,6 +871,9 @@ Rules:
 - Path `role_id` must match body `role_id`.
 - Unknown tools, MCP servers, or skills are rejected.
 - Unknown `bound_agent_id` values are rejected.
+- Unrelated saved role files with stale `tools`, `mcp_servers`, or `skills` do
+  not block the reload after a successful save; those references are ignored
+  with warnings until they are cleaned up.
 - When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
 - When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.

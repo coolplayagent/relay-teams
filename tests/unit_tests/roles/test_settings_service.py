@@ -140,6 +140,134 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
     assert "Review carefully." in record.content
 
 
+def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "dirty.md",
+        role_id="dirty",
+        name="Dirty",
+        description="Contains stale capability references.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("missing_mcp",),
+        skills=("missing_skill",),
+        system_prompt="Continue despite stale capabilities.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    summaries = service.list_role_documents()
+
+    assert len(summaries) == 1
+    assert summaries[0].role_id == "dirty"
+
+
+def test_save_role_document_filters_unknown_capabilities_from_other_roles(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "dirty.md",
+        role_id="dirty",
+        name="Dirty",
+        description="Contains stale capability references.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("missing_mcp",),
+        skills=("missing_skill",),
+        system_prompt="Continue despite stale capabilities.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    captured_registry: list[RoleRegistry] = []
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: captured_registry.append(registry),
+    )
+
+    saved = service.save_role_document(
+        "writer",
+        draft=RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
+        ),
+    )
+
+    assert saved.role_id == "writer"
+    reloaded_dirty_role = captured_registry[-1].get("dirty")
+    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.mcp_servers == ()
+    assert reloaded_dirty_role.skills == ()
+
+
+def test_validate_all_roles_rejects_unknown_capabilities_in_persisted_roles(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "dirty.md",
+        role_id="dirty",
+        name="Dirty",
+        description="Contains stale capability references.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("missing_mcp",),
+        skills=("missing_skill",),
+        system_prompt="Continue despite stale capabilities.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    try:
+        service.validate_all_roles()
+    except ValueError as exc:
+        assert "Unknown tools" in str(exc)
+    else:
+        raise AssertionError("Expected strict persisted role validation to fail")
+
+
 def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()
@@ -240,22 +368,36 @@ def _write_role(
     description: str,
     version: str,
     tools: tuple[str, ...],
+    mcp_servers: tuple[str, ...] = (),
+    skills: tuple[str, ...] = (),
     system_prompt: str,
 ) -> None:
-    path.write_text(
-        "---\n"
-        f"role_id: {role_id}\n"
-        f"name: {name}\n"
-        f"description: {description}\n"
-        "model_profile: default\n"
-        f"version: {version}\n"
-        "tools:\n"
-        + "".join(f"  - {tool}\n" for tool in tools)
-        + "---\n\n"
-        + system_prompt
-        + "\n",
-        encoding="utf-8",
-    )
+    lines = [
+        "---\n",
+        f"role_id: {role_id}\n",
+        f"name: {name}\n",
+        f"description: {description}\n",
+        "model_profile: default\n",
+        f"version: {version}\n",
+        "tools:\n",
+        *[f"  - {tool}\n" for tool in tools],
+    ]
+    if mcp_servers:
+        lines.extend(
+            [
+                "mcp_servers:\n",
+                *[f"  - {server}\n" for server in mcp_servers],
+            ]
+        )
+    if skills:
+        lines.extend(
+            [
+                "skills:\n",
+                *[f"  - {skill}\n" for skill in skills],
+            ]
+        )
+    lines.extend(["---\n\n", system_prompt, "\n"])
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 def _create_builtin_roles_dir(tmp_path: Path) -> Path:
