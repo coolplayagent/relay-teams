@@ -114,6 +114,20 @@ def save_role_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/configs/{role_id}")
+def delete_role_config(
+    role_id: str,
+    service: RoleSettingsService = Depends(get_role_settings_service),
+) -> dict[str, str]:
+    try:
+        service.delete_role_document(role_id)
+        return {"status": "ok"}
+    except ValueError as exc:
+        if str(exc).startswith("Role not found:"):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post(":validate", response_model=dict[str, int | bool])
 def validate_roles(
     service: RoleSettingsService = Depends(get_role_settings_service),

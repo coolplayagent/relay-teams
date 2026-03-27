@@ -39,6 +39,7 @@ class RoleDocumentSummary(BaseModel):
     model_profile: str = Field(min_length=1)
     bound_agent_id: str | None = None
     source: RoleConfigSource = RoleConfigSource.APP
+    deletable: bool = False
 
 
 class RoleDocumentDraft(BaseModel):

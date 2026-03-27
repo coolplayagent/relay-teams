@@ -820,6 +820,7 @@ Response fields:
 - `model_profile`
 - `bound_agent_id`
 - `source`
+- `deletable`
 
 ### `GET /roles/configs/{role_id}`
 
@@ -878,6 +879,15 @@ Rules:
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
 - When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.
 - Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`) and fixed `system_prompt` through this API.
+
+### `DELETE /roles/configs/{role_id}`
+
+Deletes one user-defined role document and reloads the runtime role registry.
+
+Rules:
+- Only user-defined app roles can be deleted.
+- Builtin roles, reserved system roles, and app overrides of builtin roles are rejected.
+- Saved role files with stale `tools`, `mcp_servers`, or `skills` do not block reload after a successful delete; those references are ignored with warnings until they are cleaned up.
 
 ### `POST /roles:validate`
 

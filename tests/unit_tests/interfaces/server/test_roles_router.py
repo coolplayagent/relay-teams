@@ -39,6 +39,7 @@ class _FakeRoleSettingsService:
                 version="1.0.0",
                 model_profile="default",
                 source=RoleConfigSource.APP,
+                deletable=True,
             ),
         )
 
@@ -79,6 +80,12 @@ class _FakeRoleSettingsService:
 
     def validate_all_roles(self) -> dict[str, int | bool]:
         return {"valid": True, "loaded_count": 1}
+
+    def delete_role_document(self, role_id: str) -> None:
+        if role_id == "missing":
+            raise ValueError("Role not found: missing")
+        if role_id != "writer":
+            raise ValueError(f"Role cannot be deleted: {role_id}")
 
 
 class _FakeToolRegistry:
@@ -181,6 +188,7 @@ def test_list_role_configs() -> None:
             "version": "1.0.0",
             "model_profile": "default",
             "source": "app",
+            "deletable": True,
         }
     ]
 
@@ -219,6 +227,33 @@ def test_validate_role_config() -> None:
     payload = response.json()
     assert payload["valid"] is True
     assert payload["role"]["role_id"] == "writer"
+
+
+def test_delete_role_config() -> None:
+    client = _create_test_client()
+
+    response = client.delete("/api/roles/configs/writer")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_delete_role_config_returns_not_found() -> None:
+    client = _create_test_client()
+
+    response = client.delete("/api/roles/configs/missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Role not found: missing"}
+
+
+def test_delete_role_config_rejects_builtin_role() -> None:
+    client = _create_test_client()
+
+    response = client.delete("/api/roles/configs/MainAgent")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Role cannot be deleted: MainAgent"}
 
 
 def test_get_role_config_options() -> None:

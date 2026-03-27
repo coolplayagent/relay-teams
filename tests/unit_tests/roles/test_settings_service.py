@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles import (
     RoleDocumentDraft,
@@ -174,6 +176,53 @@ def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
 
     assert len(summaries) == 1
     assert summaries[0].role_id == "dirty"
+    assert summaries[0].deletable is True
+
+
+def test_list_role_documents_marks_builtin_override_not_deletable(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    builtin_roles_dir = _create_builtin_roles_dir(tmp_path)
+    _write_role(
+        builtin_roles_dir / "Crafter.md",
+        role_id="Crafter",
+        name="Crafter",
+        description="Builtin crafter role.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Craft changes.",
+    )
+    _write_role(
+        roles_dir / "Crafter.md",
+        role_id="Crafter",
+        name="Crafter",
+        description="App override for builtin crafter.",
+        version="1.1.0",
+        tools=("dispatch_task",),
+        system_prompt="Craft app changes.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=builtin_roles_dir,
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    summaries = service.list_role_documents()
+
+    assert len(summaries) == 1
+    assert summaries[0].role_id == "Crafter"
+    assert summaries[0].source.value == "app"
+    assert summaries[0].deletable is False
 
 
 def test_save_role_document_filters_unknown_capabilities_from_other_roles(
@@ -358,6 +407,140 @@ def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) 
         == "Handle the task directly and verify the outcome before finishing."
     )
     assert (roles_dir / "MainAgent.md").exists()
+
+
+def test_delete_role_document_removes_dirty_app_role_and_reloads_registry(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    builtin_roles_dir = _create_builtin_roles_dir(tmp_path)
+    _write_role(
+        builtin_roles_dir / "MainAgent.md",
+        role_id="MainAgent",
+        name="Main Agent",
+        description="Handles normal-mode runs directly.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Handle the run directly.",
+    )
+    _write_role(
+        roles_dir / "writer.md",
+        role_id="writer",
+        name="Writer",
+        description="Dirty target role.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("missing_mcp",),
+        skills=("missing_skill",),
+        system_prompt="Delete this dirty role.",
+    )
+    _write_role(
+        roles_dir / "dirty.md",
+        role_id="dirty",
+        name="Dirty",
+        description="Dirty survivor role.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("missing_mcp",),
+        skills=("missing_skill",),
+        system_prompt="Keep this dirty role.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    captured_registry: list[RoleRegistry] = []
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=builtin_roles_dir,
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: captured_registry.append(registry),
+    )
+
+    service.delete_role_document("writer")
+
+    assert not (roles_dir / "writer.md").exists()
+    with pytest.raises(KeyError):
+        captured_registry[-1].get("writer")
+    reloaded_dirty_role = captured_registry[-1].get("dirty")
+    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.mcp_servers == ()
+    assert reloaded_dirty_role.skills == ()
+
+
+def test_delete_role_document_rejects_builtin_role(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    builtin_roles_dir = _create_builtin_roles_dir(tmp_path)
+    _write_role(
+        builtin_roles_dir / "Crafter.md",
+        role_id="Crafter",
+        name="Crafter",
+        description="Builtin crafter role.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Craft changes.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=builtin_roles_dir,
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Role cannot be deleted: Crafter"):
+        service.delete_role_document("Crafter")
+
+
+def test_delete_role_document_rejects_builtin_override(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    builtin_roles_dir = _create_builtin_roles_dir(tmp_path)
+    _write_role(
+        builtin_roles_dir / "Crafter.md",
+        role_id="Crafter",
+        name="Crafter",
+        description="Builtin crafter role.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Craft changes.",
+    )
+    _write_role(
+        roles_dir / "Crafter.md",
+        role_id="Crafter",
+        name="Crafter",
+        description="App override for builtin crafter.",
+        version="1.1.0",
+        tools=("dispatch_task",),
+        system_prompt="Craft app changes.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=builtin_roles_dir,
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Role cannot be deleted: Crafter"):
+        service.delete_role_document("Crafter")
 
 
 def _write_role(

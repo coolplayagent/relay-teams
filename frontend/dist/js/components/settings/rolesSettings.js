@@ -3,6 +3,7 @@
  * Role settings panel bindings.
  */
 import {
+    deleteRoleConfig,
     fetchModelProfiles,
     fetchRoleConfig,
     fetchRoleConfigOptions,
@@ -11,7 +12,7 @@ import {
     validateRoleConfig,
 } from '../../core/api.js';
 import { parseMarkdown } from '../../utils/markdown.js';
-import { showToast } from '../../utils/feedback.js';
+import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
@@ -69,7 +70,7 @@ export async function loadRoleSettingsPanel(preferredRoleId = '') {
             fetchRoleConfigOptions(),
             fetchModelProfiles(),
         ]);
-        roleSummaries = Array.isArray(summaries) ? summaries : [];
+        roleSummaries = Array.isArray(summaries) ? summaries.map(normalizeRoleSummary) : [];
         roleConfigOptions = normalizeRoleConfigOptions(options);
         const normalizedModelProfiles = normalizeModelProfiles(modelProfiles);
         availableModelProfiles = normalizedModelProfiles.names;
@@ -101,6 +102,19 @@ function bindActionButton(id, handler) {
     if (button) {
         button.onclick = handler;
     }
+}
+
+function normalizeRoleSummary(role) {
+    return {
+        role_id: String(role?.role_id || '').trim(),
+        name: String(role?.name || '').trim(),
+        description: String(role?.description || '').trim(),
+        version: String(role?.version || '').trim(),
+        model_profile: String(role?.model_profile || 'default').trim() || 'default',
+        bound_agent_id: role?.bound_agent_id == null ? null : String(role.bound_agent_id).trim(),
+        source: String(role?.source || '').trim(),
+        deletable: role?.deletable === true,
+    };
 }
 
 function normalizeRoleConfigOptions(options) {
@@ -175,6 +189,9 @@ function renderRolesList() {
                 </div>
                 <div class="role-record-actions">
                     <button class="settings-inline-action settings-list-action role-record-edit-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">${escapeHtml(t('settings.roles.edit'))}</button>
+                    ${role.deletable === true
+            ? `<button class="settings-inline-action settings-list-action role-record-delete-btn" data-role-id="${escapeHtml(role.role_id)}" type="button">${escapeHtml(t('settings.action.delete'))}</button>`
+            : ''}
                 </div>
             </div>
         `)
@@ -195,6 +212,14 @@ function renderRolesList() {
             const nextRoleId = String(button.dataset.roleId || '').trim();
             if (!nextRoleId) return;
             void loadRoleDocument(nextRoleId);
+        };
+    });
+    listEl.querySelectorAll('.role-record-delete-btn').forEach(button => {
+        button.onclick = async event => {
+            event.stopPropagation();
+            const nextRoleId = String(button.dataset.roleId || '').trim();
+            if (!nextRoleId) return;
+            await handleDeleteRole(nextRoleId);
         };
     });
 }
@@ -528,6 +553,40 @@ async function handleSaveRole() {
         showToast({
             title: t('settings.roles.save_failed'),
             message: error.message || t('settings.roles.save_failed_toast'),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleDeleteRole(roleId) {
+    const summary = roleSummaries.find(role => role.role_id === roleId) || null;
+    const roleLabel = summary?.name || roleId;
+    const confirmed = await showConfirmDialog({
+        title: t('settings.roles.delete_confirm_title'),
+        message: t('settings.roles.delete_confirm_message').replace('{name}', roleLabel),
+        tone: 'warning',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    try {
+        await deleteRoleConfig(roleId);
+        if (selectedRoleId === roleId || selectedSourceRoleId === roleId) {
+            selectedRoleId = '';
+            selectedSourceRoleId = '';
+        }
+        showToast({
+            title: t('settings.roles.deleted'),
+            message: t('settings.roles.deleted_message').replace('{role_id}', roleId),
+            tone: 'success',
+        });
+        await loadRoleSettingsPanel();
+    } catch (error) {
+        showToast({
+            title: t('settings.roles.delete_failed'),
+            message: error.message || t('settings.roles.delete_failed_message'),
             tone: 'danger',
         });
     }

@@ -179,6 +179,98 @@ console.log(JSON.stringify({
     ]
 
 
+def test_role_settings_lists_delete_actions_and_deletes_deletable_role(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+const initialListHtml = document.getElementById("roles-list").innerHTML;
+const deleteButtons = document.getElementById("roles-list").querySelectorAll(".role-record-delete-btn");
+await deleteButtons[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    initialListHtml,
+    deleteButtonCount: deleteButtons.length,
+    deleteCalls: globalThis.__deleteRoleCalls,
+    confirmCalls: globalThis.__feedbackConfirms,
+    notifications: globalThis.__feedbackNotifications,
+    roleSummaryCalls: globalThis.__fetchRoleConfigsCount,
+    finalListHtml: document.getElementById("roles-list").innerHTML,
+}));
+""".strip(),
+    )
+
+    confirm_calls = cast(list[dict[str, JsonValue]], payload["confirmCalls"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["deleteButtonCount"] == 2
+    assert "role-record-delete-btn" in cast(str, payload["initialListHtml"])
+    assert payload["deleteCalls"] == ["writer"]
+    assert payload["roleSummaryCalls"] == 2
+    assert confirm_calls == [
+        {
+            "title": "Delete Role",
+            "message": "Delete role Writer?",
+            "tone": "warning",
+            "confirmLabel": "Delete",
+            "cancelLabel": "Cancel",
+        }
+    ]
+    assert notifications == [
+        {
+            "title": "Role Deleted",
+            "message": "writer deleted.",
+            "tone": "success",
+        }
+    ]
+    assert "Writer" not in cast(str, payload["finalListHtml"])
+    assert "Reviewer" in cast(str, payload["finalListHtml"])
+
+
+def test_role_settings_delete_failure_keeps_list_and_shows_error(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+globalThis.__deleteRoleShouldFail = true;
+globalThis.__deleteRoleErrorMessage = "Cannot delete role.";
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-delete-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    deleteCalls: globalThis.__deleteRoleCalls,
+    notifications: globalThis.__feedbackNotifications,
+    roleSummaryCalls: globalThis.__fetchRoleConfigsCount,
+    listHtml: document.getElementById("roles-list").innerHTML,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["deleteCalls"] == ["writer"]
+    assert payload["roleSummaryCalls"] == 1
+    assert notifications == [
+        {
+            "title": "Delete Failed",
+            "message": "Cannot delete role.",
+            "tone": "danger",
+        }
+    ]
+    assert "Writer" in cast(str, payload["listHtml"])
+
+
 def test_role_settings_shows_shell_advisory_when_skills_are_selected(
     tmp_path: Path,
 ) -> None:
@@ -316,6 +408,7 @@ const defaultRoleRecords = {
         system_prompt: "Write the first draft.",
         file_name: "writer.md",
         content: "---\\nrole_id: writer\\n---\\n\\nWrite the first draft.\\n",
+        deletable: true,
     },
     reviewer: {
         source_role_id: "reviewer",
@@ -332,6 +425,7 @@ const defaultRoleRecords = {
         system_prompt: "Review the delivered work.",
         file_name: "reviewer.md",
         content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
+        deletable: true,
     },
     MainAgent: {
         source_role_id: "MainAgent",
@@ -348,6 +442,7 @@ const defaultRoleRecords = {
         system_prompt: "Handle the run directly.",
         file_name: "main_agent.md",
         content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
     },
     Coordinator: {
         source_role_id: "Coordinator",
@@ -364,6 +459,7 @@ const defaultRoleRecords = {
         system_prompt: "Coordinate the run.",
         file_name: "coordinator.md",
         content: "---\\nrole_id: Coordinator\\n---\\n\\nCoordinate the run.\\n",
+        deletable: false,
     },
 };
 
@@ -380,6 +476,7 @@ export async function fetchRoleConfigs() {
         version: record.version,
         bound_agent_id: record.bound_agent_id,
         model_profile: record.model_profile,
+        deletable: record.deletable === true,
     }));
 }
 
@@ -433,6 +530,15 @@ export async function saveRoleConfig(roleId, payload) {
     };
     return roleRecords[payload.role_id];
 }
+
+export async function deleteRoleConfig(roleId) {
+    globalThis.__deleteRoleCalls.push(roleId);
+    if (globalThis.__deleteRoleShouldFail) {
+        throw new Error(globalThis.__deleteRoleErrorMessage || "Delete failed.");
+    }
+    delete getRoleRecords()[roleId];
+    return { status: "ok" };
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -440,6 +546,11 @@ export async function saveRoleConfig(roleId, payload) {
         """
 export function showToast(payload) {
     globalThis.__feedbackNotifications.push(payload);
+}
+
+export async function showConfirmDialog(payload) {
+    globalThis.__feedbackConfirms.push(payload);
+    return globalThis.__confirmResult !== false;
 }
 """.strip(),
         encoding="utf-8",
@@ -449,7 +560,15 @@ export function showToast(payload) {
 const translations = {
     "composer.mode_normal": "Normal Mode",
     "settings.tab.orchestration": "Orchestration",
+    "settings.action.delete": "Delete",
+    "settings.action.cancel": "Cancel",
     "settings.roles.edit": "Edit",
+    "settings.roles.delete_confirm_title": "Delete Role",
+    "settings.roles.delete_confirm_message": "Delete role {name}?",
+    "settings.roles.deleted": "Role Deleted",
+    "settings.roles.deleted_message": "{role_id} deleted.",
+    "settings.roles.delete_failed": "Delete Failed",
+    "settings.roles.delete_failed_message": "Failed to delete role config.",
     "settings.roles.disabled": "Disabled",
     "settings.roles.none": "No roles found",
     "settings.roles.none_copy": "Add a role to edit its metadata and prompt.",
@@ -551,6 +670,8 @@ function createElement(initialDisplay = "block") {{
     let cachedRoleRecordsSource = "";
     let cachedRoleEditButtons = [];
     let cachedRoleEditButtonsSource = "";
+    let cachedRoleDeleteButtons = [];
+    let cachedRoleDeleteButtonsSource = "";
     let cachedInputs = [];
     let cachedInputsSource = "";
 
@@ -572,6 +693,20 @@ function createElement(initialDisplay = "block") {{
     function buildRoleEditButtons(source) {{
         const matches = [];
         const pattern = /class="[^"]*role-record-edit-btn[^"]*" data-role-id="([^"]+)"/g;
+        let match = pattern.exec(source);
+        while (match) {{
+            matches.push({{
+                dataset: {{ roleId: match[1] }},
+                onclick: null,
+            }});
+            match = pattern.exec(source);
+        }}
+        return matches;
+    }}
+
+    function buildRoleDeleteButtons(source) {{
+        const matches = [];
+        const pattern = /class="[^"]*role-record-delete-btn[^"]*" data-role-id="([^"]+)"/g;
         let match = pattern.exec(source);
         while (match) {{
             matches.push({{
@@ -625,6 +760,13 @@ function createElement(initialDisplay = "block") {{
                 }}
                 return cachedRoleEditButtons;
             }}
+            if (selector === ".role-record-delete-btn") {{
+                if (cachedRoleDeleteButtonsSource !== html) {{
+                    cachedRoleDeleteButtons = buildRoleDeleteButtons(html);
+                    cachedRoleDeleteButtonsSource = html;
+                }}
+                return cachedRoleDeleteButtons;
+            }}
             if (selector === 'input[type="checkbox"]') {{
                 if (cachedInputsSource !== html) {{
                     cachedInputs = buildCheckboxes(html);
@@ -651,6 +793,7 @@ function createElement(initialDisplay = "block") {{
             }}
             cachedRoleRecordsSource = "";
             cachedRoleEditButtonsSource = "";
+            cachedRoleDeleteButtonsSource = "";
             cachedInputsSource = "";
         }},
     }});
@@ -699,10 +842,15 @@ function installGlobals(elements) {{
         }},
     }};
     globalThis.__feedbackNotifications = [];
+    globalThis.__feedbackConfirms = [];
     globalThis.__fetchRoleConfigsCount = 0;
     globalThis.__fetchRoleConfigCalls = [];
     globalThis.__validatePayload = null;
     globalThis.__saveCalls = [];
+    globalThis.__deleteRoleCalls = [];
+    globalThis.__deleteRoleShouldFail = false;
+    globalThis.__deleteRoleErrorMessage = "";
+    globalThis.__confirmResult = true;
 }}
 
 {runner_source}

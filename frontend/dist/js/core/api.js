@@ -25,6 +25,7 @@ export {
     injectSubagentMessage,
     resumeRun,
     deleteSession,
+    deleteRoleConfig,
     fetchRoleConfigOptions,
     fetchRoleConfig,
     fetchRoleConfigs,

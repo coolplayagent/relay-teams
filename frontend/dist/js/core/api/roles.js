@@ -16,6 +16,16 @@ export async function fetchRoleConfig(roleId) {
     return requestJson(`/api/roles/configs/${roleId}`, undefined, 'Failed to fetch role config');
 }
 
+export async function deleteRoleConfig(roleId) {
+    return requestJson(
+        `/api/roles/configs/${roleId}`,
+        {
+            method: 'DELETE',
+        },
+        'Failed to delete role config',
+    );
+}
+
 export async function saveRoleConfig(roleId, payload) {
     return requestJson(
         `/api/roles/configs/${roleId}`,

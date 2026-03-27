@@ -32,6 +32,7 @@ export {
 } from './runs.js';
 
 export {
+    deleteRoleConfig,
     fetchRoleConfigOptions,
     fetchRoleConfig,
     fetchRoleConfigs,

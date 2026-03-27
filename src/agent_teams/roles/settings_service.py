@@ -52,8 +52,14 @@ class RoleSettingsService:
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
 
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
+        role_sources = self._load_role_sources()
+        builtin_role_ids = self._load_builtin_role_ids()
         documents = [
-            self._summary_from_definition(definition)
+            self._summary_from_definition(
+                definition,
+                source=role_sources.get(definition.role_id, RoleConfigSource.APP),
+                builtin_role_ids=builtin_role_ids,
+            )
             for definition in self._load_registry(
                 strict_capability_validation=False,
                 consumer_prefix="roles.settings_service.list_role_documents",
@@ -143,6 +149,25 @@ class RoleSettingsService:
         self._on_roles_reloaded(registry)
         return self.get_role_document(normalized.role_id)
 
+    def delete_role_document(self, role_id: str) -> None:
+        normalized_role_id = role_id.strip()
+        if not normalized_role_id:
+            raise ValueError("Role not found: ")
+        builtin_role_ids = self._load_builtin_role_ids()
+        role_path, source = self._find_role_record(normalized_role_id)
+        if not self._is_role_deletable(
+            role_id=normalized_role_id,
+            source=source,
+            builtin_role_ids=builtin_role_ids,
+        ):
+            raise ValueError(f"Role cannot be deleted: {normalized_role_id}")
+        role_path.unlink()
+        registry = self._load_registry(
+            strict_capability_validation=False,
+            consumer_prefix="roles.settings_service.delete_role_document",
+        )
+        self._on_roles_reloaded(registry)
+
     def validate_all_roles(self) -> dict[str, int | bool]:
         registry = self._load_registry(
             strict_capability_validation=True,
@@ -156,6 +181,9 @@ class RoleSettingsService:
     def _summary_from_definition(
         self,
         definition: RoleDefinition,
+        *,
+        source: RoleConfigSource,
+        builtin_role_ids: frozenset[str],
     ) -> RoleDocumentSummary:
         return RoleDocumentSummary(
             role_id=definition.role_id,
@@ -164,7 +192,12 @@ class RoleSettingsService:
             version=definition.version,
             model_profile=definition.model_profile,
             bound_agent_id=definition.bound_agent_id,
-            source=self._resolve_role_source(definition.role_id),
+            source=source,
+            deletable=self._is_role_deletable(
+                role_id=definition.role_id,
+                source=source,
+                builtin_role_ids=builtin_role_ids,
+            ),
         )
 
     def _record_from_definition(
@@ -352,10 +385,31 @@ class RoleSettingsService:
         ).get(role_id)
 
     def _resolve_role_source(self, role_id: str) -> RoleConfigSource:
-        role_record = self._find_role_record_optional(role_id)
-        if role_record is None:
-            return RoleConfigSource.APP
-        return role_record[1]
+        return self._load_role_sources().get(role_id, RoleConfigSource.APP)
+
+    def _load_role_sources(self) -> dict[str, RoleConfigSource]:
+        return {
+            role_id: source
+            for role_id, (_, source) in self._loader.build_effective_role_map(
+                builtin_roles_dir=self._builtin_roles_dir,
+                app_roles_dir=self._roles_dir,
+            ).items()
+        }
+
+    def _load_builtin_role_ids(self) -> frozenset[str]:
+        return frozenset(
+            self._loader.load_one(md_file).role_id
+            for md_file in sorted(self._builtin_roles_dir.glob("*.md"))
+        )
+
+    def _is_role_deletable(
+        self,
+        *,
+        role_id: str,
+        source: RoleConfigSource,
+        builtin_role_ids: frozenset[str],
+    ) -> bool:
+        return source == RoleConfigSource.APP and role_id not in builtin_role_ids
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
