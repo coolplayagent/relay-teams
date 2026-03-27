@@ -341,7 +341,9 @@ def _normalize_profile_context_window(
     explicit_context_window = normalized_profile.get("context_window")
     if isinstance(explicit_context_window, int) and explicit_context_window > 0:
         return normalized_profile
-    provider_raw = normalized_profile.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
+    provider_raw = normalized_profile.get(
+        "provider", ProviderType.OPENAI_COMPATIBLE.value
+    )
     model_raw = normalized_profile.get("model")
     if not isinstance(provider_raw, str) or not isinstance(model_raw, str):
         return normalized_profile

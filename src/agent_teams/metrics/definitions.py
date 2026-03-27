@@ -57,6 +57,42 @@ MCP_CALLS = MetricDefinition(
     description="Count of tool calls sourced from MCP servers.",
     unit="calls",
 )
+RETRIEVAL_SEARCHES = MetricDefinition(
+    name="agent_teams.retrieval.searches",
+    kind=MetricKind.COUNTER,
+    description="Count of retrieval search operations.",
+    unit="searches",
+)
+RETRIEVAL_SEARCH_DURATION_MS = MetricDefinition(
+    name="agent_teams.retrieval.search_duration_ms",
+    kind=MetricKind.HISTOGRAM,
+    description="Observed duration of retrieval search operations in milliseconds.",
+    unit="ms",
+)
+RETRIEVAL_SEARCH_FAILURES = MetricDefinition(
+    name="agent_teams.retrieval.search_failures",
+    kind=MetricKind.COUNTER,
+    description="Count of failed retrieval search operations.",
+    unit="searches",
+)
+RETRIEVAL_REBUILDS = MetricDefinition(
+    name="agent_teams.retrieval.rebuilds",
+    kind=MetricKind.COUNTER,
+    description="Count of retrieval index rebuild operations.",
+    unit="rebuilds",
+)
+RETRIEVAL_REBUILD_DURATION_MS = MetricDefinition(
+    name="agent_teams.retrieval.rebuild_duration_ms",
+    kind=MetricKind.HISTOGRAM,
+    description="Observed duration of retrieval rebuild operations in milliseconds.",
+    unit="ms",
+)
+RETRIEVAL_DOCUMENT_COUNT = MetricDefinition(
+    name="agent_teams.retrieval.document_count",
+    kind=MetricKind.GAUGE,
+    description="Current document count tracked by a retrieval scope.",
+    unit="documents",
+)
 
 DEFAULT_DEFINITIONS = (
     SESSION_STEPS,
@@ -68,4 +104,10 @@ DEFAULT_DEFINITIONS = (
     TOOL_FAILURES,
     SKILL_CALLS,
     MCP_CALLS,
+    RETRIEVAL_SEARCHES,
+    RETRIEVAL_SEARCH_DURATION_MS,
+    RETRIEVAL_SEARCH_FAILURES,
+    RETRIEVAL_REBUILDS,
+    RETRIEVAL_REBUILD_DURATION_MS,
+    RETRIEVAL_DOCUMENT_COUNT,
 )

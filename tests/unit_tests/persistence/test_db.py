@@ -8,6 +8,8 @@ from agent_teams.persistence.db import (
     is_retryable_sqlite_error,
     open_sqlite,
     run_sqlite_write_with_retry,
+    sqlite_compile_options,
+    sqlite_supports_fts5,
 )
 
 
@@ -21,6 +23,16 @@ def test_open_sqlite_enables_busy_timeout_and_wal_for_file_db(tmp_path: Path) ->
         assert foreign_keys == 1
         assert busy_timeout == SQLITE_BUSY_TIMEOUT_MS
         assert journal_mode == "wal"
+    finally:
+        conn.close()
+
+
+def test_sqlite_compile_options_reports_fts5_support(tmp_path: Path) -> None:
+    conn = open_sqlite(tmp_path / "compile-options.db")
+    try:
+        options = sqlite_compile_options(conn)
+        assert "ENABLE_FTS5" in options
+        assert sqlite_supports_fts5(conn) is True
     finally:
         conn.close()
 

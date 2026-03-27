@@ -15,7 +15,10 @@ from websockets.frames import Close
 from websockets.http11 import Response
 
 from agent_teams.env.proxy_env import ProxyEnvConfig
-from agent_teams.gateway.feishu.lark_ws_compat import import_lark_ws_client_module
+from agent_teams.gateway.feishu.lark_ws_compat import (
+    import_lark_module,
+    import_lark_ws_client_module,
+)
 from agent_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
@@ -470,6 +473,30 @@ def test_import_lark_ws_client_module_suppresses_known_deprecations() -> None:
     finally:
         loop.close()
         asyncio.set_event_loop(previous_loop)
+        for name, module in removed_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+                continue
+            sys.modules[name] = module
+
+
+def test_import_lark_module_suppresses_dispatcher_handler_deprecations() -> None:
+    removed_modules = {
+        name: sys.modules.pop(name, None)
+        for name in (
+            "lark_oapi.event.dispatcher_handler",
+            "lark_oapi.ws.client",
+            "lark_oapi.ws.pb.google.protobuf.internal.well_known_types",
+        )
+    }
+
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            module = import_lark_module("lark_oapi.event.dispatcher_handler")
+        assert module.__name__ == "lark_oapi.event.dispatcher_handler"
+        assert caught == []
+    finally:
         for name, module in removed_modules.items():
             if module is None:
                 sys.modules.pop(name, None)

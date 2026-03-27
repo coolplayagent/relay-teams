@@ -9,6 +9,8 @@ from agent_teams.persistence.db import (
     is_retryable_sqlite_error,
     open_sqlite,
     run_sqlite_write_with_retry,
+    sqlite_compile_options,
+    sqlite_supports_fts5,
 )
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.persistence.shared_state_repo import (
@@ -29,4 +31,6 @@ __all__ = [
     "is_retryable_sqlite_error",
     "open_sqlite",
     "run_sqlite_write_with_retry",
+    "sqlite_compile_options",
+    "sqlite_supports_fts5",
 ]

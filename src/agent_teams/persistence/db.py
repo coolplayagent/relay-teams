@@ -67,6 +67,15 @@ def open_sqlite(db_path: Path) -> sqlite3.Connection:
     )
 
 
+def sqlite_compile_options(conn: sqlite3.Connection) -> frozenset[str]:
+    rows = conn.execute("PRAGMA compile_options").fetchall()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def sqlite_supports_fts5(conn: sqlite3.Connection) -> bool:
+    return "ENABLE_FTS5" in sqlite_compile_options(conn)
+
+
 def is_retryable_sqlite_error(exc: sqlite3.OperationalError) -> bool:
     message = str(exc).lower()
     return (

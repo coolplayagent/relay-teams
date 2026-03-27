@@ -47,14 +47,14 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.session_history_marker_repository import (
-    SessionHistoryMarkerRepository,
-)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository

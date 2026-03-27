@@ -692,7 +692,98 @@ Notes:
 - Session deletion removes that session subtree under the bound workspace.
 - Daily memory is no longer file-based.
 
-### 2.8 `metric_points`
+### 2.8 `retrieval_scopes`
+
+```sql
+CREATE TABLE IF NOT EXISTS retrieval_scopes (
+    scope_kind     TEXT NOT NULL,
+    scope_id       TEXT NOT NULL,
+    backend        TEXT NOT NULL,
+    tokenizer      TEXT NOT NULL,
+    title_weight   REAL NOT NULL,
+    body_weight    REAL NOT NULL,
+    keyword_weight REAL NOT NULL,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (scope_kind, scope_id)
+);
+```
+
+Purpose: stores typed retrieval-scope configuration for local full-text indexes. Each scope maps one logical corpus such as `skill`, `memory`, `mcp`, or `file` to one retrieval backend and tokenizer strategy.
+
+Notes:
+- current backend is `sqlite_fts5`
+- tokenizer is currently `unicode61` or `trigram`
+- weights are query-time BM25 field weights for `title`, `body`, and `keywords`
+
+### 2.9 `retrieval_documents`
+
+```sql
+CREATE TABLE IF NOT EXISTS retrieval_documents (
+    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_kind  TEXT NOT NULL,
+    scope_id    TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    keywords    TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE (scope_kind, scope_id, document_id),
+    FOREIGN KEY (scope_kind, scope_id)
+        REFERENCES retrieval_scopes(scope_kind, scope_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_retrieval_documents_scope
+    ON retrieval_documents(scope_kind, scope_id, updated_at);
+```
+
+Purpose: durable content rows that back scope-local retrieval indexes.
+
+Notes:
+- `document_id` is the stable caller-owned identifier inside one retrieval scope
+- `keywords` stores the normalized keyword text used as the third BM25 field
+- FTS virtual tables read from this table through `content='retrieval_documents'`
+
+### 2.10 `retrieval_fts_unicode61` / `retrieval_fts_trigram`
+
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_unicode61
+USING fts5(
+    scope_kind UNINDEXED,
+    scope_id UNINDEXED,
+    document_id UNINDEXED,
+    title,
+    body,
+    keywords,
+    content='retrieval_documents',
+    content_rowid='rowid',
+    tokenize='unicode61',
+    detail='column'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_trigram
+USING fts5(
+    scope_kind UNINDEXED,
+    scope_id UNINDEXED,
+    document_id UNINDEXED,
+    title,
+    body,
+    keywords,
+    content='retrieval_documents',
+    content_rowid='rowid',
+    tokenize='trigram',
+    detail='column'
+);
+```
+
+Purpose: reusable SQLite FTS5 indexes for retrieval scopes. The runtime chooses one table per scope based on tokenizer configuration and ranks hits with SQLite `bm25(...)`.
+
+Notes:
+- `scope_kind`, `scope_id`, and `document_id` are stored as `UNINDEXED` metadata columns for filtering and result projection
+- rows are synchronized by the retrieval store layer instead of generic database triggers
+- current observability design intentionally avoids storing raw query text in metrics or trace attributes
+
+### 2.11 `metric_points`
 
 ```sql
 CREATE TABLE IF NOT EXISTS metric_points (

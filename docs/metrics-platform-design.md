@@ -15,6 +15,7 @@
    - session metrics
    - llm metrics
    - tool metrics
+   - retrieval metrics
 3. `sinks`
    - aggregate store sink
    - prettylog sink
@@ -36,6 +37,12 @@ Built-in metrics:
 - `agent_teams.tool.failures`
 - `agent_teams.skill.calls`
 - `agent_teams.mcp.calls`
+- `agent_teams.retrieval.searches`
+- `agent_teams.retrieval.search_duration_ms`
+- `agent_teams.retrieval.search_failures`
+- `agent_teams.retrieval.rebuilds`
+- `agent_teams.retrieval.rebuild_duration_ms`
+- `agent_teams.retrieval.document_count`
 
 Standard tags:
 - `workspace_id`
@@ -46,6 +53,9 @@ Standard tags:
 - `tool_name`
 - `tool_source`
 - `mcp_server`
+- `retrieval_backend`
+- `retrieval_scope_kind`
+- `retrieval_operation`
 - `status`
 
 ## Storage And Queries

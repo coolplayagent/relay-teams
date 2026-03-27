@@ -18,7 +18,10 @@ from agent_teams.env.proxy_env import (
     proxy_applies_to_url,
     resolve_ssl_verify,
 )
-from agent_teams.gateway.feishu.lark_ws_compat import import_lark_ws_client_module
+from agent_teams.gateway.feishu.lark_ws_compat import (
+    import_lark_module,
+    import_lark_ws_client_module,
+)
 from agent_teams.gateway.feishu.models import (
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
@@ -484,8 +487,9 @@ class _FeishuWsController:
             await asyncio.sleep(delay)
 
     def _build_client(self) -> WsClientLike:
-        import lark_oapi as lark
-        from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+        lark = import_lark_module("lark_oapi")
+        dispatcher_module = import_lark_module("lark_oapi.event.dispatcher_handler")
+        EventDispatcherHandler = dispatcher_module.EventDispatcherHandler
 
         ws_client_module = import_lark_ws_client_module()
         WsClient = ws_client_module.Client
@@ -493,7 +497,8 @@ class _FeishuWsController:
         environment = self._runtime_config.environment
 
         def _on_message(event: P2ImMessageReceiveV1) -> None:
-            from lark_oapi.core.json import JSON
+            json_module = import_lark_module("lark_oapi.core.json")
+            JSON = json_module.JSON
 
             raw_body = JSON.marshal(event) or "{}"
             result = self._event_handler.handle_sdk_event(

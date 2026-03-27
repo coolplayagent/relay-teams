@@ -365,7 +365,9 @@ export async function updateAutomationProject() {
     )
 
     assert payload["dispatchedEvents"] == []
-    assert payload["logs"] == ["Started automation run in bound IM session: session-im-1"]
+    assert payload["logs"] == [
+        "Started automation run in bound IM session: session-im-1"
+    ]
     assert "1 " in str(payload["projectViewSummary"])
 
 

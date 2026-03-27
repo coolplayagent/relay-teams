@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from typing import cast
 
-from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
-
+from agent_teams.gateway.feishu.lark_ws_compat import import_lark_module
 from agent_teams.gateway.feishu.models import (
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,
@@ -28,6 +27,9 @@ from agent_teams.sessions import ExternalSessionBindingRepository, SessionServic
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
+
+if TYPE_CHECKING:
+    from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 
 
 class _FakeRuntimeConfigLookup:
@@ -123,6 +125,14 @@ class _FakeRunService:
 
     def ensure_run_started(self, run_id: str) -> None:
         _ = run_id
+
+
+def _build_sdk_event(raw_body: str) -> P2ImMessageReceiveV1:
+    dispatcher_module = import_lark_module("lark_oapi.event.dispatcher_handler")
+    event_type = cast(
+        "type[P2ImMessageReceiveV1]", dispatcher_module.P2ImMessageReceiveV1
+    )
+    return event_type(json.loads(raw_body))
 
 
 class _FakeFeishuClient:
@@ -351,7 +361,7 @@ def test_handle_sdk_event_enqueues_normal_message(tmp_path: Path) -> None:
 
     result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={"x-test": "1"},
         remote_addr="127.0.0.1",
@@ -376,7 +386,7 @@ def test_help_command_returns_help_and_skips_enqueue(tmp_path: Path) -> None:
 
     result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={},
         remote_addr=None,
@@ -405,7 +415,7 @@ def test_group_command_requires_mention_under_mention_only(tmp_path: Path) -> No
 
     result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={},
         remote_addr=None,
@@ -433,7 +443,7 @@ def test_group_help_command_replies_when_mentioned(tmp_path: Path) -> None:
 
     result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={},
         remote_addr=None,
@@ -462,7 +472,7 @@ def test_group_command_ignores_other_bot_mentions(tmp_path: Path) -> None:
 
     result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={},
         remote_addr=None,
@@ -555,14 +565,14 @@ def test_status_and_clear_commands_include_queue_state(tmp_path: Path) -> None:
 
     status_result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(status_body)),
+        event=_build_sdk_event(status_body),
         raw_body=status_body,
         headers={},
         remote_addr=None,
     )
     clear_result = handler.handle_sdk_event(
         trigger_id="trg_feishu",
-        event=P2ImMessageReceiveV1(json.loads(clear_body)),
+        event=_build_sdk_event(clear_body),
         raw_body=clear_body,
         headers={},
         remote_addr=None,
@@ -595,7 +605,7 @@ def test_missing_runtime_config_ignores_event(tmp_path: Path) -> None:
 
     result = handler.handle_sdk_event(
         trigger_id="missing",
-        event=P2ImMessageReceiveV1(json.loads(raw_body)),
+        event=_build_sdk_event(raw_body),
         raw_body=raw_body,
         headers={},
         remote_addr=None,

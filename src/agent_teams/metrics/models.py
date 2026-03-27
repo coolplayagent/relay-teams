@@ -30,6 +30,9 @@ class MetricTagSet(BaseModel):
     tool_name: str = ""
     tool_source: str = ""
     mcp_server: str = ""
+    retrieval_backend: str = ""
+    retrieval_scope_kind: str = ""
+    retrieval_operation: str = ""
     status: str = ""
 
     def normalized_items(self) -> tuple[tuple[str, str], ...]:
@@ -42,6 +45,9 @@ class MetricTagSet(BaseModel):
             ("tool_name", self.tool_name),
             ("tool_source", self.tool_source),
             ("mcp_server", self.mcp_server),
+            ("retrieval_backend", self.retrieval_backend),
+            ("retrieval_scope_kind", self.retrieval_scope_kind),
+            ("retrieval_operation", self.retrieval_operation),
             ("status", self.status),
         )
         return tuple((key, value) for key, value in items if value)

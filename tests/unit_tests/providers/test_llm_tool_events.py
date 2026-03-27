@@ -93,10 +93,9 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             system_prompt="Coordinate work.",
         )
     )
-    shared_store = SharedStateRepository(Path(tempfile.mkstemp(suffix=".db")[1]))
-    session_history_marker_repo = SessionHistoryMarkerRepository(
-        Path(tempfile.mkstemp(suffix=".db")[1])
-    )
+    db_path = Path(tempfile.mkstemp(suffix=".db")[1])
+    shared_store = SharedStateRepository(db_path)
+    session_history_marker_repo = SessionHistoryMarkerRepository(db_path)
     return OpenAICompatibleProvider(
         config,
         task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),

@@ -687,7 +687,9 @@ export async function runAutomationProject() {
 
     assert payload["selectedSessionIds"] == []
     assert payload["openedAutomationProjectIds"] == ["aut_1"]
-    assert payload["logs"] == ["Queued automation run in bound IM session: session-im-1"]
+    assert payload["logs"] == [
+        "Queued automation run in bound IM session: session-im-1"
+    ]
 
 
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
