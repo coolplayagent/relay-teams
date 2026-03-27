@@ -123,6 +123,75 @@ async def test_acp_mcp_connection_transport_relays_initialize_list_and_call() ->
 
 
 @pytest.mark.asyncio
+async def test_acp_mcp_connection_transport_logs_bridge_subexception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded_events: list[dict[str, object]] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, JsonValue] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = duration_ms
+        recorded_events.append(
+            {
+                "event": event,
+                "message": message,
+                "payload": payload,
+                "exc_info": exc_info,
+            }
+        )
+
+    monkeypatch.setattr(acp_mcp_relay_module, "log_event", fake_log_event)
+
+    async def send_request(
+        method: str,
+        params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        _ = (method, params)
+        raise RuntimeError("boom from send_request")
+
+    async def send_notification(_message: dict[str, JsonValue]) -> None:
+        return None
+
+    transport = AcpMcpConnectionTransport(
+        session_id="gws_123",
+        connection_id="conn_123",
+        send_request=send_request,
+        send_notification=send_notification,
+    )
+    toolset = AcpMcpServer(transport=transport, id="zed-tools")
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        async with toolset:
+            await toolset.list_tools()
+
+    assert len(exc_info.value.exceptions) == 1
+    assert str(exc_info.value.exceptions[0]) == "boom from send_request"
+    assert recorded_events == [
+        {
+            "event": "gateway.acp_mcp_relay.bridge.failed",
+            "message": "ACP MCP relay bridge task failed",
+            "payload": {
+                "session_id": "gws_123",
+                "connection_id": "conn_123",
+                "pending_request_count": 0,
+                "message_kind": "request",
+                "method": "initialize",
+                "message_id": 0,
+            },
+            "exc_info": exc_info.value.exceptions[0],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_gateway_aware_mcp_registry_exposes_session_scoped_acp_servers() -> None:
     relay = AcpMcpRelay()
 
@@ -211,6 +280,179 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_acp_servers() -
     assert [tool.name for tool in tools] == ["zed-tools_echo"]
     assert schemas[0].name == "zed-tools_echo"
     assert cast(dict[str, JsonValue], schemas[0].input_schema)["type"] == "object"
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_ignores_unconnected_session_scoped_acp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    recorded_events: list[dict[str, object]] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, JsonValue] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = duration_ms
+        recorded_events.append(
+            {
+                "event": event,
+                "message": message,
+                "payload": payload,
+                "exc_info": exc_info,
+            }
+        )
+
+    monkeypatch.setattr(acp_mcp_relay_module, "log_event", fake_log_event)
+
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="cat-cafe",
+                name="cat-cafe",
+                transport="acp",
+                config={"transport": "acp", "id": "cat-cafe"},
+            ),
+        ),
+    )
+
+    with relay.session_scope("gws_123"):
+        tools = await registry.list_tools("cat-cafe")
+        toolsets = registry.get_toolsets(("cat-cafe",))
+
+    assert tools == ()
+    assert toolsets == ()
+    assert recorded_events == [
+        {
+            "event": "mcp.registry.session_server_ignored",
+            "message": "Ignoring unavailable session-scoped MCP server",
+            "payload": {
+                "server_name": "cat-cafe",
+                "reason": "acp_connection_inactive",
+                "consumer": "gateway.acp_mcp_relay.list_tools",
+                "session_id": "gws_123",
+                "transport": "acp",
+            },
+            "exc_info": None,
+        },
+        {
+            "event": "mcp.registry.session_server_ignored",
+            "message": "Ignoring unavailable session-scoped MCP server",
+            "payload": {
+                "server_name": "cat-cafe",
+                "reason": "acp_connection_inactive",
+                "consumer": "gateway.acp_mcp_relay.get_toolsets",
+                "session_id": "gws_123",
+                "transport": "acp",
+            },
+            "exc_info": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_disables_failed_session_scoped_acp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    recorded_events: list[dict[str, object]] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, JsonValue] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = duration_ms
+        recorded_events.append(
+            {
+                "event": event,
+                "message": message,
+                "payload": payload,
+                "exc_info": exc_info,
+            }
+        )
+
+    monkeypatch.setattr(acp_mcp_relay_module, "log_event", fake_log_event)
+
+    async def send_request(
+        method: str,
+        params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        _ = (method, params)
+        raise RuntimeError("cat-cafe initialize failed")
+
+    async def send_notification(_message: dict[str, JsonValue]) -> None:
+        return None
+
+    relay.set_outbound(
+        send_request=send_request,
+        send_notification=send_notification,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="cat-cafe",
+                name="cat-cafe",
+                transport="acp",
+                config={"transport": "acp", "id": "cat-cafe"},
+            ),
+        ),
+    )
+    await relay.open_connection(
+        session_id="gws_123",
+        connection_id="conn_123",
+        server_spec=GatewayMcpServerSpec(
+            server_id="cat-cafe",
+            name="cat-cafe",
+            transport="acp",
+            config={"transport": "acp", "id": "cat-cafe"},
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        tools = await registry.list_tools("cat-cafe")
+        toolsets = registry.get_toolsets(("cat-cafe",))
+
+    await relay.close_connection(connection_id="conn_123")
+
+    assert tools == ()
+    assert toolsets == ()
+    assert len(recorded_events) == 2
+    assert recorded_events[0]["event"] == "gateway.acp_mcp_relay.bridge.failed"
+    assert recorded_events[1] == {
+        "event": "mcp.registry.session_server_ignored",
+        "message": "Ignoring unavailable session-scoped MCP server",
+        "payload": {
+            "server_name": "cat-cafe",
+            "reason": "tool_listing_failed",
+            "consumer": "gateway.acp_mcp_relay.list_tools",
+            "session_id": "gws_123",
+            "transport": "acp",
+        },
+        "exc_info": recorded_events[0]["exc_info"],
+    }
+    assert str(recorded_events[0]["exc_info"]) == "cat-cafe initialize failed"
 
 
 class _FakeListedTool:

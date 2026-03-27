@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar, Token
+import logging
 from typing import TYPE_CHECKING, cast
 
 import anyio
@@ -13,6 +14,7 @@ from pydantic import JsonValue
 from pydantic_ai.mcp import MCPServer
 
 from agent_teams.gateway.gateway_models import GatewayMcpServerSpec
+from agent_teams.logger import get_logger, log_event
 from agent_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSpec,
@@ -44,6 +46,7 @@ _CURRENT_GATEWAY_SESSION_ID: ContextVar[str | None] = ContextVar(
     "gateway_session_mcp_session_id",
     default=None,
 )
+LOGGER = get_logger(__name__)
 
 
 class GatewayAwareMcpRegistry(McpRegistry):
@@ -56,6 +59,7 @@ class GatewayAwareMcpRegistry(McpRegistry):
         super().__init__(())
         self._base_registry = base_registry
         self._relay = relay
+        self._disabled_session_servers: set[tuple[str, str]] = set()
 
     def validate_known(self, names: tuple[str, ...]) -> None:
         missing = [name for name in names if name not in self.list_names()]
@@ -101,12 +105,16 @@ class GatewayAwareMcpRegistry(McpRegistry):
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[MCPServer, ...]:
         self.validate_known(names)
         toolsets: list[MCPServer] = []
-        session_toolsets = self._relay.current_session_toolsets()
         base_names: list[str] = []
         for name in names:
-            toolset = session_toolsets.get(name)
+            toolset = self._session_toolset_or_none(
+                name,
+                consumer="gateway.acp_mcp_relay.get_toolsets",
+            )
             if toolset is not None:
                 toolsets.append(toolset)
+                continue
+            if self._relay.current_session_gateway_spec(name) is not None:
                 continue
             base_names.append(name)
         if base_names:
@@ -114,11 +122,25 @@ class GatewayAwareMcpRegistry(McpRegistry):
         return tuple(toolsets)
 
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
-        toolset = self._relay.current_session_toolsets().get(name)
+        toolset = self._session_toolset_or_none(
+            name,
+            consumer="gateway.acp_mcp_relay.list_tools",
+        )
         if toolset is None:
+            if self._relay.current_session_gateway_spec(name) is not None:
+                return ()
             return await self._base_registry.list_tools(name)
-        async with toolset:
-            tools = await toolset.list_tools()
+        try:
+            async with toolset:
+                tools = await toolset.list_tools()
+        except Exception as exc:
+            self._disable_session_server(
+                name,
+                consumer="gateway.acp_mcp_relay.list_tools",
+                reason="tool_listing_failed",
+                exc=exc,
+            )
+            return ()
         return tuple(
             McpToolInfo(
                 name=get_effective_mcp_tool_name(name, str(tool.name)),
@@ -130,11 +152,25 @@ class GatewayAwareMcpRegistry(McpRegistry):
         )
 
     async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
-        toolset = self._relay.current_session_toolsets().get(name)
+        toolset = self._session_toolset_or_none(
+            name,
+            consumer="gateway.acp_mcp_relay.list_tool_schemas",
+        )
         if toolset is None:
+            if self._relay.current_session_gateway_spec(name) is not None:
+                return ()
             return await self._base_registry.list_tool_schemas(name)
-        async with toolset:
-            tools = await toolset.list_tools()
+        try:
+            async with toolset:
+                tools = await toolset.list_tools()
+        except Exception as exc:
+            self._disable_session_server(
+                name,
+                consumer="gateway.acp_mcp_relay.list_tool_schemas",
+                reason="tool_schema_listing_failed",
+                exc=exc,
+            )
+            return ()
         return tuple(
             McpToolSchema(
                 name=get_effective_mcp_tool_name(name, str(tool.name)),
@@ -146,6 +182,93 @@ class GatewayAwareMcpRegistry(McpRegistry):
                 ),
             )
             for tool in tools
+        )
+
+    def _session_toolset_or_none(
+        self,
+        name: str,
+        *,
+        consumer: str,
+    ) -> MCPServer | None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is None:
+            return None
+        if (session_id, name) in self._disabled_session_servers:
+            return None
+        spec = self._relay.current_session_gateway_spec(name)
+        if spec is None:
+            return None
+        try:
+            toolset = self._relay.current_session_toolset(name)
+        except Exception as exc:
+            self._disable_session_server(
+                name,
+                consumer=consumer,
+                reason="toolset_init_failed",
+                exc=exc,
+            )
+            return None
+        if toolset is not None:
+            return toolset
+        self._log_session_server_warning(
+            name,
+            consumer=consumer,
+            reason=(
+                "acp_connection_inactive"
+                if spec.transport == "acp"
+                else "toolset_unavailable"
+            ),
+            transport=spec.transport,
+        )
+        return None
+
+    def _disable_session_server(
+        self,
+        name: str,
+        *,
+        consumer: str,
+        reason: str,
+        exc: Exception,
+    ) -> None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is not None:
+            self._disabled_session_servers.add((session_id, name))
+        spec = self._relay.current_session_gateway_spec(name)
+        root_exc = _unwrap_exception_group(exc)
+        self._log_session_server_warning(
+            name,
+            consumer=consumer,
+            reason=reason,
+            transport=spec.transport if spec is not None else None,
+            exc=root_exc,
+        )
+
+    def _log_session_server_warning(
+        self,
+        name: str,
+        *,
+        consumer: str,
+        reason: str,
+        transport: str | None,
+        exc: Exception | None = None,
+    ) -> None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        payload: dict[str, JsonValue] = {
+            "server_name": name,
+            "reason": reason,
+            "consumer": consumer,
+        }
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if transport is not None:
+            payload["transport"] = transport
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="mcp.registry.session_server_ignored",
+            message="Ignoring unavailable session-scoped MCP server",
+            payload=payload,
+            exc_info=exc,
         )
 
 
@@ -206,24 +329,42 @@ class AcpMcpRelay:
                 return spec
         raise ValueError(f"Unknown MCP server: {name}")
 
+    def current_session_gateway_spec(self, name: str) -> GatewayMcpServerSpec | None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is None:
+            return None
+        return self._session_specs.get(session_id, {}).get(name)
+
+    def current_session_toolset(self, name: str) -> MCPServer | None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is None:
+            return None
+        spec = self._session_specs.get(session_id, {}).get(name)
+        if spec is None:
+            return None
+        if spec.transport == "acp":
+            active = self._session_active_servers.get(session_id, {})
+            connection_id = active.get(name)
+            if connection_id in self._connections:
+                return self._connections[connection_id].toolset
+            return None
+        cache_key = (session_id, name)
+        toolset = self._session_toolsets.get(cache_key)
+        if toolset is None:
+            toolset = build_mcp_server(_gateway_spec_to_mcp_spec(spec))
+            self._session_toolsets[cache_key] = toolset
+        return toolset
+
     def current_session_toolsets(self) -> dict[str, MCPServer]:
         session_id = _CURRENT_GATEWAY_SESSION_ID.get()
         if session_id is None:
             return {}
         specs = self._session_specs.get(session_id, {})
-        active = self._session_active_servers.get(session_id, {})
         toolsets: dict[str, MCPServer] = {}
         for server_id, spec in specs.items():
-            if spec.transport == "acp":
-                connection_id = active.get(server_id)
-                if connection_id in self._connections:
-                    toolsets[server_id] = self._connections[connection_id].toolset
-                continue
-            cache_key = (session_id, server_id)
-            toolset = self._session_toolsets.get(cache_key)
+            toolset = self.current_session_toolset(server_id)
             if toolset is None:
-                toolset = build_mcp_server(_gateway_spec_to_mcp_spec(spec))
-                self._session_toolsets[cache_key] = toolset
+                continue
             toolsets[server_id] = toolset
         return toolsets
 
@@ -414,55 +555,96 @@ class AcpMcpConnectionTransport:
         read_stream: MemoryObjectReceiveStream[SessionMessage | Exception],
         write_stream: MemoryObjectSendStream[SessionMessage],
     ) -> None:
-        async with read_stream:
-            async for item in read_stream:
-                if isinstance(item, Exception):
-                    raise item
-                raw_message = item.message.root
-                if isinstance(raw_message, mcp_types.JSONRPCNotification):
-                    await self._send_notification(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "mcp/message",
-                            "params": _build_mcp_message_request(
+        message_kind: str | None = None
+        method_name: str | None = None
+        message_id: JsonRpcId | None = None
+        try:
+            async with read_stream:
+                async for item in read_stream:
+                    if isinstance(item, Exception):
+                        raise item
+                    raw_message = item.message.root
+                    message_kind = None
+                    method_name = None
+                    message_id = None
+                    if isinstance(raw_message, mcp_types.JSONRPCNotification):
+                        message_kind = "notification"
+                        method_name = raw_message.method
+                        await self._send_notification(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "mcp/message",
+                                "params": _build_mcp_message_request(
+                                    session_id=self._session_id,
+                                    connection_id=self._connection_id,
+                                    method=raw_message.method,
+                                    params=_json_object(raw_message.params),
+                                ),
+                            }
+                        )
+                        continue
+                    if isinstance(raw_message, mcp_types.JSONRPCRequest):
+                        message_kind = "request"
+                        method_name = raw_message.method
+                        message_id = raw_message.id
+                        response = await self._send_request(
+                            "mcp/message",
+                            _build_mcp_message_request(
                                 session_id=self._session_id,
                                 connection_id=self._connection_id,
                                 method=raw_message.method,
                                 params=_json_object(raw_message.params),
                             ),
-                        }
-                    )
-                    continue
-                if isinstance(raw_message, mcp_types.JSONRPCRequest):
-                    response = await self._send_request(
-                        "mcp/message",
-                        _build_mcp_message_request(
-                            session_id=self._session_id,
-                            connection_id=self._connection_id,
-                            method=raw_message.method,
-                            params=_json_object(raw_message.params),
-                        ),
-                    )
-                    await write_stream.send(
-                        SessionMessage(
-                            message=mcp_types.JSONRPCMessage(
-                                _jsonrpc_message_from_acp_response(
-                                    raw_request_id=raw_message.id,
-                                    response=response,
+                        )
+                        await write_stream.send(
+                            SessionMessage(
+                                message=mcp_types.JSONRPCMessage(
+                                    _jsonrpc_message_from_acp_response(
+                                        raw_request_id=raw_message.id,
+                                        response=response,
+                                    )
                                 )
                             )
                         )
-                    )
-                    continue
-                if isinstance(raw_message, mcp_types.JSONRPCResponse):
-                    future = self._connected_request_futures.get(raw_message.id)
-                    if future is not None and not future.done():
-                        future.set_result(dict(raw_message.result))
-                    continue
-                if isinstance(raw_message, mcp_types.JSONRPCError):
-                    future = self._connected_request_futures.get(raw_message.id)
-                    if future is not None and not future.done():
-                        future.set_exception(RuntimeError(raw_message.error.message))
+                        continue
+                    if isinstance(raw_message, mcp_types.JSONRPCResponse):
+                        message_kind = "response"
+                        message_id = raw_message.id
+                        future = self._connected_request_futures.get(raw_message.id)
+                        if future is not None and not future.done():
+                            future.set_result(dict(raw_message.result))
+                        continue
+                    if isinstance(raw_message, mcp_types.JSONRPCError):
+                        message_kind = "error"
+                        message_id = raw_message.id
+                        future = self._connected_request_futures.get(raw_message.id)
+                        if future is not None and not future.done():
+                            future.set_exception(
+                                RuntimeError(raw_message.error.message)
+                            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            payload: dict[str, JsonValue] = {
+                "session_id": self._session_id,
+                "connection_id": self._connection_id,
+                "pending_request_count": len(self._connected_request_futures),
+            }
+            if message_kind is not None:
+                payload["message_kind"] = message_kind
+            if method_name is not None:
+                payload["method"] = method_name
+            if message_id is not None:
+                payload["message_id"] = message_id
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                event="gateway.acp_mcp_relay.bridge.failed",
+                message="ACP MCP relay bridge task failed",
+                payload=payload,
+                exc_info=exc,
+            )
+            raise
 
     def _next_message_id(self) -> int:
         self._message_id += 1
@@ -579,3 +761,11 @@ def _json_object(value: object) -> dict[str, JsonValue]:
     if isinstance(value, dict):
         return cast(dict[str, JsonValue], value)
     return {}
+
+
+def _unwrap_exception_group(exc: Exception) -> Exception:
+    if isinstance(exc, ExceptionGroup) and exc.exceptions:
+        first = exc.exceptions[0]
+        if isinstance(first, Exception):
+            return _unwrap_exception_group(first)
+    return exc
