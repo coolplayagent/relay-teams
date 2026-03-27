@@ -228,3 +228,33 @@ def test_save_sensitive_app_environment_variable_uses_secret_store(
             value_kind=EnvironmentVariableValueKind.STRING,
         ),
     )
+
+
+def test_environment_variable_service_notifies_changed_keys_for_rename_and_delete(
+    tmp_path: Path,
+) -> None:
+    backend = _FakeEnvironmentVariableBackend()
+    app_env_file_path = tmp_path / ".agent-teams" / ".env"
+    app_env_file_path.parent.mkdir(parents=True)
+    app_env_file_path.write_text("Path=value\n", encoding="utf-8")
+    changed_key_events: list[frozenset[str]] = []
+    service = EnvironmentVariableService(
+        backend=backend,
+        app_env_file_path=app_env_file_path,
+        on_app_env_changed=changed_key_events.append,
+    )
+
+    service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key="SystemPath",
+        request=EnvironmentVariableSaveRequest(source_key="Path", value="next"),
+    )
+    service.delete_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key="SystemPath",
+    )
+
+    assert changed_key_events == [
+        frozenset(("Path", "SystemPath")),
+        frozenset(("SystemPath",)),
+    ]

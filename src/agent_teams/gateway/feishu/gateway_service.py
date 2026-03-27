@@ -59,6 +59,9 @@ class FeishuGatewayService:
         self._workspace_service = workspace_service
         self._external_session_binding_repo = external_session_binding_repo
 
+    def replace_role_registry(self, role_registry: RoleRegistry) -> None:
+        self._role_registry = role_registry
+
     def list_accounts(self) -> tuple[FeishuGatewayAccountRecord, ...]:
         return tuple(
             self.attach_secret_status(account)

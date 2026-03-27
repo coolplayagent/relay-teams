@@ -242,6 +242,7 @@ Response fields:
 ### `POST /system/configs/proxy:reload`
 
 Reloads effective proxy env into runtime.
+The reload source is the current effective merged environment, not only app-saved `.env` values.
 This updates process-level proxy variables for future HTTP requests and shell/MCP subprocesses, clears removed proxy keys, and refreshes MCP runtime state.
 
 ### `POST /system/configs/mcp:reload`
@@ -308,6 +309,8 @@ Request body fields:
 `app` writes preserve unrelated `.env` lines and comments where possible.
 Sensitive app keys are written to the secret store instead of `.env`, and any managed plaintext copy is removed from `.env`.
 The backend preserves the existing value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
+Saving an app variable also reloads runtime model config immediately, so `model.json` placeholders such as `${OPENAI_API_KEY}` take effect without a restart.
+Changes to `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, or `SSL_VERIFY` also trigger the same proxy runtime refresh side effects as the dedicated proxy settings API.
 `system` scope is read-only and returns a user-facing validation error on mutation.
 
 ### `DELETE /system/configs/environment-variables/{scope}/{key}`

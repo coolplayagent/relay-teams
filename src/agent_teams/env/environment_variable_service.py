@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import os
 import re
 from pathlib import Path
@@ -57,6 +57,7 @@ class EnvironmentVariableService:
         *,
         backend: EnvironmentVariableBackend | None = None,
         app_env_file_path: Path | None = None,
+        on_app_env_changed: Callable[[frozenset[str]], None] | None = None,
     ) -> None:
         self._backend: EnvironmentVariableBackend = (
             ProcessEnvironmentVariableBackend() if backend is None else backend
@@ -67,6 +68,7 @@ class EnvironmentVariableService:
             else app_env_file_path.expanduser().resolve()
         )
         self._secret_store = get_secret_store()
+        self._on_app_env_changed = on_app_env_changed or (lambda _changed_keys: None)
 
     def list_environment_variables(self) -> EnvironmentVariableCatalog:
         system_records = self._sort_records(
@@ -131,6 +133,10 @@ class EnvironmentVariableService:
             plaintext_records[normalized_key] = next_record
 
         self._write_app_records(plaintext_records)
+        changed_keys = {normalized_key}
+        if source_existing is not None:
+            changed_keys.add(source_key)
+        self._on_app_env_changed(frozenset(changed_keys))
         return next_record
 
     def delete_environment_variable(
@@ -152,6 +158,7 @@ class EnvironmentVariableService:
         else:
             plaintext_records.pop(normalized_key, None)
         self._write_app_records(plaintext_records)
+        self._on_app_env_changed(frozenset((normalized_key,)))
 
     def _sort_records(
         self,

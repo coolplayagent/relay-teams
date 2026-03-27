@@ -133,6 +133,15 @@ class SessionService:
         self._media_asset_service = media_asset_service
         self._get_runtime = get_runtime
 
+    def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
+        self._role_registry = role_registry
+
+    def replace_subagent_reflection_service(
+        self,
+        subagent_reflection_service: SubagentReflectionService | None,
+    ) -> None:
+        self._subagent_reflection_service = subagent_reflection_service
+
     def create_session(
         self,
         *,

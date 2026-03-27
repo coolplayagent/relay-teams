@@ -106,6 +106,9 @@ class WeChatGatewayService:
         self._login_sessions: dict[str, WeChatLoginSession] = {}
         self._watched_runs: set[str] = set()
 
+    def replace_role_registry(self, role_registry: RoleRegistry) -> None:
+        self._role_registry = role_registry
+
     def start(self) -> None:
         for account in self._repository.list_accounts():
             if account.status == WeChatAccountStatus.ENABLED:

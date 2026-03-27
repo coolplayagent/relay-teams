@@ -201,7 +201,10 @@ class ServerContainer:
             config_dir=config_dir
         )
         self.environment_variable_service: EnvironmentVariableService = (
-            EnvironmentVariableService()
+            EnvironmentVariableService(
+                app_env_file_path=runtime.paths.env_file,
+                on_app_env_changed=self._on_app_environment_changed,
+            )
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             app_config_dir=config_dir
@@ -800,13 +803,25 @@ class ServerContainer:
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service
 
+    def _refresh_runtime_dependents(self) -> None:
+        self.runtime_role_resolver.replace_role_registry(self.role_registry)
+        self.session_service.replace_role_registry(self.role_registry)
+        self.session_service.replace_subagent_reflection_service(
+            self.subagent_reflection_service
+        )
+        self.run_service.replace_runtime_dependencies(
+            role_registry=self.role_registry,
+            provider_factory=self._provider_factory,
+            runtime_role_resolver=self.runtime_role_resolver,
+        )
+        self.feishu_gateway_service.replace_role_registry(self.role_registry)
+        self.wechat_gateway_service.replace_role_registry(self.role_registry)
+
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
         self.subagent_reflection_service = self._build_subagent_reflection_service()
-        self.session_service._subagent_reflection_service = (
-            self.subagent_reflection_service
-        )
         self._refresh_coordinator_runtime()
+        self._refresh_runtime_dependents()
 
     def _on_roles_reloaded(self, role_registry: RoleRegistry) -> None:
         self.role_registry = role_registry
@@ -821,6 +836,7 @@ class ServerContainer:
             on_skill_reloaded=self._on_skill_reloaded,
         )
         self._refresh_coordinator_runtime()
+        self._refresh_runtime_dependents()
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:
         self.mcp_registry = mcp_registry
@@ -837,6 +853,20 @@ class ServerContainer:
         self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
         self.feishu_subscription_service.reload()
         self.wechat_gateway_service.reload()
+
+    def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
+        self.model_config_service.reload_model_config()
+        proxy_related_keys = {
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "SSL_VERIFY",
+        }
+        normalized_keys = {key.upper() for key in changed_keys}
+        if normalized_keys.isdisjoint(proxy_related_keys):
+            return
+        self.proxy_config_service.reload_proxy_config()
 
     def _ensure_default_workspace(self) -> None:
         if self.workspace_repo.exists("default"):

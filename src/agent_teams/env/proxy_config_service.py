@@ -69,7 +69,7 @@ class ProxyConfigService:
 
     def reload_proxy_config(self) -> None:
         self._on_proxy_reloaded(
-            self._load_runtime_proxy_config(include_process_env=False)
+            self._load_runtime_proxy_config(include_process_env=True)
         )
 
     def save_proxy_config(self, payload: ProxyEnvInput) -> None:

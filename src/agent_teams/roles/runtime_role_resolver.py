@@ -21,6 +21,9 @@ class RuntimeRoleResolver:
         self._role_registry = role_registry
         self._temporary_role_repository = temporary_role_repository
 
+    def replace_role_registry(self, role_registry: RoleRegistry) -> None:
+        self._role_registry = role_registry
+
     def get_effective_role(self, *, run_id: str | None, role_id: str) -> RoleDefinition:
         if run_id is not None:
             try:

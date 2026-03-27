@@ -138,6 +138,17 @@ class RunManager:
         self._resume_requested_runs: set[str] = set()
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
+    def replace_runtime_dependencies(
+        self,
+        *,
+        role_registry: RoleRegistry | None,
+        provider_factory: Callable[[RoleDefinition, str | None], LLMProvider],
+        runtime_role_resolver: RuntimeRoleResolver | None,
+    ) -> None:
+        self._role_registry = role_registry
+        self._provider_factory = provider_factory
+        self._runtime_role_resolver = runtime_role_resolver
+
     def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._event_loop = loop
 

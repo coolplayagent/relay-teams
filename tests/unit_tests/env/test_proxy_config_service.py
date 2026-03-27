@@ -343,7 +343,7 @@ def test_save_proxy_config_clears_runtime_proxy_env_when_proxy_removed(
     )
 
 
-def test_reload_proxy_config_ignores_stale_process_proxy_env(
+def test_reload_proxy_config_uses_effective_process_proxy_env(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -365,7 +365,7 @@ def test_reload_proxy_config_ignores_stale_process_proxy_env(
 
     assert captured == [
         ProxyEnvConfig(
-            http_proxy=None,
+            http_proxy="http://bad-proxy.invalid:8080",
             https_proxy=None,
             all_proxy=None,
             no_proxy=None,
