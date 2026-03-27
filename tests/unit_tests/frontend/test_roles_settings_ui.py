@@ -307,6 +307,41 @@ console.log(JSON.stringify({
     )
 
 
+def test_role_settings_renders_skill_option_objects_by_name(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { name: "diff", description: "Inspect file changes before replying." },
+        { name: "time", description: "Read the current wall-clock time." },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+
+console.log(JSON.stringify({
+    skillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    skillValues: skillOptions.map(input => input.dataset.optionValue),
+}));
+""".strip(),
+    )
+
+    assert "[object Object]" not in cast(str, payload["skillsHtml"])
+    assert "diff" in cast(str, payload["skillsHtml"])
+    assert "time" in cast(str, payload["skillsHtml"])
+    assert payload["skillValues"] == ["diff", "time"]
+
+
 def test_role_settings_render_default_alias_with_current_profile_name(
     tmp_path: Path,
 ) -> None:
@@ -481,17 +516,21 @@ export async function fetchRoleConfigs() {
 }
 
 export async function fetchRoleConfigOptions() {
-        return {
-            coordinator_role_id: "Coordinator",
-            main_agent_role_id: "MainAgent",
-            tools: ["read_file", "write_file", "shell"],
-            mcp_servers: ["docs"],
-            skills: ["diff", "time"],
-            agents: [
-                { agent_id: "codex_local", name: "Codex Local", transport: "stdio" },
-                { agent_id: "claude_http", name: "Claude HTTP", transport: "streamable_http" },
-            ],
-        };
+    const defaults = {
+        coordinator_role_id: "Coordinator",
+        main_agent_role_id: "MainAgent",
+        tools: ["read_file", "write_file", "shell"],
+        mcp_servers: ["docs"],
+        skills: ["diff", "time"],
+        agents: [
+            { agent_id: "codex_local", name: "Codex Local", transport: "stdio" },
+            { agent_id: "claude_http", name: "Claude HTTP", transport: "streamable_http" },
+        ],
+    };
+    return {
+        ...defaults,
+        ...(globalThis.__roleConfigOptionsOverride || {}),
+    };
 }
 
 export async function fetchModelProfiles() {
@@ -851,6 +890,7 @@ function installGlobals(elements) {{
     globalThis.__deleteRoleShouldFail = false;
     globalThis.__deleteRoleErrorMessage = "";
     globalThis.__confirmResult = true;
+    globalThis.__roleConfigOptionsOverride = null;
 }}
 
 {runner_source}

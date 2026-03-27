@@ -121,9 +121,9 @@ function normalizeRoleConfigOptions(options) {
     return {
         coordinator_role_id: String(options?.coordinator_role_id || '').trim(),
         main_agent_role_id: String(options?.main_agent_role_id || '').trim(),
-        tools: Array.isArray(options?.tools) ? options.tools : [],
-        mcp_servers: Array.isArray(options?.mcp_servers) ? options.mcp_servers : [],
-        skills: Array.isArray(options?.skills) ? options.skills : [],
+        tools: normalizeOptionNames(options?.tools),
+        mcp_servers: normalizeOptionNames(options?.mcp_servers),
+        skills: normalizeOptionNames(options?.skills),
         agents: Array.isArray(options?.agents) ? options.agents.map(agent => ({
             agent_id: String(agent?.agent_id || '').trim(),
             name: String(agent?.name || '').trim(),
@@ -158,6 +158,25 @@ function normalizeModelProfiles(modelProfiles) {
             }),
         defaultName,
     };
+}
+
+function normalizeOptionNames(values) {
+    if (!Array.isArray(values)) {
+        return [];
+    }
+    return values
+        .map(normalizeOptionName)
+        .filter(value => Boolean(value));
+}
+
+function normalizeOptionName(value) {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+    if (typeof value?.name === 'string') {
+        return value.name.trim();
+    }
+    return '';
 }
 
 function renderRolesList() {
@@ -246,9 +265,9 @@ function applyRoleRecord(record) {
     currentMemoryProfile = normalizeMemoryProfile(record.memory_profile);
     currentBoundAgentId = String(record.bound_agent_id || '').trim();
     currentSelections = {
-        tools: Array.isArray(record.tools) ? [...record.tools] : [],
-        mcp_servers: Array.isArray(record.mcp_servers) ? [...record.mcp_servers] : [],
-        skills: Array.isArray(record.skills) ? [...record.skills] : [],
+        tools: normalizeOptionNames(record.tools),
+        mcp_servers: normalizeOptionNames(record.mcp_servers),
+        skills: normalizeOptionNames(record.skills),
     };
 
     setInputValue('role-id-input', record.role_id || '');
