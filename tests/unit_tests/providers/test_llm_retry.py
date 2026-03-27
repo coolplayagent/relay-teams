@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from openai import APIError, APIStatusError
@@ -62,6 +64,40 @@ def test_extract_retry_error_info_marks_remote_protocol_interrupt_as_retryable()
     assert info.retryable is True
     assert info.transport_error is True
     assert info.timeout_error is False
+
+
+def test_extract_retry_error_info_marks_invalid_tool_args_json_as_retryable() -> None:
+    info = extract_retry_error_info(
+        json.JSONDecodeError(
+            "Expecting property name enclosed in double quotes",
+            "{invalid: true}",
+            1,
+        )
+    )
+
+    assert info is not None
+    assert info.error_code == "model_tool_args_invalid_json"
+    assert info.retryable is True
+    assert info.transport_error is False
+    assert info.timeout_error is False
+
+
+def test_extract_retry_error_info_unwraps_invalid_tool_args_json_cause() -> None:
+    try:
+        raise json.JSONDecodeError(
+            "Expecting property name enclosed in double quotes",
+            "{invalid: true}",
+            1,
+        )
+    except json.JSONDecodeError as inner:
+        wrapped = RuntimeError("tool args parsing failed")
+        wrapped.__cause__ = inner
+
+    info = extract_retry_error_info(wrapped)
+
+    assert info is not None
+    assert info.error_code == "model_tool_args_invalid_json"
+    assert info.retryable is True
 
 
 def test_compute_retry_delay_ms_uses_exponential_backoff_without_jitter() -> None:

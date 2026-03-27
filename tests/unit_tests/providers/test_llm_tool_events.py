@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import json
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -74,6 +77,41 @@ class _FakeSharedStateRepository:
 
 class _FakeEventLog:
     pass
+
+
+class _FakeMessageRepository:
+    def __init__(self) -> None:
+        self._messages_by_conversation: dict[
+            str, list[ModelRequest | ModelResponse]
+        ] = {}
+
+    def append(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> None:
+        _ = (
+            session_id,
+            workspace_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        stored = self._messages_by_conversation.setdefault(conversation_id, [])
+        stored.extend(messages)
+
+    def get_history_for_conversation(
+        self, conversation_id: str
+    ) -> list[ModelRequest | ModelResponse]:
+        return list(self._messages_by_conversation.get(conversation_id, []))
 
 
 def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
@@ -213,6 +251,80 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
     assert tool_result_payload["tool_name"] == "create_tasks"
     assert tool_result_payload["tool_call_id"] == "call-2"
     assert tool_result_payload["error"] is False
+
+
+def test_commit_ready_messages_defers_tool_call_event_until_safe_commit() -> None:
+    hub = _FakeRunEventHub()
+    provider = _provider_with_hub(hub)
+    fake_repo = _FakeMessageRepository()
+    provider._session._message_repo = cast(
+        MessageRepository,
+        cast(object, fake_repo),
+    )
+
+    history, pending, tool_events_published = provider._session._commit_ready_messages(
+        request=_request(),
+        history=[],
+        pending_messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create_tasks",
+                        args={"objective": "x"},
+                        tool_call_id="call-unsafe",
+                    )
+                ]
+            )
+        ],
+    )
+
+    assert history == []
+    assert len(pending) == 1
+    assert tool_events_published is False
+    assert hub.events == []
+
+
+def test_commit_ready_messages_publishes_tool_events_after_safe_commit() -> None:
+    hub = _FakeRunEventHub()
+    provider = _provider_with_hub(hub)
+    fake_repo = _FakeMessageRepository()
+    provider._session._message_repo = cast(
+        MessageRepository,
+        cast(object, fake_repo),
+    )
+
+    history, pending, tool_events_published = provider._session._commit_ready_messages(
+        request=_request(),
+        history=[],
+        pending_messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create_tasks",
+                        args={"objective": "x"},
+                        tool_call_id="call-safe",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="create_tasks",
+                        content={"ok": True},
+                        tool_call_id="call-safe",
+                    )
+                ]
+            ),
+        ],
+    )
+
+    assert len(history) == 2
+    assert pending == []
+    assert tool_events_published is True
+    assert [event.event_type for event in hub.events] == [
+        RunEventType.TOOL_CALL,
+        RunEventType.TOOL_RESULT,
+    ]
 
 
 def test_publish_tool_events_skips_retry_without_tool_name() -> None:

@@ -1459,7 +1459,7 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
 
     history_after_cancel = message_repo.get_history("inst-sub")
     assert len(history_after_cancel) == 1
-    assert any(
+    assert not any(
         event.event_type == RunEventType.TOOL_CALL for event in cancel_hub.events
     )
     assert not any(
@@ -1751,6 +1751,78 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
     assert exc_info.value.payload.error_message == "busy"
+
+
+@pytest.mark.asyncio
+async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _ = _build_provider(tmp_path / "retry_invalid_tool_args.db", fake_hub)
+    provider._session._retry_config.jitter = False
+    committed_tool_messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="current_time",
+                    args={"timezone": "UTC"},
+                    tool_call_id="call-safe",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="current_time",
+                    tool_call_id="call-safe",
+                    content={"time": "2026-03-27T09:37:00Z"},
+                )
+            ]
+        ),
+    ]
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[committed_tool_messages],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=json.JSONDecodeError(
+                    "Expecting property name enclosed in double quotes",
+                    "{invalid: true}",
+                    1,
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-invalid-tool-args",
+        trace_id="run-invalid-tool-args",
+        task_id="task-invalid-tool-args",
+        session_id="session-invalid-tool-args",
+        workspace_id="default",
+        instance_id="inst-invalid-tool-args",
+        role_id="coordinator_agent",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(RecoverableRunPauseError) as exc_info:
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert RunEventType.TOOL_CALL in event_types
+    assert RunEventType.TOOL_RESULT in event_types
+    assert exc_info.value.payload.error_code == "model_tool_args_invalid_json"
+    assert "Expecting property name enclosed in double quotes" in (
+        exc_info.value.payload.error_message
+    )
 
 
 @pytest.mark.asyncio

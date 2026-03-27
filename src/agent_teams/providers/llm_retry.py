@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 from collections.abc import Awaitable, Callable
@@ -139,6 +140,9 @@ def extract_retry_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
 
 
 def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
+    invalid_json_error = _extract_invalid_json_error_info(exc)
+    if invalid_json_error is not None:
+        return invalid_json_error
     if isinstance(exc, ModelHTTPError):
         retryable = _is_retryable_status_code(exc.status_code)
         return LlmRetryErrorInfo(
@@ -236,6 +240,20 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         )
 
     return None
+
+
+def _extract_invalid_json_error_info(
+    exc: BaseException,
+) -> LlmRetryErrorInfo | None:
+    if not isinstance(exc, json.JSONDecodeError):
+        return None
+    return LlmRetryErrorInfo(
+        message=str(exc),
+        error_code="model_tool_args_invalid_json",
+        retryable=True,
+        transport_error=False,
+        timeout_error=False,
+    )
 
 
 class _ParsedErrorPayload(BaseModel):

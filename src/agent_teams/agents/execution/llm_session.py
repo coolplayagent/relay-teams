@@ -477,19 +477,19 @@ class AgentLlmSession:
                             new_messages=new_batch,
                         )
                         if new_to_process:
-                            if self._has_tool_side_effect_messages(new_to_process):
-                                attempt_tool_event_emitted = True
-                            self._publish_tool_call_events_from_messages(
-                                request=request,
-                                messages=new_to_process,
-                            )
                             buffered_messages.extend(new_to_process)
                             previous_history_size = len(history)
-                            history, buffered_messages = self._commit_ready_messages(
+                            (
+                                history,
+                                buffered_messages,
+                                committed_tool_events_published,
+                            ) = self._commit_ready_messages(
                                 request=request,
                                 history=history,
                                 pending_messages=buffered_messages,
                             )
+                            if committed_tool_events_published:
+                                attempt_tool_event_emitted = True
                             if len(history) > previous_history_size:
                                 attempt_messages_committed = True
                         seen_count += len(new_batch)
@@ -553,19 +553,19 @@ class AgentLlmSession:
                         new_messages=list(all_new)[seen_count:],
                     )
                     if to_save:
-                        if self._has_tool_side_effect_messages(to_save):
-                            attempt_tool_event_emitted = True
-                        self._publish_tool_call_events_from_messages(
-                            request=request,
-                            messages=to_save,
-                        )
                         buffered_messages.extend(to_save)
                     previous_history_size = len(history)
-                    history, buffered_messages = self._commit_all_safe_messages(
+                    (
+                        history,
+                        buffered_messages,
+                        committed_tool_events_published,
+                    ) = self._commit_all_safe_messages(
                         request=request,
                         history=history,
                         pending_messages=buffered_messages,
                     )
+                    if committed_tool_events_published:
+                        attempt_tool_event_emitted = True
                     if len(history) > previous_history_size:
                         attempt_messages_committed = True
                     # Record and publish token usage
@@ -1588,10 +1588,14 @@ class AgentLlmSession:
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
-    ) -> tuple[list[ModelRequest | ModelResponse], list[ModelRequest | ModelResponse]]:
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+    ]:
         safe_index = self._last_committable_index(pending_messages)
         if safe_index <= 0:
-            return history, pending_messages
+            return history, pending_messages, False
         ready = pending_messages[:safe_index]
         self._message_repo.append(
             session_id=request.session_id,
@@ -1603,6 +1607,10 @@ class AgentLlmSession:
             trace_id=request.trace_id,
             messages=ready,
         )
+        self._publish_tool_call_events_from_messages(
+            request=request,
+            messages=ready,
+        )
         self._publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
@@ -1612,7 +1620,11 @@ class AgentLlmSession:
                 self._conversation_id(request)
             )
         )
-        return next_history, pending_messages[safe_index:]
+        return (
+            next_history,
+            pending_messages[safe_index:],
+            self._has_tool_side_effect_messages(ready),
+        )
 
     def _commit_all_safe_messages(
         self,
@@ -1620,19 +1632,30 @@ class AgentLlmSession:
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
-    ) -> tuple[list[ModelRequest | ModelResponse], list[ModelRequest | ModelResponse]]:
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+    ]:
         next_history = history
         remaining = list(pending_messages)
+        tool_events_published = False
         while remaining:
             safe_index = self._last_committable_index(remaining)
             if safe_index <= 0:
                 break
-            next_history, remaining = self._commit_ready_messages(
+            (
+                next_history,
+                remaining,
+                committed_tool_events_published,
+            ) = self._commit_ready_messages(
                 request=request,
                 history=next_history,
                 pending_messages=remaining,
             )
-        return next_history, remaining
+            if committed_tool_events_published:
+                tool_events_published = True
+        return next_history, remaining, tool_events_published
 
     def _last_committable_index(
         self,
