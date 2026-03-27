@@ -332,6 +332,29 @@ def test_load_llm_configs_reads_context_window(tmp_path: Path) -> None:
     assert profiles["default"].context_window == 128000
 
 
+def test_load_llm_configs_infers_known_context_window_when_missing(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4.1",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "plain-text-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["default"].context_window == 1000000
+
+
 def test_load_llm_configs_resolves_api_key_env_placeholder(tmp_path: Path) -> None:
     model_file = tmp_path / "model.json"
     model_file.write_text(

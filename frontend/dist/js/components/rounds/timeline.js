@@ -406,6 +406,9 @@ function renderRoundSection(round, index) {
         <div class="round-detail-intent">${esc(round.intent || 'No intent')}</div>`;
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
+    if (round.compaction_marker_before) {
+        section.appendChild(renderRoundHistoryDivider(round.compaction_marker_before));
+    }
 
     const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
         const roleId = item?.role_id || '';
@@ -511,6 +514,18 @@ function renderClearDivider(segment, isExpanded) {
         toggleHistorySegment(segment.segmentId);
     });
     return button;
+}
+
+function renderRoundHistoryDivider(marker) {
+    const divider = document.createElement('div');
+    divider.className = 'round-history-divider';
+    divider.dataset.markerType = String(marker?.marker_type || '');
+    divider.innerHTML = `
+        <span class="round-history-divider-line" aria-hidden="true"></span>
+        <span class="round-history-divider-chip">${esc(String(marker?.label || 'History compacted'))}</span>
+        <span class="round-history-divider-line" aria-hidden="true"></span>
+    `;
+    return divider;
 }
 
 function toggleHistorySegment(segmentId, expanded) {

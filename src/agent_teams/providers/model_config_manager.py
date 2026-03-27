@@ -9,6 +9,10 @@ from typing import cast
 
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    ProviderType,
+)
+from agent_teams.providers.known_model_context_windows import (
+    infer_known_context_window,
 )
 from agent_teams.secrets import AppSecretStore, get_secret_store
 
@@ -50,19 +54,20 @@ class ModelConfigManager:
             if not isinstance(profile, dict):
                 continue
             api_key, has_api_key = self._resolve_api_key(name, profile)
+            normalized_profile = _normalize_profile_context_window(profile)
             result[name] = {
-                "provider": profile.get("provider", "openai_compatible"),
-                "model": profile.get("model", ""),
-                "base_url": profile.get("base_url", ""),
+                "provider": normalized_profile.get("provider", "openai_compatible"),
+                "model": normalized_profile.get("model", ""),
+                "base_url": normalized_profile.get("base_url", ""),
                 "api_key": api_key,
                 "has_api_key": has_api_key,
-                "ssl_verify": profile.get("ssl_verify"),
-                "temperature": profile.get("temperature", 0.7),
-                "top_p": profile.get("top_p", 1.0),
-                "max_tokens": profile.get("max_tokens", 100000),
-                "context_window": profile.get("context_window"),
+                "ssl_verify": normalized_profile.get("ssl_verify"),
+                "temperature": normalized_profile.get("temperature", 0.7),
+                "top_p": normalized_profile.get("top_p", 1.0),
+                "max_tokens": normalized_profile.get("max_tokens", 100000),
+                "context_window": normalized_profile.get("context_window"),
                 "is_default": name == default_profile_name,
-                "connect_timeout_seconds": profile.get(
+                "connect_timeout_seconds": normalized_profile.get(
                     "connect_timeout_seconds",
                     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
                 ),
@@ -94,7 +99,7 @@ class ModelConfigManager:
         config[name], next_secret, preserve_secret = (
             _prepare_profile_api_key_for_storage(
                 existing_profile=existing_profile,
-                next_profile=profile,
+                next_profile=_normalize_profile_context_window(profile),
                 current_secret=current_secret,
             )
         )
@@ -141,7 +146,7 @@ class ModelConfigManager:
             next_profile, next_secret, preserve_secret = (
                 _prepare_profile_api_key_for_storage(
                     existing_profile=existing_config.get(name),
-                    next_profile=profile,
+                    next_profile=_normalize_profile_context_window(profile),
                     current_secret=current_secret,
                 )
             )
@@ -179,6 +184,7 @@ class ModelConfigManager:
                 hydrated[name] = profile
                 continue
             next_profile = dict(profile)
+            next_profile = _normalize_profile_context_window(next_profile)
             api_key, has_api_key = self._resolve_api_key(name, profile)
             if has_api_key:
                 next_profile["api_key"] = api_key
@@ -326,6 +332,31 @@ def _prepare_profile_api_key_for_storage(
     if current_secret is not None:
         return merged_profile, None, True
     return merged_profile, None, False
+
+
+def _normalize_profile_context_window(
+    profile: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    normalized_profile = dict(profile)
+    explicit_context_window = normalized_profile.get("context_window")
+    if isinstance(explicit_context_window, int) and explicit_context_window > 0:
+        return normalized_profile
+    provider_raw = normalized_profile.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
+    model_raw = normalized_profile.get("model")
+    if not isinstance(provider_raw, str) or not isinstance(model_raw, str):
+        return normalized_profile
+    try:
+        provider = ProviderType(provider_raw)
+    except ValueError:
+        return normalized_profile
+    inferred_context_window = infer_known_context_window(
+        provider=provider,
+        model=model_raw,
+    )
+    if inferred_context_window is None:
+        return normalized_profile
+    normalized_profile["context_window"] = inferred_context_window
+    return normalized_profile
 
 
 def _normalize_default_profile_flags(

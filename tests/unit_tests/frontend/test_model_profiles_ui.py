@@ -224,6 +224,72 @@ console.log(JSON.stringify({
     assert payload["discoveryStatusText"] == "Fetched 2 models in 37ms."
 
 
+def test_discover_models_prefills_context_window_when_metadata_is_available(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    modelValue: document.getElementById("profile-model").value,
+    contextWindowValue: document.getElementById("profile-context-window").value,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        models: ["fake-chat-model", "reasoning-model"],
+        model_entries: [
+            { model: "fake-chat-model", context_window: 256000 },
+            { model: "reasoning-model", context_window: null },
+        ],
+    };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    assert payload["modelValue"] == "fake-chat-model"
+    assert payload["contextWindowValue"] == "256000"
+
+
 def test_saving_model_profile_preserves_bigmodel_provider_value(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,

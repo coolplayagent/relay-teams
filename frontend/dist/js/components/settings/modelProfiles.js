@@ -85,6 +85,11 @@ export function bindModelProfileHandlers() {
         sslVerifyInput.onchange = handleDraftEndpointChanged;
     }
 
+    const contextWindowInput = document.getElementById('profile-context-window');
+    if (contextWindowInput) {
+        contextWindowInput.oninput = handleContextWindowInputChanged;
+    }
+
     const modelInput = document.getElementById('profile-model');
     if (modelInput) {
         modelInput.onfocus = openDiscoveredModelMenu;
@@ -161,6 +166,7 @@ function handleAddProfile() {
     document.getElementById('profile-top-p').value = '1.0';
     document.getElementById('profile-max-tokens').value = '100000';
     document.getElementById('profile-context-window').value = '';
+    delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
 
@@ -196,6 +202,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
     document.getElementById('profile-max-tokens').value = profile.max_tokens || 100000;
     document.getElementById('profile-context-window').value = profile.context_window || '';
+    delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
 
@@ -387,7 +394,7 @@ async function handleDiscoverDraftModels() {
                 message: `Fetch failed: ${result.error_message || result.error_code || 'Unknown error'}`,
             };
         } else {
-            draftDiscoveredModels = Array.isArray(result.models) ? result.models : [];
+            draftDiscoveredModels = normalizeDiscoveredModels(result);
             draftModelDiscoveryState = {
                 status: 'success',
                 message: buildDiscoveredModelsMessage(result),
@@ -579,12 +586,14 @@ function renderDiscoveredModels() {
     }
 
     const currentValue = String(modelInput.dataset.currentValue || modelInput.value || '').trim();
+    const discoveredNames = draftDiscoveredModels.map(item => item.model);
     const seenValues = new Set();
     const menuOptions = [];
-    if (currentValue && !draftDiscoveredModels.includes(currentValue)) {
+    if (currentValue && !discoveredNames.includes(currentValue)) {
         seenValues.add(currentValue);
     }
-    draftDiscoveredModels.forEach(modelName => {
+    draftDiscoveredModels.forEach(modelEntry => {
+        const modelName = modelEntry.model;
         if (seenValues.has(modelName)) {
             return;
         }
@@ -669,14 +678,24 @@ function applyDiscoveredModelSelection() {
         return;
     }
     const currentModel = String(modelInput.dataset.currentValue || modelInput.value || '').trim();
-    if (currentModel && draftDiscoveredModels.includes(currentModel)) {
+    if (currentModel && findDiscoveredModelEntry(currentModel)) {
+        applyDiscoveredContextWindow(currentModel);
         renderDiscoveredModels();
         return;
     }
     if (!currentModel && draftDiscoveredModels.length > 0) {
-        setDraftModelValue(draftDiscoveredModels[0]);
+        setDraftModelValue(draftDiscoveredModels[0].model);
+        applyDiscoveredContextWindow(draftDiscoveredModels[0].model);
     }
     renderDiscoveredModels();
+}
+
+function handleContextWindowInputChanged() {
+    const contextInput = document.getElementById('profile-context-window');
+    if (!contextInput) {
+        return;
+    }
+    delete contextInput.dataset.autofilledModel;
 }
 
 function setDraftModelValue(value) {
@@ -696,6 +715,7 @@ function syncDraftModelSelection() {
     }
     const normalized = String(modelInput.value || '').trim();
     modelInput.dataset.currentValue = normalized;
+    applyDiscoveredContextWindow(normalized);
     renderDiscoveredModels();
     if (draftDiscoveredModels.length > 0) {
         setModelMenuOpen(true);
@@ -704,6 +724,7 @@ function syncDraftModelSelection() {
 
 function handleDiscoveredModelPicked(modelName) {
     setDraftModelValue(modelName || '');
+    applyDiscoveredContextWindow(modelName || '');
     renderDiscoveredModels();
     setModelMenuOpen(false);
 }
@@ -732,12 +753,56 @@ function setModelMenuOpen(open) {
 }
 
 function buildDiscoveredModelsMessage(result) {
-    const modelCount = Array.isArray(result.models) ? result.models.length : 0;
+    const modelCount = normalizeDiscoveredModels(result).length;
     if (modelCount === 0) {
         return `Connected in ${result.latency_ms}ms, but the endpoint returned no models.`;
     }
     const noun = modelCount === 1 ? 'model' : 'models';
     return `Fetched ${modelCount} ${noun} in ${result.latency_ms}ms.`;
+}
+
+function normalizeDiscoveredModels(result) {
+    if (Array.isArray(result?.model_entries) && result.model_entries.length > 0) {
+        return result.model_entries
+            .filter(entry => entry && typeof entry === 'object')
+            .map(entry => ({
+                model: String(entry.model || '').trim(),
+                context_window: Number.isInteger(entry.context_window) ? entry.context_window : null,
+            }))
+            .filter(entry => entry.model);
+    }
+    if (!Array.isArray(result?.models)) {
+        return [];
+    }
+    return result.models
+        .map(model => String(model || '').trim())
+        .filter(Boolean)
+        .map(model => ({ model, context_window: null }));
+}
+
+function findDiscoveredModelEntry(modelName) {
+    const normalized = String(modelName || '').trim();
+    if (!normalized) {
+        return null;
+    }
+    return draftDiscoveredModels.find(entry => entry.model === normalized) || null;
+}
+
+function applyDiscoveredContextWindow(modelName) {
+    const contextInput = document.getElementById('profile-context-window');
+    if (!contextInput) {
+        return;
+    }
+    const entry = findDiscoveredModelEntry(modelName);
+    if (!entry || !Number.isInteger(entry.context_window) || entry.context_window <= 0) {
+        if (String(contextInput.dataset.autofilledModel || '').trim()) {
+            contextInput.value = '';
+            delete contextInput.dataset.autofilledModel;
+        }
+        return;
+    }
+    contextInput.value = String(entry.context_window);
+    contextInput.dataset.autofilledModel = entry.model;
 }
 
 function resetDraftEditorState() {

@@ -51,7 +51,11 @@ class MessageRepository:
                     trace_id        TEXT NOT NULL,
                     role            TEXT NOT NULL,
                     message_json    TEXT NOT NULL,
-                    created_at      TEXT NOT NULL
+                    created_at      TEXT NOT NULL,
+                    hidden_from_context INTEGER NOT NULL DEFAULT 0,
+                    hidden_reason   TEXT NOT NULL DEFAULT '',
+                    hidden_at       TEXT NOT NULL DEFAULT '',
+                    hidden_marker_id TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -75,6 +79,22 @@ class MessageRepository:
                 self._conn.execute(
                     "ALTER TABLE messages ADD COLUMN agent_role_id TEXT NOT NULL DEFAULT ''"
                 )
+            if "hidden_from_context" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN hidden_from_context INTEGER NOT NULL DEFAULT 0"
+                )
+            if "hidden_reason" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN hidden_reason TEXT NOT NULL DEFAULT ''"
+                )
+            if "hidden_at" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN hidden_at TEXT NOT NULL DEFAULT ''"
+                )
+            if "hidden_marker_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE messages ADD COLUMN hidden_marker_id TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)"
             )
@@ -83,6 +103,9 @@ class MessageRepository:
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_conversation_visibility ON messages(conversation_id, hidden_from_context, created_at)"
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id)"
@@ -145,13 +168,13 @@ class MessageRepository:
 
     def get_history(self, instance_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at FROM messages WHERE instance_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
     def get_history_for_conversation(self, conversation_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
         )
 
@@ -160,16 +183,21 @@ class MessageRepository:
         session_id: str,
         *,
         include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
                 "FROM messages WHERE session_id=? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
-        if not include_cleared:
-            rows = self._filter_rows_for_active_segments(rows)
-        rows = _truncate_message_rows_to_safe_boundary(rows)
+        rows = self._filter_rows_for_read(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+        if not include_hidden_from_context:
+            rows = _truncate_message_rows_to_safe_boundary(rows)
 
         results: list[dict[str, JsonValue]] = []
         for row in rows:
@@ -184,6 +212,10 @@ class MessageRepository:
                     "trace_id": str(row["trace_id"]),
                     "role": str(row["role"]),
                     "created_at": str(row["created_at"]),
+                    "hidden_from_context": bool(int(row["hidden_from_context"] or 0)),
+                    "hidden_reason": str(row["hidden_reason"] or ""),
+                    "hidden_at": str(row["hidden_at"] or ""),
+                    "hidden_marker_id": str(row["hidden_marker_id"] or ""),
                     "message": msg,
                 }
             )
@@ -195,16 +227,21 @@ class MessageRepository:
         instance_id: str,
         *,
         include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at "
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
                 "FROM messages WHERE session_id=? AND instance_id=? ORDER BY id ASC",
                 (session_id, instance_id),
             ).fetchall()
-        if not include_cleared:
-            rows = self._filter_rows_for_active_segments(rows)
-        rows = _truncate_message_rows_to_safe_boundary(rows)
+        rows = self._filter_rows_for_read(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+        if not include_hidden_from_context:
+            rows = _truncate_message_rows_to_safe_boundary(rows)
 
         results: list[dict[str, JsonValue]] = []
         for row in rows:
@@ -219,6 +256,10 @@ class MessageRepository:
                     "trace_id": str(row["trace_id"]),
                     "role": str(row["role"]),
                     "created_at": str(row["created_at"]),
+                    "hidden_from_context": bool(int(row["hidden_from_context"] or 0)),
+                    "hidden_reason": str(row["hidden_reason"] or ""),
+                    "hidden_at": str(row["hidden_at"] or ""),
+                    "hidden_marker_id": str(row["hidden_marker_id"] or ""),
                     "message": msg,
                 }
             )
@@ -238,13 +279,13 @@ class MessageRepository:
 
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
-            "SELECT id, session_id, message_json, created_at FROM messages WHERE instance_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
         self._prune_to_safe_boundary(
-            "SELECT id, session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
         )
 
@@ -253,15 +294,22 @@ class MessageRepository:
         conversation_id: str,
         *,
         keep_message_count: int,
+        hidden_reason: str = "compaction",
+        hidden_marker_id: str = "",
     ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
         safe_keep_count = max(1, int(keep_message_count))
 
         def operation() -> None:
             rows = self._conn.execute(
-                "SELECT id, session_id, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                "SELECT id, session_id, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
                 (conversation_id,),
             ).fetchall()
-            active_rows = self._filter_rows_for_active_segments(rows)
+            active_rows = self._filter_rows_for_read(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
             if len(active_rows) <= safe_keep_count:
                 return
             stale_ids = [
@@ -273,8 +321,8 @@ class MessageRepository:
                 return
             placeholders = ",".join("?" for _ in stale_ids)
             self._conn.execute(
-                f"DELETE FROM messages WHERE id IN ({placeholders})",
-                stale_ids,
+                f"UPDATE messages SET hidden_from_context=1, hidden_reason=?, hidden_at=?, hidden_marker_id=? WHERE id IN ({placeholders})",
+                [hidden_reason, now, hidden_marker_id, *stale_ids],
             )
 
         run_sqlite_write_with_retry(
@@ -313,10 +361,14 @@ class MessageRepository:
 
         def operation() -> bool:
             rows = self._conn.execute(
-                "SELECT id, session_id, message_json, created_at FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
                 (resolved_conversation_id,),
             ).fetchall()
-            active_rows = self._filter_rows_for_active_segments(rows)
+            active_rows = self._filter_rows_for_read(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
             allowed_ids = _safe_row_ids(active_rows)
             stale_ids = [
                 int(row["id"])
@@ -366,7 +418,7 @@ class MessageRepository:
         self, instance_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
             (instance_id, task_id),
         )
 
@@ -374,7 +426,7 @@ class MessageRepository:
         self, conversation_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
             (conversation_id, task_id),
         )
 
@@ -385,7 +437,11 @@ class MessageRepository:
     ) -> list[ModelMessage]:
         with self._lock:
             rows = self._conn.execute(query, params).fetchall()
-        rows = self._filter_rows_for_active_segments(rows)
+        rows = self._filter_rows_for_read(
+            rows,
+            include_cleared=False,
+            include_hidden_from_context=False,
+        )
         result: list[ModelMessage] = []
         for row in rows:
             msgs = ModelMessagesTypeAdapter.validate_json(
@@ -401,7 +457,11 @@ class MessageRepository:
     ) -> None:
         def operation() -> None:
             rows = self._conn.execute(query, params).fetchall()
-            active_rows = self._filter_rows_for_active_segments(rows)
+            active_rows = self._filter_rows_for_read(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
             if not active_rows:
                 return
             allowed_ids = _safe_row_ids(active_rows)
@@ -426,6 +486,67 @@ class MessageRepository:
             repository_name="MessageRepository",
             operation_name="prune_to_safe_boundary",
         )
+
+    def hide_conversation_messages_for_compaction(
+        self,
+        *,
+        conversation_id: str,
+        hide_message_count: int,
+        hidden_marker_id: str,
+    ) -> int:
+        safe_hide_count = max(0, int(hide_message_count))
+        if safe_hide_count <= 0:
+            return 0
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        def operation() -> int:
+            rows = self._conn.execute(
+                "SELECT id, session_id, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (conversation_id,),
+            ).fetchall()
+            active_rows = self._filter_rows_for_read(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if not active_rows:
+                return 0
+            row_ids = [
+                int(row["id"])
+                for row in active_rows[:safe_hide_count]
+                if isinstance(row["id"], int)
+            ]
+            if not row_ids:
+                return 0
+            placeholders = ",".join("?" for _ in row_ids)
+            self._conn.execute(
+                f"UPDATE messages SET hidden_from_context=1, hidden_reason='compaction', hidden_at=?, hidden_marker_id=? WHERE id IN ({placeholders})",
+                [now, hidden_marker_id, *row_ids],
+            )
+            return len(row_ids)
+
+        return run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="hide_conversation_messages_for_compaction",
+        )
+
+    def _filter_rows_for_read(
+        self,
+        rows: Sequence[sqlite3.Row],
+        *,
+        include_cleared: bool,
+        include_hidden_from_context: bool,
+    ) -> list[sqlite3.Row]:
+        filtered_rows = list(rows)
+        if not include_cleared:
+            filtered_rows = self._filter_rows_for_active_segments(filtered_rows)
+        if include_hidden_from_context:
+            return filtered_rows
+        return self._filter_rows_for_visible_context(filtered_rows)
 
     def _filter_rows_for_active_segments(
         self,
@@ -452,6 +573,12 @@ class MessageRepository:
             if created_at > cutoff:
                 filtered.append(row)
         return filtered
+
+    def _filter_rows_for_visible_context(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> list[sqlite3.Row]:
+        return [row for row in rows if not bool(int(row["hidden_from_context"] or 0))]
 
     def _latest_clear_cutoff_by_session(
         self,

@@ -33,6 +33,9 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -128,6 +131,7 @@ def _build_factory(
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),
         message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
@@ -274,6 +278,7 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),
         message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
@@ -393,6 +398,7 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
         mcp_registry=mcp_registry,
         skill_registry=skill_registry,
         message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),

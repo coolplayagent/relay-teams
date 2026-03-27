@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class SessionHistoryMarkerType(str, Enum):
     CLEAR = "clear"
+    COMPACTION = "compaction"
 
 
 class SessionHistoryMarkerRecord(BaseModel):

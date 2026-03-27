@@ -36,6 +36,9 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -69,6 +72,7 @@ def create_provider_factory(
     mcp_registry: McpRegistry,
     skill_registry: SkillRegistry,
     message_repo: MessageRepository,
+    session_history_marker_repo: SessionHistoryMarkerRepository,
     role_registry: RoleRegistry,
     get_task_service: Callable[[], TaskOrchestrationService],
     run_control_manager: RunControlManager,
@@ -152,6 +156,7 @@ def create_provider_factory(
                     consumer=f"providers.provider_factory.role:{role.role_id}",
                 ),
                 message_repo=message_repo,
+                session_history_marker_repo=session_history_marker_repo,
                 role_registry=role_registry,
                 task_execution_service=get_task_execution_service(),
                 task_service=get_task_service(),

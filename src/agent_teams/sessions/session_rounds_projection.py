@@ -13,6 +13,7 @@ from agent_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerType,
 )
 from agent_teams.agents.tasks.task_repository import TaskRepository
+from agent_teams.workspace import build_conversation_id
 
 
 def build_session_rounds(
@@ -213,11 +214,14 @@ def build_session_rounds(
             "run_phase": runtime.phase.value if runtime is not None else None,
             "is_recoverable": runtime.is_recoverable if runtime is not None else False,
             "clear_marker_before": None,
+            "compaction_marker_before": None,
         }
         rounds.append(round_item)
 
     rounds.sort(key=lambda item: str(item.get("created_at") or ""))
-    _attach_clear_markers(rounds, session_markers)
+    _attach_history_markers(
+        session_id=session_id, rounds=rounds, session_markers=session_markers
+    )
     rounds.reverse()
     return rounds
 
@@ -418,37 +422,75 @@ def _reconstruct_completed_output_message(
     }
 
 
-def _attach_clear_markers(
+def _attach_history_markers(
+    *,
+    session_id: str,
     rounds: list[dict[str, object]],
     session_markers: list[dict[str, object]],
 ) -> None:
     if not rounds or not session_markers:
         return
-    clear_markers = sorted(
-        (
-            marker
-            for marker in session_markers
-            if str(marker.get("marker_type") or "") == SessionHistoryMarkerType.CLEAR
+    _attach_marker_before(
+        rounds=rounds,
+        markers=sorted(
+            (
+                marker
+                for marker in session_markers
+                if str(marker.get("marker_type") or "")
+                == SessionHistoryMarkerType.CLEAR.value
+            ),
+            key=lambda item: str(item.get("created_at") or ""),
         ),
-        key=lambda item: str(item.get("created_at") or ""),
+        field_name="clear_marker_before",
+        matches_round=lambda _round, _marker: True,
+        projector=_project_clear_marker,
     )
-    if not clear_markers:
+    _attach_marker_before(
+        rounds=rounds,
+        markers=sorted(
+            (
+                marker
+                for marker in session_markers
+                if str(marker.get("marker_type") or "")
+                == SessionHistoryMarkerType.COMPACTION.value
+            ),
+            key=lambda item: str(item.get("created_at") or ""),
+        ),
+        field_name="compaction_marker_before",
+        matches_round=lambda round_item, marker: _round_matches_compaction_marker(
+            session_id=session_id,
+            round_item=round_item,
+            marker=marker,
+        ),
+        projector=_project_compaction_marker,
+    )
+
+
+def _attach_marker_before(
+    *,
+    rounds: list[dict[str, object]],
+    markers: list[dict[str, object]],
+    field_name: str,
+    matches_round: Callable[[dict[str, object], dict[str, object]], bool],
+    projector: Callable[[dict[str, object]], dict[str, object]],
+) -> None:
+    if not markers:
         return
 
     marker_index = 0
     pending_marker: dict[str, object] | None = None
     for round_item in rounds:
         created_at = str(round_item.get("created_at") or "")
-        while marker_index < len(clear_markers):
-            marker = clear_markers[marker_index]
+        while marker_index < len(markers):
+            marker = markers[marker_index]
             marker_created_at = str(marker.get("created_at") or "")
             if marker_created_at > created_at:
                 break
             pending_marker = marker
             marker_index += 1
-        if pending_marker is None:
+        if pending_marker is None or not matches_round(round_item, pending_marker):
             continue
-        round_item["clear_marker_before"] = _project_clear_marker(pending_marker)
+        round_item[field_name] = projector(pending_marker)
         pending_marker = None
 
 
@@ -459,3 +501,36 @@ def _project_clear_marker(marker: dict[str, object]) -> dict[str, object]:
         "created_at": str(marker.get("created_at") or ""),
         "label": "History cleared",
     }
+
+
+def _project_compaction_marker(marker: dict[str, object]) -> dict[str, object]:
+    return {
+        "marker_id": str(marker.get("marker_id") or ""),
+        "marker_type": str(marker.get("marker_type") or ""),
+        "created_at": str(marker.get("created_at") or ""),
+        "label": "History compacted",
+    }
+
+
+def _round_matches_compaction_marker(
+    *,
+    session_id: str,
+    round_item: dict[str, object],
+    marker: dict[str, object],
+) -> bool:
+    metadata = marker.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    conversation_id = str(metadata.get("conversation_id") or "")
+    if not conversation_id:
+        return False
+    primary_role_id = str(round_item.get("primary_role_id") or "")
+    if primary_role_id:
+        return conversation_id == build_conversation_id(session_id, primary_role_id)
+    coordinator_messages = round_item.get("coordinator_messages")
+    if not isinstance(coordinator_messages, list) or not coordinator_messages:
+        return False
+    first_message = coordinator_messages[0]
+    if not isinstance(first_message, dict):
+        return False
+    return str(first_message.get("conversation_id") or "") == conversation_id

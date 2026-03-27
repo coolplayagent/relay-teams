@@ -244,7 +244,7 @@ def test_message_repo_filters_active_segment_after_clear_marker(tmp_path: Path) 
     assert active_history_part.content == "after clear"
 
 
-def test_compact_conversation_history_preserves_pre_clear_messages(
+def test_compact_conversation_history_marks_messages_hidden_from_context(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "message_repo_compaction_markers.db"
@@ -282,11 +282,20 @@ def test_compact_conversation_history_preserves_pre_clear_messages(
 
     repo.compact_conversation_history(conversation_id, keep_message_count=1)
 
-    all_messages = repo.get_messages_by_session("session-1", include_cleared=True)
+    raw_messages = repo.get_messages_by_session(
+        "session-1",
+        include_cleared=True,
+        include_hidden_from_context=True,
+    )
     active_history = repo.get_history_for_conversation(conversation_id)
 
-    assert len(all_messages) == 2
+    assert len(raw_messages) == 4
     assert len(active_history) == 1
     final_history_part = active_history[0].parts[0]
     assert isinstance(final_history_part, UserPromptPart)
     assert final_history_part.content == "post-clear-3"
+    hidden_messages = [
+        message for message in raw_messages if message["hidden_from_context"]
+    ]
+    assert len(hidden_messages) == 2
+    assert {message["hidden_reason"] for message in hidden_messages} == {"compaction"}

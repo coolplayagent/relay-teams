@@ -60,6 +60,9 @@ from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionService,
+)
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
@@ -84,7 +87,6 @@ from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.workspace import (
@@ -146,6 +148,7 @@ class AgentLlmSession:
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
         subagent_reflection_service: SubagentReflectionService | None,
+        conversation_compaction_service: ConversationCompactionService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -178,6 +181,7 @@ class AgentLlmSession:
         self._workspace_manager = workspace_manager
         self._role_memory_service = role_memory_service
         self._subagent_reflection_service = subagent_reflection_service
+        self._conversation_compaction_service = conversation_compaction_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
@@ -214,31 +218,6 @@ class AgentLlmSession:
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         agent_system_prompt = request.system_prompt
-        log_event(
-            LOGGER,
-            logging.DEBUG,
-            event="llm.system_prompt.prepared",
-            message=f"LLM system prompt prepared\n{agent_system_prompt}",
-            payload={
-                "role_id": request.role_id,
-                "instance_id": request.instance_id,
-                "task_id": request.task_id,
-                "length": len(agent_system_prompt),
-            },
-        )
-        log_event(
-            LOGGER,
-            logging.INFO,
-            event="llm.request.started",
-            message="LLM request started",
-            payload={
-                "model": self._config.model,
-                "base_url": self._config.base_url,
-                "role_id": request.role_id,
-                "instance_id": request.instance_id,
-                "task_id": request.task_id,
-            },
-        )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=request.session_id,
@@ -357,8 +336,37 @@ class AgentLlmSession:
         history = await self._maybe_compact_history(
             request=request,
             history=history,
-            workspace_id=resolved_workspace_id,
             conversation_id=resolved_conversation_id,
+        )
+        agent_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=resolved_conversation_id,
+            system_prompt=agent_system_prompt,
+        )
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="llm.system_prompt.prepared",
+            message=f"LLM system prompt prepared\n{agent_system_prompt}",
+            payload={
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "task_id": request.task_id,
+                "length": len(agent_system_prompt),
+            },
+        )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="llm.request.started",
+            message="LLM request started",
+            payload={
+                "model": self._config.model,
+                "base_url": self._config.base_url,
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "task_id": request.task_id,
+            },
         )
         history = self._persist_user_prompt_if_needed(
             request=request,
@@ -1396,35 +1404,33 @@ class AgentLlmSession:
         *,
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
-        workspace_id: str,
         conversation_id: str,
     ) -> list[ModelRequest | ModelResponse]:
-        if self._subagent_reflection_service is None:
+        if self._conversation_compaction_service is None:
             return history
-        if self._role_registry.is_coordinator_role(request.role_id):
-            return history
-        role = self._resolve_effective_role_for_request(request)
-        return await self._subagent_reflection_service.maybe_compact(
-            role=role,
-            workspace_id=workspace_id,
+        return await self._conversation_compaction_service.maybe_compact(
+            session_id=request.session_id,
+            role_id=request.role_id,
             conversation_id=conversation_id,
             history=history,
         )
 
-    def _resolve_effective_role_for_request(
-        self, request: LLMRequest
-    ) -> RoleDefinition:
-        runtime_role_resolver = getattr(
-            self._task_execution_service,
-            "runtime_role_resolver",
-            None,
+    def _inject_compaction_summary(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        system_prompt: str,
+    ) -> str:
+        if self._conversation_compaction_service is None:
+            return system_prompt
+        prompt_section = self._conversation_compaction_service.build_prompt_section(
+            session_id=session_id,
+            conversation_id=conversation_id,
         )
-        if runtime_role_resolver is not None:
-            return runtime_role_resolver.get_effective_role(
-                run_id=request.trace_id,
-                role_id=request.role_id,
-            )
-        return self._role_registry.get(request.role_id)
+        if not prompt_section:
+            return system_prompt
+        return f"{system_prompt.rstrip()}\n\n{prompt_section}".strip()
 
     def _persist_user_prompt_if_needed(
         self,

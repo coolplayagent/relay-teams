@@ -24,12 +24,17 @@ if TYPE_CHECKING:
     from agent_teams.providers.model_config_manager import ModelConfigManager
     from agent_teams.providers.model_config_service import ModelConfigService
     from agent_teams.providers.model_connectivity import (
+        ModelDiscoveryEntry,
         ModelConnectivityDiagnostics,
         ModelConnectivityProbeOverride,
         ModelConnectivityProbeRequest,
         ModelConnectivityProbeResult,
+        ModelDiscoveryResult,
         ModelConnectivityProbeService,
         ModelConnectivityTokenUsage,
+    )
+    from agent_teams.providers.known_model_context_windows import (
+        infer_known_context_window,
     )
     from agent_teams.providers.provider_registry import (
         ProviderRegistry,
@@ -54,6 +59,8 @@ __all__ = [
     "ModelEndpointConfig",
     "ModelConfigManager",
     "ModelConfigService",
+    "ModelDiscoveryEntry",
+    "ModelDiscoveryResult",
     "ModelConnectivityDiagnostics",
     "ModelConnectivityProbeOverride",
     "ModelConnectivityProbeRequest",
@@ -72,6 +79,7 @@ __all__ = [
     "compute_retry_delay_ms",
     "create_default_provider_registry",
     "extract_retry_error_info",
+    "infer_known_context_window",
     "list_provider_models",
     "run_with_llm_retry",
 ]
@@ -104,6 +112,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelConnectivityDiagnostics": (
         "agent_teams.providers.model_connectivity",
         "ModelConnectivityDiagnostics",
+    ),
+    "ModelDiscoveryEntry": (
+        "agent_teams.providers.model_connectivity",
+        "ModelDiscoveryEntry",
+    ),
+    "ModelDiscoveryResult": (
+        "agent_teams.providers.model_connectivity",
+        "ModelDiscoveryResult",
     ),
     "ModelConnectivityProbeOverride": (
         "agent_teams.providers.model_connectivity",
@@ -163,6 +179,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "extract_retry_error_info": (
         "agent_teams.providers.llm_retry",
         "extract_retry_error_info",
+    ),
+    "infer_known_context_window": (
+        "agent_teams.providers.known_model_context_windows",
+        "infer_known_context_window",
     ),
     "list_provider_models": (
         "agent_teams.providers.provider_registry",

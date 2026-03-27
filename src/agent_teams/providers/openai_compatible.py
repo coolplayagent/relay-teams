@@ -11,10 +11,14 @@ import httpx
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from agent_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionService,
+)
 from agent_teams.agents.execution.llm_session import AgentLlmSession
 from agent_teams.media import ContentPart, MediaAssetService, MediaModality
 from agent_teams.metrics import MetricRecorder
 from agent_teams.net.llm_client import build_llm_http_client
+from agent_teams.providers.model_config import LlmRetryConfig
 from agent_teams.providers.provider_contracts import (
     LLMProvider,
     LLMRequest,
@@ -49,6 +53,9 @@ if TYPE_CHECKING:
     from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
     from agent_teams.sessions.runs.event_log import EventLog
     from agent_teams.agents.execution.message_repository import MessageRepository
+    from agent_teams.sessions.session_history_marker_repository import (
+        SessionHistoryMarkerRepository,
+    )
     from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
     from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -89,6 +96,7 @@ class OpenAICompatibleProvider(LLMProvider):
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
         message_repo: MessageRepository,
+        session_history_marker_repo: SessionHistoryMarkerRepository,
         role_registry: RoleRegistry,
         task_execution_service: TaskExecutionService,
         task_service: TaskOrchestrationService,
@@ -117,6 +125,12 @@ class OpenAICompatibleProvider(LLMProvider):
             workspace_manager=workspace_manager,
             role_memory_service=role_memory_service,
             subagent_reflection_service=subagent_reflection_service,
+            conversation_compaction_service=ConversationCompactionService(
+                config=config,
+                retry_config=retry_config or LlmRetryConfig(),
+                message_repo=message_repo,
+                session_history_marker_repo=session_history_marker_repo,
+            ),
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_registry=skill_registry,

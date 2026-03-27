@@ -97,6 +97,30 @@ def test_get_model_profiles_uses_default_connect_timeout_when_missing(
     )
 
 
+def test_get_model_profiles_infers_known_context_window_when_missing(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = manager.get_model_profiles()
+
+    assert profiles["default"]["context_window"] == 128000
+
+
 def test_delete_model_profile_removes_entry(tmp_path: Path) -> None:
     manager = ModelConfigManager(config_dir=tmp_path)
     model_file = tmp_path / "model.json"
@@ -169,6 +193,30 @@ def test_save_model_profile_preserves_existing_api_key_when_blank(
     assert saved_profile["model"] == "kimi-k2.5"
     assert saved_profile["top_p"] == 0.95
     assert saved_profile["api_key"] == "secret-key"
+
+
+def test_save_model_profile_persists_inferred_context_window_when_missing(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4.1",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret-key",
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": 1024,
+        },
+    )
+
+    config = manager.get_model_config()
+    saved_profile = cast(dict[str, JsonValue], config["default"])
+
+    assert saved_profile["context_window"] == 1000000
 
 
 def test_save_model_profile_renames_and_preserves_existing_api_key(

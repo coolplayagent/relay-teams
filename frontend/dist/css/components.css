@@ -1734,6 +1734,36 @@
     white-space: nowrap;
 }
 
+.round-history-divider,
+.message-history-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0.35rem 0 1rem;
+    color: var(--text-secondary);
+}
+
+.round-history-divider-line,
+.message-history-divider-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.round-history-divider-chip,
+.message-history-divider-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.32rem 0.68rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 74%, transparent);
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
 .session-round-section.round-section-emphasis .round-detail-header {
     border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
     background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);
@@ -5257,6 +5287,8 @@ body.light-theme .round-item,
 body.light-theme .project-card,
 body.light-theme .round-detail-header,
 body.light-theme .round-clear-divider-chip,
+body.light-theme .round-history-divider-chip,
+body.light-theme .message-history-divider-chip,
 body.light-theme .system-intro,
 body.light-theme .human-dispatch-panel,
 body.light-theme .gate-card,
@@ -5302,6 +5334,11 @@ body.light-theme .session-item.active {
 }
 
 body.light-theme .round-clear-divider-line {
+    background: color-mix(in srgb, var(--border-color) 78%, transparent);
+}
+
+body.light-theme .round-history-divider-line,
+body.light-theme .message-history-divider-line {
     background: color-mix(in srgb, var(--border-color) 78%, transparent);
 }
 

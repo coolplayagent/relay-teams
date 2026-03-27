@@ -79,6 +79,7 @@ Request body may include optional `source_name` to rename an existing profile wh
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
+When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
 
 ### `DELETE /system/configs/model/profiles/{name}`
 
@@ -103,6 +104,12 @@ Draft overrides may omit `model`, but must provide `base_url` and `api_key` when
 When `profile_name` is provided, the request may override `base_url`, `api_key`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 `openai_compatible` and `bigmodel` both map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
+When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
+- `model`
+- optional `context_window`
+
+The settings UI uses `model_entries[].context_window` to auto-fill the profile context window field after model discovery. Providers that return only model ids will still populate `models[]`, but `context_window` remains user-specified.
+For a small set of known provider/model pairs, the backend also applies a built-in context-window fallback when the provider returns only model ids.
 
 ### `POST /system/configs/model:reload`
 
@@ -436,6 +443,12 @@ Response shape:
         "marker_type": "clear",
         "created_at": "2026-03-11T11:59:30Z",
         "label": "History cleared"
+      },
+      "compaction_marker_before": {
+        "marker_id": "marker-2",
+        "marker_type": "compaction",
+        "created_at": "2026-03-11T12:10:00Z",
+        "label": "History compacted"
       }
     }
   ],
@@ -452,6 +465,8 @@ Notes:
 - Active retry countdowns are anchored to the event `occurred_at` timestamp, not to the browser receive time.
 - `retry_events[].phase` is `scheduled` while backoff is pending and `failed` when retries have been exhausted.
 - `clear_marker_before` is present on the first round after a session history clear boundary. The frontend uses it to render a divider and collapse older segments by default.
+- `compaction_marker_before` is present on the first round whose coordinator conversation continues after an automatic history compaction boundary. The frontend uses it to render a non-collapsing divider.
+- Automatic history compaction is logical only. Older messages are marked hidden-from-context for model reads, but remain available to raw/history endpoints.
 - When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted `run_completed.output`.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
@@ -493,11 +508,18 @@ Lists persisted business events in the session.
 
 ### `GET /sessions/{session_id}/messages`
 
-Lists persisted messages in the active session segment only. Rows before the latest logical `clear` marker are excluded from this endpoint.
+Lists persisted messages in the active session segment only. Rows before the latest logical `clear` marker are excluded from this endpoint, and rows marked hidden-from-context by automatic compaction are also excluded.
 
 ### `GET /sessions/{session_id}/agents/{instance_id}/messages`
 
-Lists messages for one agent instance in the active session segment only.
+Lists the raw history timeline for one agent instance, including:
+- original message rows, even when they were marked hidden-from-context by automatic compaction
+- session `clear` dividers
+- conversation-local `compaction` dividers
+
+Response entries are ordered oldest to newest and use `entry_type`:
+- `message`: original persisted message row. Includes `hidden_from_context`, `hidden_reason`, `hidden_at`, and `hidden_marker_id`.
+- `marker`: logical history divider with `marker_id`, `marker_type`, `created_at`, and `label`.
 
 ### `GET /sessions/{session_id}/agents/{instance_id}/reflection`
 
@@ -513,7 +535,7 @@ Response fields:
 
 ### `POST /sessions/{session_id}/agents/{instance_id}/reflection:refresh`
 
-Triggers reflection recomputation for one subagent instance and returns the refreshed summary. This uses the same compaction/reflection strategy as automatic context compaction.
+Triggers reflection recomputation for one subagent instance and returns the refreshed summary. Reflection memory is separate from automatic conversation compaction summaries.
 
 ### `PATCH /sessions/{session_id}/agents/{instance_id}/reflection`
 
@@ -820,7 +842,6 @@ Response fields:
 - `model_profile`
 - `bound_agent_id`
 - `source`
-- `deletable`
 
 ### `GET /roles/configs/{role_id}`
 
@@ -879,15 +900,6 @@ Rules:
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
 - When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.
 - Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`) and fixed `system_prompt` through this API.
-
-### `DELETE /roles/configs/{role_id}`
-
-Deletes one user-defined role document and reloads the runtime role registry.
-
-Rules:
-- Only user-defined app roles can be deleted.
-- Builtin roles, reserved system roles, and app overrides of builtin roles are rejected.
-- Saved role files with stale `tools`, `mcp_servers`, or `skills` do not block reload after a successful delete; those references are ignored with warnings until they are cleaned up.
 
 ### `POST /roles:validate`
 
@@ -1188,10 +1200,9 @@ Behavior:
   `收到来自 {sender_name} 的飞书消息：{message}` with `sender_open_id` fallback.
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
-- Accepted `group` and `p2p` messages use a Feishu reaction acknowledgement with emoji `OK`.
+- Accepted group messages use a Feishu reaction acknowledgement with emoji `eyes`.
 - Only queued messages send a separate text reply: `已进入队列，前面还有 N 条消息。`
-- `im_send`, queued replies, and final run replies use Feishu reply-to-message when the triggering message id is available.
-- Group command responses use Feishu reply-to-message on the triggering message.
+- Group command responses and group final run replies use Feishu reply-to-message on the triggering message.
 - Reuses one internal session per `account_id + tenant_key + chat_id`.
 - Requires no public callback URL.
 - Runs one SDK long connection per enabled Feishu gateway account whose credentials are ready.
@@ -1453,26 +1464,10 @@ Deletes the automation project and its backing trigger. Historical sessions are 
 
 ### `POST /automation/projects/{automation_project_id}:run`
 
-Starts an automation run immediately.
-If the project has a Feishu delivery binding and that binding already resolves to an
-existing IM session, the backend reuses that bound session instead of creating a new
-automation-only session.
-
-Bound-session behavior:
-- when the bound session is idle, the backend sends `定时任务 {display_name} 开始执行`
-  to the bound chat and starts a detached run in that same session
-- when the bound session already has an active recoverable run, the backend sends
-  `定时任务 {display_name} 准备执行，当前任务前面有 n 个消息` and appends the automation
-  run to the durable bound-session queue
-- queued automation runs prepend `定时任务触发：{display_name}` to the run prompt before
-  the original project prompt
-
+Creates a new session for that automation project and starts the run immediately.
 Response fields:
 - `automation_project_id`
 - `session_id`
-- `run_id`
-- `queued`
-- `reused_bound_session`
 
 ### `POST /automation/projects/{automation_project_id}:enable`
 
@@ -1484,12 +1479,7 @@ Disables scheduling and clears `next_run_at`.
 
 ### `GET /automation/projects/{automation_project_id}/sessions`
 
-Returns sessions associated with one automation project.
-
-Notes:
-- this includes automation-generated sessions created specifically for that project
-- when an automation project reuses an existing bound IM session, `last_session_id`
-  may reference that reused session even if its `project_kind` is not `automation`
+Returns sessions generated for one automation project.
 
 ## Session Projection Additions
 

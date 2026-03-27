@@ -20,6 +20,9 @@ from agent_teams.providers.model_config import (
     ProviderType,
     SamplingConfig,
 )
+from agent_teams.providers.known_model_context_windows import (
+    infer_known_context_window,
+)
 from agent_teams.secrets import get_secret_store
 
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
@@ -198,7 +201,10 @@ def load_llm_profile_state(
             context_window=(
                 int(context_window_raw)
                 if isinstance(context_window_raw, int) and context_window_raw > 0
-                else None
+                else infer_known_context_window(
+                    provider=provider,
+                    model=model,
+                )
             ),
             connect_timeout_seconds=connect_timeout_seconds,
             sampling=SamplingConfig(

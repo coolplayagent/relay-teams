@@ -22,13 +22,19 @@ def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history()
     assert "expandHistorySegmentForRun(round.run_id);" in timeline_script
     assert "round-history-segment" in timeline_script
     assert "round-clear-divider" in timeline_script
+    assert "round-history-divider" in timeline_script
     assert "History cleared" in timeline_script
+    assert "History compacted" in timeline_script
     assert "Show ${roundLabel}" in timeline_script
     assert "Hide ${roundLabel}" in timeline_script
 
     assert ".round-history-segment {" in components_css
     assert ".round-history-segment-body[hidden] {" in components_css
     assert ".round-clear-divider {" in components_css
+    assert ".round-history-divider," in components_css
+    assert ".message-history-divider {" in components_css
     assert ".round-clear-divider-chip {" in components_css
+    assert ".round-history-divider-chip," in components_css
     assert ".round-clear-divider-title {" in components_css
     assert "body.light-theme .round-clear-divider-chip," in components_css
+    assert "body.light-theme .round-history-divider-chip," in components_css

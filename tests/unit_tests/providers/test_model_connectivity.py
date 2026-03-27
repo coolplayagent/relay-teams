@@ -328,6 +328,76 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
     assert headers["Authorization"] == "Bearer saved-api-key"
     assert captured["timeout_seconds"] == pytest.approx(2.8)
     assert captured["connect_timeout_seconds"] == pytest.approx(2.8)
+    assert tuple(entry.model for entry in result.model_entries) == (
+        "fake-chat-model",
+        "reasoning-model",
+    )
+
+
+def test_discover_models_extracts_context_window_when_provider_returns_it(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "fake-chat-model",
+                            "context_window": 256000,
+                        },
+                        {
+                            "id": "reasoning-model",
+                            "limits": {
+                                "context": 128000,
+                            },
+                        },
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.models == ("fake-chat-model", "reasoning-model")
+    assert result.model_entries[0].model == "fake-chat-model"
+    assert result.model_entries[0].context_window == 256000
+    assert result.model_entries[1].model == "reasoning-model"
+    assert result.model_entries[1].context_window == 128000
+
+
+def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {"id": "gpt-4o-mini"},
+                        {"id": "kimi-k2.5"},
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.models == ("gpt-4o-mini", "kimi-k2.5")
+    assert result.model_entries[0].context_window == 128000
+    assert result.model_entries[1].context_window == 256000
 
 
 def test_discover_models_allows_saved_api_key_with_override_base_url(

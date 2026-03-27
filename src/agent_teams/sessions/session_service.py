@@ -53,6 +53,10 @@ from agent_teams.sessions.session_models import ProjectKind, SessionMode, Sessio
 from agent_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
+from agent_teams.sessions.session_history_marker_models import (
+    SessionHistoryMarkerRecord,
+    SessionHistoryMarkerType,
+)
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -433,16 +437,31 @@ class SessionService:
     ) -> list[dict[str, object]]:
         messages = cast(
             list[dict[str, object]],
-            self._message_repo.get_messages_for_instance(session_id, instance_id),
+            self._message_repo.get_messages_for_instance(
+                session_id,
+                instance_id,
+                include_cleared=True,
+                include_hidden_from_context=True,
+            ),
         )
         try:
             agent = self._agent_repo.get_instance(instance_id)
         except KeyError:
-            return messages
+            return [
+                self._project_message_timeline_entry(message) for message in messages
+            ]
+        conversation_id = build_conversation_id(session_id, agent.role_id)
         for message in messages:
             if "role_id" not in message or not message.get("role_id"):
                 message["role_id"] = agent.role_id
-        return messages
+        markers = self._list_agent_history_markers(
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
+        return self._build_agent_timeline_entries(
+            messages=messages,
+            markers=markers,
+        )
 
     def get_global_events(self, session_id: str) -> list[dict[str, object]]:
         if self._event_log is None:
@@ -489,6 +508,7 @@ class SessionService:
                 self._message_repo.get_messages_by_session(
                     current_session_id,
                     include_cleared=True,
+                    include_hidden_from_context=True,
                 ),
             ),
             get_session_history_markers=self._get_session_history_markers,
@@ -611,6 +631,102 @@ class SessionService:
             return []
         markers = self._session_history_marker_repo.list_by_session(session_id)
         return [marker.model_dump(mode="json") for marker in markers]
+
+    def _list_agent_history_markers(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[SessionHistoryMarkerRecord, ...]:
+        if self._session_history_marker_repo is None:
+            return ()
+        markers = self._session_history_marker_repo.list_by_session(session_id)
+        return tuple(
+            marker
+            for marker in markers
+            if marker.marker_type == SessionHistoryMarkerType.CLEAR
+            or (
+                marker.marker_type == SessionHistoryMarkerType.COMPACTION
+                and marker.metadata.get("conversation_id") == conversation_id
+            )
+        )
+
+    @staticmethod
+    def _project_message_timeline_entry(
+        message: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "entry_type": "message",
+            **message,
+        }
+
+    @staticmethod
+    def _project_history_marker_entry(
+        marker: SessionHistoryMarkerRecord,
+    ) -> dict[str, object]:
+        label = (
+            "History cleared"
+            if marker.marker_type == SessionHistoryMarkerType.CLEAR
+            else "History compacted"
+        )
+        return {
+            "entry_type": "marker",
+            "marker_id": marker.marker_id,
+            "marker_type": marker.marker_type.value,
+            "created_at": marker.created_at.isoformat(),
+            "label": label,
+        }
+
+    def _build_agent_timeline_entries(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        markers: tuple[SessionHistoryMarkerRecord, ...],
+    ) -> list[dict[str, object]]:
+        clear_markers = [
+            marker
+            for marker in markers
+            if marker.marker_type == SessionHistoryMarkerType.CLEAR
+        ]
+        compaction_markers = {
+            marker.marker_id: marker
+            for marker in markers
+            if marker.marker_type == SessionHistoryMarkerType.COMPACTION
+        }
+        clear_index = 0
+        entries: list[dict[str, object]] = []
+
+        for index, message in enumerate(messages):
+            created_at = str(message.get("created_at") or "")
+            while clear_index < len(clear_markers):
+                marker = clear_markers[clear_index]
+                if marker.created_at.isoformat() > created_at:
+                    break
+                entries.append(self._project_history_marker_entry(marker))
+                clear_index += 1
+
+            entries.append(self._project_message_timeline_entry(message))
+            hidden_marker_id = str(message.get("hidden_marker_id") or "")
+            if not hidden_marker_id:
+                continue
+            next_hidden_marker_id = ""
+            if index + 1 < len(messages):
+                next_hidden_marker_id = str(
+                    messages[index + 1].get("hidden_marker_id") or ""
+                )
+            if next_hidden_marker_id == hidden_marker_id:
+                continue
+            marker = compaction_markers.get(hidden_marker_id)
+            if marker is None:
+                continue
+            entries.append(self._project_history_marker_entry(marker))
+
+        while clear_index < len(clear_markers):
+            entries.append(
+                self._project_history_marker_entry(clear_markers[clear_index])
+            )
+            clear_index += 1
+        return entries
 
     def _select_active_run(
         self, session_id: str

@@ -35,6 +35,11 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
     let lastRenderedMessage = null;
 
     historyMessages.forEach(msgItem => {
+        if (String(msgItem?.entry_type || '') === 'marker') {
+            renderHistoryMarker(container, msgItem);
+            lastRenderedMessage = null;
+            return;
+        }
         const role = msgItem.role;
         const msgObj = msgItem.message;
         if (!msgObj) return;
@@ -77,6 +82,19 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
 
     applyPendingApprovalsToHistory(container, pendingToolApprovals, runId);
     forceScrollBottom(container);
+}
+
+function renderHistoryMarker(container, marker) {
+    if (!container || !marker) return;
+    const markerEl = document.createElement('div');
+    markerEl.className = 'message-history-divider';
+    markerEl.dataset.markerType = String(marker.marker_type || '').trim();
+    markerEl.innerHTML = `
+        <span class="message-history-divider-line" aria-hidden="true"></span>
+        <span class="message-history-divider-chip">${String(marker.label || 'History marker')}</span>
+        <span class="message-history-divider-line" aria-hidden="true"></span>
+    `;
+    container.appendChild(markerEl);
 }
 
 function applyPendingApprovalsToHistory(container, approvals, runId) {

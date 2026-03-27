@@ -10,6 +10,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.net.clients import create_sync_http_client
+from agent_teams.providers.known_model_context_windows import (
+    infer_known_context_window,
+)
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
@@ -91,6 +94,13 @@ class ModelConnectivityProbeResult(BaseModel):
     retryable: bool = False
 
 
+class ModelDiscoveryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+    context_window: int | None = Field(default=None, ge=1)
+
+
 class ModelDiscoveryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -101,6 +111,7 @@ class ModelDiscoveryResult(BaseModel):
     checked_at: datetime
     diagnostics: ModelConnectivityDiagnostics
     models: tuple[str, ...] = ()
+    model_entries: tuple[ModelDiscoveryEntry, ...] = ()
     error_code: str | None = None
     error_message: str | None = None
     retryable: bool = False
@@ -580,8 +591,11 @@ class ModelConnectivityProbeService:
                 retryable=False,
             )
 
-        models = self._extract_model_ids(response_payload)
-        if models is None:
+        model_entries = self._extract_model_entries(
+            payload=response_payload,
+            provider=config.provider,
+        )
+        if model_entries is None:
             return ModelDiscoveryResult(
                 ok=False,
                 provider=config.provider,
@@ -609,7 +623,8 @@ class ModelConnectivityProbeService:
                 auth_valid=True,
                 rate_limited=False,
             ),
-            models=models,
+            models=tuple(entry.model for entry in model_entries),
+            model_entries=model_entries,
         )
 
     def _build_transport_error_result(
@@ -753,11 +768,17 @@ class ModelConnectivityProbeService:
             return detail.strip()
         return None
 
-    def _extract_model_ids(self, payload: dict[str, object]) -> tuple[str, ...] | None:
+    def _extract_model_entries(
+        self,
+        *,
+        payload: dict[str, object],
+        provider: ProviderType,
+    ) -> tuple[ModelDiscoveryEntry, ...] | None:
         data = payload.get("data")
         if not isinstance(data, list):
             return None
-        model_ids: list[str] = []
+        model_entries: list[ModelDiscoveryEntry] = []
+        seen_model_ids: set[str] = set()
         for entry in data:
             if not isinstance(entry, dict):
                 continue
@@ -765,9 +786,51 @@ class ModelConnectivityProbeService:
             if not isinstance(model_id, str):
                 continue
             normalized = model_id.strip()
-            if normalized:
-                model_ids.append(normalized)
-        return tuple(sorted(set(model_ids)))
+            if not normalized or normalized in seen_model_ids:
+                continue
+            seen_model_ids.add(normalized)
+            model_entries.append(
+                ModelDiscoveryEntry(
+                    model=normalized,
+                    context_window=(
+                        self._extract_context_window(entry)
+                        or infer_known_context_window(
+                            provider=provider,
+                            model=normalized,
+                        )
+                    ),
+                )
+            )
+        model_entries.sort(key=lambda item: item.model)
+        return tuple(model_entries)
+
+    def _extract_context_window(self, entry: dict[str, object]) -> int | None:
+        direct_keys = (
+            "context_window",
+            "contextWindow",
+            "context_length",
+            "contextLength",
+            "max_context_length",
+            "maxContextLength",
+            "input_token_limit",
+            "inputTokenLimit",
+        )
+        for key in direct_keys:
+            value = entry.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+        for nested_key in ("limits", "limit", "capabilities", "metadata"):
+            nested = entry.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for key in direct_keys:
+                value = nested.get(key)
+                if isinstance(value, int) and value > 0:
+                    return value
+            context_limit = nested.get("context")
+            if isinstance(context_limit, int) and context_limit > 0:
+                return context_limit
+        return None
 
     def _response_payload(self, response: httpx.Response) -> object:
         try:
