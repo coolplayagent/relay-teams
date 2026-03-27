@@ -1,6 +1,7 @@
-List non-coordinator roles available for delegation.
+List non-coordinator roles available for delegation in the current run.
 
 Usage:
 - Use this tool when you need the current set of worker roles and their local tool access.
+- The result includes both static roles and any run-scoped temporary roles that already exist.
 - The result excludes the coordinator role itself.
-- Prefer this tool when selecting a role for `create_tasks`.
+- Prefer this tool when selecting or reusing a role for `dispatch_task`.

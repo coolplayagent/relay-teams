@@ -33,6 +33,7 @@ from agent_teams.agents.orchestration.task_execution_service import TaskExecutio
 from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
+from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
 from agent_teams.providers.model_config import ModelEndpointConfig
@@ -119,6 +120,22 @@ class _FakeSkillRegistry:
     ) -> tuple[PromptSkillInstruction, ...]:
         self.requested.append(skill_names)
         return self._entries
+
+
+class _FakeSubagentReflectionService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[RoleDefinition, str, str, list[object]]] = []
+
+    async def maybe_compact(
+        self,
+        *,
+        role: RoleDefinition,
+        workspace_id: str,
+        conversation_id: str,
+        history: list[object],
+    ) -> list[object]:
+        self.calls.append((role, workspace_id, conversation_id, list(history)))
+        return history
 
 
 class _FakeResult:
@@ -571,6 +588,8 @@ def _build_provider(
     allowed_skills: tuple[str, ...] = (),
     skill_registry: object | None = None,
     run_control_manager: object | None = None,
+    subagent_reflection_service: object | None = None,
+    task_execution_service: object | None = None,
 ) -> tuple[OpenAICompatibleProvider, MessageRepository]:
     registry = (
         cast(SkillRegistry, skill_registry)
@@ -623,7 +642,10 @@ def _build_provider(
         ),
         media_asset_service=cast(MediaAssetService, object()),
         role_memory_service=cast(RoleMemoryService | None, None),
-        subagent_reflection_service=None,
+        subagent_reflection_service=cast(
+            SubagentReflectionService | None,
+            subagent_reflection_service,
+        ),
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=registry,
@@ -632,7 +654,10 @@ def _build_provider(
         allowed_skills=allowed_skills,
         message_repo=message_repo,
         role_registry=role_registry,
-        task_execution_service=cast(TaskExecutionService, object()),
+        task_execution_service=cast(
+            TaskExecutionService,
+            cast(object, task_execution_service or object()),
+        ),
         task_service=cast(TaskOrchestrationService, object()),
         run_control_manager=cast(
             RunControlManager,
@@ -642,6 +667,69 @@ def _build_provider(
         tool_approval_policy=ToolApprovalPolicy(),
     )
     return provider, message_repo
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_history_resolves_temporary_role_via_runtime_role_resolver(
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    fake_reflection_service = _FakeSubagentReflectionService()
+    temporary_role = RoleDefinition(
+        role_id="runtime-role-scout",
+        name="Runtime Role Scout",
+        description="Inspects temporary role behavior.",
+        version="1",
+        tools=(),
+        system_prompt="Inspect runtime role behavior.",
+    )
+
+    class _FakeRuntimeRoleResolver:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def get_effective_role(
+            self, *, run_id: str | None, role_id: str
+        ) -> RoleDefinition:
+            self.calls.append((str(run_id), role_id))
+            if role_id != temporary_role.role_id:
+                raise KeyError(role_id)
+            return temporary_role
+
+    resolver = _FakeRuntimeRoleResolver()
+    provider, _ = _build_provider(
+        tmp_path / "temporary_role_compaction.db",
+        fake_hub,
+        subagent_reflection_service=fake_reflection_service,
+        task_execution_service=SimpleNamespace(runtime_role_resolver=resolver),
+    )
+
+    history: list[ModelRequest | ModelResponse] = [
+        ModelRequest(parts=[UserPromptPart(content="inspect temp role")])
+    ]
+    request = LLMRequest(
+        run_id="run-temp-role",
+        trace_id="run-temp-role",
+        task_id="task-temp-role",
+        session_id="session-temp-role",
+        workspace_id="default",
+        conversation_id="conv-temp-role",
+        instance_id="inst-temp-role",
+        role_id=temporary_role.role_id,
+        system_prompt="Inspect runtime role behavior.",
+        user_prompt="inspect temp role",
+    )
+
+    compacted = await provider._session._maybe_compact_history(
+        request=request,
+        history=history,
+        workspace_id="default",
+        conversation_id="conv-temp-role",
+    )
+
+    assert compacted == history
+    assert resolver.calls == [("run-temp-role", temporary_role.role_id)]
+    assert fake_reflection_service.calls[0][0] == temporary_role
 
 
 def _seed_request(

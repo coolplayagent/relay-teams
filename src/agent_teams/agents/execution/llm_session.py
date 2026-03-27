@@ -84,6 +84,7 @@ from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
+from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.workspace import (
@@ -1402,13 +1403,28 @@ class AgentLlmSession:
             return history
         if self._role_registry.is_coordinator_role(request.role_id):
             return history
-        role = self._role_registry.get(request.role_id)
+        role = self._resolve_effective_role_for_request(request)
         return await self._subagent_reflection_service.maybe_compact(
             role=role,
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             history=history,
         )
+
+    def _resolve_effective_role_for_request(
+        self, request: LLMRequest
+    ) -> RoleDefinition:
+        runtime_role_resolver = getattr(
+            self._task_execution_service,
+            "runtime_role_resolver",
+            None,
+        )
+        if runtime_role_resolver is not None:
+            return runtime_role_resolver.get_effective_role(
+                run_id=request.trace_id,
+                role_id=request.role_id,
+            )
+        return self._role_registry.get(request.role_id)
 
     def _persist_user_prompt_if_needed(
         self,

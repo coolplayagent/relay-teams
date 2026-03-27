@@ -21,6 +21,7 @@ from agent_teams.roles.role_registry import (
     is_coordinator_role_definition,
     is_main_agent_role_definition,
 )
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.run_models import (
     RuntimePromptConversationContext,
     RunTopologySnapshot,
@@ -38,6 +39,10 @@ ORCHESTRATION_USAGE_PROMPT = (
     "- Orchestrate delegated work and avoid implementing the task directly.\n"
     "- Delegate only when another role is a better fit than continuing yourself.\n"
     "- Choose roles by their Description, Tools, MCP Tools, and Skills.\n"
+    "- Inspect the current worker pool with `list_available_roles` when selecting or reusing a dispatch target.\n"
+    "- If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch.\n"
+    "- Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities.\n"
+    "- Reuse an existing temporary role when it already matches the delegated work.\n"
     "- Create tasks as durable contracts with concrete outcomes and constraints.\n"
     "- Choose the executing role in `dispatch_task`.\n"
     "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
@@ -59,6 +64,7 @@ FEISHU_GROUP_CONTEXT_PROMPT = (
 AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
 ROLE_BLOCK_HEADING_PREFIX = "### "
+ROLE_BLOCK_SOURCE_PREFIX = "- Source: "
 ROLE_BLOCK_DESCRIPTION_PREFIX = "- Description: "
 ROLE_BLOCK_TOOLS_PREFIX = "- Tools: "
 ROLE_BLOCK_MCP_TOOLS_PREFIX = "- MCP Tools: "
@@ -196,12 +202,14 @@ async def build_runtime_system_prompt(
     data: RuntimePromptBuildInput,
     *,
     role_registry: RoleRegistry | None = None,
+    runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
 ) -> str:
     sections = await build_runtime_system_prompt_result(
         data,
         role_registry=role_registry,
+        runtime_role_resolver=runtime_role_resolver,
         mcp_registry=mcp_registry,
         instruction_resolver=instruction_resolver,
     )
@@ -212,6 +220,7 @@ async def build_runtime_system_prompt_result(
     data: RuntimePromptBuildInput,
     *,
     role_registry: RoleRegistry | None = None,
+    runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
 ) -> RuntimePromptSections:
@@ -253,7 +262,9 @@ async def build_runtime_system_prompt_result(
         )
     roles_prompt = await build_available_roles_prompt(
         role_registry=role_registry,
+        runtime_role_resolver=runtime_role_resolver,
         mcp_registry=mcp_registry,
+        run_id=data.task.trace_id if data.task is not None else None,
         allowed_role_ids=topology.allowed_role_ids if topology is not None else (),
     )
     base_instruction_sections.append(ORCHESTRATION_USAGE_PROMPT)
@@ -275,17 +286,29 @@ async def build_runtime_system_prompt_result(
 async def build_available_roles_prompt(
     *,
     role_registry: RoleRegistry,
+    runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry,
+    run_id: str | None = None,
     allowed_role_ids: tuple[str, ...] = (),
 ) -> str:
     allowed_role_id_set = {role_id for role_id in allowed_role_ids if role_id}
+    static_role_ids = {role.role_id for role in role_registry.list_roles()}
+    source_roles = (
+        runtime_role_resolver.list_effective_roles(run_id=run_id)
+        if runtime_role_resolver is not None and run_id is not None
+        else role_registry.list_roles()
+    )
     roles = sorted(
         (
             role
-            for role in role_registry.list_roles()
+            for role in source_roles
             if not is_coordinator_role_definition(role)
             and not is_main_agent_role_definition(role)
-            and (not allowed_role_id_set or role.role_id in allowed_role_id_set)
+            and (
+                role.role_id not in static_role_ids
+                or not allowed_role_id_set
+                or role.role_id in allowed_role_id_set
+            )
         ),
         key=lambda role: (role.name, role.role_id),
     )
@@ -294,7 +317,13 @@ async def build_available_roles_prompt(
 
     role_blocks = await asyncio.gather(
         *[
-            _build_available_role_block(role=role, mcp_registry=mcp_registry)
+            _build_available_role_block(
+                role=role,
+                role_source=(
+                    "static" if role.role_id in static_role_ids else "temporary"
+                ),
+                mcp_registry=mcp_registry,
+            )
             for role in roles
         ]
     )
@@ -377,12 +406,14 @@ async def _load_runtime_prompt_instructions(
 async def _build_available_role_block(
     *,
     role: RoleDefinition,
+    role_source: str,
     mcp_registry: McpRegistry,
 ) -> str:
     mcp_tools = await _list_role_mcp_tools(role=role, mcp_registry=mcp_registry)
     return "\n".join(
         (
             ROLE_BLOCK_HEADING_PREFIX + role.role_id,
+            ROLE_BLOCK_SOURCE_PREFIX + role_source,
             ROLE_BLOCK_DESCRIPTION_PREFIX + role.description,
             ROLE_BLOCK_TOOLS_PREFIX + _format_names(role.tools),
             ROLE_BLOCK_MCP_TOOLS_PREFIX + _format_names(mcp_tools),
@@ -473,6 +504,7 @@ class RuntimePromptBuilder(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     role_registry: RoleRegistry | None = None
+    runtime_role_resolver: RuntimeRoleResolver | None = None
     mcp_registry: McpRegistry | None = None
     instruction_resolver: PromptInstructionResolver | None = None
 
@@ -487,6 +519,7 @@ class RuntimePromptBuilder(BaseModel):
         return await build_runtime_system_prompt_result(
             data,
             role_registry=self.role_registry,
+            runtime_role_resolver=self.runtime_role_resolver,
             mcp_registry=self.mcp_registry,
             instruction_resolver=self.instruction_resolver,
         )

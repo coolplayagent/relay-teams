@@ -7,6 +7,9 @@ from agent_teams.tools.task_tools.create_temporary_role import (
 from agent_teams.tools.task_tools.dispatch_task import (
     register as register_dispatch_task,
 )
+from agent_teams.tools.task_tools.list_available_roles import (
+    register as register_list_available_roles,
+)
 from agent_teams.tools.task_tools.list_delegated_tasks import (
     register as register_list_delegated_tasks,
 )
@@ -16,6 +19,7 @@ TOOLS = {
     "create_tasks": register_create_tasks,
     "create_temporary_role": register_create_temporary_role,
     "update_task": register_update_task,
+    "list_available_roles": register_list_available_roles,
     "list_delegated_tasks": register_list_delegated_tasks,
     "dispatch_task": register_dispatch_task,
 }

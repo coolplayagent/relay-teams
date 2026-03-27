@@ -201,10 +201,15 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
         in payload["runtime_system_prompt"]
     )
     assert (
+        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        in payload["runtime_system_prompt"]
+    )
+    assert (
         "The roles listed below are dispatch targets, not your own capabilities."
         in payload["runtime_system_prompt"]
     )
     assert "### writer_agent" in payload["runtime_system_prompt"]
+    assert "- Source: static" in payload["runtime_system_prompt"]
     assert (
         "- Description: Drafts release notes and summaries."
         in payload["runtime_system_prompt"]

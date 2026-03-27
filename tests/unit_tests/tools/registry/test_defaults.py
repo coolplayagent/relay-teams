@@ -22,6 +22,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "glob",
         "grep",
         "im_send",
+        "list_available_roles",
         "list_delegated_tasks",
         "read",
         "shell",

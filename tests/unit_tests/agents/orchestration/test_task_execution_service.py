@@ -632,10 +632,15 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         in provider.system_prompts[0]
     )
     assert (
+        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        in provider.system_prompts[0]
+    )
+    assert (
         "The roles listed below are dispatch targets, not your own capabilities."
         in provider.system_prompts[0]
     )
     assert "### writer_agent" in provider.system_prompts[0]
+    assert "- Source: static" in provider.system_prompts[0]
 
 
 @pytest.mark.asyncio

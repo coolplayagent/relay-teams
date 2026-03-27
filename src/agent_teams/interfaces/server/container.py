@@ -459,6 +459,7 @@ class ServerContainer:
             agent_repo=self.agent_repo,
             prompt_builder=RuntimePromptBuilder(
                 role_registry=self.role_registry,
+                runtime_role_resolver=self.runtime_role_resolver,
                 mcp_registry=self.mcp_registry,
                 instruction_resolver=PromptInstructionResolver(
                     app_config_dir=runtime.paths.config_dir,
@@ -790,6 +791,7 @@ class ServerContainer:
         self.meta_agent.coordinator.role_registry = self.role_registry
         self.meta_agent.coordinator.prompt_builder = RuntimePromptBuilder(
             role_registry=self.role_registry,
+            runtime_role_resolver=self.runtime_role_resolver,
             mcp_registry=self.mcp_registry,
             instruction_resolver=PromptInstructionResolver(
                 app_config_dir=self.runtime.paths.config_dir,

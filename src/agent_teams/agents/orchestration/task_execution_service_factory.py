@@ -65,6 +65,7 @@ def create_task_execution_service(
         workspace_manager=workspace_manager,
         prompt_builder=RuntimePromptBuilder(
             role_registry=role_registry,
+            runtime_role_resolver=runtime_role_resolver,
             mcp_registry=mcp_registry,
             instruction_resolver=PromptInstructionResolver(
                 app_config_dir=app_config_dir,

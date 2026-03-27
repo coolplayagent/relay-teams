@@ -25,6 +25,9 @@ from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInf
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from agent_teams.roles.temporary_role_models import TemporaryRoleSpec
+from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
 from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.sessions.session_models import SessionMode
 
@@ -45,7 +48,10 @@ def _role(role_id: str) -> RoleDefinition:
     if role_id.casefold() in {"coordinator_agent", "coordinator"}:
         tools = (
             "create_tasks",
+            "create_temporary_role",
             "update_task",
+            "list_available_roles",
+            "list_delegated_tasks",
             "dispatch_task",
         )
     return RoleDefinition(
@@ -98,7 +104,14 @@ def _coordinator_registry() -> RoleRegistry:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=(
+                "create_tasks",
+                "create_temporary_role",
+                "update_task",
+                "list_available_roles",
+                "list_delegated_tasks",
+                "dispatch_task",
+            ),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -157,12 +170,25 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
         "Create tasks as durable contracts with concrete outcomes and constraints."
         in prompt
     )
+    assert (
+        "Inspect the current worker pool with `list_available_roles` when selecting or reusing a dispatch target."
+        in prompt
+    )
+    assert (
+        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        in prompt
+    )
+    assert (
+        "Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities."
+        in prompt
+    )
     assert "Choose the executing role in `dispatch_task`." in prompt
     assert (
         "Use the dispatch prompt to pass stage-specific instructions and upstream context."
         in prompt
     )
     assert "dispatch targets, not your own capabilities." in prompt
+    assert "- Source: static" in prompt
     assert "- Description: Drafts release notes." in prompt
     assert "- Tools: read, write" in prompt
     assert "- MCP Tools: docs_search" in prompt
@@ -221,6 +247,55 @@ def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() 
     )
 
     assert "- MCP Tools: docs_search" in prompt
+
+
+def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
+    tmp_path: Path,
+) -> None:
+    registry = _coordinator_registry()
+    resolver = RuntimeRoleResolver(
+        role_registry=registry,
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+    resolver.create_temporary_role(
+        run_id="trace-1",
+        session_id="session-1",
+        role=TemporaryRoleSpec(
+            role_id="tmp_writer",
+            name="Tmp Writer",
+            description="Handles a run-specific writing format.",
+            system_prompt="You are a temporary writer.",
+            tools=("read", "write_tmp"),
+        ),
+    )
+
+    prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=_role("coordinator_agent"),
+                task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
+                    coordinator_role_id="coordinator_agent",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
+                shared_state_snapshot=(),
+            ),
+            role_registry=registry,
+            runtime_role_resolver=resolver,
+            mcp_registry=_FakeMcpRegistry(),
+        )
+    )
+
+    assert "### writer_agent" in prompt
+    assert "### tmp_writer" in prompt
+    assert "- Source: temporary" in prompt
+    assert "- Description: Handles a run-specific writing format." in prompt
+    assert "- Tools: read, write_tmp" in prompt
 
 
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
@@ -393,6 +468,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     assert "## Orchestration Rules" in prompt
     assert "Orchestration Prompt" in prompt
     assert "Choose roles by their Description, Tools, MCP Tools, and Skills." in prompt
+    assert "list_available_roles" in prompt
 
 
 def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> None:
