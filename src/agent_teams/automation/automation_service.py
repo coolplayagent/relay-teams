@@ -241,10 +241,13 @@ class AutomationService:
 
     def run_now(self, automation_project_id: str) -> dict[str, JsonValue]:
         project = self._repository.get(automation_project_id)
-        session_id = self._materialize_execution(project, reason="manual")
+        execution_handle = self._materialize_execution(project, reason="manual")
         return {
             "automation_project_id": automation_project_id,
-            "session_id": session_id,
+            "session_id": execution_handle.session_id,
+            "run_id": execution_handle.run_id,
+            "queued": execution_handle.queued,
+            "reused_bound_session": execution_handle.reused_bound_session,
         }
 
     def list_project_sessions(
@@ -288,7 +291,7 @@ class AutomationService:
         *,
         reason: str,
         now: datetime | None = None,
-    ) -> str:
+    ) -> AutomationExecutionHandle:
         effective_now = now or datetime.now(tz=UTC)
         execution_event = self._record_execution_event(project, reason=reason)
         next_status = project.status
@@ -320,7 +323,9 @@ class AutomationService:
                         }
                     )
                 )
-                return bound_session_handle.session_id
+                return bound_session_handle.model_copy(
+                    update={"reused_bound_session": True}
+                )
 
             title = (
                 f"{project.display_name} run "
@@ -374,7 +379,12 @@ class AutomationService:
                     }
                 )
             )
-            return session.session_id
+            return AutomationExecutionHandle(
+                session_id=session.session_id,
+                run_id=run_id,
+                queued=False,
+                reused_bound_session=False,
+            )
         except Exception as exc:
             next_run_at = _next_run_at_after_fire(
                 project=project, fired_at=effective_now

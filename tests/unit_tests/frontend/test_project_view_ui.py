@@ -258,6 +258,117 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert "feishu_main - Release Updates" in str(payload["contentHtml"])
 
 
+def test_project_view_keeps_automation_view_for_reused_bound_session_run(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+const runButton = document.querySelector("[data-automation-run]");
+runButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    dispatchedEvents: globalThis.__dispatchedEvents,
+    logs: globalThis.__logs,
+    projectViewSummary: els.projectViewSummary.textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        last_session_id: "session-im-1",
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [
+        {
+            session_id: "session-im-1",
+            workspace_id: "alpha-project",
+            project_kind: "workspace",
+            project_id: "alpha-project",
+            metadata: { title: "feishu_main - Release Updates" },
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+    ];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        session_id: "session-im-1",
+        run_id: "run-1",
+        queued: false,
+        reused_bound_session: true,
+    };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["dispatchedEvents"] == []
+    assert payload["logs"] == ["Started automation run in bound IM session: session-im-1"]
+    assert "1 " in str(payload["projectViewSummary"])
+
+
 def _run_project_view_script(
     tmp_path: Path,
     runner_source: str,
@@ -343,6 +454,7 @@ function parseNodes(source, selector) {
         ".workspace-tree-file": /class="([^"]*workspace-tree-file[^"]*)"[\s\S]*?data-tree-file-path="([^"]+)"[\s\S]*?aria-pressed="([^"]+)"/g,
         ".workspace-diff-card": /class="([^"]*workspace-diff-card[^"]*)"[\s\S]*?data-diff-path="([^"]*)"/g,
         "[data-automation-edit]": /data-automation-edit/g,
+        "[data-automation-run]": /data-automation-run/g,
     };
     const pattern = patterns[selector];
     const results = [];
@@ -369,6 +481,8 @@ function parseNodes(source, selector) {
                 "data-diff-path": decodeHtmlAttribute(match[2]),
             }));
         } else if (selector === "[data-automation-edit]") {
+            results.push(createTreeNode({}));
+        } else if (selector === "[data-automation-run]") {
             results.push(createTreeNode({}));
         }
         match = pattern.exec(source);
@@ -428,7 +542,11 @@ export function createDomEnvironment() {
         addEventListener() {
             return undefined;
         },
-        dispatchEvent() {
+        dispatchEvent(event) {
+            globalThis.__dispatchedEvents.push({
+                type: event?.type || null,
+                detail: event?.detail || null,
+            });
             return undefined;
         },
         querySelector(selector) {
@@ -631,7 +749,7 @@ export function t(key) {
     mock_logger_path.write_text(
         """
 export function sysLog() {
-    return undefined;
+    globalThis.__logs.push(Array.from(arguments).map(value => String(value)).join(" "));
 }
 """.strip(),
         encoding="utf-8",
@@ -694,6 +812,8 @@ globalThis.__diffFileRequests = [];
 globalThis.__treeRequests = [];
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
+globalThis.__dispatchedEvents = [];
+globalThis.__logs = [];
 globalThis.CustomEvent = class CustomEvent {{
     constructor(type, init = {{}}) {{
         this.type = type;

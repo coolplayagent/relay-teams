@@ -239,7 +239,10 @@ class AutomationDeliveryService:
             event_log=self._event_log,
             fallback_error=runtime.last_error,
         )
-        if terminal_event not in claimed.delivery_events:
+        if (
+            terminal_event not in claimed.delivery_events
+            or terminal_message.strip() == ""
+        ):
             now = _utc_now()
             _ = self._repository.update(
                 claimed.model_copy(
@@ -397,8 +400,8 @@ def _build_terminal_message(
         break
     if runtime_status == RunRuntimeStatus.COMPLETED:
         if output:
-            return f"定时任务 {project_name} 执行完成。\n\n{output}"
-        return f"定时任务 {project_name} 执行完成。"
+            return output
+        return ""
     failure_detail = output or str(fallback_error or "").strip() or "未知错误。"
     return f"定时任务 {project_name} 执行失败。\n\n{failure_detail}"
 

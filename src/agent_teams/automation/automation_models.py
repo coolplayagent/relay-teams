@@ -211,6 +211,7 @@ class AutomationExecutionHandle(BaseModel):
     session_id: str = Field(min_length=1)
     run_id: str | None = None
     queued: bool = False
+    reused_bound_session: bool = False
 
 
 __all__ = [

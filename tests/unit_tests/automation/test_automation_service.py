@@ -128,6 +128,9 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     sessions = service.list_project_sessions(created.automation_project_id)
 
     assert result["automation_project_id"] == created.automation_project_id
+    assert result["run_id"] == "run-1"
+    assert result["queued"] is False
+    assert result["reused_bound_session"] is False
     assert len(sessions) == 1
     session_payload = cast(dict[str, object], sessions[0])
     metadata = cast(dict[str, str], session_payload["metadata"])
@@ -193,6 +196,7 @@ def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> No
     assert enabled.status.value == "enabled"
     assert enabled.next_run_at is not None
     assert result["automation_project_id"] == created.automation_project_id
+    assert result["reused_bound_session"] is False
     assert run_manager.started_run_ids == ["run-1"]
 
 
@@ -232,6 +236,9 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
     assert result == {
         "automation_project_id": created.automation_project_id,
         "session_id": "bound-session-1",
+        "run_id": "bound-run-1",
+        "queued": False,
+        "reused_bound_session": True,
     }
     assert bound_queue_service.materialize_calls == [
         (created.automation_project_id, "manual")

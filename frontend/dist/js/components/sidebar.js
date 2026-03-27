@@ -210,11 +210,38 @@ function sessionGroupKey(session) {
     return workspaceId ? groupKey('workspace', workspaceId) : '';
 }
 
+function mergeAutomationProjectSessions(project, groupedSessions, sessionsById) {
+    const automationProjectId = String(project?.automation_project_id || '').trim();
+    const mergedSessions = Array.isArray(groupedSessions) ? [...groupedSessions] : [];
+    const seenSessionIds = new Set(
+        mergedSessions.map(session => String(session?.session_id || '').trim()).filter(Boolean),
+    );
+    const lastSessionId = String(project?.last_session_id || '').trim();
+    if (!automationProjectId || !lastSessionId || seenSessionIds.has(lastSessionId)) {
+        return mergedSessions;
+    }
+    const aliasedSession = sessionsById.get(lastSessionId);
+    if (!aliasedSession) {
+        return mergedSessions;
+    }
+    mergedSessions.push({
+        ...aliasedSession,
+        project_kind: 'automation',
+        project_id: automationProjectId,
+    });
+    return mergedSessions;
+}
+
 function buildProjectGroups(workspaces, automationProjects, sessions) {
     const sessionsByGroup = new Map();
+    const sessionsById = new Map();
     sessionWorkspaceMap.clear();
 
     sessions.forEach(session => {
+        const sessionId = String(session?.session_id || '').trim();
+        if (sessionId) {
+            sessionsById.set(sessionId, session);
+        }
         const key = sessionGroupKey(session);
         if (!key) return;
         const workspaceId = String(session?.workspace_id || '').trim();
@@ -246,7 +273,11 @@ function buildProjectGroups(workspaces, automationProjects, sessions) {
         const id = String(project?.automation_project_id || '').trim();
         if (!id) return;
         const key = groupKey('automation', id);
-        const projectSessions = Array.from(sessionsByGroup.get(key) || []).sort((a, b) => timestampValue(b.updated_at) - timestampValue(a.updated_at));
+        const projectSessions = mergeAutomationProjectSessions(
+            project,
+            Array.from(sessionsByGroup.get(key) || []),
+            sessionsById,
+        ).sort((a, b) => timestampValue(b.updated_at) - timestampValue(a.updated_at));
         if (!initializedProjectIds.has(key)) {
             initializedProjectIds.add(key);
             expandedProjectIds.add(key);
@@ -906,9 +937,17 @@ async function handleRunAutomationProject(project, manualClick = true) {
     if (!projectId) return;
     const data = await runAutomationProject(projectId);
     state.currentWorkspaceId = String(project?.workspace_id || '').trim() || AUTOMATION_INTERNAL_WORKSPACE_ID;
-    sysLog(`Started automation run: ${data.session_id}`);
     if (manualClick) els.chatMessages.innerHTML = '';
     await loadProjects();
+    if (data?.reused_bound_session === true) {
+        const logMessage = data?.queued === true
+            ? `Queued automation run in bound IM session: ${data.session_id}`
+            : `Started automation run in bound IM session: ${data.session_id}`;
+        sysLog(logMessage);
+        await openAutomationProjectView(project);
+        return;
+    }
+    sysLog(`Started automation run: ${data.session_id}`);
     await selectSessionById(data.session_id);
 }
 

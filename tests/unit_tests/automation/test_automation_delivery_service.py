@@ -177,10 +177,48 @@ def test_process_pending_sends_completed_message_when_run_finishes(
 
     assert progressed is True
     assert len(feishu_client.sent_messages) == 2
-    assert (
-        feishu_client.sent_messages[1]["text"]
-        == "定时任务 Daily Briefing 执行完成。\n\nDaily report is ready."
-    )
+    assert feishu_client.sent_messages[1]["text"] == "Daily report is ready."
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status.value == "sent"
     assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+
+
+def test_process_pending_skips_completed_message_when_run_has_no_output(
+    tmp_path: Path,
+) -> None:
+    service, feishu_client, run_runtime_repo, event_log, repository = _build_service(
+        tmp_path
+    )
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"   "}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    assert progressed is True
+    assert len(feishu_client.sent_messages) == 1
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.terminal_status.value == "skipped"
+    assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+    assert persisted.terminal_message == ""

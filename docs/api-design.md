@@ -1470,6 +1470,9 @@ Bound-session behavior:
 Response fields:
 - `automation_project_id`
 - `session_id`
+- `run_id`
+- `queued`
+- `reused_bound_session`
 
 ### `POST /automation/projects/{automation_project_id}:enable`
 

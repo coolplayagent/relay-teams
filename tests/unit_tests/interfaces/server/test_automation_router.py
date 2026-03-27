@@ -120,11 +120,14 @@ class _FakeAutomationService:
             raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
         self.deleted_project_ids.append(automation_project_id)
 
-    def run_now(self, automation_project_id: str) -> dict[str, str]:
+    def run_now(self, automation_project_id: str) -> dict[str, str | bool | None]:
         self.run_calls.append(automation_project_id)
         return {
             "automation_project_id": automation_project_id,
             "session_id": "session-automation-1",
+            "run_id": "run-automation-1",
+            "queued": False,
+            "reused_bound_session": False,
         }
 
     def set_project_status(
@@ -260,6 +263,9 @@ def test_run_project_route_returns_session_id() -> None:
     assert response.json() == {
         "automation_project_id": "aut_1",
         "session_id": "session-automation-1",
+        "run_id": "run-automation-1",
+        "queued": False,
+        "reused_bound_session": False,
     }
     assert fake_service.run_calls == ["aut_1"]
 

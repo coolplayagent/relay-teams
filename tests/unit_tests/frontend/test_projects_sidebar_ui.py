@@ -425,6 +425,271 @@ export async function runAutomationProject(projectId) {
     assert payload["runCalls"] == ["aut_created"]
 
 
+def test_projects_sidebar_aliases_reused_im_session_into_automation_group(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectCards = document.getElementById("projects-list").children.filter(child => String(child.className || "").includes("project-card"));
+const workspaceCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Alpha Project");
+const automationCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Daily Briefing");
+
+console.log(JSON.stringify({
+    workspaceSessionCount: workspaceCard?.querySelectorAll(".session-item").length || 0,
+    automationSessionCount: automationCard?.querySelectorAll(".session-item").length || 0,
+    automationFirstSessionLabel: automationCard?.querySelectorAll(".session-id")[0]?.textContent || "",
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-im-1",
+        workspace_id: "alpha-project",
+        project_kind: "workspace",
+        project_id: "alpha-project",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: {
+            title: "feishu_main - Release Updates",
+            source_kind: "im",
+        },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [
+        {
+            automation_project_id: "aut_1",
+            display_name: "Daily Briefing",
+            name: "daily-briefing",
+            status: "enabled",
+            workspace_id: "alpha-project",
+            last_session_id: "session-im-1",
+            updated_at: "2026-03-14T10:12:00Z",
+            last_run_started_at: "2026-03-14T10:12:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["workspaceSessionCount"] == 1
+    assert payload["automationSessionCount"] == 1
+    assert payload["automationFirstSessionLabel"] == "feishu_main - Release Updates"
+
+
+def test_projects_sidebar_keeps_automation_view_for_reused_bound_session_run(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+await loadProjects();
+const projectCards = document.getElementById("projects-list").children.filter(child => String(child.className || "").includes("project-card"));
+const automationCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Daily Briefing");
+automationCard?.querySelector(".project-new-session-btn")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    openedAutomationProjectIds: globalThis.__openedAutomationProjectIds,
+    logs: globalThis.__logs,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return [
+        {
+            session_id: "session-im-1",
+            workspace_id: "alpha-project",
+            updated_at: "2026-03-14T10:11:00Z",
+            pending_tool_approval_count: 0,
+            metadata: { title: "feishu_main - Release Updates", source_kind: "im" },
+        },
+    ];
+}
+
+export async function fetchAutomationProjects() {
+    return [
+        {
+            automation_project_id: "aut_1",
+            display_name: "Daily Briefing",
+            name: "daily-briefing",
+            status: "enabled",
+            workspace_id: "alpha-project",
+            last_session_id: "session-im-1",
+            updated_at: "2026-03-14T10:12:00Z",
+            last_run_started_at: "2026-03-14T10:12:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        session_id: "session-im-1",
+        run_id: "run-1",
+        queued: true,
+        reused_bound_session: true,
+    };
+}
+""".strip(),
+    )
+
+    assert payload["selectedSessionIds"] == []
+    assert payload["openedAutomationProjectIds"] == ["aut_1"]
+    assert payload["logs"] == ["Queued automation run in bound IM session: session-im-1"]
+
+
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
     tmp_path: Path,
 ) -> None:

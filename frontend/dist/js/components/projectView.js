@@ -120,6 +120,15 @@ function resolveFeishuBindingDisplayName(binding, bindings) {
     return String(binding?.chat_id || '').trim();
 }
 
+function formatAutomationRunLogMessage(result) {
+    const sessionId = String(result?.session_id || '').trim();
+    const suffix = sessionId ? `: ${sessionId}` : '';
+    if (result?.queued === true) {
+        return `Queued automation run in bound IM session${suffix}`;
+    }
+    return `Started automation run in bound IM session${suffix}`;
+}
+
 async function requestAutomationProjectEditInput(project) {
     const [workspaces, feishuBindings] = await Promise.all([
         fetchWorkspaces(),
@@ -783,10 +792,14 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
     document.querySelector('[data-automation-edit]')?.addEventListener('click', editAction);
     const runAction = async () => {
         const result = await runAutomationProject(String(project?.automation_project_id || ''));
+        if (result?.reused_bound_session === true) {
+            sysLog(formatAutomationRunLogMessage(result));
+            await openAutomationProjectView(project);
+            return;
+        }
         if (result?.session_id) {
             document.dispatchEvent(new CustomEvent('agent-teams-select-session', { detail: { sessionId: result.session_id } }));
         }
-        await openAutomationProjectView(project);
     };
     document.querySelector('[data-automation-run]')?.addEventListener('click', runAction);
     const toggleAction = async () => {
