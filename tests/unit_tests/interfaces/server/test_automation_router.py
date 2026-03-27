@@ -82,6 +82,7 @@ class _FakeAutomationService:
                 trigger_id="trg_feishu",
                 tenant_key="tenant-1",
                 chat_id="oc_123",
+                session_id="session-im-1",
                 chat_type="group",
                 source_label="Release Updates",
             ),
@@ -228,6 +229,7 @@ def test_list_projects_route_returns_records() -> None:
     assert payload[0]["automation_project_id"] == "aut_1"
     assert payload[0]["schedule_mode"] == "cron"
     assert payload[0]["delivery_binding"]["chat_id"] == "oc_123"
+    assert payload[0]["delivery_binding"]["session_id"] == "session-im-1"
     assert payload[0]["delivery_events"] == ["started", "completed", "failed"]
 
 

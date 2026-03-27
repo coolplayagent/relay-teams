@@ -111,30 +111,31 @@ class AutomationFeishuBindingService:
             raise ValueError(
                 "delivery_binding.trigger_id does not have usable Feishu credentials"
             )
-        exists = self._external_session_binding_repo.exists(
-            platform=FEISHU_PLATFORM,
-            trigger_id=binding.trigger_id,
-            tenant_key=binding.tenant_key,
-            external_chat_id=binding.chat_id,
-        )
-        if not exists:
-            raise ValueError(
-                "delivery_binding must reference an existing Feishu chat binding"
-            )
+        session_id = str(binding.session_id or "").strip()
+        if not session_id:
+            raise ValueError("delivery_binding.session_id is required")
+        matched_candidate: AutomationFeishuBindingCandidate | None = None
         for candidate in self.list_candidates():
             if (
                 candidate.trigger_id == binding.trigger_id
                 and candidate.tenant_key == binding.tenant_key
                 and candidate.chat_id == binding.chat_id
+                and candidate.session_id == session_id
             ):
-                return AutomationFeishuBinding(
-                    trigger_id=candidate.trigger_id,
-                    tenant_key=candidate.tenant_key,
-                    chat_id=candidate.chat_id,
-                    chat_type=candidate.chat_type,
-                    source_label=candidate.source_label,
-                )
-        return binding
+                matched_candidate = candidate
+                break
+        if matched_candidate is None:
+            raise ValueError(
+                "delivery_binding must reference an existing Feishu chat binding"
+            )
+        return AutomationFeishuBinding(
+            trigger_id=matched_candidate.trigger_id,
+            tenant_key=matched_candidate.tenant_key,
+            chat_id=matched_candidate.chat_id,
+            session_id=matched_candidate.session_id,
+            chat_type=matched_candidate.chat_type,
+            source_label=matched_candidate.source_label,
+        )
 
 
 def _fallback_source_label(chat_id: str) -> str:

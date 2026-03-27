@@ -179,3 +179,21 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     assert feishu_reload_calls == ["feishu"]
     assert wechat_reload_calls == ["wechat"]
     assert mcp_reload_calls == ["mcp"]
+
+
+def test_container_wires_automation_bound_session_queue_runtime(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    assert container.automation_service._bound_session_queue_service is (
+        container.automation_bound_session_queue_service
+    )
+    assert (
+        container.automation_bound_session_queue_worker._queue_service
+        is container.automation_bound_session_queue_service
+    )

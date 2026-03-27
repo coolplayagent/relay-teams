@@ -124,6 +124,7 @@ def test_validate_binding_rejects_unknown_chat_binding(tmp_path: Path) -> None:
                 trigger_id="fsg_main",
                 tenant_key="tenant-1",
                 chat_id="oc_missing",
+                session_id="session-im-1",
                 chat_type="group",
                 source_label="Missing Chat",
             )
@@ -132,3 +133,60 @@ def test_validate_binding_rejects_unknown_chat_binding(tmp_path: Path) -> None:
         assert "existing Feishu chat binding" in str(exc)
     else:
         raise AssertionError("Expected validate_binding to reject unknown chat")
+
+
+def test_validate_binding_requires_session_id(tmp_path: Path) -> None:
+    service, _session_repo, _binding_repo = _build_service(tmp_path)
+
+    try:
+        service.validate_binding(
+            AutomationFeishuBinding(
+                trigger_id="fsg_main",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                chat_type="group",
+                source_label="Release Updates",
+            )
+        )
+    except ValueError as exc:
+        assert "delivery_binding.session_id is required" in str(exc)
+    else:
+        raise AssertionError("Expected validate_binding to require session_id")
+
+
+def test_validate_binding_returns_canonical_candidate_with_session_id(
+    tmp_path: Path,
+) -> None:
+    service, session_repo, binding_repo = _build_service(tmp_path)
+    session = session_repo.create(
+        session_id="session-im-1",
+        workspace_id="default",
+        metadata={
+            "title": "Feishu Main - Release Updates",
+            "source_label": "Release Updates",
+            "title_source": "auto",
+            "feishu_chat_type": "group",
+        },
+    )
+    binding_repo.upsert_binding(
+        platform="feishu",
+        trigger_id="fsg_main",
+        tenant_key="tenant-1",
+        external_chat_id="oc_123",
+        session_id=session.session_id,
+    )
+
+    validated = service.validate_binding(
+        AutomationFeishuBinding(
+            trigger_id="fsg_main",
+            tenant_key="tenant-1",
+            chat_id="oc_123",
+            session_id="session-im-1",
+            chat_type="p2p",
+            source_label="Wrong Label",
+        )
+    )
+
+    assert validated.session_id == "session-im-1"
+    assert validated.chat_type == "group"
+    assert validated.source_label == "Release Updates"

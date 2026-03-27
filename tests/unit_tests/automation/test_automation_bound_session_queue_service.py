@@ -15,9 +15,8 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.gateway.feishu.models import FEISHU_PLATFORM, FeishuEnvironment
+from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.media import content_parts_to_text
-from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -116,6 +115,7 @@ def _build_project() -> AutomationProjectRecord:
             trigger_id="trigger-1",
             tenant_key="tenant-1",
             chat_id="oc_123",
+            session_id="session-1",
             chat_type="group",
             source_label="Release Updates",
         ),
@@ -141,14 +141,6 @@ def _build_service(
 ]:
     db_path = tmp_path / "automation-bound-session-queue.db"
     project = _build_project()
-    binding_repo = ExternalSessionBindingRepository(db_path)
-    binding_repo.upsert_binding(
-        platform=FEISHU_PLATFORM,
-        trigger_id="trigger-1",
-        tenant_key="tenant-1",
-        external_chat_id="oc_123",
-        session_id="session-1",
-    )
     queue_repo = AutomationBoundSessionQueueRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
     run_service = _FakeRunService()
@@ -157,7 +149,6 @@ def _build_service(
     project_repo = _FakeProjectRepository(project)
     service = AutomationBoundSessionQueueService(
         repository=queue_repo,
-        external_session_binding_repo=binding_repo,
         session_lookup=_FakeSessionLookup(
             {
                 "session-1": SessionRecord(
@@ -209,7 +200,7 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
     assert len(run_service.created_intents) == 1
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
-        == "Summarize the day."
+        == '触发定时任务 “Daily Briefing”：\nSummarize the day.'
     )
     assert (
         run_service.created_intents[0].conversation_context is not None
@@ -256,7 +247,7 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
     assert len(run_service.created_intents) == 0
     assert len(queued_records) == 1
     assert (
-        queued_records[0].prompt == "定时任务触发：Daily Briefing\n\nSummarize the day."
+        queued_records[0].prompt == '触发定时任务 “Daily Briefing”：\nSummarize the day.'
     )
     assert (
         queued_records[0].queue_message
@@ -307,7 +298,7 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert len(run_service.created_intents) == 1
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
-        == "定时任务触发：Daily Briefing\n\nSummarize the day."
+        == '触发定时任务 “Daily Briefing”：\nSummarize the day.'
     )
     assert run_service.started_run_ids == ["run-1"]
     assert len(waiting_records) == 1
@@ -316,3 +307,37 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert delivery_service.register_calls[0]["send_started"] is False
     assert project_repo.project.last_session_id == "session-1"
     assert project_repo.project.last_run_started_at is not None
+
+
+def test_materialize_execution_fails_when_bound_session_is_missing(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _queue_repo,
+        _run_runtime_repo,
+        run_service,
+        _delivery_service,
+        _feishu_client,
+        _project_repo,
+    ) = _build_service(tmp_path)
+    project = _build_project().model_copy(
+        update={
+            "delivery_binding": AutomationFeishuBinding(
+                trigger_id="trigger-1",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                session_id="missing-session",
+                chat_type="group",
+                source_label="Release Updates",
+            )
+        }
+    )
+
+    try:
+        _ = service.materialize_execution(project=project, reason="schedule")
+    except RuntimeError as exc:
+        assert "missing_bound_session:missing-session" in str(exc)
+    else:
+        raise AssertionError("Expected missing bound session to fail")
+    assert run_service.created_intents == []

@@ -61,6 +61,7 @@ class AutomationFeishuBinding(BaseModel):
     trigger_id: str = Field(min_length=1)
     tenant_key: str = Field(min_length=1)
     chat_id: str = Field(min_length=1)
+    session_id: str | None = None
     chat_type: str = Field(min_length=1)
     source_label: str = Field(min_length=1)
 

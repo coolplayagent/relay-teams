@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from agent_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
 )
+from agent_teams.automation.prompt_building import build_automation_prompt
 from agent_teams.automation.automation_delivery_service import AutomationDeliveryService
 from agent_teams.automation.automation_event_repository import (
     AutomationEventRepository,
@@ -347,7 +348,12 @@ class AutomationService:
             run_id, _ = self._run_service.create_run(
                 IntentInput(
                     session_id=session.session_id,
-                    input=content_parts_from_text(project.prompt),
+                    input=content_parts_from_text(
+                        build_automation_prompt(
+                            project_name=project.display_name,
+                            prompt=project.prompt,
+                        )
+                    ),
                     execution_mode=project.run_config.execution_mode,
                     yolo=project.run_config.yolo,
                     thinking=project.run_config.thinking,
@@ -441,8 +447,10 @@ class AutomationService:
         project: AutomationProjectRecord,
         reason: str,
     ) -> AutomationExecutionHandle | None:
-        if self._bound_session_queue_service is None:
+        if project.delivery_binding is None:
             return None
+        if self._bound_session_queue_service is None:
+            raise RuntimeError("Automation bound session execution service is unavailable")
         return self._bound_session_queue_service.materialize_execution(
             project=project,
             reason=reason,

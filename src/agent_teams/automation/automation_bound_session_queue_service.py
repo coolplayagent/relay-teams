@@ -22,8 +22,8 @@ from agent_teams.automation.automation_models import (
 )
 from agent_teams.gateway.feishu.models import FEISHU_PLATFORM, FeishuEnvironment
 from agent_teams.logger import get_logger, log_event
+from agent_teams.automation.prompt_building import build_automation_prompt
 from agent_teams.media import content_parts_from_text
-from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
     RuntimePromptConversationContext,
@@ -82,7 +82,6 @@ class AutomationBoundSessionQueueService:
         self,
         *,
         repository: AutomationBoundSessionQueueRepository,
-        external_session_binding_repo: ExternalSessionBindingRepository,
         session_lookup: SessionLookup,
         run_service: RunServiceLike,
         run_runtime_repo: RunRuntimeRepository,
@@ -92,7 +91,6 @@ class AutomationBoundSessionQueueService:
         project_repository: AutomationProjectLookup,
     ) -> None:
         self._repository = repository
-        self._external_session_binding_repo = external_session_binding_repo
         self._session_lookup = session_lookup
         self._run_service = run_service
         self._run_runtime_repo = run_runtime_repo
@@ -110,20 +108,18 @@ class AutomationBoundSessionQueueService:
         binding = project.delivery_binding
         if binding is None:
             return None
-        binding_record = self._external_session_binding_repo.get_binding(
-            platform=FEISHU_PLATFORM,
-            trigger_id=binding.trigger_id,
-            tenant_key=binding.tenant_key,
-            external_chat_id=binding.chat_id,
+        session_id = str(binding.session_id or "").strip()
+        if not session_id:
+            raise RuntimeError("missing_bound_session_id")
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            binding.trigger_id
         )
-        if binding_record is None:
-            return None
+        if runtime_config is None:
+            raise RuntimeError("missing_runtime_config")
         try:
-            _ = self._session_lookup.get_session(binding_record.session_id)
+            _ = self._session_lookup.get_session(session_id)
         except KeyError:
-            return None
-
-        session_id = binding_record.session_id
+            raise RuntimeError(f"missing_bound_session:{session_id}") from None
         active_run_id = self._active_recoverable_run_id(session_id)
         queued_count = self._repository.count_non_terminal_by_session(session_id)
         queued_represents_active_run = (
@@ -144,7 +140,7 @@ class AutomationBoundSessionQueueService:
                     binding=binding,
                     delivery_events=project.delivery_events,
                     run_config=project.run_config,
-                    prompt=_build_queued_prompt(
+                    prompt=build_automation_prompt(
                         project_name=project.display_name,
                         prompt=project.prompt,
                     ),
@@ -166,7 +162,10 @@ class AutomationBoundSessionQueueService:
             project_id=project.automation_project_id,
             session_id=session_id,
             reason=reason,
-            prompt=project.prompt,
+            prompt=build_automation_prompt(
+                project_name=project.display_name,
+                prompt=project.prompt,
+            ),
             run_config=project.run_config,
             binding=binding,
             delivery_events=project.delivery_events,
@@ -477,10 +476,6 @@ class AutomationBoundSessionQueueWorker:
                 )
             self._wake_event.wait(timeout=self._poll_interval_seconds)
             self._wake_event.clear()
-
-
-def _build_queued_prompt(*, project_name: str, prompt: str) -> str:
-    return f"定时任务触发：{project_name}\n\n{prompt}"
 
 
 def _build_queue_message(*, project_name: str, ahead_count: int) -> str:

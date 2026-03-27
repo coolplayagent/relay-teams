@@ -71,10 +71,11 @@ function buildFeishuBindingKey(binding) {
     const triggerId = String(binding?.trigger_id || '').trim();
     const tenantKey = String(binding?.tenant_key || '').trim();
     const chatId = String(binding?.chat_id || '').trim();
-    if (!triggerId || !tenantKey || !chatId) {
+    const sessionId = String(binding?.session_id || '').trim();
+    if (!triggerId || !tenantKey || !chatId || !sessionId) {
         return '';
     }
-    return `${triggerId}::${tenantKey}::${chatId}`;
+    return `${triggerId}::${tenantKey}::${chatId}::${sessionId}`;
 }
 
 function buildFeishuBindingOptions(bindings) {
@@ -256,6 +257,7 @@ async function requestAutomationProjectEditInput(project) {
             trigger_id: String(selectedBinding.trigger_id || '').trim(),
             tenant_key: String(selectedBinding.tenant_key || '').trim(),
             chat_id: String(selectedBinding.chat_id || '').trim(),
+            session_id: String(selectedBinding.session_id || '').trim(),
             chat_type: String(selectedBinding.chat_type || '').trim(),
             source_label: String(selectedBinding.source_label || '').trim(),
         } : null,

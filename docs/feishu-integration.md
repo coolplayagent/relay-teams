@@ -159,10 +159,12 @@ Behavior:
 Automation projects that bind to an existing Feishu chat follow a different outbound
 rule from inbound chat messages:
 
-- bound scheduled/manual automation runs reuse the existing internal session when
-  possible instead of creating a fresh automation-only session
+- bound scheduled/manual automation runs persist and reuse the exact selected
+  internal session instead of creating a fresh automation-only session
 - if that session is busy, the automation run is queued behind the current session
   work and the bound chat receives `定时任务 {display_name} 准备执行，当前任务前面有 n 个消息`
+- if that saved session later disappears or becomes unusable, the automation run
+  fails and does not fall back to a new `MainAgent` automation session
 - for these automation-bound runs, receipts, terminal result messages, and `im_send`
   tool output all use direct send to the chat, not reply-to-message, even in group chats
 

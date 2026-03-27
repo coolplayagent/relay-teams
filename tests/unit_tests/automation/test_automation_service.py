@@ -11,6 +11,8 @@ from agent_teams.automation import (
     AutomationBoundSessionQueueService,
     AutomationExecutionHandle,
     AutomationEventRepository,
+    AutomationFeishuBinding,
+    AutomationFeishuBindingService,
     AutomationProjectCreateInput,
     AutomationProjectRepository,
     AutomationProjectStatus,
@@ -59,6 +61,11 @@ class _FakeBoundSessionQueueService:
         self.deleted_project_ids.append(automation_project_id)
 
 
+class _FakeFeishuBindingService:
+    def validate_binding(self, binding: object) -> object:
+        return binding
+
+
 def _build_session_service(db_path: Path) -> SessionService:
     return SessionService(
         session_repo=SessionRepository(db_path),
@@ -75,6 +82,7 @@ def _build_service(
     tmp_path: Path,
     *,
     bound_session_queue_service: _FakeBoundSessionQueueService | None = None,
+    feishu_binding_service: object | None = None,
 ) -> tuple[AutomationService, _FakeRunManager, SessionService]:
     db_path = tmp_path / "automation.db"
     run_manager = _FakeRunManager()
@@ -84,6 +92,10 @@ def _build_service(
         event_repository=AutomationEventRepository(db_path),
         session_service=session_service,
         run_service=cast(RunManager, run_manager),
+        feishu_binding_service=cast(
+            AutomationFeishuBindingService | None,
+            feishu_binding_service,
+        ),
         bound_session_queue_service=cast(
             AutomationBoundSessionQueueService | None,
             bound_session_queue_service,
@@ -141,6 +153,10 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert "automation_trigger_event_id" in metadata
     assert len(run_manager.create_calls) == 1
     assert run_manager.started_run_ids == ["run-1"]
+    assert (
+        getattr(run_manager.create_calls[0], "intent")
+        == '触发定时任务 “nightly-report”：\nDraft a nightly report.'
+    )
 
 
 def test_process_due_projects_runs_one_shot_once_and_disables_it(
@@ -171,6 +187,10 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
     metadata = cast(dict[str, str], session_payload["metadata"])
     assert metadata["automation_reason"] == "schedule"
     assert run_manager.started_run_ids == ["run-1"]
+    assert (
+        getattr(run_manager.create_calls[0], "intent")
+        == '触发定时任务 “one-shot-report”：\nRun once.'
+    )
 
 
 def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> None:
@@ -213,6 +233,7 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
     service, run_manager, session_service = _build_service(
         tmp_path,
         bound_session_queue_service=bound_queue_service,
+        feishu_binding_service=_FakeFeishuBindingService(),
     )
     _ = session_service.create_session(
         session_id="bound-session-1",
@@ -227,6 +248,14 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
             schedule_mode=AutomationScheduleMode.CRON,
             cron_expression="0 1 * * *",
             timezone="UTC",
+            delivery_binding=AutomationFeishuBinding(
+                trigger_id="trg_feishu",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                session_id="bound-session-1",
+                chat_type="group",
+                source_label="Release Updates",
+            ),
         )
     )
 
@@ -247,3 +276,51 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
     assert len(sessions) == 1
     session_payload = cast(dict[str, object], sessions[0])
     assert session_payload["session_id"] == "bound-session-1"
+
+
+def test_run_now_fails_when_bound_session_execution_errors(tmp_path: Path) -> None:
+    class _FailingBoundSessionQueueService(_FakeBoundSessionQueueService):
+        def materialize_execution(
+            self,
+            *,
+            project: object,
+            reason: str,
+        ) -> AutomationExecutionHandle | None:
+            automation_project_id = getattr(project, "automation_project_id")
+            self.materialize_calls.append((cast(str, automation_project_id), reason))
+            raise RuntimeError("missing_bound_session:session-im-1")
+
+    bound_queue_service = _FailingBoundSessionQueueService()
+    service, run_manager, _session_service = _build_service(
+        tmp_path,
+        bound_session_queue_service=bound_queue_service,
+        feishu_binding_service=_FakeFeishuBindingService(),
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="nightly-report",
+            workspace_id="default",
+            prompt="Draft a nightly report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            delivery_binding=AutomationFeishuBinding(
+                trigger_id="trg_feishu",
+                tenant_key="tenant-1",
+                chat_id="oc_123",
+                session_id="session-im-1",
+                chat_type="group",
+                source_label="Release Updates",
+            ),
+        )
+    )
+
+    try:
+        _ = service.run_now(created.automation_project_id)
+    except RuntimeError as exc:
+        assert "missing_bound_session:session-im-1" in str(exc)
+    else:
+        raise AssertionError("Expected bound session error to propagate")
+    updated = service.get_project(created.automation_project_id)
+    assert updated.last_error == "missing_bound_session:session-im-1"
+    assert run_manager.create_calls == []

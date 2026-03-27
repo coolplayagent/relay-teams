@@ -1450,6 +1450,7 @@ Request fields:
   - `trigger_id`
   - `tenant_key`
   - `chat_id`
+  - `session_id`
   - `chat_type`
   - `source_label`
 - `delivery_events[]` optional
@@ -1457,7 +1458,9 @@ Request fields:
 
 Notes:
 - `delivery_binding` must reference an existing Feishu IM chat binding returned by `GET /automation/feishu-bindings`.
+- `delivery_binding.session_id` is required for explicit create/update requests and binds the automation project to that exact saved session.
 - When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
+- When a bound session cannot be resolved at run time, the run fails instead of falling back to a fresh automation session.
 
 ### `GET /automation/projects/{automation_project_id}`
 
@@ -1473,7 +1476,8 @@ Deletes the automation project and its backing trigger. Historical sessions are 
 
 ### `POST /automation/projects/{automation_project_id}:run`
 
-Creates a new session for that automation project and starts the run immediately.
+Starts the automation project immediately. Unbound projects create a fresh automation
+session; projects with a Feishu delivery binding reuse the exact saved bound session.
 Response fields:
 - `automation_project_id`
 - `session_id`

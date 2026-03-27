@@ -121,7 +121,7 @@ globalThis.__showFormDialogResult = {
     cron_expression: "0 9 * * *",
     timezone: "UTC",
     enabled: true,
-    delivery_binding_key: "trg_feishu::tenant-1::oc_123",
+    delivery_binding_key: "trg_feishu::tenant-1::oc_123::session-im-1",
     delivery_event_started: true,
     delivery_event_completed: true,
     delivery_event_failed: true,
@@ -168,6 +168,7 @@ export async function fetchAutomationProject() {
             trigger_id: "trg_feishu",
             tenant_key: "tenant-1",
             chat_id: "oc_123",
+            session_id: "session-im-1",
             chat_type: "group",
             source_label: "Release Updates",
         },
@@ -248,6 +249,7 @@ export async function updateAutomationProject(_automationProjectId, payload) {
 
     assert delivery_binding["trigger_id"] == "trg_feishu"
     assert delivery_binding["chat_id"] == "oc_123"
+    assert delivery_binding["session_id"] == "session-im-1"
     assert delivery_events == [
         "started",
         "completed",

@@ -837,7 +837,7 @@ Purpose: stores virtual automation projects shown in the sidebar, their schedule
 Notes:
 - `schedule_mode` is `cron` or `one_shot`.
 - `run_config_json` stores session mode, orchestration preset, execution mode, YOLO, and thinking configuration.
-- `delivery_binding_json` stores the selected Feishu chat target copied from an existing `external_session_bindings` row.
+- `delivery_binding_json` stores the selected Feishu chat target plus the exact bound `session_id` chosen from the current Feishu binding candidates.
 - `delivery_events_json` stores which Feishu notifications are enabled for that automation project.
 - `trigger_id` is a legacy compatibility field and now stores `schedule-{automation_project_id}`.
 - `last_session_id` points at the most recent session used by that automation project, including a reused bound IM session.
