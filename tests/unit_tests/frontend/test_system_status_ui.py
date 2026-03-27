@@ -15,8 +15,8 @@ const initialStatus = {
     },
     skills: {
         skills: [
-            { name: 'diff', description: 'Inspect file changes before replying.' },
-            { name: 'time', description: '' },
+            { ref: 'builtin:diff', name: 'diff', description: 'Inspect file changes before replying.', scope: 'builtin' },
+            { ref: 'app:time', name: 'time', description: '', scope: 'app' },
         ],
     },
 };
@@ -30,7 +30,7 @@ const reloadedMcpStatus = {
 const reloadedSkillsStatus = {
     skills: {
         skills: [
-            { name: 'diff', description: 'Compare the latest workspace changes.' },
+            { ref: 'builtin:diff', name: 'diff', description: 'Compare the latest workspace changes.', scope: 'builtin' },
         ],
     },
 };
@@ -313,8 +313,10 @@ console.log(JSON.stringify({
     reloaded_html = cast(str, payload["reloadedHtml"])
     toasts = cast(list[JsonValue], payload["toasts"])
     assert "diff" in initial_html
+    assert "BUILTIN" not in initial_html
     assert "Inspect file changes before replying." in initial_html
     assert "time" in initial_html
+    assert "APP" not in initial_html
     assert "No description provided." in initial_html
     assert "Compare the latest workspace changes." in reloaded_html
     assert "Inspect file changes before replying." not in reloaded_html
@@ -327,6 +329,66 @@ console.log(JSON.stringify({
             "tone": "success",
         }
     ]
+
+
+def test_skills_status_panel_disambiguates_only_duplicate_skill_names(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: [],
+    },
+    skills: {
+        skills: [
+            { ref: 'builtin:diff', name: 'diff', description: 'Inspect file changes before replying.', scope: 'builtin' },
+            { ref: 'builtin:time', name: 'time', description: 'Builtin time.', scope: 'builtin' },
+            { ref: 'app:time', name: 'time', description: 'App time.', scope: 'app' },
+        ],
+    },
+};
+
+export async function fetchConfigStatus() {
+    globalThis.__fetchConfigStatusCalls += 1;
+    return status;
+}
+
+export async function fetchMcpServerTools(serverName) {
+    globalThis.__toolFetchCalls.push(serverName);
+    return { source: 'project', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    globalThis.__reloadMcpCalls += 1;
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers, loadSkillsStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+bindSystemStatusHandlers();
+await loadSkillsStatusPanel();
+
+console.log(JSON.stringify({
+    html: document.getElementById('skills-status').innerHTML,
+}));
+""".strip(),
+    )
+
+    html = cast(str, payload["html"])
+    assert "diff" in html
+    assert "diff" in html and "BUILTIN" not in html.split("diff", 1)[1][:20]
+    assert "time" in html
+    assert "BUILTIN" in html
+    assert "APP" in html
 
 
 def test_system_status_styles_include_mcp_tool_list_tokens() -> None:

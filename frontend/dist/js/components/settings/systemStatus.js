@@ -318,12 +318,13 @@ function renderStatusList(items, stateLabel) {
     const normalizedItems = Array.isArray(items)
         ? items.map(normalizeStatusItem).filter(item => item !== null)
         : [];
+    const nameCounts = buildStatusNameCounts(normalizedItems);
     return `
         <div class="status-list">
             ${normalizedItems.map(item => `
                 <div class="status-list-row">
                     <div class="status-list-copy">
-                        <div class="status-list-name">${escapeHtml(item.name)}</div>
+                        <div class="status-list-name">${escapeHtml(formatStatusItemLabel(item, nameCounts))}</div>
                         <div class="status-list-description${item.description ? '' : ' status-list-description-empty'}">${escapeHtml(item.description || 'No description provided.')}</div>
                     </div>
                     <div class="status-list-state">${escapeHtml(stateLabel)}</div>
@@ -342,6 +343,7 @@ function normalizeStatusItem(item) {
         return {
             name,
             description: '',
+            scope: '',
         };
     }
 
@@ -353,7 +355,38 @@ function normalizeStatusItem(item) {
     return {
         name,
         description: typeof item?.description === 'string' ? item.description.trim() : '',
+        scope: typeof item?.scope === 'string' ? item.scope.trim() : '',
     };
+}
+
+function buildStatusNameCounts(items) {
+    const counts = new Map();
+    items.forEach(item => {
+        const name = String(item?.name || '').trim();
+        if (!name) {
+            return;
+        }
+        counts.set(name, (counts.get(name) || 0) + 1);
+    });
+    return counts;
+}
+
+function formatStatusItemLabel(item, nameCounts) {
+    const safeName = String(item?.name || '').trim();
+    const duplicateCount = nameCounts.get(safeName) || 0;
+    if (duplicateCount <= 1) {
+        return safeName;
+    }
+    return formatSkillStatusLabel(safeName, item?.scope);
+}
+
+function formatSkillStatusLabel(name, scope) {
+    const safeName = String(name || '').trim();
+    const safeScope = String(scope || '').trim().toUpperCase();
+    if (!safeScope) {
+        return safeName;
+    }
+    return `${safeName} · ${safeScope}`;
 }
 
 function renderEmptyState(title, description) {

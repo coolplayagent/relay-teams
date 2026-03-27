@@ -9,6 +9,7 @@ from agent_teams.roles.role_models import (
     RoleDocumentDraft,
     RoleDocumentRecord,
     RoleDocumentSummary,
+    RoleSkillOption,
     RoleValidationResult,
 )
 from agent_teams.roles.memory_models import (
@@ -43,6 +44,7 @@ __all__ = [
     "RoleMemoryRepository",
     "RoleMemoryService",
     "RoleRegistry",
+    "RoleSkillOption",
     "RoleValidationResult",
     "RuntimeRoleResolver",
     "TemporaryRoleRecord",

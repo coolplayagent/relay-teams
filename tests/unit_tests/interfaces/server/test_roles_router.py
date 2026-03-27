@@ -24,8 +24,10 @@ from agent_teams.roles import (
     RoleDocumentRecord,
     RoleDocumentSummary,
     RoleRegistry,
+    RoleSkillOption,
     RoleValidationResult,
 )
+from agent_teams.skills.skill_models import SkillOptionEntry, SkillScope
 from agent_teams.roles import default_memory_profile
 
 
@@ -108,8 +110,21 @@ class _FakeMcpService:
 
 
 class _FakeSkillRegistry:
-    def list_names(self) -> tuple[str, ...]:
-        return ("diff", "time")
+    def list_skill_options(self) -> tuple[SkillOptionEntry, ...]:
+        return (
+            SkillOptionEntry(
+                ref="builtin:diff",
+                name="diff",
+                description="Inspect file changes.",
+                scope=SkillScope.BUILTIN,
+            ),
+            SkillOptionEntry(
+                ref="app:time",
+                name="time",
+                description="Read the current time.",
+                scope=SkillScope.APP,
+            ),
+        )
 
 
 class _FakeExternalAgentService:
@@ -279,7 +294,20 @@ def test_get_role_config_options() -> None:
         ),
         tools=("create_tasks", "dispatch_task"),
         mcp_servers=("docs",),
-        skills=("diff", "time"),
+        skills=(
+            RoleSkillOption(
+                ref="builtin:diff",
+                name="diff",
+                description="Inspect file changes.",
+                scope=SkillScope.BUILTIN,
+            ),
+            RoleSkillOption(
+                ref="app:time",
+                name="time",
+                description="Read the current time.",
+                scope=SkillScope.APP,
+            ),
+        ),
         agents=(
             RoleAgentOption(
                 agent_id="codex",

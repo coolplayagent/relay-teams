@@ -88,6 +88,15 @@ class RoleAgentOption(BaseModel):
     transport: str = Field(min_length=1)
 
 
+class RoleSkillOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    scope: str = Field(pattern="^(builtin|app)$")
+
+
 class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -96,5 +105,5 @@ class RoleConfigOptions(BaseModel):
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
-    skills: tuple[str, ...] = ()
+    skills: tuple[RoleSkillOption, ...] = ()
     agents: tuple[RoleAgentOption, ...] = ()

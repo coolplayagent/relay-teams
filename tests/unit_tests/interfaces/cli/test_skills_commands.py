@@ -13,7 +13,7 @@ from agent_teams.skills.skill_registry import SkillRegistry
 runner = CliRunner()
 
 
-def test_skills_list_prefers_app_skill_in_json_output(
+def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     registry = _build_registry(tmp_path)
@@ -27,6 +27,7 @@ def test_skills_list_prefers_app_skill_in_json_output(
     payload = json.loads(result.output)
     assert payload == [
         {
+            "ref": "app:app_only",
             "name": "app_only",
             "source": "app",
             "directory": (tmp_path / ".agent-teams" / "skills" / "app_only")
@@ -35,6 +36,7 @@ def test_skills_list_prefers_app_skill_in_json_output(
             "description": "app only skill",
         },
         {
+            "ref": "builtin:builtin_only",
             "name": "builtin_only",
             "source": "builtin",
             "directory": (tmp_path / "builtin" / "skills" / "builtin_only")
@@ -43,12 +45,22 @@ def test_skills_list_prefers_app_skill_in_json_output(
             "description": "builtin only skill",
         },
         {
+            "ref": "app:shared",
             "name": "shared",
             "source": "app",
             "directory": (tmp_path / ".agent-teams" / "skills" / "shared")
             .resolve()
             .as_posix(),
             "description": "app shared skill",
+        },
+        {
+            "ref": "builtin:shared",
+            "name": "shared",
+            "source": "builtin",
+            "directory": (tmp_path / "builtin" / "skills" / "shared")
+            .resolve()
+            .as_posix(),
+            "description": "builtin shared skill",
         },
     ]
 
@@ -62,11 +74,12 @@ def test_skills_show_returns_effective_skill_details(
     )
 
     result = runner.invoke(
-        cli_app.app, ["skills", "show", "shared", "--format", "json"]
+        cli_app.app, ["skills", "show", "app:shared", "--format", "json"]
     )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
+    assert payload["ref"] == "app:shared"
     assert payload["name"] == "shared"
     assert payload["source"] == "app"
     assert payload["description"] == "app shared skill"
@@ -93,7 +106,7 @@ def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> No
     result = runner.invoke(cli_app.app, ["skills", "list"])
 
     assert result.exit_code == 0
-    assert result.output.startswith("Skills (3 total)")
+    assert result.output.startswith("Skills (4 total)")
     assert "| Name" in result.output
     assert "shared" in result.output
     assert "app" in result.output
@@ -108,7 +121,7 @@ def test_skills_help_explains_merge_order() -> None:
         in result.output
     )
     assert "~/.agent-teams/skills" in result.output
-    assert "app scope, overrides builtin skills" in result.output
+    assert "both entries are kept" in result.output
     assert "agent-teams skills show time" in result.output
 
 
@@ -116,13 +129,8 @@ def test_skills_list_help_includes_examples_and_source_behavior() -> None:
     result = runner.invoke(cli_app.app, ["skills", "list", "--help"])
 
     assert result.exit_code == 0
-    assert (
-        "List effective skills after merging builtin and app scopes." in result.output
-    )
-    assert (
-        "If the same skill exists in both places, the app copy is shown."
-        in result.output
-    )
+    assert "List all discovered skills across builtin and app scopes." in result.output
+    assert "both entries are shown" in result.output
     assert "--source" in result.output
     assert "agent-teams skills list --source builtin" in result.output
 
@@ -131,9 +139,9 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
     result = runner.invoke(cli_app.app, ["skills", "show", "--help"])
 
     assert result.exit_code == 0
-    assert "Show the effective definition for a single skill." in result.output
-    assert "skill shadows a built-in skill with the same name" in result.output
-    assert "Skill name to inspect after scope merge and override" in result.output
+    assert "Show a single skill definition." in result.output
+    assert "canonical ref such as app:time or builtin:time" in result.output
+    assert "Skill canonical ref or unique plain name to inspect." in result.output
     assert "agent-teams skills show time --format json" in result.output
 
 

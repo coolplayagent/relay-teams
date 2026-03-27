@@ -16,7 +16,7 @@ from agent_teams.sessions.runs.runtime_config import (
     RuntimeConfig,
     RuntimePaths,
 )
-from agent_teams.skills.skill_models import SkillSummaryEntry
+from agent_teams.skills.skill_models import SkillScope, SkillSummaryEntry
 from agent_teams.skills.skill_registry import SkillRegistry
 
 
@@ -24,8 +24,10 @@ class _FakeSkillRegistry:
     def list_skill_summaries(self) -> tuple[SkillSummaryEntry, ...]:
         return (
             SkillSummaryEntry(
+                ref="builtin:diff",
                 name="diff",
                 description="Inspect changes between files.",
+                scope=SkillScope.BUILTIN,
             ),
         )
 
@@ -85,8 +87,10 @@ def test_get_config_status_only_exposes_app_scoped_mcp_servers() -> None:
         "loaded": True,
         "skills": [
             {
+                "ref": "builtin:diff",
                 "name": "diff",
                 "description": "Inspect changes between files.",
+                "scope": "builtin",
             }
         ],
     }

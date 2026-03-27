@@ -166,7 +166,10 @@ def fetch_remote_skill_names(
 
 
 def discover_installed_skill_names() -> frozenset[str]:
-    return frozenset(SkillRegistry.from_default_scopes().list_names())
+    return frozenset(
+        skill.metadata.name
+        for skill in SkillRegistry.from_default_scopes().list_skill_definitions()
+    )
 
 
 def install_from_url(
@@ -675,18 +678,18 @@ def mount_skills_to_roles(
         get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,
     )
-    known_skills = frozenset(SkillRegistry.from_default_scopes().list_names())
-    missing = [
-        skill_name
-        for skill_name in normalized_skill_names
-        if skill_name not in known_skills
-    ]
-    if missing:
-        raise SkillInstallerError(f"Unknown skills after install: {missing}")
+    try:
+        resolved_skill_refs = SkillRegistry.from_default_scopes().resolve_known(
+            normalized_skill_names,
+            strict=True,
+            consumer="skills.installer_support.mount_skills_to_roles",
+        )
+    except ValueError as exc:
+        raise SkillInstallerError(str(exc)) from exc
 
     for role_id in normalized_role_ids:
         record = role_service.get_role_document(role_id)
-        merged_skills = _merge_names(record.skills, normalized_skill_names)
+        merged_skills = _merge_names(record.skills, resolved_skill_refs)
         if merged_skills == record.skills:
             continue
         role_service.save_role_document(

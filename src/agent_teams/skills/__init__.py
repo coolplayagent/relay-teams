@@ -11,10 +11,13 @@ from agent_teams.skills.skill_models import (
     Skill,
     SkillInstructionEntry,
     SkillMetadata,
+    SkillOptionEntry,
     SkillResource,
     SkillScope,
     SkillScript,
     SkillSummaryEntry,
+    build_skill_ref,
+    parse_skill_ref,
 )
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.skills.skill_routing_models import (
@@ -40,6 +43,7 @@ __all__ = [
     "SkillInstructionEntry",
     "SkillMetadata",
     "SkillPromptResult",
+    "SkillOptionEntry",
     "SkillResource",
     "SkillRouteCandidate",
     "SkillRoutingContext",
@@ -55,6 +59,8 @@ __all__ = [
     "SkillsDirectory",
     "SkillRegistry",
     "build_skill_routing_query_text",
+    "build_skill_ref",
     "get_project_skills_dir",
     "get_user_skills_dir",
+    "parse_skill_ref",
 ]

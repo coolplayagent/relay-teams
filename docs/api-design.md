@@ -829,11 +829,20 @@ Response fields:
   - `description`
 - `tools`
 - `mcp_servers`
-- `skills`
+- `skills[]`
+  - `ref`: canonical skill ref. Uses `builtin:<name>` for built-in skills and
+    `app:<name>` for user/app skills.
+  - `name`
+  - `description`
+  - `scope`: `builtin` or `app`
 - `agents[]`
   - `agent_id`
   - `name`
   - `transport`
+
+Notes:
+- Same-name builtin/app skills are both returned. Frontends must treat `ref` as
+  the stable identity and use `name` only for display.
 
 ### `GET /roles/configs`
 
@@ -872,6 +881,11 @@ Response fields:
 - `system_prompt`
 - `file_name`
 - `content`
+
+Notes:
+- `skills` in saved role documents are returned as canonical refs when they can
+  be resolved uniquely. Existing unknown saved values are preserved so the UI
+  can still display and edit the role.
 
 ### `PUT /roles/configs/{role_id}`
 
@@ -1116,7 +1130,7 @@ Request:
     "feishu_chat_type": "group"
   },
   "tools": ["dispatch_task"],
-  "skills": ["time"]
+  "skills": ["builtin:time"]
 }
 ```
 
@@ -1130,6 +1144,9 @@ Notes:
 - When `conversation_context.source_provider = "feishu"` and `conversation_context.feishu_chat_type = "group"`, both `runtime_system_prompt` and `provider_system_prompt` append the extra Feishu-group instruction:
   `当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。`
 - Other contexts leave the role system prompt unchanged.
+- Skill requests accept canonical refs or unique plain names. The response
+  always returns canonical refs so same-name builtin/app skills remain
+  distinguishable.
 - When `workspace_id` does not exist, the endpoint returns `404`.
 - Routed skill candidates do not appear in `runtime_system_prompt` or `provider_system_prompt`; they only appear in `user_prompt`.
 - When `objective` is omitted or blank, the preview response returns `objective: ""` and `user_prompt: ""`, but `skill_routing` may still report the effective authorized and visible skill sets.
@@ -1141,7 +1158,7 @@ Response:
   "role_id": "Coordinator",
   "objective": "Draft release note",
   "tools": ["dispatch_task"],
-  "skills": ["time"],
+  "skills": ["builtin:time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",
   "user_prompt": "...",

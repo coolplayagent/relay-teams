@@ -317,8 +317,8 @@ import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings
 
 globalThis.__roleConfigOptionsOverride = {
     skills: [
-        { name: "diff", description: "Inspect file changes before replying." },
-        { name: "time", description: "Read the current wall-clock time." },
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "app:time", name: "time", description: "Read the current wall-clock time.", scope: "app" },
     ],
 };
 
@@ -339,7 +339,45 @@ console.log(JSON.stringify({
     assert "[object Object]" not in cast(str, payload["skillsHtml"])
     assert "diff" in cast(str, payload["skillsHtml"])
     assert "time" in cast(str, payload["skillsHtml"])
-    assert payload["skillValues"] == ["diff", "time"]
+    assert "BUILTIN" not in cast(str, payload["skillsHtml"])
+    assert "APP" not in cast(str, payload["skillsHtml"])
+    assert payload["skillValues"] == ["builtin:diff", "app:time"]
+
+
+def test_role_settings_disambiguates_only_duplicate_skill_names(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read builtin time.", scope: "builtin" },
+        { ref: "app:time", name: "time", description: "Read app time.", scope: "app" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    skillsHtml: document.getElementById("role-skills-picker").innerHTML,
+}));
+""".strip(),
+    )
+
+    skills_html = cast(str, payload["skillsHtml"])
+    assert "diff" in skills_html
+    assert "diff" in skills_html and "BUILTIN" not in skills_html.split("diff", 1)[1][:20]
+    assert "time" in skills_html
+    assert "BUILTIN" in skills_html
+    assert "APP" in skills_html
 
 
 def test_role_settings_render_default_alias_with_current_profile_name(
@@ -454,7 +492,7 @@ const defaultRoleRecords = {
         bound_agent_id: null,
         tools: ["read_file", "write_file"],
         mcp_servers: ["docs"],
-        skills: ["diff"],
+        skills: ["builtin:diff"],
         model_profile: "default",
         memory_profile: { enabled: true },
         system_prompt: "Review the delivered work.",
@@ -521,7 +559,10 @@ export async function fetchRoleConfigOptions() {
         main_agent_role_id: "MainAgent",
         tools: ["read_file", "write_file", "shell"],
         mcp_servers: ["docs"],
-        skills: ["diff", "time"],
+        skills: [
+            { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+            { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+        ],
         agents: [
             { agent_id: "codex_local", name: "Codex Local", transport: "stdio" },
             { agent_id: "claude_http", name: "Claude HTTP", transport: "streamable_http" },
@@ -871,6 +912,8 @@ function createElements() {{
 }}
 
 function installGlobals(elements) {{
+    const previousRoleConfigOptionsOverride = globalThis.__roleConfigOptionsOverride ?? null;
+    const previousModelProfilesOverride = globalThis.__modelProfilesOverride ?? null;
     globalThis.document = {{
         getElementById(id) {{
             const element = elements.get(id);
@@ -890,7 +933,8 @@ function installGlobals(elements) {{
     globalThis.__deleteRoleShouldFail = false;
     globalThis.__deleteRoleErrorMessage = "";
     globalThis.__confirmResult = true;
-    globalThis.__roleConfigOptionsOverride = null;
+    globalThis.__roleConfigOptionsOverride = previousRoleConfigOptionsOverride;
+    globalThis.__modelProfilesOverride = previousModelProfilesOverride;
 }}
 
 {runner_source}

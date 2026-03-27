@@ -142,6 +142,43 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
     assert "Review carefully." in record.content
 
 
+def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "reviewer.md",
+        role_id="reviewer",
+        name="Reviewer",
+        description="Reviews delivered work.",
+        version="1.1.0",
+        tools=("dispatch_task",),
+        skills=("time",),
+        system_prompt="Review carefully.",
+    )
+    app_skills_dir = tmp_path / "skills"
+    app_skills_dir.mkdir()
+    (app_skills_dir / "time").mkdir()
+    (app_skills_dir / "time" / "SKILL.md").write_text(
+        "---\nname: time\ndescription: timezone helper\n---\nUse UTC.\n",
+        encoding="utf-8",
+    )
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=app_skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    record = service.get_role_document("reviewer")
+
+    assert record.skills == ("app:time",)
+
+
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
     tmp_path: Path,
 ) -> None:
@@ -315,6 +352,53 @@ def test_validate_all_roles_rejects_unknown_capabilities_in_persisted_roles(
         assert "Unknown tools" in str(exc)
     else:
         raise AssertionError("Expected strict persisted role validation to fail")
+
+
+def test_validate_role_document_rejects_ambiguous_plain_skill_name(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    app_skills_dir = tmp_path / "skills"
+    builtin_skills_dir = tmp_path / "builtin_skills"
+    (app_skills_dir / "time").mkdir(parents=True)
+    (builtin_skills_dir / "time").mkdir(parents=True)
+    (app_skills_dir / "time" / "SKILL.md").write_text(
+        "---\nname: time\ndescription: app timezone helper\n---\nUse app.\n",
+        encoding="utf-8",
+    )
+    (builtin_skills_dir / "time" / "SKILL.md").write_text(
+        "---\nname: time\ndescription: builtin timezone helper\n---\nUse builtin.\n",
+        encoding="utf-8",
+    )
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=app_skills_dir,
+            builtin_skills_dir=builtin_skills_dir,
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Ambiguous skills require canonical refs"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                mcp_servers=(),
+                skills=("time",),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Write clearly.",
+            )
+        )
 
 
 def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:

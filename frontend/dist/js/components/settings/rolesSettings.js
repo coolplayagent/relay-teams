@@ -123,7 +123,7 @@ function normalizeRoleConfigOptions(options) {
         main_agent_role_id: String(options?.main_agent_role_id || '').trim(),
         tools: normalizeOptionNames(options?.tools),
         mcp_servers: normalizeOptionNames(options?.mcp_servers),
-        skills: normalizeOptionNames(options?.skills),
+        skills: normalizeSkillOptions(options?.skills),
         agents: Array.isArray(options?.agents) ? options.agents.map(agent => ({
             agent_id: String(agent?.agent_id || '').trim(),
             name: String(agent?.name || '').trim(),
@@ -177,6 +177,100 @@ function normalizeOptionName(value) {
         return value.name.trim();
     }
     return '';
+}
+
+function normalizeSkillOptions(values) {
+    if (!Array.isArray(values)) {
+        return [];
+    }
+    return values
+        .map(normalizeSkillOption)
+        .filter(option => option !== null)
+        .sort(compareSkillOptions);
+}
+
+function normalizeSkillOption(value) {
+    if (typeof value === 'string') {
+        const parsed = parseSkillRef(value);
+        const ref = value.trim();
+        if (!ref) {
+            return null;
+        }
+        return {
+            ref,
+            name: parsed ? parsed.name : ref,
+            description: '',
+            scope: parsed ? parsed.scope : '',
+        };
+    }
+    const ref = typeof value?.ref === 'string' ? value.ref.trim() : '';
+    const name = typeof value?.name === 'string' ? value.name.trim() : '';
+    if (!ref || !name) {
+        return null;
+    }
+    return {
+        ref,
+        name,
+        description: typeof value?.description === 'string' ? value.description.trim() : '',
+        scope: typeof value?.scope === 'string' ? value.scope.trim().toLowerCase() : '',
+    };
+}
+
+function normalizeSkillSelections(values) {
+    if (!Array.isArray(values)) {
+        return [];
+    }
+    return values
+        .map(value => {
+            if (typeof value === 'string') {
+                return value.trim();
+            }
+            if (typeof value?.ref === 'string') {
+                return value.ref.trim();
+            }
+            return '';
+        })
+        .filter(value => Boolean(value));
+}
+
+function compareSkillOptions(left, right) {
+    const leftName = String(left?.name || '');
+    const rightName = String(right?.name || '');
+    if (leftName !== rightName) {
+        return leftName.localeCompare(rightName);
+    }
+    const leftPriority = left?.scope === 'app' ? 0 : 1;
+    const rightPriority = right?.scope === 'app' ? 0 : 1;
+    if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+    }
+    return String(left?.ref || '').localeCompare(String(right?.ref || ''));
+}
+
+function parseSkillRef(value) {
+    const normalized = String(value || '').trim();
+    const delimiterIndex = normalized.indexOf(':');
+    if (delimiterIndex <= 0 || delimiterIndex >= normalized.length - 1) {
+        return null;
+    }
+    const scope = normalized.slice(0, delimiterIndex).trim().toLowerCase();
+    const name = normalized.slice(delimiterIndex + 1).trim();
+    if (!name || (scope !== 'app' && scope !== 'builtin')) {
+        return null;
+    }
+    return { scope, name };
+}
+
+function formatSkillOptionLabel(option) {
+    const name = String(option?.name || '').trim();
+    const scope = String(option?.scope || '').trim().toUpperCase();
+    const duplicateCount = roleConfigOptions.skills.filter(
+        candidate => String(candidate?.name || '').trim() === name,
+    ).length;
+    if (!scope || duplicateCount <= 1) {
+        return name;
+    }
+    return `${name} · ${scope}`;
 }
 
 function renderRolesList() {
@@ -267,7 +361,7 @@ function applyRoleRecord(record) {
     currentSelections = {
         tools: normalizeOptionNames(record.tools),
         mcp_servers: normalizeOptionNames(record.mcp_servers),
-        skills: normalizeOptionNames(record.skills),
+        skills: normalizeSkillSelections(record.skills),
     };
 
     setInputValue('role-id-input', record.role_id || '');
@@ -350,10 +444,46 @@ function renderOptionPicker(containerId, availableValues, selectedValues, emptyM
     });
 }
 
+function renderSkillOptionPicker(selectedValues, emptyMessage) {
+    const container = document.getElementById('role-skills-picker');
+    if (!container) return;
+
+    const selectedSet = new Set(Array.isArray(selectedValues) ? selectedValues : []);
+    const availableList = Array.isArray(roleConfigOptions.skills) ? roleConfigOptions.skills : [];
+    const availableRefs = new Set(availableList.map(option => option.ref));
+    const invalidValues = Array.from(selectedSet).filter(value => !availableRefs.has(value));
+
+    if (availableList.length === 0 && invalidValues.length === 0) {
+        container.innerHTML = `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`;
+        return;
+    }
+
+    container.innerHTML = [
+        ...availableList.map(option => `
+            <label class="role-option-item">
+                <input type="checkbox" data-option-value="${escapeHtml(option.ref)}"${selectedSet.has(option.ref) ? ' checked' : ''}>
+                <span class="role-option-check" aria-hidden="true"></span>
+                <span class="role-option-label">${escapeHtml(formatSkillOptionLabel(option))}</span>
+            </label>
+        `),
+        ...invalidValues.map(value => `
+            <label class="role-option-item role-option-item-invalid">
+                <input type="checkbox" data-option-value="${escapeHtml(value)}" checked>
+                <span class="role-option-check" aria-hidden="true"></span>
+                <span class="role-option-label">${escapeHtml(value)} <em>Unavailable</em></span>
+            </label>
+        `),
+    ].join('');
+
+    container.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        input.onchange = () => syncOptionSelection('role-skills-picker');
+    });
+}
+
 function renderRoleOptionPickers() {
     renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
     renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
-    renderOptionPicker('role-skills-picker', roleConfigOptions.skills, currentSelections.skills, t('settings.roles.no_skills'));
+    renderSkillOptionPicker(currentSelections.skills, t('settings.roles.no_skills'));
     renderSkillsShellAdvisory();
 }
 

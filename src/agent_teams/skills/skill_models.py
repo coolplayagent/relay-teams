@@ -29,6 +29,24 @@ class SkillScript(BaseModel):
     path: Path
 
 
+def build_skill_ref(*, scope: SkillScope, name: str) -> str:
+    return f"{scope.value}:{name}"
+
+
+def parse_skill_ref(value: str) -> tuple[SkillScope, str] | None:
+    normalized = value.strip()
+    if ":" not in normalized:
+        return None
+    scope_text, name = normalized.split(":", maxsplit=1)
+    if not name.strip():
+        return None
+    try:
+        scope = SkillScope(scope_text.strip())
+    except ValueError:
+        return None
+    return scope, name.strip()
+
+
 class SkillMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,6 +60,7 @@ class SkillMetadata(BaseModel):
 class Skill(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    ref: str = Field(min_length=1)
     metadata: SkillMetadata
     directory: Path
     scope: SkillScope
@@ -50,8 +69,19 @@ class Skill(BaseModel):
 class SkillSummaryEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    ref: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
+    scope: SkillScope
+
+
+class SkillOptionEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    scope: SkillScope
 
 
 class SkillInstructionEntry(BaseModel):

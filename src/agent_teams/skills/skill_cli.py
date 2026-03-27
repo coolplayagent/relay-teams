@@ -23,7 +23,9 @@ skills_app = typer.Typer(
         "Inspect skills discovered from built-in defaults and the app directory.\n\n"
         "Load order:\n"
         "1. built-in skills (builtin scope)\n"
-        "2. ~/.agent-teams/skills (app scope, overrides builtin skills with the same name)\n\n"
+        "2. ~/.agent-teams/skills (app scope)\n\n"
+        "If both scopes define the same skill name, both entries are kept and can "
+        "be distinguished by canonical ref.\n\n"
         "Common usage:\n"
         "- agent-teams skills list\n"
         "- agent-teams skills list --source app --format json\n"
@@ -44,6 +46,7 @@ class SkillSourceFilter(str, Enum):
 
 
 class SkillListEntry(TypedDict):
+    ref: str
     name: str
     source: str
     directory: str
@@ -53,8 +56,8 @@ class SkillListEntry(TypedDict):
 @skills_app.command(
     "list",
     help=(
-        "List effective skills after merging builtin and app scopes.\n\n"
-        "If the same skill exists in both places, the app copy is shown.\n\n"
+        "List all discovered skills across builtin and app scopes.\n\n"
+        "If the same skill exists in both places, both entries are shown.\n\n"
         "Examples:\n"
         "- agent-teams skills list\n"
         "- agent-teams skills list --source builtin\n"
@@ -71,10 +74,7 @@ def skills_list(
     source: SkillSourceFilter = typer.Option(
         SkillSourceFilter.ALL,
         "--source",
-        help=(
-            "Filter by resolved scope: all, builtin, or app. This applies after "
-            "app-over-builtin override resolution."
-        ),
+        help="Filter by resolved scope: all, builtin, or app.",
         case_sensitive=False,
     ),
 ) -> None:
@@ -93,17 +93,18 @@ def skills_list(
 @skills_app.command(
     "show",
     help=(
-        "Show the effective definition for a single skill.\n\n"
-        "The result reflects the same merge rules as runtime loading, so if an app "
-        "skill shadows a built-in skill with the same name, the app skill is shown.\n\n"
+        "Show a single skill definition.\n\n"
+        "The argument can be a canonical ref such as app:time or builtin:time, "
+        "or a unique plain skill name.\n\n"
         "Examples:\n"
         "- agent-teams skills show time\n"
+        "- agent-teams skills show builtin:time\n"
         "- agent-teams skills show time --format json"
     ),
 )
 def skills_show(
     name: str = typer.Argument(
-        ..., help="Skill name to inspect after scope merge and override resolution."
+        ..., help="Skill canonical ref or unique plain name to inspect."
     ),
     output_format: SkillOutputFormat = typer.Option(
         SkillOutputFormat.TABLE,
@@ -164,6 +165,7 @@ def render_skill_list_table(skills: tuple[Skill, ...]) -> None:
 
 def render_skill_detail_table(skill: Skill) -> None:
     summary_rows = [
+        ("Ref", skill.ref),
         ("Name", skill.metadata.name),
         ("Source", skill.scope.value),
         ("Directory", _to_path_text(skill.directory)),
@@ -246,6 +248,7 @@ def _filter_skills(
 
 def _to_skill_list_entry(skill: Skill) -> SkillListEntry:
     return SkillListEntry(
+        ref=skill.ref,
         name=skill.metadata.name,
         source=skill.scope.value,
         directory=_to_path_text(skill.directory),
@@ -255,6 +258,7 @@ def _to_skill_list_entry(skill: Skill) -> SkillListEntry:
 
 def _to_skill_json(skill: Skill) -> dict[str, object]:
     return {
+        "ref": skill.ref,
         "name": skill.metadata.name,
         "description": skill.metadata.description,
         "manifest_path": _to_path_text(skill.directory / "SKILL.md"),

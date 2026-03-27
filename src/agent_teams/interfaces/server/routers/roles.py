@@ -20,6 +20,7 @@ from agent_teams.roles import (
     RoleDocumentRecord,
     RoleDocumentSummary,
     RoleRegistry,
+    RoleSkillOption,
     RoleValidationResult,
 )
 from agent_teams.external_agents import ExternalAgentConfigService
@@ -60,7 +61,15 @@ def get_role_config_options(
         ),
         tools=tool_registry.list_configurable_names(),
         mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
-        skills=skill_registry.list_names(),
+        skills=tuple(
+            RoleSkillOption(
+                ref=skill.ref,
+                name=skill.name,
+                description=skill.description,
+                scope=skill.scope,
+            )
+            for skill in skill_registry.list_skill_options()
+        ),
         agents=tuple(
             RoleAgentOption(
                 agent_id=agent.agent_id,

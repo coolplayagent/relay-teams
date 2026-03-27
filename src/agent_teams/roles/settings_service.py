@@ -70,7 +70,10 @@ class RoleSettingsService:
     def get_role_document(self, role_id: str) -> RoleDocumentRecord:
         role_path, source = self._find_role_record(role_id)
         content = role_path.read_text(encoding="utf-8")
-        role = self._loader.load_from_text(content, source_name=role_path.name)
+        role = self._canonicalize_role_skills_for_record(
+            self._loader.load_from_text(content, source_name=role_path.name),
+            consumer=f"roles.settings_service.get_role_document.role:{role_id}",
+        )
         return self._record_from_definition(
             definition=role,
             file_name=role_path.name,
@@ -302,10 +305,20 @@ class RoleSettingsService:
         if strict_capability_validation:
             tools = definition.tools
             mcp_servers = definition.mcp_servers
-            skills = definition.skills
             self._get_tool_registry().validate_known(tools)
             self._get_mcp_registry().validate_known(mcp_servers)
-            self._get_skill_registry().validate_known(skills)
+            skills = self._get_skill_registry().resolve_known(
+                definition.skills,
+                strict=True,
+                consumer=consumer,
+            )
+            definition = definition.model_copy(
+                update={
+                    "tools": tools,
+                    "mcp_servers": mcp_servers,
+                    "skills": skills,
+                }
+            )
         else:
             tools = self._get_tool_registry().resolve_known(
                 definition.tools,
@@ -348,6 +361,28 @@ class RoleSettingsService:
                     f"Coordinator role must keep required tools: {missing}"
                 )
         return definition
+
+    def _canonicalize_role_skills_for_record(
+        self,
+        definition: RoleDefinition,
+        *,
+        consumer: str,
+    ) -> RoleDefinition:
+        normalized_skills: list[str] = []
+        for skill_name in definition.skills:
+            normalized_skill_name = skill_name.strip()
+            if not normalized_skill_name:
+                continue
+            resolved = self._get_skill_registry().resolve_known(
+                (normalized_skill_name,),
+                strict=False,
+                consumer=consumer,
+            )
+            if resolved:
+                normalized_skills.append(resolved[0])
+            else:
+                normalized_skills.append(normalized_skill_name)
+        return definition.model_copy(update={"skills": tuple(normalized_skills)})
 
     def _validate_reserved_role_mutation(
         self,

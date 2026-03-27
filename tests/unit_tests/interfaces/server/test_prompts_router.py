@@ -87,10 +87,17 @@ class _FakeWorkspaceManager:
 
 class _FakeSkillRegistry:
     def __init__(self) -> None:
-        self._known = {"time", "planner"}
+        self._known = {
+            "time": "builtin:time",
+            "planner": "builtin:planner",
+        }
 
     def validate_known(self, skill_names: tuple[str, ...]) -> None:
-        unknown = [name for name in skill_names if name not in self._known]
+        unknown = [
+            name
+            for name in skill_names
+            if name not in self._known and name not in self._known.values()
+        ]
         if unknown:
             raise ValueError(f"Unknown skills: {unknown}")
 
@@ -102,23 +109,35 @@ class _FakeSkillRegistry:
         consumer: str | None = None,
     ) -> tuple[str, ...]:
         _ = consumer
-        self.validate_known(skill_names)
-        return skill_names
+        resolved: list[str] = []
+        unknown: list[str] = []
+        for name in skill_names:
+            if name in self._known.values():
+                resolved.append(name)
+                continue
+            ref = self._known.get(name)
+            if ref is None:
+                unknown.append(name)
+                continue
+            resolved.append(ref)
+        if strict and unknown:
+            raise ValueError(f"Unknown skills: {unknown}")
+        return tuple(resolved)
 
     def get_instruction_entries(
         self, skill_names: tuple[str, ...]
     ) -> tuple[SkillInstructionEntry, ...]:
-        self.validate_known(skill_names)
+        resolved_names = self.resolve_known(skill_names)
         return tuple(
             SkillInstructionEntry(
-                name=name,
+                name=resolved_name.removeprefix("builtin:"),
                 description=(
                     "Normalize all times to UTC."
-                    if name == "time"
+                    if resolved_name.endswith(":time")
                     else "Break objectives into executable plans."
                 ),
             )
-            for name in skill_names
+            for resolved_name in resolved_names
         )
 
 
@@ -159,7 +178,9 @@ class _FakeSkillRuntimeService:
                 user_prompt
                 + "\n\n## Skill Candidates\n"
                 + "\n".join(
-                    f"- {name}: {descriptions[name]}" for name in visible_skills
+                    f"- {name.removeprefix('builtin:').removeprefix('app:')}: "
+                    f"{descriptions[name.removeprefix('builtin:').removeprefix('app:')]}"
+                    for name in visible_skills
                 )
             )
         return SkillPromptResult(
@@ -280,7 +301,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     payload = response.json()
     assert payload["role_id"] == "coordinator_agent"
     assert payload["tools"] == ["dispatch_task"]
-    assert payload["skills"] == ["time"]
+    assert payload["skills"] == ["builtin:time"]
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
     assert "## Runtime Rules" in payload["runtime_system_prompt"]
     assert "## Available Roles" in payload["runtime_system_prompt"]
@@ -316,7 +337,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert "## Skill Candidates" in payload["user_prompt"]
     assert "- time: Normalize all times to UTC." in payload["user_prompt"]
     assert payload["skill_routing"]["mode"] == "passthrough"
-    assert payload["skill_routing"]["visible_skills"] == ["time"]
+    assert payload["skill_routing"]["visible_skills"] == ["builtin:time"]
     assert "## Available Roles" in payload["provider_system_prompt"]
 
 
@@ -419,10 +440,10 @@ def test_prompts_preview_skill_override_replaces_role_default() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["objective"] == ""
-    assert payload["skills"] == ["planner"]
-    assert "## Available Skills" not in payload["runtime_system_prompt"]
+    assert payload["skills"] == ["builtin:planner"]
     assert payload["user_prompt"] == ""
-    assert payload["skill_routing"]["visible_skills"] == ["planner"]
+    assert payload["skill_routing"]["visible_skills"] == ["builtin:planner"]
+    assert "## Available Skills" not in payload["runtime_system_prompt"]
 
 
 def test_prompts_preview_passes_orchestration_prompt_to_skill_runtime_service() -> None:

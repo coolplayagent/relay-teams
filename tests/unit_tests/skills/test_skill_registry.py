@@ -7,6 +7,7 @@ from tempfile import mkdtemp
 from typing import cast
 
 from pydantic import JsonValue
+import pytest
 
 from agent_teams.builtin import get_builtin_skills_dir
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -71,10 +72,10 @@ def test_resolve_known_ignores_unknown_skills_when_strict_is_false(
         consumer="tests.unit_tests.skills.test_skill_registry",
     )
 
-    assert resolved == ("time",)
+    assert resolved == ("app:time",)
 
 
-def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
+def test_registry_from_skill_dirs_keeps_builtin_and_app_variants_for_same_name(
     tmp_path: Path,
 ) -> None:
     builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
@@ -104,13 +105,19 @@ def test_registry_from_skill_dirs_prefers_project_skill_over_user_skill(
         builtin_skills_dir=tmp_path / "builtin" / "skills",
     )
 
-    skill = registry.get_skill_definition("time")
-    entries = registry.get_instruction_entries(("time",))
+    app_skill = registry.get_skill_definition("app:time")
+    builtin_skill = registry.get_skill_definition("builtin:time")
+    resolved = registry.resolve_known(("time",), strict=False)
+    entries = registry.get_instruction_entries(("app:time", "builtin:time"))
 
-    assert skill is not None
-    assert skill.scope == SkillScope.APP
-    assert skill.metadata.description == "app timezone helper"
-    assert entries[0].description == "app timezone helper"
+    assert app_skill is not None
+    assert app_skill.scope == SkillScope.APP
+    assert app_skill.metadata.description == "app timezone helper"
+    assert builtin_skill is not None
+    assert builtin_skill.scope == SkillScope.BUILTIN
+    assert resolved == ("app:time",)
+    assert entries[0].name == "time (app)"
+    assert entries[1].name == "time (builtin)"
 
 
 def test_registry_from_skill_dirs_loads_user_skill_when_project_skill_missing(
@@ -136,7 +143,7 @@ def test_registry_from_skill_dirs_loads_user_skill_when_project_skill_missing(
 
     assert skill is not None
     assert skill.scope == SkillScope.BUILTIN
-    assert registry.list_names() == ("time",)
+    assert registry.list_names() == ("builtin:time",)
 
 
 def test_registry_from_config_dirs_merges_builtin_and_app_skills(
@@ -178,16 +185,20 @@ def test_registry_from_config_dirs_merges_builtin_and_app_skills(
     registry = SkillRegistry.from_config_dirs(app_config_dir=app_config_dir)
 
     skills = registry.list_skill_definitions()
-    shared_skill = registry.get_skill_definition("shared")
-    builtin_only_skill = registry.get_skill_definition("builtin_only")
+    shared_app_skill = registry.get_skill_definition("app:shared")
+    shared_builtin_skill = registry.get_skill_definition("builtin:shared")
+    builtin_only_skill = registry.get_skill_definition("builtin:builtin_only")
 
-    assert tuple(skill.metadata.name for skill in skills) == (
-        "app_only",
-        "builtin_only",
-        "shared",
+    assert tuple(skill.ref for skill in skills) == (
+        "app:app_only",
+        "builtin:builtin_only",
+        "app:shared",
+        "builtin:shared",
     )
-    assert shared_skill is not None
-    assert shared_skill.scope == SkillScope.APP
+    assert shared_app_skill is not None
+    assert shared_app_skill.scope == SkillScope.APP
+    assert shared_builtin_skill is not None
+    assert shared_builtin_skill.scope == SkillScope.BUILTIN
     assert builtin_only_skill is not None
     assert builtin_only_skill.scope == SkillScope.BUILTIN
 
@@ -214,7 +225,7 @@ def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> No
         builtin_skills_dir=get_builtin_skills_dir(),
     )
 
-    skill = registry.get_skill_definition("skill-installer")
+    skill = registry.get_skill_definition("builtin:skill-installer")
 
     assert skill is not None
     assert skill.scope == SkillScope.BUILTIN
@@ -261,6 +272,7 @@ def test_load_skill_returns_manifest_and_selected_absolute_file_paths(
 
     assert result["ok"] is True
     data = cast(dict[str, JsonValue], result["data"])
+    assert data["ref"] == "app:time"
     assert data["manifest_path"] == manifest_path.resolve().as_posix()
     assert data["manifest_content"] == manifest_content
     assert data["instructions"] == "Use UTC for all timestamps."
@@ -346,6 +358,7 @@ def test_load_skill_omits_large_dependency_trees_from_file_listing(
 
     assert result["ok"] is True
     data = cast(dict[str, JsonValue], result["data"])
+    assert data["ref"] == "app:deck"
     files = cast(list[str], data["files"])
     assert manifest_path.resolve().as_posix() in files
     assert bundled_dependency.resolve().as_posix() not in files
@@ -363,6 +376,28 @@ def _write_skill(
         f"---\nname: {name}\ndescription: {description}\n---\n{instructions}\n",
         encoding="utf-8",
     )
+
+
+def test_validate_known_rejects_ambiguous_plain_name(tmp_path: Path) -> None:
+    builtin_skill_dir = tmp_path / "builtin" / "skills" / "time"
+    app_skill_dir = tmp_path / ".agent-teams" / "skills" / "time"
+    builtin_skill_dir.mkdir(parents=True)
+    app_skill_dir.mkdir(parents=True)
+    (builtin_skill_dir / "SKILL.md").write_text(
+        "---\nname: time\ndescription: builtin timezone helper\n---\nUse builtin.\n",
+        encoding="utf-8",
+    )
+    (app_skill_dir / "SKILL.md").write_text(
+        "---\nname: time\ndescription: app timezone helper\n---\nUse app.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry.from_skill_dirs(
+        app_skills_dir=tmp_path / ".agent-teams" / "skills",
+        builtin_skills_dir=tmp_path / "builtin" / "skills",
+    )
+
+    with pytest.raises(ValueError, match="Ambiguous skills require canonical refs"):
+        registry.validate_known(("time",))
 
 
 class _FakeRunEventHub:

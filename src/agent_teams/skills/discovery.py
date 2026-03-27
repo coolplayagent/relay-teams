@@ -15,6 +15,7 @@ from agent_teams.skills.skill_models import (
     SkillResource,
     SkillScope,
     SkillScript,
+    build_skill_ref,
 )
 from agent_teams.trace import trace_span
 
@@ -123,7 +124,7 @@ class SkillsDirectory:
                             continue
                         skill = self._load_skill(path=path, scope=scope)
                         if skill is not None:
-                            self._skills[skill.metadata.name] = skill
+                            self._skills[skill.ref] = skill
                     except Exception as exc:
                         logger.warning("Failed to load skill at %s: %s", path, exc)
 
@@ -246,7 +247,12 @@ class SkillsDirectory:
                 resources=resources,
                 scripts=scripts,
             )
-            return Skill(metadata=metadata, directory=path.parent, scope=scope)
+            return Skill(
+                ref=build_skill_ref(scope=scope, name=name),
+                metadata=metadata,
+                directory=path.parent,
+                scope=scope,
+            )
 
 
 def _resolve_dir(path: Path) -> Path:

@@ -99,9 +99,12 @@ async def preview_prompts(
             consumer="interfaces.server.routers.prompts.preview",
         )
     if req.skills is not None:
-        resolved_skills = req.skills
         try:
-            skill_registry.validate_known(resolved_skills)
+            resolved_skills = skill_registry.resolve_known(
+                req.skills,
+                strict=True,
+                consumer=f"interfaces.server.prompts.preview.role:{role.role_id}",
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
