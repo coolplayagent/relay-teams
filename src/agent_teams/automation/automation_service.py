@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-import uuid
 
 from pydantic import JsonValue
 
+from agent_teams.automation.automation_bound_session_queue_service import (
+    AutomationBoundSessionQueueService,
+)
+from agent_teams.automation.automation_delivery_service import AutomationDeliveryService
 from agent_teams.automation.automation_event_repository import (
     AutomationEventRepository,
     AutomationExecutionEventRecord,
 )
 from agent_teams.automation.automation_models import (
     AutomationDeliveryEvent,
+    AutomationExecutionHandle,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
@@ -21,21 +26,18 @@ from agent_teams.automation.automation_models import (
     AutomationProjectUpdateInput,
     AutomationScheduleMode,
 )
-from agent_teams.automation.automation_delivery_service import AutomationDeliveryService
-from agent_teams.automation.feishu_binding_service import (
-    AutomationFeishuBindingService,
-)
 from agent_teams.automation.automation_repository import (
     AutomationProjectNameConflictError,
     AutomationProjectRepository,
+)
+from agent_teams.automation.feishu_binding_service import (
+    AutomationFeishuBindingService,
 )
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions import ProjectKind
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput
-from agent_teams.sessions.session_service import (
-    SessionService,
-)
+from agent_teams.sessions.session_service import SessionService
 
 
 class AutomationService:
@@ -48,6 +50,7 @@ class AutomationService:
         run_service: RunManager,
         feishu_binding_service: AutomationFeishuBindingService | None = None,
         delivery_service: AutomationDeliveryService | None = None,
+        bound_session_queue_service: AutomationBoundSessionQueueService | None = None,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
@@ -55,6 +58,7 @@ class AutomationService:
         self._run_service = run_service
         self._feishu_binding_service = feishu_binding_service
         self._delivery_service = delivery_service
+        self._bound_session_queue_service = bound_session_queue_service
 
     def create_project(
         self,
@@ -229,6 +233,10 @@ class AutomationService:
         _ = self._repository.get(automation_project_id)
         if self._delivery_service is not None:
             self._delivery_service.delete_project_deliveries(automation_project_id)
+        if self._bound_session_queue_service is not None:
+            self._bound_session_queue_service.delete_project_queue(
+                automation_project_id
+            )
         self._repository.delete(automation_project_id)
 
     def run_now(self, automation_project_id: str) -> dict[str, JsonValue]:
@@ -243,11 +251,28 @@ class AutomationService:
         self,
         automation_project_id: str,
     ) -> tuple[dict[str, object], ...]:
-        _ = self._repository.get(automation_project_id)
-        return self._session_service.list_sessions_by_project(
-            project_kind=ProjectKind.AUTOMATION,
-            project_id=automation_project_id,
+        project = self._repository.get(automation_project_id)
+        sessions = list(
+            self._session_service.list_sessions_by_project(
+                project_kind=ProjectKind.AUTOMATION,
+                project_id=automation_project_id,
+            )
         )
+        last_session_id = str(project.last_session_id or "").strip()
+        if not last_session_id:
+            return tuple(sessions)
+        if any(
+            str(item.get("session_id", "")).strip() == last_session_id
+            for item in sessions
+        ):
+            return tuple(sessions)
+        for session in self._session_service.list_sessions():
+            if session.session_id != last_session_id:
+                continue
+            sessions.append(session.model_dump(mode="json"))
+            break
+        sessions.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
+        return tuple(sessions)
 
     def process_due_projects(self, now: datetime | None = None) -> tuple[str, ...]:
         effective_now = now or datetime.now(tz=UTC)
@@ -265,20 +290,48 @@ class AutomationService:
         now: datetime | None = None,
     ) -> str:
         effective_now = now or datetime.now(tz=UTC)
-        event_record = self._record_execution_event(project, reason=reason)
-        title = (
-            f"{project.display_name} · "
-            f"{effective_now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')}"
-        )
+        execution_event = self._record_execution_event(project, reason=reason)
         next_status = project.status
         next_run_at = project.next_run_at
         try:
+            bound_session_handle = self._materialize_bound_session_execution(
+                project=project,
+                reason=reason,
+            )
+            if bound_session_handle is not None:
+                next_run_at = _next_run_at_after_fire(
+                    project=project, fired_at=effective_now
+                )
+                if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+                    next_status = AutomationProjectStatus.DISABLED
+                self._repository.update(
+                    project.model_copy(
+                        update={
+                            "status": next_status,
+                            "last_session_id": bound_session_handle.session_id,
+                            "last_run_started_at": (
+                                effective_now
+                                if bound_session_handle.run_id is not None
+                                else project.last_run_started_at
+                            ),
+                            "last_error": None,
+                            "next_run_at": next_run_at,
+                            "updated_at": effective_now,
+                        }
+                    )
+                )
+                return bound_session_handle.session_id
+
+            title = (
+                f"{project.display_name} run "
+                f"{effective_now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')}"
+            )
             session = self._session_service.create_session(
                 workspace_id=project.workspace_id,
                 metadata={
                     "title": title,
                     "automation_project_id": project.automation_project_id,
-                    "automation_trigger_event_id": event_record.event_id,
+                    "automation_trigger_event_id": execution_event.event_id,
                     "automation_reason": reason,
                 },
                 project_kind=ProjectKind.AUTOMATION,
@@ -309,17 +362,18 @@ class AutomationService:
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
-            updated = project.model_copy(
-                update={
-                    "status": next_status,
-                    "last_session_id": session.session_id,
-                    "last_run_started_at": effective_now,
-                    "last_error": None,
-                    "next_run_at": next_run_at,
-                    "updated_at": effective_now,
-                }
+            self._repository.update(
+                project.model_copy(
+                    update={
+                        "status": next_status,
+                        "last_session_id": session.session_id,
+                        "last_run_started_at": effective_now,
+                        "last_error": None,
+                        "next_run_at": next_run_at,
+                        "updated_at": effective_now,
+                    }
+                )
             )
-            self._repository.update(updated)
             return session.session_id
         except Exception as exc:
             next_run_at = _next_run_at_after_fire(
@@ -327,15 +381,16 @@ class AutomationService:
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
-            updated = project.model_copy(
-                update={
-                    "status": next_status,
-                    "last_error": str(exc),
-                    "next_run_at": next_run_at,
-                    "updated_at": effective_now,
-                }
+            self._repository.update(
+                project.model_copy(
+                    update={
+                        "status": next_status,
+                        "last_error": str(exc),
+                        "next_run_at": next_run_at,
+                        "updated_at": effective_now,
+                    }
+                )
             )
-            self._repository.update(updated)
             raise
 
     def _resolve_delivery_binding(
@@ -368,6 +423,19 @@ class AutomationService:
             AutomationDeliveryEvent.STARTED,
             AutomationDeliveryEvent.COMPLETED,
             AutomationDeliveryEvent.FAILED,
+        )
+
+    def _materialize_bound_session_execution(
+        self,
+        *,
+        project: AutomationProjectRecord,
+        reason: str,
+    ) -> AutomationExecutionHandle | None:
+        if self._bound_session_queue_service is None:
+            return None
+        return self._bound_session_queue_service.materialize_execution(
+            project=project,
+            reason=reason,
         )
 
     def _record_execution_event(

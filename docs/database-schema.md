@@ -625,7 +625,7 @@ Notes:
 - `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
 - `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
-- `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly.
+- `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly and the automation direct-send override used by IM-bound scheduled runs.
 
 ---
 
@@ -749,7 +749,7 @@ Notes:
 - `delivery_binding_json` stores the selected Feishu chat target copied from an existing `external_session_bindings` row.
 - `delivery_events_json` stores which Feishu notifications are enabled for that automation project.
 - `trigger_id` is a legacy compatibility field and now stores `schedule-{automation_project_id}`.
-- `last_session_id` points at the most recent generated session instance.
+- `last_session_id` points at the most recent session used by that automation project, including a reused bound IM session.
 - `next_run_at` is the scheduler cursor used to find due projects.
 
 ### 2.1.3 `automation_deliveries`
@@ -788,7 +788,53 @@ CREATE INDEX IF NOT EXISTS idx_automation_deliveries_terminal
 
 Purpose: persists Feishu delivery state for automation runs so started/completed/failed messages can be retried and resumed after process restart.
 
-### 2.1.4 `sessions` additions
+### 2.1.4 `automation_bound_session_queue`
+
+```sql
+CREATE TABLE IF NOT EXISTS automation_bound_session_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    automation_queue_id TEXT NOT NULL UNIQUE,
+    automation_project_id TEXT NOT NULL,
+    automation_project_name TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    binding_json TEXT NOT NULL,
+    delivery_events_json TEXT NOT NULL,
+    run_config_json TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    queue_message TEXT NOT NULL,
+    run_id TEXT UNIQUE,
+    status TEXT NOT NULL,
+    start_attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_bound_session_queue_session
+    ON automation_bound_session_queue(session_id, id ASC);
+CREATE INDEX IF NOT EXISTS idx_automation_bound_session_queue_status
+    ON automation_bound_session_queue(status, next_attempt_at, id ASC);
+CREATE INDEX IF NOT EXISTS idx_automation_bound_session_queue_project
+    ON automation_bound_session_queue(automation_project_id, created_at DESC);
+```
+
+Purpose: persists scheduled/manual automation runs that are bound to an existing IM
+session so they can queue behind that session's current run, survive restarts, and
+resume result delivery after they finally start.
+
+Notes:
+- rows are created only for automation runs that reuse a bound IM session and cannot
+  start immediately
+- `prompt` stores the queued prompt after the `定时任务触发：{display_name}` prefix is added
+- `queue_message` stores the already-rendered receipt sent to the bound chat when the
+  run is queued
+- `run_id` is populated only after the queued item has successfully started
+- `status` flows through `queued`, `starting`, `waiting_result`, then a terminal state
+
+### 2.1.5 `sessions` additions
 
 The `sessions` table now also stores:
 - `project_kind TEXT NOT NULL DEFAULT 'workspace'`

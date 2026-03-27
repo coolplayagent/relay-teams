@@ -86,9 +86,21 @@ class TaskExecutionServiceLike(Protocol):
 
 
 class ImToolServiceLike(Protocol):
-    def send_text(self, *, session_id: str, text: str) -> str: ...
+    def send_text(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        run_id: str | None = None,
+    ) -> str: ...
 
-    def send_file(self, *, session_id: str, file_path: Path) -> str: ...
+    def send_file(
+        self,
+        *,
+        session_id: str,
+        file_path: Path,
+        run_id: str | None = None,
+    ) -> str: ...
 
 
 class ToolDeps(BaseModel):

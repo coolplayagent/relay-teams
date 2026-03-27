@@ -1453,7 +1453,20 @@ Deletes the automation project and its backing trigger. Historical sessions are 
 
 ### `POST /automation/projects/{automation_project_id}:run`
 
-Creates a new session for that automation project and starts the run immediately.
+Starts an automation run immediately.
+If the project has a Feishu delivery binding and that binding already resolves to an
+existing IM session, the backend reuses that bound session instead of creating a new
+automation-only session.
+
+Bound-session behavior:
+- when the bound session is idle, the backend sends `定时任务 {display_name} 开始执行`
+  to the bound chat and starts a detached run in that same session
+- when the bound session already has an active recoverable run, the backend sends
+  `定时任务 {display_name} 准备执行，当前任务前面有 n 个消息` and appends the automation
+  run to the durable bound-session queue
+- queued automation runs prepend `定时任务触发：{display_name}` to the run prompt before
+  the original project prompt
+
 Response fields:
 - `automation_project_id`
 - `session_id`
@@ -1468,7 +1481,12 @@ Disables scheduling and clears `next_run_at`.
 
 ### `GET /automation/projects/{automation_project_id}/sessions`
 
-Returns sessions generated for one automation project.
+Returns sessions associated with one automation project.
+
+Notes:
+- this includes automation-generated sessions created specifically for that project
+- when an automation project reuses an existing bound IM session, `last_session_id`
+  may reference that reused session even if its `project_kind` is not `automation`
 
 ## Session Projection Additions
 

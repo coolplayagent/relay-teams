@@ -14,6 +14,7 @@ from agent_teams.gateway.im.context import (
     _SessionLookup,
     resolve_im_chat_context,
 )
+from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.gateway.wechat.models import WeChatAccountRecord
 
 
@@ -73,6 +74,10 @@ class _WeChatSender(Protocol):
     ) -> str: ...
 
 
+class _RunIntentLookup(Protocol):
+    def get(self, run_id: str) -> IntentInput: ...
+
+
 class ImToolService:
     def __init__(
         self,
@@ -80,6 +85,7 @@ class ImToolService:
         config_dir: Path,
         session_repo: _SessionLookup,
         runtime_config_lookup: _RuntimeConfigLookup,
+        run_intent_lookup: _RunIntentLookup | None = None,
         automation_project_repo: _AutomationProjectLookup | None = None,
         gateway_session_lookup: _GatewaySessionLookup | None = None,
         feishu_client: _FeishuSender,
@@ -90,6 +96,7 @@ class ImToolService:
         self._config_dir = config_dir
         self._session_repo = session_repo
         self._runtime_config_lookup = runtime_config_lookup
+        self._run_intent_lookup = run_intent_lookup
         self._automation_project_repo = automation_project_repo
         self._gateway_session_lookup = gateway_session_lookup
         self._feishu_client = feishu_client
@@ -97,15 +104,27 @@ class ImToolService:
         self._wechat_secret_store = wechat_secret_store
         self._wechat_client = wechat_client
 
-    def send_text(self, *, session_id: str, text: str) -> str:
-        ctx = self._resolve_context(session_id)
+    def send_text(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        run_id: str | None = None,
+    ) -> str:
+        ctx = self._resolve_context(session_id, run_id=run_id)
         if ctx is None:
             return "Session is not linked to an IM chat."
         self.send_text_to_context(ctx=ctx, text=text)
         return "Message sent."
 
-    def send_file(self, *, session_id: str, file_path: Path) -> str:
-        ctx = self._resolve_context(session_id)
+    def send_file(
+        self,
+        *,
+        session_id: str,
+        file_path: Path,
+        run_id: str | None = None,
+    ) -> str:
+        ctx = self._resolve_context(session_id, run_id=run_id)
         if ctx is None:
             return "Session is not linked to an IM chat."
         if not file_path.is_file():
@@ -183,14 +202,31 @@ class ImToolService:
     def _resolve_context(
         self,
         session_id: str,
+        *,
+        run_id: str | None = None,
     ) -> FeishuChatContext | WeChatChatContext | None:
+        prefer_direct_send = self._should_force_direct_send(run_id)
         return resolve_im_chat_context(
             session_repo=self._session_repo,
             runtime_config_lookup=self._runtime_config_lookup,
             automation_project_repo=self._automation_project_repo,
             gateway_session_lookup=self._gateway_session_lookup,
             session_id=session_id,
+            prefer_direct_send=prefer_direct_send,
         )
+
+    def _should_force_direct_send(self, run_id: str | None) -> bool:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id or self._run_intent_lookup is None:
+            return False
+        try:
+            intent = self._run_intent_lookup.get(normalized_run_id)
+        except KeyError:
+            return False
+        context = intent.conversation_context
+        if context is None:
+            return False
+        return context.im_force_direct_send
 
     def _send_wechat_text(
         self,

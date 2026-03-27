@@ -7,6 +7,9 @@ from pathlib import Path
 
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from agent_teams.automation import (
+    AutomationBoundSessionQueueRepository,
+    AutomationBoundSessionQueueService,
+    AutomationBoundSessionQueueWorker,
     AutomationDeliveryRepository,
     AutomationEventRepository,
     AutomationDeliveryService,
@@ -332,6 +335,9 @@ class ServerContainer:
         self.automation_delivery_repo: AutomationDeliveryRepository = (
             AutomationDeliveryRepository(runtime.paths.db_path)
         )
+        self.automation_bound_session_queue_repo: AutomationBoundSessionQueueRepository = AutomationBoundSessionQueueRepository(
+            runtime.paths.db_path
+        )
         self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
             runtime.paths.db_path
         )
@@ -376,6 +382,7 @@ class ServerContainer:
             config_dir=config_dir,
             session_repo=self.session_repo,
             runtime_config_lookup=self.feishu_gateway_service,
+            run_intent_lookup=self.run_intent_repo,
             automation_project_repo=self.automation_repo,
             gateway_session_lookup=self.gateway_session_repository,
             feishu_client=self.feishu_client,
@@ -594,6 +601,22 @@ class ServerContainer:
         self.automation_delivery_worker = AutomationDeliveryWorker(
             delivery_service=self.automation_delivery_service
         )
+        self.automation_bound_session_queue_service = (
+            AutomationBoundSessionQueueService(
+                repository=self.automation_bound_session_queue_repo,
+                external_session_binding_repo=self.external_session_binding_repo,
+                session_lookup=self.session_service,
+                run_service=self.run_service,
+                run_runtime_repo=self.run_runtime_repo,
+                delivery_service=self.automation_delivery_service,
+                runtime_config_lookup=self.feishu_gateway_service,
+                feishu_client=self.feishu_client,
+                project_repository=self.automation_repo,
+            )
+        )
+        self.automation_bound_session_queue_worker = AutomationBoundSessionQueueWorker(
+            queue_service=self.automation_bound_session_queue_service
+        )
         self.feishu_trigger_handler = FeishuTriggerHandler(
             runtime_config_lookup=self.feishu_gateway_service,
             message_pool_service=self.feishu_message_pool_service,
@@ -611,6 +634,7 @@ class ServerContainer:
             run_service=self.run_service,
             feishu_binding_service=self.automation_feishu_binding_service,
             delivery_service=self.automation_delivery_service,
+            bound_session_queue_service=self.automation_bound_session_queue_service,
         )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)
@@ -774,11 +798,13 @@ class ServerContainer:
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
         self.automation_delivery_worker.start()
+        self.automation_bound_session_queue_worker.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
+        self.automation_bound_session_queue_worker.stop()
         self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()

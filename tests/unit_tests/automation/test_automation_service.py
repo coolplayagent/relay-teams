@@ -8,6 +8,8 @@ from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.automation import (
+    AutomationBoundSessionQueueService,
+    AutomationExecutionHandle,
     AutomationEventRepository,
     AutomationProjectCreateInput,
     AutomationProjectRepository,
@@ -37,6 +39,26 @@ class _FakeRunManager:
         self.started_run_ids.append(run_id)
 
 
+class _FakeBoundSessionQueueService:
+    def __init__(self, handle: AutomationExecutionHandle | None = None) -> None:
+        self._handle = handle
+        self.materialize_calls: list[tuple[str, str]] = []
+        self.deleted_project_ids: list[str] = []
+
+    def materialize_execution(
+        self,
+        *,
+        project: object,
+        reason: str,
+    ) -> AutomationExecutionHandle | None:
+        automation_project_id = getattr(project, "automation_project_id")
+        self.materialize_calls.append((cast(str, automation_project_id), reason))
+        return self._handle
+
+    def delete_project_queue(self, automation_project_id: str) -> None:
+        self.deleted_project_ids.append(automation_project_id)
+
+
 def _build_session_service(db_path: Path) -> SessionService:
     return SessionService(
         session_repo=SessionRepository(db_path),
@@ -49,20 +71,29 @@ def _build_session_service(db_path: Path) -> SessionService:
     )
 
 
-def _build_service(tmp_path: Path) -> tuple[AutomationService, _FakeRunManager]:
+def _build_service(
+    tmp_path: Path,
+    *,
+    bound_session_queue_service: _FakeBoundSessionQueueService | None = None,
+) -> tuple[AutomationService, _FakeRunManager, SessionService]:
     db_path = tmp_path / "automation.db"
     run_manager = _FakeRunManager()
+    session_service = _build_session_service(db_path)
     service = AutomationService(
         repository=AutomationProjectRepository(db_path),
         event_repository=AutomationEventRepository(db_path),
-        session_service=_build_session_service(db_path),
+        session_service=session_service,
         run_service=cast(RunManager, run_manager),
+        bound_session_queue_service=cast(
+            AutomationBoundSessionQueueService | None,
+            bound_session_queue_service,
+        ),
     )
-    return service, run_manager
+    return service, run_manager, session_service
 
 
 def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
-    service, _ = _build_service(tmp_path)
+    service, _, _ = _build_service(tmp_path)
 
     created = service.create_project(
         AutomationProjectCreateInput(
@@ -81,7 +112,7 @@ def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
 
 
 def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> None:
-    service, run_manager = _build_service(tmp_path)
+    service, run_manager, _ = _build_service(tmp_path)
     created = service.create_project(
         AutomationProjectCreateInput(
             name="nightly-report",
@@ -112,7 +143,7 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
 def test_process_due_projects_runs_one_shot_once_and_disables_it(
     tmp_path: Path,
 ) -> None:
-    service, run_manager = _build_service(tmp_path)
+    service, run_manager, _ = _build_service(tmp_path)
     run_at = datetime.now(tz=UTC) + timedelta(minutes=5)
     created = service.create_project(
         AutomationProjectCreateInput(
@@ -140,7 +171,7 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
 
 
 def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> None:
-    service, run_manager = _build_service(tmp_path)
+    service, run_manager, _ = _build_service(tmp_path)
     created = service.create_project(
         AutomationProjectCreateInput(
             name="disabled-report",
@@ -163,3 +194,49 @@ def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> No
     assert enabled.next_run_at is not None
     assert result["automation_project_id"] == created.automation_project_id
     assert run_manager.started_run_ids == ["run-1"]
+
+
+def test_run_now_reuses_bound_session_without_creating_new_session(
+    tmp_path: Path,
+) -> None:
+    bound_queue_service = _FakeBoundSessionQueueService(
+        AutomationExecutionHandle(
+            session_id="bound-session-1",
+            run_id="bound-run-1",
+            queued=False,
+        )
+    )
+    service, run_manager, session_service = _build_service(
+        tmp_path,
+        bound_session_queue_service=bound_queue_service,
+    )
+    _ = session_service.create_session(
+        session_id="bound-session-1",
+        workspace_id="default",
+        metadata={"title": "Bound IM Session"},
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="nightly-report",
+            workspace_id="default",
+            prompt="Draft a nightly report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+        )
+    )
+
+    result = service.run_now(created.automation_project_id)
+    sessions = service.list_project_sessions(created.automation_project_id)
+
+    assert result == {
+        "automation_project_id": created.automation_project_id,
+        "session_id": "bound-session-1",
+    }
+    assert bound_queue_service.materialize_calls == [
+        (created.automation_project_id, "manual")
+    ]
+    assert run_manager.create_calls == []
+    assert len(sessions) == 1
+    session_payload = cast(dict[str, object], sessions[0])
+    assert session_payload["session_id"] == "bound-session-1"

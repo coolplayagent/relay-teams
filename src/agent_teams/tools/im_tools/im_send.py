@@ -31,6 +31,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 result = service.send_text(
                     session_id=ctx.deps.session_id,
                     text=text,
+                    run_id=ctx.deps.run_id,
                 )
                 results.append(result)
             if file_path is not None:
@@ -41,6 +42,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 result = service.send_file(
                     session_id=ctx.deps.session_id,
                     file_path=resolved_path,
+                    run_id=ctx.deps.run_id,
                 )
                 results.append(result)
             return {"status": "ok", "details": results}

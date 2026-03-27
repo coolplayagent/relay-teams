@@ -267,11 +267,30 @@ class RunManager:
         if self._should_delegate_to_bound_loop():
             delegated_intent = intent.model_copy(deep=True)
             return self._call_in_bound_loop(
-                lambda: self._create_run_local(delegated_intent)
+                lambda: self._create_run_local(
+                    delegated_intent,
+                    allow_active_run_attach=True,
+                )
             )
-        return self._create_run_local(intent)
+        return self._create_run_local(intent, allow_active_run_attach=True)
 
-    def _create_run_local(self, intent: IntentInput) -> tuple[str, str]:
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
+        if self._should_delegate_to_bound_loop():
+            delegated_intent = intent.model_copy(deep=True)
+            return self._call_in_bound_loop(
+                lambda: self._create_run_local(
+                    delegated_intent,
+                    allow_active_run_attach=False,
+                )
+            )
+        return self._create_run_local(intent, allow_active_run_attach=False)
+
+    def _create_run_local(
+        self,
+        intent: IntentInput,
+        *,
+        allow_active_run_attach: bool,
+    ) -> tuple[str, str]:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
         intent = self._prepare_intent(intent)
@@ -281,6 +300,10 @@ class RunManager:
         existing = self._active_recoverable_run(session_id)
         if existing is not None:
             active_run_id, runtime = existing
+            if not allow_active_run_attach:
+                raise RuntimeError(
+                    f"Session {session_id} already has active run {active_run_id}"
+                )
             if not self._run_accepts_followups(active_run_id, next_intent=intent):
                 raise RuntimeError(
                     f"Run {active_run_id} is active and does not accept follow-up input"

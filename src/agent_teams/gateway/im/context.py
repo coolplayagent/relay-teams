@@ -79,6 +79,7 @@ def resolve_feishu_chat_context(
     runtime_config_lookup: _RuntimeConfigLookup,
     automation_project_repo: _AutomationProjectLookup | None = None,
     session_id: str,
+    prefer_direct_send: bool = False,
 ) -> FeishuChatContext | None:
     try:
         session = session_repo.get(session_id)
@@ -88,6 +89,7 @@ def resolve_feishu_chat_context(
         session=session,
         runtime_config_lookup=runtime_config_lookup,
         automation_project_repo=automation_project_repo,
+        prefer_direct_send=prefer_direct_send,
     )
 
 
@@ -98,12 +100,14 @@ def resolve_im_chat_context(
     automation_project_repo: _AutomationProjectLookup | None = None,
     gateway_session_lookup: _GatewaySessionLookup | None = None,
     session_id: str,
+    prefer_direct_send: bool = False,
 ) -> FeishuChatContext | WeChatChatContext | None:
     feishu_context = resolve_feishu_chat_context(
         session_repo=session_repo,
         runtime_config_lookup=runtime_config_lookup,
         automation_project_repo=automation_project_repo,
         session_id=session_id,
+        prefer_direct_send=prefer_direct_send,
     )
     if feishu_context is not None:
         return feishu_context
@@ -187,6 +191,7 @@ def _resolve_from_session(
     session: SessionRecord,
     runtime_config_lookup: _RuntimeConfigLookup,
     automation_project_repo: _AutomationProjectLookup | None,
+    prefer_direct_send: bool,
 ) -> FeishuChatContext | None:
     metadata = session.metadata
     if str(metadata.get(FEISHU_METADATA_PLATFORM_KEY, "")).strip() != FEISHU_PLATFORM:
@@ -194,6 +199,7 @@ def _resolve_from_session(
             session=session,
             runtime_config_lookup=runtime_config_lookup,
             automation_project_repo=automation_project_repo,
+            prefer_direct_send=prefer_direct_send,
         )
     trigger_id = str(metadata.get(FEISHU_METADATA_TRIGGER_ID_KEY, "")).strip()
     if not trigger_id:
@@ -211,7 +217,11 @@ def _resolve_from_session(
         environment=runtime_config.environment,
         chat_type=chat_type,
         reply_to_message_id=message_id,
-        prefer_reply=message_id is not None,
+        prefer_reply=(
+            not prefer_direct_send
+            and chat_type.lower() == "group"
+            and message_id is not None
+        ),
     )
 
 
@@ -220,6 +230,7 @@ def _resolve_automation_binding_context(
     session: SessionRecord,
     runtime_config_lookup: _RuntimeConfigLookup,
     automation_project_repo: _AutomationProjectLookup | None,
+    prefer_direct_send: bool,
 ) -> FeishuChatContext | None:
     if (
         session.project_kind != ProjectKind.AUTOMATION
@@ -245,4 +256,5 @@ def _resolve_automation_binding_context(
         chat_id=binding.chat_id,
         environment=runtime_config.environment,
         chat_type=binding.chat_type,
+        prefer_reply=False,
     )

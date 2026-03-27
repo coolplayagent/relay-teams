@@ -36,6 +36,14 @@ class AutomationDeliveryStatus(str, Enum):
     FAILED = "failed"
 
 
+class AutomationBoundSessionQueueStatus(str, Enum):
+    QUEUED = "queued"
+    STARTING = "starting"
+    WAITING_RESULT = "waiting_result"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class AutomationRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -172,9 +180,45 @@ class AutomationRunDeliveryRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
+class AutomationBoundSessionQueueRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    automation_queue_id: str = Field(min_length=1)
+    automation_project_id: str = Field(min_length=1)
+    automation_project_name: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    binding: AutomationFeishuBinding
+    delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
+    run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
+    prompt: str = Field(min_length=1)
+    queue_message: str = Field(min_length=1)
+    run_id: str | None = None
+    status: AutomationBoundSessionQueueStatus = AutomationBoundSessionQueueStatus.QUEUED
+    start_attempts: int = Field(default=0, ge=0)
+    next_attempt_at: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc)
+    )
+    last_error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    completed_at: datetime | None = None
+
+
+class AutomationExecutionHandle(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_id: str = Field(min_length=1)
+    run_id: str | None = None
+    queued: bool = False
+
+
 __all__ = [
+    "AutomationBoundSessionQueueRecord",
+    "AutomationBoundSessionQueueStatus",
     "AutomationDeliveryEvent",
     "AutomationDeliveryStatus",
+    "AutomationExecutionHandle",
     "AutomationFeishuBinding",
     "AutomationFeishuBindingCandidate",
     "AutomationProjectCreateInput",

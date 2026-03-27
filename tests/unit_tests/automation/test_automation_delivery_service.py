@@ -35,7 +35,7 @@ class _FakeRuntimeConfigLookup:
                 app_name="Agent Teams Bot",
             )
 
-    def get_runtime_config_by_trigger_id(self, trigger_id: str):
+    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> _RuntimeConfig:
         return self._RuntimeConfig(trigger_id)
 
 
@@ -114,10 +114,7 @@ def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
 
     assert record is not None
     assert len(feishu_client.sent_messages) == 1
-    assert (
-        feishu_client.sent_messages[0]["text"]
-        == "Daily Briefing 定时任务开始执行（手动触发）。"
-    )
+    assert feishu_client.sent_messages[0]["text"] == "定时任务 Daily Briefing 开始执行"
     persisted = repository.get_by_run_id("run-1")
     assert persisted.started_status.value == "sent"
     assert persisted.terminal_status.value == "pending"
@@ -182,7 +179,7 @@ def test_process_pending_sends_completed_message_when_run_finishes(
     assert len(feishu_client.sent_messages) == 2
     assert (
         feishu_client.sent_messages[1]["text"]
-        == "Daily Briefing 定时任务执行完成。\n\nDaily report is ready."
+        == "定时任务 Daily Briefing 执行完成。\n\nDaily report is ready."
     )
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status.value == "sent"

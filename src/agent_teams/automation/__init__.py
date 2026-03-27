@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from agent_teams.automation.automation_models import (
+    AutomationBoundSessionQueueRecord,
+    AutomationBoundSessionQueueStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
+    AutomationExecutionHandle,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
@@ -12,6 +15,13 @@ from agent_teams.automation.automation_models import (
     AutomationRunDeliveryRecord,
     AutomationRunConfig,
     AutomationScheduleMode,
+)
+from agent_teams.automation.automation_bound_session_queue_repository import (
+    AutomationBoundSessionQueueRepository,
+)
+from agent_teams.automation.automation_bound_session_queue_service import (
+    AutomationBoundSessionQueueService,
+    AutomationBoundSessionQueueWorker,
 )
 from agent_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
@@ -37,12 +47,18 @@ from agent_teams.automation.automation_service import (
 from agent_teams.automation.scheduler_service import AutomationSchedulerService
 
 __all__ = [
+    "AutomationBoundSessionQueueRecord",
+    "AutomationBoundSessionQueueRepository",
+    "AutomationBoundSessionQueueService",
+    "AutomationBoundSessionQueueStatus",
+    "AutomationBoundSessionQueueWorker",
     "AutomationDeliveryEvent",
     "AutomationDeliveryRepository",
     "AutomationEventRepository",
     "AutomationDeliveryService",
     "AutomationDeliveryStatus",
     "AutomationDeliveryWorker",
+    "AutomationExecutionHandle",
     "AutomationFeishuBinding",
     "AutomationFeishuBindingCandidate",
     "AutomationFeishuBindingService",

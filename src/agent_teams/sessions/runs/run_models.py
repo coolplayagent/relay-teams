@@ -50,6 +50,7 @@ class RuntimePromptConversationContext(BaseModel):
     source_provider: str | None = None
     source_kind: str | None = None
     feishu_chat_type: str | None = None
+    im_force_direct_send: bool = False
 
 
 class ImageGenerationConfig(BaseModel):

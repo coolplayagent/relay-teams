@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from typing import Protocol
 from uuid import uuid4
@@ -14,6 +14,7 @@ from agent_teams.automation.automation_delivery_repository import (
 from agent_teams.automation.automation_models import (
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
+    AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationRunDeliveryRecord,
 )
@@ -35,7 +36,7 @@ _CLAIM_STALE_AFTER_SECONDS = 60
 class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
         self, trigger_id: str
-    ) -> "FeishuRuntimeConfigLike | None": ...
+    ) -> FeishuRuntimeConfigLike | None: ...
 
 
 class FeishuRuntimeConfigLike(Protocol):
@@ -72,34 +73,54 @@ class AutomationDeliveryService:
     def register_run(
         self,
         *,
-        project: AutomationProjectRecord,
+        project: AutomationProjectRecord | None,
         session_id: str,
         run_id: str,
         reason: str,
+        project_id: str | None = None,
+        project_name: str | None = None,
+        binding: AutomationFeishuBinding | None = None,
+        delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None,
+        send_started: bool = True,
     ) -> AutomationRunDeliveryRecord | None:
-        binding = project.delivery_binding
-        if binding is None:
+        resolved_binding = (
+            binding
+            if binding is not None
+            else (project.delivery_binding if project is not None else None)
+        )
+        if resolved_binding is None:
             return None
-        delivery_events = project.delivery_events
+        resolved_project_id = str(project_id or "").strip() or (
+            project.automation_project_id if project is not None else ""
+        )
+        resolved_project_name = str(project_name or "").strip() or (
+            project.display_name if project is not None else ""
+        )
+        resolved_events = (
+            delivery_events
+            if delivery_events is not None
+            else (project.delivery_events if project is not None else ())
+        )
         record = self._repository.create(
             AutomationRunDeliveryRecord(
                 automation_delivery_id=f"autd_{uuid4().hex[:12]}",
-                automation_project_id=project.automation_project_id,
-                automation_project_name=project.display_name,
+                automation_project_id=resolved_project_id,
+                automation_project_name=resolved_project_name,
                 run_id=run_id,
                 session_id=session_id,
                 reason=reason,
-                binding=binding,
-                delivery_events=delivery_events,
+                binding=resolved_binding,
+                delivery_events=resolved_events,
                 started_status=(
                     AutomationDeliveryStatus.PENDING
-                    if AutomationDeliveryEvent.STARTED in delivery_events
+                    if send_started
+                    and AutomationDeliveryEvent.STARTED in resolved_events
                     else AutomationDeliveryStatus.SKIPPED
                 ),
                 terminal_status=(
                     AutomationDeliveryStatus.PENDING
                     if any(
-                        event in delivery_events
+                        event in resolved_events
                         for event in (
                             AutomationDeliveryEvent.COMPLETED,
                             AutomationDeliveryEvent.FAILED,
@@ -108,9 +129,7 @@ class AutomationDeliveryService:
                     else AutomationDeliveryStatus.SKIPPED
                 ),
                 started_message=_build_started_message(
-                    project_name=project.display_name,
-                    reason=reason,
-                    run_id=run_id,
+                    project_name=resolved_project_name
                 ),
             )
         )
@@ -150,13 +169,12 @@ class AutomationDeliveryService:
         )
         if claimed is None:
             return False
-        record = claimed
-        attempts = record.started_attempts + 1
+        attempts = claimed.started_attempts + 1
         try:
             self._send_text(
-                trigger_id=record.binding.trigger_id,
-                chat_id=record.binding.chat_id,
-                text=str(record.started_message or "").strip(),
+                trigger_id=claimed.binding.trigger_id,
+                chat_id=claimed.binding.chat_id,
+                text=str(claimed.started_message or "").strip(),
             )
         except RuntimeError as exc:
             now = _utc_now()
@@ -165,8 +183,8 @@ class AutomationDeliveryService:
                 if attempts >= _STARTED_MAX_ATTEMPTS
                 else AutomationDeliveryStatus.PENDING
             )
-            self._repository.update(
-                record.model_copy(
+            _ = self._repository.update(
+                claimed.model_copy(
                     update={
                         "started_attempts": attempts,
                         "started_status": next_status,
@@ -177,8 +195,8 @@ class AutomationDeliveryService:
             )
             return True
         now = _utc_now()
-        self._repository.update(
-            record.model_copy(
+        _ = self._repository.update(
+            claimed.model_copy(
                 update={
                     "started_attempts": attempts,
                     "started_status": AutomationDeliveryStatus.SENT,
@@ -209,43 +227,36 @@ class AutomationDeliveryService:
         )
         if claimed is None:
             return False
-        record = claimed
         terminal_event = (
             AutomationDeliveryEvent.COMPLETED
             if runtime.status == RunRuntimeStatus.COMPLETED
             else AutomationDeliveryEvent.FAILED
         )
-        if terminal_event not in record.delivery_events:
+        terminal_message = _build_terminal_message(
+            project_name=claimed.automation_project_name,
+            run_id=claimed.run_id,
+            runtime_status=runtime.status,
+            event_log=self._event_log,
+            fallback_error=runtime.last_error,
+        )
+        if terminal_event not in claimed.delivery_events:
             now = _utc_now()
-            self._repository.update(
-                record.model_copy(
+            _ = self._repository.update(
+                claimed.model_copy(
                     update={
                         "terminal_event": terminal_event,
                         "terminal_status": AutomationDeliveryStatus.SKIPPED,
-                        "terminal_message": _build_terminal_message(
-                            project_name=record.automation_project_name,
-                            run_id=record.run_id,
-                            runtime_status=runtime.status,
-                            event_log=self._event_log,
-                            fallback_error=runtime.last_error,
-                        ),
+                        "terminal_message": terminal_message,
                         "updated_at": now,
                     }
                 )
             )
             return True
-        terminal_message = _build_terminal_message(
-            project_name=record.automation_project_name,
-            run_id=record.run_id,
-            runtime_status=runtime.status,
-            event_log=self._event_log,
-            fallback_error=runtime.last_error,
-        )
-        attempts = record.terminal_attempts + 1
+        attempts = claimed.terminal_attempts + 1
         try:
             self._send_text(
-                trigger_id=record.binding.trigger_id,
-                chat_id=record.binding.chat_id,
+                trigger_id=claimed.binding.trigger_id,
+                chat_id=claimed.binding.chat_id,
                 text=terminal_message,
             )
         except RuntimeError as exc:
@@ -255,8 +266,8 @@ class AutomationDeliveryService:
                 if attempts >= _TERMINAL_MAX_ATTEMPTS
                 else AutomationDeliveryStatus.PENDING
             )
-            self._repository.update(
-                record.model_copy(
+            _ = self._repository.update(
+                claimed.model_copy(
                     update={
                         "terminal_event": terminal_event,
                         "terminal_message": terminal_message,
@@ -269,8 +280,8 @@ class AutomationDeliveryService:
             )
             return True
         now = _utc_now()
-        self._repository.update(
-            record.model_copy(
+        _ = self._repository.update(
+            claimed.model_copy(
                 update={
                     "terminal_event": terminal_event,
                     "terminal_message": terminal_message,
@@ -353,23 +364,12 @@ class AutomationDeliveryWorker:
             self._wake_event.clear()
 
 
-def _utc_now():
-    from datetime import datetime, timezone
-
-    return datetime.now(tz=timezone.utc)
+def _utc_now() -> datetime:
+    return datetime.now(tz=UTC)
 
 
-def _build_started_message(
-    *,
-    project_name: str,
-    reason: str,
-    run_id: str,
-) -> str:
-    _ = run_id
-    reason_label = _describe_reason(reason)
-    if reason_label is None:
-        return f"{project_name} 定时任务开始执行。"
-    return f"{project_name} 定时任务开始执行（{reason_label}）。"
+def _build_started_message(*, project_name: str) -> str:
+    return f"定时任务 {project_name} 开始执行"
 
 
 def _build_terminal_message(
@@ -397,20 +397,10 @@ def _build_terminal_message(
         break
     if runtime_status == RunRuntimeStatus.COMPLETED:
         if output:
-            return f"{project_name} 定时任务执行完成。\n\n{output}"
-        return f"{project_name} 定时任务执行完成。"
-    _ = run_id
+            return f"定时任务 {project_name} 执行完成。\n\n{output}"
+        return f"定时任务 {project_name} 执行完成。"
     failure_detail = output or str(fallback_error or "").strip() or "未知错误。"
-    return f"{project_name} 定时任务执行失败。\n\n{failure_detail}"
-
-
-def _describe_reason(reason: str) -> str | None:
-    normalized_reason = str(reason).strip().lower()
-    if normalized_reason == "manual":
-        return "手动触发"
-    if normalized_reason == "schedule":
-        return "定时触发"
-    return None
+    return f"定时任务 {project_name} 执行失败。\n\n{failure_detail}"
 
 
 __all__ = ["AutomationDeliveryService", "AutomationDeliveryWorker"]

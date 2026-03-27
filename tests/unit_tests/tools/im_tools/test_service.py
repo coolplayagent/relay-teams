@@ -27,6 +27,11 @@ from agent_teams.gateway import (
     GatewayChannelType,
     GatewaySessionRecord,
 )
+from agent_teams.media import content_parts_from_text
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    RuntimePromptConversationContext,
+)
 from agent_teams.sessions.session_models import ProjectKind, SessionRecord
 from agent_teams.gateway.im import ImToolContextResolver, ImToolService
 from agent_teams.tools.registry import ToolResolutionContext
@@ -126,6 +131,16 @@ class _FakeGatewaySessionLookup:
         internal_session_id: str,
     ) -> GatewaySessionRecord | None:
         return self._sessions.get(internal_session_id)
+
+
+class _FakeRunIntentLookup:
+    def __init__(self, intents: dict[str, IntentInput] | None = None) -> None:
+        self._intents = intents or {}
+
+    def get(self, run_id: str) -> IntentInput:
+        if run_id not in self._intents:
+            raise KeyError(run_id)
+        return self._intents[run_id]
 
 
 class _FakeFeishuClient:
@@ -231,6 +246,7 @@ def _build_service(
     configs: dict[str, FeishuTriggerRuntimeConfig] | None = None,
     projects: dict[str, AutomationProjectRecord] | None = None,
     gateway_sessions: dict[str, GatewaySessionRecord] | None = None,
+    run_intents: dict[str, IntentInput] | None = None,
     wechat_token: str | None = "wechat-token",
     feishu_client: _FakeFeishuClient | None = None,
     wechat_client: _FakeWeChatClient | None = None,
@@ -241,6 +257,7 @@ def _build_service(
         config_dir=Path("C:/config"),
         session_repo=_FakeSessionRepo(sessions),
         runtime_config_lookup=_FakeRuntimeConfigLookup(configs),
+        run_intent_lookup=_FakeRunIntentLookup(run_intents),
         automation_project_repo=_FakeAutomationProjectRepo(projects),
         gateway_session_lookup=_FakeGatewaySessionLookup(gateway_sessions),
         feishu_client=resolved_feishu_client,
@@ -444,6 +461,32 @@ def test_send_text_success_for_feishu_p2p_uses_reply() -> None:
     assert result == "Message sent."
     assert feishu_client.sent_texts == []
     assert feishu_client.reply_texts == [("om_p2p_1", "hello")]
+    assert wechat_client.sent_texts == []
+
+
+def test_send_text_for_feishu_group_run_can_force_direct_send() -> None:
+    service, feishu_client, wechat_client = _build_service(
+        sessions=_default_sessions(),
+        configs=_default_configs(),
+        run_intents={
+            "run-1": IntentInput(
+                session_id=_SESSION_ID,
+                input=content_parts_from_text("hello"),
+                conversation_context=RuntimePromptConversationContext(
+                    source_provider="feishu",
+                    source_kind="im",
+                    feishu_chat_type="group",
+                    im_force_direct_send=True,
+                ),
+            )
+        },
+    )
+
+    result = service.send_text(session_id=_SESSION_ID, text="hello", run_id="run-1")
+
+    assert result == "Message sent."
+    assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
+    assert feishu_client.reply_texts == []
     assert wechat_client.sent_texts == []
 
 
