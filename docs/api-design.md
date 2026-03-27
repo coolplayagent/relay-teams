@@ -1178,9 +1178,10 @@ Behavior:
   `收到来自 {sender_name} 的飞书消息：{message}` with `sender_open_id` fallback.
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
-- Accepted group messages use a Feishu reaction acknowledgement with emoji `eyes`.
+- Accepted `group` and `p2p` messages use a Feishu reaction acknowledgement with emoji `OK`.
 - Only queued messages send a separate text reply: `已进入队列，前面还有 N 条消息。`
-- Group command responses and group final run replies use Feishu reply-to-message on the triggering message.
+- `im_send`, queued replies, and final run replies use Feishu reply-to-message when the triggering message id is available.
+- Group command responses use Feishu reply-to-message on the triggering message.
 - Reuses one internal session per `account_id + tenant_key + chat_id`.
 - Requires no public callback URL.
 - Runs one SDK long connection per enabled Feishu gateway account whose credentials are ready.

@@ -199,12 +199,13 @@ def _build_message(
     message_id: str,
     text: str,
     chat_id: str = "oc_group_1",
+    chat_type: str = "group",
 ) -> FeishuNormalizedMessage:
     return FeishuNormalizedMessage(
         event_id=event_id,
         tenant_key="tenant-1",
         chat_id=chat_id,
-        chat_type="group",
+        chat_type=chat_type,
         message_id=message_id,
         message_type="text",
         trigger_text=text,
@@ -284,9 +285,133 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
         message_key="om_2",
     )
     assert first_record.reaction_status == FeishuMessageDeliveryStatus.SENT
-    assert first_record.ack_status == FeishuMessageDeliveryStatus.PENDING
+    assert first_record.ack_status == FeishuMessageDeliveryStatus.SKIPPED
     assert second_record.ack_status == FeishuMessageDeliveryStatus.SENT
     assert second_record.reaction_status == FeishuMessageDeliveryStatus.SENT
+
+
+def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> None:
+    service, repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+    runtime = _build_runtime()
+
+    first = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(
+            event_id="evt-p2p-1",
+            message_id="om_p2p_1",
+            text="first",
+            chat_id="oc_p2p_1",
+            chat_type="p2p",
+        ),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    second = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(
+            event_id="evt-p2p-2",
+            message_id="om_p2p_2",
+            text="second",
+            chat_id="oc_p2p_1",
+            chat_type="p2p",
+        ),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+
+    assert first.status == "accepted"
+    assert second.status == "accepted"
+    assert feishu_client.reactions == [("om_p2p_1", "OK"), ("om_p2p_2", "OK")]
+    assert feishu_client.reply_messages == [
+        ("om_p2p_2", "已进入队列，前面还有 1 条消息。")
+    ]
+    assert feishu_client.sent_messages == []
+    first_record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_p2p_1",
+    )
+    second_record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_p2p_2",
+    )
+    assert first_record.reaction_status == FeishuMessageDeliveryStatus.SENT
+    assert first_record.ack_status == FeishuMessageDeliveryStatus.SKIPPED
+    assert second_record.reaction_status == FeishuMessageDeliveryStatus.SENT
+    assert second_record.ack_status == FeishuMessageDeliveryStatus.SENT
+
+
+def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None:
+    (
+        service,
+        repo,
+        feishu_client,
+        run_runtime_repo,
+        event_log,
+        _run_service,
+    ) = _build_service(tmp_path)
+    runtime = _build_runtime()
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(
+            event_id="evt-p2p-1",
+            message_id="om_p2p_1",
+            text="hello",
+            chat_id="oc_p2p_1",
+            chat_type="p2p",
+        ),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+
+    assert service._process_queued_messages() is True
+    record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_p2p_1",
+    )
+    assert record.processing_status == FeishuMessageProcessingStatus.WAITING_RESULT
+    assert record.run_id == "run-1"
+
+    _ = run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = run_runtime_repo.update(
+        "run-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+        last_error=None,
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"final answer"}',
+        )
+    )
+
+    assert service._finalize_waiting_results() is True
+    updated = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_p2p_1",
+    )
+    assert updated.processing_status == FeishuMessageProcessingStatus.COMPLETED
+    assert updated.final_reply_status == FeishuMessageDeliveryStatus.SENT
+    assert feishu_client.reply_messages[-1] == ("om_p2p_1", "final answer")
+    assert feishu_client.sent_messages == []
 
 
 def test_process_and_finalize_message_run(tmp_path: Path) -> None:

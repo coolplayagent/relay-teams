@@ -428,7 +428,7 @@ def test_send_text_success_for_feishu() -> None:
     assert wechat_client.sent_texts == []
 
 
-def test_send_text_success_for_feishu_p2p_uses_plain_send() -> None:
+def test_send_text_success_for_feishu_p2p_uses_reply() -> None:
     service, feishu_client, wechat_client = _build_service(
         sessions={
             _SESSION_ID: _make_session(
@@ -442,8 +442,8 @@ def test_send_text_success_for_feishu_p2p_uses_plain_send() -> None:
     result = service.send_text(session_id=_SESSION_ID, text="hello")
 
     assert result == "Message sent."
-    assert feishu_client.sent_texts == [(_CHAT_ID, "hello")]
-    assert feishu_client.reply_texts == []
+    assert feishu_client.sent_texts == []
+    assert feishu_client.reply_texts == [("om_p2p_1", "hello")]
     assert wechat_client.sent_texts == []
 
 

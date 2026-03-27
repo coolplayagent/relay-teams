@@ -158,13 +158,8 @@ class FeishuMessagePoolService:
         now = datetime.now(tz=timezone.utc)
         reaction_status = (
             FeishuMessageDeliveryStatus.PENDING
-            if self._should_send_group_reaction(enriched)
-            else FeishuMessageDeliveryStatus.SKIPPED
-        )
-        ack_status = (
-            FeishuMessageDeliveryStatus.PENDING
             if self._feishu_client is not None
-            and enriched.chat_type.strip().lower() == "group"
+            and self._should_send_reaction_acknowledgement(enriched)
             else FeishuMessageDeliveryStatus.SKIPPED
         )
         final_reply_status = (
@@ -194,7 +189,7 @@ class FeishuMessagePoolService:
                     if reaction_status == FeishuMessageDeliveryStatus.PENDING
                     else None
                 ),
-                ack_status=ack_status,
+                ack_status=FeishuMessageDeliveryStatus.SKIPPED,
                 final_reply_status=final_reply_status,
                 next_attempt_at=now,
                 created_at=now,
@@ -212,9 +207,15 @@ class FeishuMessagePoolService:
         queue_depth = self._message_pool_repo.count_active_chat_messages_ahead(
             record.message_pool_id
         )
+        queue_reply_text = _build_queue_reply_text(queue_depth)
         updated = self._message_pool_repo.update(
             record.message_pool_id,
-            ack_text=_build_queue_reply_text(queue_depth),
+            ack_status=(
+                FeishuMessageDeliveryStatus.PENDING
+                if self._feishu_client is not None and queue_reply_text is not None
+                else FeishuMessageDeliveryStatus.SKIPPED
+            ),
+            ack_text=queue_reply_text,
             last_error=None,
         )
         self._attempt_reaction(updated)
@@ -658,10 +659,7 @@ class FeishuMessagePoolService:
         feishu_client = self._feishu_client
         if feishu_client is None:
             raise RuntimeError("Feishu client is not configured")
-        if (
-            record.chat_type.strip().lower() == "group"
-            and str(record.message_id or "").strip()
-        ):
+        if str(record.message_id or "").strip():
             feishu_client.reply_text_message(
                 message_id=str(record.message_id),
                 text=text,
@@ -684,10 +682,7 @@ class FeishuMessagePoolService:
         feishu_client = self._feishu_client
         if feishu_client is None:
             raise RuntimeError("Feishu client is not configured")
-        if (
-            record.chat_type.strip().lower() == "group"
-            and str(record.message_id or "").strip()
-        ):
+        if str(record.message_id or "").strip():
             feishu_client.reply_text_message(
                 message_id=str(record.message_id),
                 text=text,
@@ -769,8 +764,13 @@ class FeishuMessagePoolService:
         )
 
     @staticmethod
-    def _should_send_group_reaction(message: FeishuNormalizedMessage) -> bool:
-        return message.chat_type.strip().lower() == "group"
+    def _should_send_reaction_acknowledgement(
+        message: FeishuNormalizedMessage,
+    ) -> bool:
+        return (
+            message.chat_type.strip().lower() in {"group", "p2p"}
+            and bool(str(message.message_id).strip())
+        )
 
     def _build_queue_preview(
         self,

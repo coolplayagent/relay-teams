@@ -143,12 +143,12 @@ Behavior:
 - deduplication still uses the Feishu `message_id`, falling back to `event_id`
 - duplicate deliveries do not send a second acknowledgement
 - same-chat messages are processed in order
-- accepted group messages use a Feishu message reaction acknowledgement instead of a text ack
-  - default reaction emoji: `eyes`
+- accepted group and p2p messages use a Feishu message reaction acknowledgement
+  - default reaction emoji: `OK`
 - only queued messages emit a separate text reply
-  - queue reply: `?????????? N ????`
-- group command replies and final run replies use Feishu reply-to-message on the triggering message
-- p2p chats still use normal outbound text sending
+  - queue reply: `已进入队列，前面还有 N 条消息。`
+- group command replies and group final run replies use Feishu reply-to-message on the triggering message
+- p2p queued replies and final run replies also use Feishu reply-to-message on the triggering message
 - final Feishu replies for inbound chat messages are sent by the message-pool worker
   after the run reaches a terminal state
 - waiting messages reconcile against `run_runtime`; stalled rows are retried instead
