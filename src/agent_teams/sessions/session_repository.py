@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import JsonValue
+
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
+
+LOGGER = get_logger(__name__)
 
 
 class SessionRepository:
@@ -249,13 +255,15 @@ class SessionRepository:
         self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
+        session_id = str(row["session_id"])
+        workspace_id = str(row["workspace_id"])
         project_id = str(row["project_id"] or "").strip() or str(row["workspace_id"])
         return SessionRecord(
-            session_id=str(row["session_id"]),
-            workspace_id=str(row["workspace_id"]),
+            session_id=session_id,
+            workspace_id=workspace_id,
             project_kind=ProjectKind(str(row["project_kind"] or "workspace")),
             project_id=project_id,
-            metadata=json.loads(str(row["metadata"])),
+            metadata=_metadata_from_json(row["metadata"], session_id=session_id),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             normal_root_role_id=str(row["normal_root_role_id"] or "").strip() or None,
             orchestration_preset_id=str(row["orchestration_preset_id"] or "").strip()
@@ -269,3 +277,78 @@ class SessionRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
+
+
+def _metadata_from_json(value: object, *, session_id: str) -> dict[str, str]:
+    raw = str(value or "").strip()
+    if not raw:
+        _log_invalid_metadata(
+            session_id=session_id,
+            reason="blank_metadata_json",
+            raw_preview="",
+        )
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        _log_invalid_metadata(
+            session_id=session_id,
+            reason="invalid_metadata_json",
+            raw_preview=raw[:200],
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        _log_invalid_metadata(
+            session_id=session_id,
+            reason="metadata_not_object",
+            raw_preview=raw[:200],
+        )
+        return {}
+    normalized: dict[str, str] = {}
+    dropped_keys: list[str] = []
+    for key, item in parsed.items():
+        key_name = str(key).strip()
+        if not key_name:
+            dropped_keys.append(str(key))
+            continue
+        if isinstance(item, str):
+            normalized[key_name] = item
+            continue
+        if isinstance(item, bool | int | float):
+            normalized[key_name] = str(item)
+            continue
+        dropped_keys.append(key_name)
+    if dropped_keys:
+        ignored_keys: list[JsonValue] = [key for key in sorted(dropped_keys)]
+        payload: dict[str, JsonValue] = {
+            "session_id": session_id,
+            "ignored_keys": ignored_keys,
+        }
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="sessions.repository.metadata_entries_ignored",
+            message="Ignored non-string session metadata values from persisted row",
+            payload=payload,
+        )
+    return normalized
+
+
+def _log_invalid_metadata(
+    *,
+    session_id: str,
+    reason: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "session_id": session_id,
+        "reason": reason,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.repository.metadata_invalid",
+        message="Ignoring invalid session metadata from persisted row",
+        payload=payload,
+    )
