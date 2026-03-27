@@ -6,8 +6,12 @@ import { markBackendOffline, markBackendOnline } from '../../utils/backendStatus
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 export async function requestJson(url, options, errorMessage) {
+    const method = String(options?.method || 'GET').toUpperCase();
+    const requestOptions = (method === 'GET' || method === 'HEAD') && options?.cache == null
+        ? { ...options, cache: 'no-store' }
+        : options;
     try {
-        const res = await fetch(url, options);
+        const res = await fetch(url, requestOptions);
         markBackendOnline();
         if (!res.ok) {
             let detail = errorMessage;
@@ -24,7 +28,7 @@ export async function requestJson(url, options, errorMessage) {
                 detail,
                 {
                     url,
-                    method: options?.method || 'GET',
+                    method,
                     status: res.status,
                 },
             );
@@ -33,7 +37,7 @@ export async function requestJson(url, options, errorMessage) {
             error.status = res.status;
             error.detail = detail;
             error.url = url;
-            error.method = options?.method || 'GET';
+            error.method = method;
             throw error;
         }
         return res.json();
@@ -47,7 +51,7 @@ export async function requestJson(url, options, errorMessage) {
             errorMessage,
             errorToPayload(error, {
                 url,
-                method: options?.method || 'GET',
+                method,
             }),
         );
         throw error;

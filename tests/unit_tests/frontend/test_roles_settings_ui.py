@@ -415,6 +415,103 @@ console.log(JSON.stringify({
     assert 'value="moonshot">moonshot</option>' in model_profile_html
 
 
+def test_role_settings_refreshes_stale_skill_options_before_save(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const staleSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    staleSkillsHtml,
+    refreshedSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+    roleConfigOptionsCalls: globalThis.__fetchRoleConfigOptionsCount,
+    modelProfileCalls: globalThis.__fetchModelProfilesCount,
+}));
+""".strip(),
+    )
+
+    stale_skills_html = cast(str, payload["staleSkillsHtml"])
+    refreshed_skills_html = cast(str, payload["refreshedSkillsHtml"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert "builtin:diff <em>Unavailable</em>" in stale_skills_html
+    assert "Unavailable" not in refreshed_skills_html
+    assert save_payload["skills"] == ["builtin:diff"]
+    assert payload["roleConfigOptionsCalls"] == 5
+    assert payload["modelProfileCalls"] == 5
+
+
+def test_role_settings_preserves_skill_checkbox_handlers_after_advisory_render(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+        { ref: "app:time1", name: "time1", description: "Read app time1.", scope: "app" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const initialSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+initialSkillOptions[1].checked = true;
+await initialSkillOptions[1].onchange();
+const updatedSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    initialSkillsHtml,
+    updatedSkillsHtml,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    initial_skills_html = cast(str, payload["initialSkillsHtml"])
+    updated_skills_html = cast(str, payload["updatedSkillsHtml"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert "Roles that use skills usually work better with the shell tool enabled." in (
+        initial_skills_html
+    )
+    assert "checked" in updated_skills_html
+    assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
+
+
 def test_role_settings_marks_main_agent_and_keeps_reserved_prompt_editable(
     tmp_path: Path,
 ) -> None:
@@ -556,6 +653,7 @@ export async function fetchRoleConfigs() {
 }
 
 export async function fetchRoleConfigOptions() {
+    globalThis.__fetchRoleConfigOptionsCount += 1;
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
@@ -577,6 +675,7 @@ export async function fetchRoleConfigOptions() {
 }
 
 export async function fetchModelProfiles() {
+    globalThis.__fetchModelProfilesCount += 1;
     return globalThis.__modelProfilesOverride || {
         default: { model: "gpt-4o-mini" },
         editor: { model: "gpt-4.1" },
@@ -827,6 +926,16 @@ function createElement(initialDisplay = "block") {{
         focus() {{
             return undefined;
         }},
+        insertAdjacentHTML(position, value) {{
+            if (position !== "beforeend") {{
+                throw new Error(`Unsupported insertAdjacentHTML position: ${{position}}`);
+            }}
+            html += String(value);
+            cachedRoleRecordsSource = html;
+            cachedRoleEditButtonsSource = html;
+            cachedRoleDeleteButtonsSource = html;
+            cachedInputsSource = html;
+        }},
         querySelectorAll(selector) {{
             if (selector === ".role-record") {{
                 if (cachedRoleRecordsSource !== html) {{
@@ -928,7 +1037,9 @@ function installGlobals(elements) {{
     globalThis.__feedbackNotifications = [];
     globalThis.__feedbackConfirms = [];
     globalThis.__fetchRoleConfigsCount = 0;
+    globalThis.__fetchRoleConfigOptionsCount = 0;
     globalThis.__fetchRoleConfigCalls = [];
+    globalThis.__fetchModelProfilesCount = 0;
     globalThis.__validatePayload = null;
     globalThis.__saveCalls = [];
     globalThis.__deleteRoleCalls = [];

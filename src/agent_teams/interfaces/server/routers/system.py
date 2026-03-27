@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from agent_teams.env.environment_variable_models import (
@@ -52,6 +52,10 @@ from agent_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
+from agent_teams.interfaces.server.runtime_identity import (
+    ServerHealthPayload,
+    build_server_health_payload,
+)
 from agent_teams.mcp.config_reload_service import McpConfigReloadService
 from agent_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
@@ -73,8 +77,14 @@ router = APIRouter(prefix="/system", tags=["System"])
 
 
 @router.get("/health")
-def health_check() -> dict[str, str]:
-    return {"status": "ok", "version": "0.1.0"}
+def health_check(request: Request) -> ServerHealthPayload:
+    container = getattr(request.app.state, "container", None)
+    if container is None:
+        return build_server_health_payload()
+    return build_server_health_payload(
+        config_dir=container.config_dir,
+        skill_registry=container.skill_registry,
+    )
 
 
 @router.get("/configs")

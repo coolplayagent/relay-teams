@@ -20,6 +20,10 @@ from agent_teams.builtin import ensure_app_config_bootstrap
 from agent_teams.env.runtime_env import sync_app_env_to_process_env
 from agent_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from agent_teams.interfaces.server.container import ServerContainer
+from agent_teams.interfaces.server.runtime_identity import (
+    SERVER_VERSION,
+    build_server_health_payload,
+)
 from agent_teams.interfaces.server.routers import (
     automation,
     feishu_gateway,
@@ -74,13 +78,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _register_signal_handlers()
     app.state.container = ServerContainer(config_dir=config_dir)
     await app.state.container.start()
+    health_payload = build_server_health_payload(
+        config_dir=config_dir,
+        skill_registry=app.state.container.skill_registry,
+    )
+    startup_payload = health_payload.model_dump(mode="json")
     log_event(
         logger,
         logging.INFO,
         event="app.startup",
         message="Agent Teams server started",
-        payload={"config_dir": str(config_dir)},
+        payload=startup_payload,
     )
+    skill_registry_sanity = health_payload.skill_registry_sanity
+    if (
+        skill_registry_sanity is not None
+        and skill_registry_sanity.builtin_skill_count == 0
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            event="app.startup.builtin_skills_missing",
+            message="Builtin skill discovery returned no skills",
+            payload=startup_payload,
+        )
+    if (
+        skill_registry_sanity is not None
+        and not skill_registry_sanity.has_builtin_deepresearch
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            event="app.startup.expected_builtin_skill_missing",
+            message="Expected builtin skill builtin:deepresearch is missing",
+            payload=startup_payload,
+        )
     yield
     await app.state.container.stop()
     log_event(
@@ -95,7 +127,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Agent Teams Server",
     description="REST API for Agent Teams orchestration.",
-    version="0.1.0",
+    version=SERVER_VERSION,
     lifespan=lifespan,
 )
 

@@ -357,6 +357,25 @@ def _create_test_client(fake_service: object) -> TestClient:
     return TestClient(app)
 
 
+def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["version"] == "0.1.0"
+    assert payload["python_executable"]
+    assert payload["package_root"]
+    assert payload["config_dir"]
+    assert payload["builtin_skills_dir"]
+    skill_registry_sanity = payload["skill_registry_sanity"]
+    assert skill_registry_sanity["builtin_skill_count"] >= 1
+    assert "builtin:deepresearch" in skill_registry_sanity["builtin_skill_refs"]
+    assert skill_registry_sanity["has_builtin_deepresearch"] is True
+
+
 def test_get_notification_config() -> None:
     client = _create_test_client(_FakeSystemService())
     response = client.get("/api/system/configs/notifications")

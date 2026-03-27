@@ -243,3 +243,99 @@ def test_core_api_facade_exports_wechat_gateway_helpers() -> None:
         completed.stdout.strip()
         == "function,function,function,function,function,function,function"
     )
+
+
+def test_request_json_disables_browser_cache_for_get_requests(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    module_under_test_path = tmp_path / "request.mjs"
+    backend_status_path = tmp_path / "mockBackendStatus.mjs"
+    logger_path = tmp_path / "mockLogger.mjs"
+
+    backend_status_path.write_text(
+        """
+export function markBackendOffline() {
+    return undefined;
+}
+
+export function markBackendOnline() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    logger_path.write_text(
+        """
+export function errorToPayload(error, extra = {}) {
+    return {
+        error_message: String(error?.message || error || ""),
+        ...extra,
+    };
+}
+
+export function logError() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace(
+            "../../utils/backendStatus.js",
+            "./mockBackendStatus.mjs",
+        )
+        .replace("../../utils/logger.js", "./mockLogger.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "globalThis.__calls = []; "
+                "globalThis.fetch = async (url, options) => { "
+                "globalThis.__calls.push({ url, options }); "
+                "return { ok: true, async json() { return { ok: true }; } }; "
+                "}; "
+                "await mod.requestJson('/api/roles:options', undefined, 'load failed'); "
+                "await mod.requestJson('/api/roles/configs/test', { method: 'GET' }, 'load failed'); "
+                "await mod.requestJson('/api/roles/configs/test', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 'save failed'); "
+                "console.log(JSON.stringify(globalThis.__calls));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload[0] == {
+        "url": "/api/roles:options",
+        "options": {"cache": "no-store"},
+    }
+    assert payload[1] == {
+        "url": "/api/roles/configs/test",
+        "options": {"method": "GET", "cache": "no-store"},
+    }
+    assert payload[2]["url"] == "/api/roles/configs/test"
+    assert payload[2]["options"] == {
+        "method": "PUT",
+        "headers": {"Content-Type": "application/json"},
+        "body": "{}",
+    }

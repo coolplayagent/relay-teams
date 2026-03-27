@@ -65,16 +65,11 @@ export function bindRoleSettingsHandlers() {
 
 export async function loadRoleSettingsPanel(preferredRoleId = '') {
     try {
-        const [summaries, options, modelProfiles] = await Promise.all([
+        const [summaries] = await Promise.all([
             fetchRoleConfigs(),
-            fetchRoleConfigOptions(),
-            fetchModelProfiles(),
+            refreshRoleSettingsDependencies(),
         ]);
         roleSummaries = Array.isArray(summaries) ? summaries.map(normalizeRoleSummary) : [];
-        roleConfigOptions = normalizeRoleConfigOptions(options);
-        const normalizedModelProfiles = normalizeModelProfiles(modelProfiles);
-        availableModelProfiles = normalizedModelProfiles.names;
-        defaultModelProfileName = normalizedModelProfiles.defaultName;
         renderRolesList();
         if (roleSummaries.length === 0) {
             showRolesList();
@@ -313,18 +308,18 @@ function renderRolesList() {
     `;
 
     listEl.querySelectorAll('.role-record').forEach(button => {
-        button.onclick = () => {
+        button.onclick = async () => {
             const nextRoleId = String(button.dataset.roleId || '').trim();
             if (!nextRoleId) return;
-            void loadRoleDocument(nextRoleId);
+            await loadRoleDocument(nextRoleId);
         };
     });
     listEl.querySelectorAll('.role-record-edit-btn').forEach(button => {
-        button.onclick = event => {
+        button.onclick = async event => {
             event.stopPropagation();
             const nextRoleId = String(button.dataset.roleId || '').trim();
             if (!nextRoleId) return;
-            void loadRoleDocument(nextRoleId);
+            await loadRoleDocument(nextRoleId);
         };
     });
     listEl.querySelectorAll('.role-record-delete-btn').forEach(button => {
@@ -340,7 +335,10 @@ function renderRolesList() {
 async function loadRoleDocument(roleId) {
     selectedRoleId = roleId;
     renderRolesList();
-    const record = await fetchRoleConfig(roleId);
+    const [record] = await Promise.all([
+        fetchRoleConfig(roleId),
+        refreshRoleSettingsDependencies(),
+    ]);
     selectedRoleId = record.role_id;
     selectedSourceRoleId = record.source_role_id || record.role_id;
     applyRoleRecord(record);
@@ -530,9 +528,9 @@ function renderSkillsShellAdvisory() {
     if (!hasSkills || hasShell) {
         return;
     }
-    container.innerHTML += `
+    container.insertAdjacentHTML('beforeend', `
         <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
-    `;
+    `);
 }
 
 function syncOptionSelection(containerId) {
@@ -666,6 +664,7 @@ function handleAddRole() {
 
 async function handleValidateRole() {
     try {
+        await refreshRoleSettingsDependencies({ applyEditorState: true });
         const draft = buildDraftFromForm();
         const result = await validateRoleConfig(draft);
         renderRoleStatus(t('settings.roles.validated_message'), 'success');
@@ -686,6 +685,7 @@ async function handleValidateRole() {
 
 async function handleSaveRole() {
     try {
+        await refreshRoleSettingsDependencies({ applyEditorState: true });
         const draft = buildDraftFromForm();
         const saved = await saveRoleConfig(draft.role_id, draft);
         selectedRoleId = saved.role_id;
@@ -778,6 +778,25 @@ function buildDraftFromForm() {
         memory_profile: memoryProfile,
         system_prompt: systemPrompt,
     };
+}
+
+async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}) {
+    const selectedModelProfile = resolveSelectedModelProfile();
+    const selectedBoundAgentId = currentBoundAgentId || String(getInputValue('role-bound-agent-input')).trim();
+    const [options, modelProfiles] = await Promise.all([
+        fetchRoleConfigOptions(),
+        fetchModelProfiles(),
+    ]);
+    roleConfigOptions = normalizeRoleConfigOptions(options);
+    const normalizedModelProfiles = normalizeModelProfiles(modelProfiles);
+    availableModelProfiles = normalizedModelProfiles.names;
+    defaultModelProfileName = normalizedModelProfiles.defaultName;
+    if (!applyEditorState) {
+        return;
+    }
+    renderModelProfileSelect(selectedModelProfile);
+    renderBoundAgentSelect(selectedBoundAgentId);
+    renderRoleOptionPickers();
 }
 
 function setPromptPreviewMode(mode) {

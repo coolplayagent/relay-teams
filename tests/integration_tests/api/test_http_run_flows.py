@@ -19,6 +19,13 @@ def test_health_endpoint(api_client: httpx.Client) -> None:
     response.raise_for_status()
     body = response.json()
     assert body["status"] == "ok"
+    assert body["python_executable"]
+    assert body["package_root"]
+    assert body["config_dir"]
+    assert body["builtin_skills_dir"]
+    skill_registry_sanity = body["skill_registry_sanity"]
+    assert skill_registry_sanity["builtin_skill_count"] >= 1
+    assert skill_registry_sanity["has_builtin_deepresearch"] is True
 
 
 def test_manual_run_stream_reaches_terminal(api_client: httpx.Client) -> None:

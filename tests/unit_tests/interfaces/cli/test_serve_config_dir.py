@@ -6,6 +6,7 @@ from types import ModuleType
 import sys
 
 from agent_teams.interfaces.server import cli as server_cli
+from agent_teams.interfaces.server.runtime_identity import ServerRuntimeIdentity
 
 
 def test_start_runs_uvicorn_and_tracks_managed_process(
@@ -46,6 +47,16 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "get_server_process_file_path",
         lambda project_root=None: process_file,
     )
+    monkeypatch.setattr(
+        server_cli,
+        "_get_current_runtime_identity",
+        lambda: ServerRuntimeIdentity(
+            python_executable="D:/workspace/agent_teams/.venv/Scripts/python.exe",
+            package_root="D:/workspace/agent_teams/src/agent_teams",
+            config_dir="C:/Users/test/.agent-teams",
+            builtin_skills_dir="D:/workspace/agent_teams/src/agent_teams/builtin/skills",
+        ),
+    )
     monkeypatch.setattr(server_cli.os, "getpid", lambda: 4321)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setitem(
@@ -68,5 +79,8 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "pid": 4321,
         "host": "127.0.0.1",
         "port": 8911,
+        "python_executable": "D:/workspace/agent_teams/.venv/Scripts/python.exe",
+        "package_root": "D:/workspace/agent_teams/src/agent_teams",
+        "builtin_skills_dir": "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
     }
     assert not process_file.exists()

@@ -17,6 +17,11 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 import typer
 from typer.models import OptionInfo
 
+from agent_teams.interfaces.server.runtime_identity import (
+    ServerHealthPayload,
+    ServerRuntimeIdentity,
+    build_server_runtime_identity,
+)
 from agent_teams.paths import get_project_config_dir
 
 DEFAULT_SERVER_HOST = "127.0.0.1"
@@ -33,6 +38,9 @@ class ManagedServerProcess(BaseModel):
     pid: int
     host: str
     port: int
+    python_executable: str | None = None
+    package_root: str | None = None
+    builtin_skills_dir: str | None = None
 
 
 def get_server_process_file_path(project_root: Path | None = None) -> Path:
@@ -47,7 +55,7 @@ def _health_check_host(host: str) -> str:
     return host
 
 
-def is_server_healthy(base_url: str) -> bool:
+def get_server_health(base_url: str) -> ServerHealthPayload | None:
     request = Request(
         url=f"{base_url.rstrip('/')}{_SERVER_HEALTH_PATH}",
         method="GET",
@@ -55,10 +63,15 @@ def is_server_healthy(base_url: str) -> bool:
     )
     try:
         with urlopen(request, timeout=1.5) as response:
-            raw_payload = response.read().decode("utf-8").replace(" ", "")
-            return '"status":"ok"' in raw_payload
-    except (HTTPError, URLError, OSError):
-        return False
+            raw_payload = response.read().decode("utf-8")
+            return ServerHealthPayload.model_validate_json(raw_payload)
+    except (HTTPError, URLError, OSError, ValidationError, ValueError):
+        return None
+
+
+def is_server_healthy(base_url: str) -> bool:
+    health = get_server_health(base_url)
+    return health is not None and health.status == "ok"
 
 
 def start_server_daemon(host: str, port: int) -> None:
@@ -150,7 +163,7 @@ def start(
     current_pid = os.getpid()
 
     _register_managed_server(
-        ManagedServerProcess(pid=current_pid, host=host, port=port)
+        _build_managed_server_process(pid=current_pid, host=host, port=port)
     )
 
     try:
@@ -169,16 +182,25 @@ def start(
 def _start_daemon(host: str, port: int) -> None:
     check_host = _health_check_host(host)
     check_url = f"http://{check_host}:{port}"
+    display_url = f"http://{host}:{port}"
 
     existing = _load_managed_server(raise_on_invalid=False)
     if existing is not None and _is_process_running(existing.pid):
-        if is_server_healthy(check_url):
+        health = get_server_health(check_url)
+        if health is not None and health.status == "ok":
+            _raise_if_runtime_mismatch(health=health, display_url=display_url)
             typer.echo(
                 f"Agent Teams server is already running on http://{host}:{port} "
                 f"(pid {existing.pid})"
             )
             return
         _stop_managed_server(force=False)
+
+    live_health = get_server_health(check_url)
+    if live_health is not None and live_health.status == "ok":
+        _raise_if_runtime_mismatch(health=live_health, display_url=display_url)
+        typer.echo(f"Agent Teams server is already running on {display_url}")
+        return
 
     start_server_daemon(host=host, port=port)
 
@@ -241,7 +263,9 @@ def restart(
     check_url = f"http://{check_host}:{resolved_port}"
     display_url = f"http://{resolved_host}:{resolved_port}"
 
-    if stopped_process is None and is_server_healthy(check_url):
+    live_health = get_server_health(check_url)
+    if live_health is not None and live_health.status == "ok":
+        _raise_if_runtime_mismatch(health=live_health, display_url=display_url)
         raise RuntimeError(
             f"Agent Teams server is already responding at {display_url}, "
             "but it is not managed by this CLI."
@@ -284,6 +308,23 @@ def _register_managed_server(process: ManagedServerProcess) -> None:
     process_file = get_server_process_file_path()
     process_file.parent.mkdir(parents=True, exist_ok=True)
     process_file.write_text(process.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _build_managed_server_process(
+    *,
+    pid: int,
+    host: str,
+    port: int,
+) -> ManagedServerProcess:
+    runtime_identity = _get_current_runtime_identity()
+    return ManagedServerProcess(
+        pid=pid,
+        host=host,
+        port=port,
+        python_executable=runtime_identity.python_executable,
+        package_root=runtime_identity.package_root,
+        builtin_skills_dir=runtime_identity.builtin_skills_dir,
+    )
 
 
 def _load_managed_server(*, raise_on_invalid: bool) -> ManagedServerProcess | None:
@@ -432,4 +473,52 @@ def _run_hidden_windows_command(command: list[str]) -> subprocess.CompletedProce
         text=True,
         creationflags=create_no_window,
         startupinfo=startupinfo,
+    )
+
+
+def _get_current_runtime_identity() -> ServerRuntimeIdentity:
+    return build_server_runtime_identity(config_dir=get_project_config_dir())
+
+
+def _health_has_runtime_identity(health: ServerHealthPayload) -> bool:
+    return (
+        isinstance(health.python_executable, str)
+        and bool(health.python_executable.strip())
+        and isinstance(health.package_root, str)
+        and bool(health.package_root.strip())
+    )
+
+
+def _runtime_identity_matches(
+    *,
+    health: ServerHealthPayload,
+    current: ServerRuntimeIdentity,
+) -> bool:
+    return (
+        health.python_executable == current.python_executable
+        and health.package_root == current.package_root
+    )
+
+
+def _raise_if_runtime_mismatch(
+    *,
+    health: ServerHealthPayload,
+    display_url: str,
+) -> None:
+    current_identity = _get_current_runtime_identity()
+    if not _health_has_runtime_identity(health):
+        raise RuntimeError(
+            f"Agent Teams server is already responding at {display_url}, "
+            "but it does not expose runtime identity metadata. "
+            "Stop the conflicting server first, then retry."
+        )
+    if _runtime_identity_matches(health=health, current=current_identity):
+        return
+    raise RuntimeError(
+        "Agent Teams server runtime mismatch at "
+        f"{display_url}. Current CLI runtime uses "
+        f"{current_identity.python_executable} from {current_identity.package_root}, "
+        "but the live server uses "
+        f"{health.python_executable} from {health.package_root}. "
+        "Stop the conflicting server first, then retry."
     )
