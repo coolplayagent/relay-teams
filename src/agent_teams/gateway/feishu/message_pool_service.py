@@ -767,9 +767,8 @@ class FeishuMessagePoolService:
     def _should_send_reaction_acknowledgement(
         message: FeishuNormalizedMessage,
     ) -> bool:
-        return (
-            message.chat_type.strip().lower() in {"group", "p2p"}
-            and bool(str(message.message_id).strip())
+        return message.chat_type.strip().lower() in {"group", "p2p"} and bool(
+            str(message.message_id).strip()
         )
 
     def _build_queue_preview(

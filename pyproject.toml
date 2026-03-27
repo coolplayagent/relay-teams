@@ -59,10 +59,7 @@ version = { attr = "agent_teams._version.__version__" }
   "skills/*/SKILL.md",
   "skills/*/scripts/*.py",
 ]
-"agent_teams.tools.task_tools" = ["*.txt"]
-"agent_teams.tools.web_tools" = ["*.txt"]
-"agent_teams.tools.workspace_tools" = ["*.txt"]
-"agent_teams.tools.feishu_tools" = ["*.txt"]
+"agent_teams.tools" = ["*/*.txt"]
 
 [dependency-groups]
 evals = [
