@@ -30,6 +30,9 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -91,6 +94,9 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         )
     )
     shared_store = SharedStateRepository(Path(tempfile.mkstemp(suffix=".db")[1]))
+    session_history_marker_repo = SessionHistoryMarkerRepository(
+        Path(tempfile.mkstemp(suffix=".db")[1])
+    )
     return OpenAICompatibleProvider(
         config,
         task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),
@@ -116,6 +122,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         allowed_mcp_servers=(),
         allowed_skills=(),
         message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=session_history_marker_repo,
         role_registry=role_registry,
         task_execution_service=cast(TaskExecutionService, object()),
         task_service=cast(TaskOrchestrationService, object()),

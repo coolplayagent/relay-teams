@@ -298,4 +298,7 @@ def test_compact_conversation_history_marks_messages_hidden_from_context(
         message for message in raw_messages if message["hidden_from_context"]
     ]
     assert len(hidden_messages) == 2
-    assert {message["hidden_reason"] for message in hidden_messages} == {"compaction"}
+    hidden_reasons = {
+        cast(str, message["hidden_reason"]) for message in hidden_messages
+    }
+    assert hidden_reasons == {"compaction"}

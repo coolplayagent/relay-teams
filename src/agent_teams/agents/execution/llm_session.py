@@ -670,7 +670,7 @@ class AgentLlmSession:
             should_retry = self._should_retry_request(
                 retry_error=retry_error,
                 retry_number=retry_number,
-                attempt_text_emitted=attempt_text_emitted,
+                attempt_text_emitted=attempt_text_emitted or printed_any,
                 attempt_tool_event_emitted=attempt_tool_event_emitted,
                 attempt_messages_committed=attempt_messages_committed,
             )
@@ -725,7 +725,7 @@ class AgentLlmSession:
             should_retry = self._should_retry_request(
                 retry_error=retry_error,
                 retry_number=retry_number,
-                attempt_text_emitted=attempt_text_emitted,
+                attempt_text_emitted=attempt_text_emitted or printed_any,
                 attempt_tool_event_emitted=attempt_tool_event_emitted,
                 attempt_messages_committed=attempt_messages_committed,
             )

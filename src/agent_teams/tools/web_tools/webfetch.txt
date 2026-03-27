@@ -1,3 +1,4 @@
 Fetch content from an http or https URL.
 
-Use this for reading current web pages or downloading files that need to be inspected.
+Use this for reading current web pages, downloading files that need to be inspected,
+or explicitly extracting structured data from RSS/Atom feeds and OPML subscription lists.

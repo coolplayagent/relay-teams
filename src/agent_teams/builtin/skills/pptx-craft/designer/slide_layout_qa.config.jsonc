@@ -1,0 +1,12 @@
+{
+  "blankThreshold": 0.30, // 几何空白率阈值：内容覆盖率低于此值则报告
+  "pixelBlankThreshold": 0.40, // 像素空白率阈值：空白率超过此值则报告（更严格的检测）
+  "overflowTolerance": 5, // 溢出容差：元素溢出边界多少像素内不报告
+  "textOverlapMinArea": 16, // 文本重叠最小面积：文本重叠面积小于此值不报告
+  "recursiveBlankThreshold": 0.65, // 递归子元素空白率阈值：子元素空白率超过此值则报告（标题栏等设计元素空白率较高是正常的）
+  "minElementAreaRatio": 0.05, // 最小元素面积占比：元素面积小于页面 5% 则停止递归
+  // 禁用特定检测项（true=禁用）
+  "disableChildOverflow": true, // 禁用子元素溢出检测
+  "disableTextOverlap": true, // 禁用文本重叠检测
+  "disableBlockOverlap": true // 禁用区块重叠检测
+}

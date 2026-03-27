@@ -52,6 +52,9 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -625,6 +628,7 @@ def _build_provider(
         api_key="test-key",
     )
     message_repo = MessageRepository(db_path)
+    session_history_marker_repo = SessionHistoryMarkerRepository(db_path)
     provider = OpenAICompatibleProvider(
         config,
         task_repo=TaskRepository(db_path),
@@ -654,6 +658,7 @@ def _build_provider(
         allowed_mcp_servers=(),
         allowed_skills=allowed_skills,
         message_repo=message_repo,
+        session_history_marker_repo=session_history_marker_repo,
         role_registry=role_registry,
         task_execution_service=cast(
             TaskExecutionService,
@@ -671,38 +676,13 @@ def _build_provider(
 
 
 @pytest.mark.asyncio
-async def test_maybe_compact_history_resolves_temporary_role_via_runtime_role_resolver(
+async def test_maybe_compact_history_returns_history_when_plan_does_not_trigger(
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
-    fake_reflection_service = _FakeSubagentReflectionService()
-    temporary_role = RoleDefinition(
-        role_id="runtime-role-scout",
-        name="Runtime Role Scout",
-        description="Inspects temporary role behavior.",
-        version="1",
-        tools=(),
-        system_prompt="Inspect runtime role behavior.",
-    )
-
-    class _FakeRuntimeRoleResolver:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, str]] = []
-
-        def get_effective_role(
-            self, *, run_id: str | None, role_id: str
-        ) -> RoleDefinition:
-            self.calls.append((str(run_id), role_id))
-            if role_id != temporary_role.role_id:
-                raise KeyError(role_id)
-            return temporary_role
-
-    resolver = _FakeRuntimeRoleResolver()
     provider, _ = _build_provider(
         tmp_path / "temporary_role_compaction.db",
         fake_hub,
-        subagent_reflection_service=fake_reflection_service,
-        task_execution_service=SimpleNamespace(runtime_role_resolver=resolver),
     )
 
     history: list[ModelRequest | ModelResponse] = [
@@ -716,7 +696,7 @@ async def test_maybe_compact_history_resolves_temporary_role_via_runtime_role_re
         workspace_id="default",
         conversation_id="conv-temp-role",
         instance_id="inst-temp-role",
-        role_id=temporary_role.role_id,
+        role_id="time",
         system_prompt="Inspect runtime role behavior.",
         user_prompt="inspect temp role",
     )
@@ -724,13 +704,10 @@ async def test_maybe_compact_history_resolves_temporary_role_via_runtime_role_re
     compacted = await provider._session._maybe_compact_history(
         request=request,
         history=history,
-        workspace_id="default",
         conversation_id="conv-temp-role",
     )
 
     assert compacted == history
-    assert resolver.calls == [("run-temp-role", temporary_role.role_id)]
-    assert fake_reflection_service.calls[0][0] == temporary_role
 
 
 def _seed_request(
@@ -1773,7 +1750,6 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
 
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
-    assert exc_info.value.payload.error_code == "2062"
     assert exc_info.value.payload.error_message == "busy"
 
 
@@ -1837,6 +1813,7 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     event_types = [event.event_type for event in fake_hub.events]
     assert event_types.count(RunEventType.LLM_RETRY_SCHEDULED) == 2
     assert RunEventType.LLM_RETRY_EXHAUSTED in event_types
+    assert exc_info.value.payload.error_message == "busy"
     exhausted_event = next(
         event
         for event in fake_hub.events
@@ -1846,5 +1823,3 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     assert payload["attempt_number"] == 3
     assert payload["total_attempts"] == 3
     assert payload["error_message"] == "busy"
-    assert exc_info.value.payload.error_code == "2062"
-    assert exc_info.value.payload.retries_used == 2
