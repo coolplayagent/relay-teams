@@ -13,7 +13,9 @@ tmp.db-journal
 pytest-cache-files-*/
 frontend/node_modules/
 frontend/.vite/
-
+node_modules
+package-lock.json
+package.json
 .claude
 .agent_teams/evals/
 !.agent_teams/
