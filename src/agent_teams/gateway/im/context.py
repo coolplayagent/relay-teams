@@ -217,11 +217,7 @@ def _resolve_from_session(
         environment=runtime_config.environment,
         chat_type=chat_type,
         reply_to_message_id=message_id,
-        prefer_reply=(
-            not prefer_direct_send
-            and chat_type.lower() == "group"
-            and message_id is not None
-        ),
+        prefer_reply=(not prefer_direct_send and message_id is not None),
     )
 
 

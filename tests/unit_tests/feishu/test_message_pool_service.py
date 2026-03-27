@@ -537,6 +537,59 @@ def test_process_and_finalize_message_run_with_structured_output(
     assert feishu_client.reply_messages[-1] == ("om_1", "final answer")
 
 
+def test_finalize_waiting_result_sends_recovery_pause_notice_once(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        repo,
+        feishu_client,
+        run_runtime_repo,
+        event_log,
+        _run_service,
+    ) = _build_service(tmp_path)
+    runtime = _build_runtime()
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(event_id="evt-1", message_id="om_1", text="hello"),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+
+    assert service._process_queued_messages() is True
+
+    _ = run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            event_type=RunEventType.RUN_PAUSED,
+            payload_json='{"error_message":"stream interrupted"}',
+        )
+    )
+
+    assert service._finalize_waiting_results() is True
+    record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_1",
+    )
+    assert record.processing_status == FeishuMessageProcessingStatus.WAITING_RESULT
+    assert feishu_client.reply_messages[-1] == (
+        "om_1",
+        "运行已暂停：stream interrupted\n发送 resume 继续。",
+    )
+    assert service._finalize_waiting_results() is False
+
+
 def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:
     service, repo, _feishu_client, _run_runtime_repo, _event_log, run_service = (
         _build_service(tmp_path)

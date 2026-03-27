@@ -27,6 +27,7 @@ class RunRuntimePhase(str, Enum):
     SUBAGENT_RUNNING = "subagent_running"
     AWAITING_TOOL_APPROVAL = "awaiting_tool_approval"
     AWAITING_SUBAGENT_FOLLOWUP = "awaiting_subagent_followup"
+    AWAITING_RECOVERY = "awaiting_recovery"
     MANUAL = "manual"
     TERMINAL = "terminal"
 

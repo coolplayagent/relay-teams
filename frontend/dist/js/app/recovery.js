@@ -949,7 +949,12 @@ function getFooterActions(activeRun, approvals, pausedSubagent) {
     const actions = [];
     if (!activeRun?.is_recoverable) return actions;
     if (isLocallyStreaming(activeRun.run_id)) return actions;
-    if (activeRun.status === 'stopped' || activeRun.phase === 'stopped') {
+    if (
+        activeRun.status === 'stopped'
+        || activeRun.phase === 'stopped'
+        || activeRun.status === 'paused'
+        || activeRun.phase === 'awaiting_recovery'
+    ) {
         actions.push({
             action: 'resume-run',
             label: 'Resume Run',

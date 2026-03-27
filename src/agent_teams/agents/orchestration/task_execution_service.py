@@ -52,6 +52,7 @@ from agent_teams.sessions.runs.run_models import (
     RunThinkingConfig,
     RunTopologySnapshot,
 )
+from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -368,6 +369,50 @@ class TaskExecutionService(BaseModel):
                     "instance_id": instance_id,
                     "role_id": role_id,
                     "paused_subagent": paused_subagent,
+                },
+            )
+            raise
+        except RecoverableRunPauseError as exc:
+            payload = exc.payload
+            _ = self.task_repo.update_status(
+                task.task_id,
+                TaskStatus.STOPPED,
+                assigned_instance_id=instance_id,
+                error_message=payload.error_message,
+            )
+            _ = self.agent_repo.mark_status(instance_id, InstanceStatus.IDLE)
+            self.run_runtime_repo.update(
+                task.trace_id,
+                status=RunRuntimeStatus.PAUSED,
+                phase=RunRuntimePhase.AWAITING_RECOVERY,
+                active_instance_id=payload.instance_id,
+                active_task_id=payload.task_id,
+                active_role_id=payload.role_id,
+                active_subagent_instance_id=(
+                    None if is_coordinator else payload.instance_id
+                ),
+                last_error=payload.error_message,
+            )
+            self.event_bus.emit(
+                EventEnvelope(
+                    event_type=EventType.TASK_STOPPED,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                    payload_json="{}",
+                )
+            )
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="task.execution.paused",
+                message="Task execution paused after recoverable model interruption",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                    "error_code": payload.error_code,
                 },
             )
             raise

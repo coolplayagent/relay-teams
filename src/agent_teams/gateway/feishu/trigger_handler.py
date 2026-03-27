@@ -183,11 +183,16 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="empty_trigger_text",
             )
-        response_text = self._im_session_command_service.handle_feishu_command(
+        command_result = self._im_session_command_service.handle_feishu_command(
             runtime_config=runtime_config,
             message=normalized,
         )
-        if response_text is not None:
+        if command_result is not None:
+            response_text = (
+                command_result
+                if isinstance(command_result, str)
+                else command_result.text
+            )
             self._send_command_response(
                 chat_id=normalized.chat_id,
                 chat_type=normalized.chat_type,

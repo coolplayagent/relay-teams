@@ -44,6 +44,10 @@ from agent_teams.providers.openai_model_profiles import (
 )
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from agent_teams.logger import (
     close_model_stream,
     get_logger,
@@ -663,13 +667,12 @@ class AgentLlmSession:
                 exc_info=exc,
             )
             retry_error = extract_retry_error_info(exc)
-            should_retry = (
-                retry_error is not None
-                and self._retry_config.enabled
-                and retry_number < self._retry_config.max_retries
-                and not attempt_text_emitted
-                and not attempt_tool_event_emitted
-                and not attempt_messages_committed
+            should_retry = self._should_retry_request(
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_messages_committed=attempt_messages_committed,
             )
             if should_retry:
                 resolved_retry_error = retry_error
@@ -695,30 +698,36 @@ class AgentLlmSession:
                     retry_number=next_retry_number,
                     total_attempts=total_attempts,
                 )
-            if (
-                retry_error is not None
-                and self._retry_config.enabled
-                and retry_number >= self._retry_config.max_retries
-            ):
-                self._handle_retry_exhausted(
+            if retry_error is not None and retry_error.retryable:
+                if (
+                    self._retry_config.enabled
+                    and retry_number >= self._retry_config.max_retries
+                ):
+                    self._handle_retry_exhausted(
+                        request=request,
+                        retry_number=retry_number,
+                        total_attempts=total_attempts,
+                        error=retry_error,
+                    )
+                raise self._build_recoverable_pause_error(
                     request=request,
+                    error=retry_error,
                     retry_number=retry_number,
                     total_attempts=total_attempts,
-                    error=retry_error,
-                )
+                    error_message=self._build_model_api_error_message(exc),
+                ) from exc
             raise ModelAPIError(
                 model_name=exc.model_name,
                 message=self._build_model_api_error_message(exc),
             ) from exc
         except Exception as exc:
             retry_error = extract_retry_error_info(exc)
-            should_retry = (
-                retry_error is not None
-                and self._retry_config.enabled
-                and retry_number < self._retry_config.max_retries
-                and not attempt_text_emitted
-                and not attempt_tool_event_emitted
-                and not attempt_messages_committed
+            should_retry = self._should_retry_request(
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_messages_committed=attempt_messages_committed,
             )
             if should_retry:
                 resolved_retry_error = retry_error
@@ -758,13 +767,23 @@ class AgentLlmSession:
                     },
                     exc_info=exc,
                 )
-                if retry_number >= self._retry_config.max_retries:
+                if retry_error.retryable and (
+                    self._retry_config.enabled
+                    and retry_number >= self._retry_config.max_retries
+                ):
                     self._handle_retry_exhausted(
                         request=request,
                         retry_number=retry_number,
                         total_attempts=total_attempts,
                         error=retry_error,
                     )
+                if retry_error.retryable:
+                    raise self._build_recoverable_pause_error(
+                        request=request,
+                        error=retry_error,
+                        retry_number=retry_number,
+                        total_attempts=total_attempts,
+                    ) from exc
             raise
 
         assert result is not None
@@ -878,6 +897,44 @@ class AgentLlmSession:
                 "transport_error": schedule.error.transport_error,
                 "timeout_error": schedule.error.timeout_error,
             },
+        )
+
+    def _should_retry_request(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_event_emitted: bool,
+        attempt_messages_committed: bool,
+    ) -> bool:
+        return (
+            retry_error is not None
+            and retry_error.retryable
+            and self._retry_config.enabled
+            and retry_number < self._retry_config.max_retries
+            and not attempt_text_emitted
+            and not attempt_tool_event_emitted
+            and not attempt_messages_committed
+        )
+
+    def _build_recoverable_pause_error(
+        self,
+        *,
+        request: LLMRequest,
+        error: LlmRetryErrorInfo,
+        retry_number: int,
+        total_attempts: int,
+        error_message: str | None = None,
+    ) -> RecoverableRunPauseError:
+        return RecoverableRunPauseError(
+            RecoverableRunPausePayload.from_request(
+                request=request,
+                error=error,
+                retries_used=retry_number,
+                total_attempts=total_attempts,
+                error_message=error_message,
+            )
         )
 
     def _handle_retry_exhausted(

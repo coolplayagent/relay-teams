@@ -27,6 +27,10 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -68,6 +72,24 @@ class _InterruptingProvider:
     async def generate(self, request: object) -> str:
         _ = request
         raise asyncio.CancelledError
+
+
+class _RecoverablePauseProvider:
+    async def generate(self, request: object) -> str:
+        raise RecoverableRunPauseError(
+            RecoverableRunPausePayload(
+                run_id=str(getattr(request, "run_id")),
+                trace_id=str(getattr(request, "trace_id")),
+                task_id=str(getattr(request, "task_id")),
+                session_id=str(getattr(request, "session_id")),
+                instance_id=str(getattr(request, "instance_id")),
+                role_id=str(getattr(request, "role_id")),
+                error_code="network_stream_interrupted",
+                error_message="stream interrupted",
+                retries_used=1,
+                total_attempts=3,
+            )
+        )
 
 
 def _build_service(
@@ -533,6 +555,48 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
     record = task_repo.get(task.task_id)
     assert record.status == TaskStatus.STOPPED
     assert record.error_message == "Task stopped by user"
+
+
+@pytest.mark.asyncio
+async def test_execute_marks_recoverable_pause_as_awaiting_recovery(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        agent_repo,
+        message_repo,
+        run_runtime_repo,
+        _run_control_manager,
+    ) = _build_service_with_control(
+        tmp_path / "task_execution_service_pause.db",
+        _RecoverablePauseProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    with pytest.raises(RecoverableRunPauseError):
+        await service.execute(
+            instance_id=instance_id,
+            role_id="time",
+            task=task,
+        )
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+    assert runtime.active_task_id == task.task_id
+    assert runtime.active_role_id == "time"
+    assert runtime.active_instance_id == instance_id
+    assert runtime.active_subagent_instance_id == instance_id
+    assert runtime.last_error == "stream interrupted"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.STOPPED
+    assert record.error_message == "stream interrupted"
 
 
 @pytest.mark.asyncio

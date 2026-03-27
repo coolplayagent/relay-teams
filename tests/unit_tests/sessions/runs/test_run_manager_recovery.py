@@ -17,6 +17,10 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from agent_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
@@ -601,6 +605,111 @@ async def test_stream_run_events_replays_resume_path_after_last_seen_event(
         RunEventType.RUN_COMPLETED,
     ]
     assert manager._run_event_hub.has_subscribers("run-existing") is False
+
+
+@pytest.mark.asyncio
+async def test_stream_run_events_stops_after_run_paused(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stream_paused.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._running_run_ids.add("run-existing")
+
+    for event in (
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"session_id":"session-1"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"partial"}',
+        ),
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_PAUSED,
+            payload_json='{"error_message":"stream interrupted"}',
+        ),
+    ):
+        manager._run_event_hub.publish(event)
+
+    replayed = [event async for event in manager.stream_run_events("run-existing")]
+
+    assert [event.event_type for event in replayed] == [
+        RunEventType.RUN_STARTED,
+        RunEventType.TEXT_DELTA,
+        RunEventType.RUN_PAUSED,
+    ]
+    assert manager._run_event_hub.has_subscribers("run-existing") is False
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_recoverable_pause_without_run_failed(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_paused.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="network_stream_interrupted",
+        error_message="stream interrupted",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+    assert runtime.last_error == "stream interrupted"
+    assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    assert events[-1]["event_type"] == RunEventType.RUN_PAUSED.value
+    assert not any(
+        str(event["event_type"]) == RunEventType.RUN_FAILED.value for event in events
+    )
 
 
 @pytest.mark.asyncio

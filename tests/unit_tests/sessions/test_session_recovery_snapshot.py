@@ -153,6 +153,37 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     assert round_snapshot.get("primary_role_id") == "coordinator_agent"
 
 
+def test_get_recovery_snapshot_exposes_awaiting_recovery_phase(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_awaiting_recovery.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+        last_error="stream interrupted",
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("status") == "paused"
+    assert active_run.get("phase") == "awaiting_recovery"
+    assert active_run.get("is_recoverable") is True
+    assert active_run.get("should_show_recover") is True
+
+
 def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
     tmp_path: Path,
 ) -> None:

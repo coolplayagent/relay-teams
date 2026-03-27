@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
+    from agent_teams.sessions.runs.recoverable_pause import (
+        RecoverableRunPauseError,
+        RecoverableRunPausePayload,
+    )
     from agent_teams.sessions.runs.enums import (
         ExecutionMode,
         InjectionSource,
@@ -59,6 +63,8 @@ __all__ = [
     "RunInjectionManager",
     "RunIntentRepository",
     "RunManager",
+    "RecoverableRunPauseError",
+    "RecoverableRunPausePayload",
     "RunResult",
     "RuntimePromptConversationContext",
     "RunRuntimePhase",
@@ -95,6 +101,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "RunControlManager": (
         "agent_teams.sessions.runs.run_control_manager",
         "RunControlManager",
+    ),
+    "RecoverableRunPauseError": (
+        "agent_teams.sessions.runs.recoverable_pause",
+        "RecoverableRunPauseError",
+    ),
+    "RecoverableRunPausePayload": (
+        "agent_teams.sessions.runs.recoverable_pause",
+        "RecoverableRunPausePayload",
     ),
     "RunEvent": ("agent_teams.sessions.runs.run_models", "RunEvent"),
     "RunEventHub": ("agent_teams.sessions.runs.event_stream", "RunEventHub"),

@@ -17,6 +17,7 @@ from agent_teams.sessions.runs.run_state_models import (
 
 _SNAPSHOT_EVENT_TYPES = {
     RunEventType.RUN_STARTED,
+    RunEventType.RUN_PAUSED,
     RunEventType.RUN_RESUMED,
     RunEventType.MODEL_STEP_STARTED,
     RunEventType.TOOL_APPROVAL_REQUESTED,

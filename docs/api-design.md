@@ -667,13 +667,15 @@ Thinking events:
 Retry events:
 - `llm_retry_scheduled`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `retry_in_ms`, `error_code`, and `error_message`.
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
+- `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
 - Retry countdowns are computed from the SSE event `occurred_at` timestamp plus `retry_in_ms`, so delayed delivery or page refresh does not restart the timer.
 - Later retry events replace the same card instead of stacking multiple historical cards.
 - Once a retried model attempt produces successful output, the retry card is removed.
-- If the run still fails after retries are exhausted, `llm_retry_exhausted` leaves the retry card visible as the final failed retry state.
+- If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
+- `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
 
 ### `POST /runs/{run_id}/inject`
 
@@ -700,6 +702,10 @@ Stops the full run or a specific subagent.
 ### `POST /runs/{run_id}:resume`
 
 Resumes a recoverable run.
+
+Behavior:
+- Recoverable runs in `queued`, `paused`, or `stopped` may be resumed.
+- Runs paused for `awaiting_tool_approval` or `awaiting_subagent_followup` are not resumed by this endpoint; those flows still require their dedicated resolution action.
 
 ### `POST /runs/{run_id}/subagents/{instance_id}/inject`
 

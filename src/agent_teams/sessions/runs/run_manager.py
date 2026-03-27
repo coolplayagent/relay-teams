@@ -59,6 +59,7 @@ from agent_teams.tools.runtime.approval_ticket_repo import (
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -247,6 +248,21 @@ class RunManager:
                 )
                 return result
             except Exception as exc:
+                if isinstance(exc, RecoverableRunPauseError):
+                    payload = exc.payload
+                    if self._run_runtime_repo is not None:
+                        self._run_runtime_repo.update(
+                            run_id,
+                            root_task_id=payload.task_id,
+                            status=RunRuntimeStatus.PAUSED,
+                            phase=RunRuntimePhase.AWAITING_RECOVERY,
+                            active_instance_id=payload.instance_id,
+                            active_task_id=payload.task_id,
+                            active_role_id=payload.role_id,
+                            active_subagent_instance_id=None,
+                            last_error=payload.error_message,
+                        )
+                    raise
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
                         run_id,
@@ -859,6 +875,42 @@ class RunManager:
                 title=notification_title,
                 body=notification_body,
             )
+        except RecoverableRunPauseError as exc:
+            payload = exc.payload
+            self._safe_runtime_update(
+                run_id,
+                root_task_id=payload.task_id,
+                status=RunRuntimeStatus.PAUSED,
+                phase=RunRuntimePhase.AWAITING_RECOVERY,
+                active_instance_id=payload.instance_id,
+                active_task_id=payload.task_id,
+                active_role_id=payload.role_id,
+                active_subagent_instance_id=None,
+                last_error=payload.error_message,
+            )
+            self._safe_publish_run_event(
+                RunEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=payload.trace_id,
+                    task_id=payload.task_id,
+                    instance_id=payload.instance_id,
+                    role_id=payload.role_id,
+                    event_type=RunEventType.RUN_PAUSED,
+                    payload_json=payload.model_dump_json(),
+                ),
+                failure_event="run.event.publish_failed",
+            )
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.paused",
+                    message="Run paused awaiting recovery",
+                    payload=payload.model_dump(mode="json"),
+                )
         except asyncio.CancelledError:
             self._safe_runtime_update(
                 run_id,
@@ -1007,6 +1059,7 @@ class RunManager:
                     replay_high_watermark = max(replay_high_watermark, row_id)
                     yield replay_event
                     if event_type in (
+                        RunEventType.RUN_PAUSED,
                         RunEventType.RUN_COMPLETED,
                         RunEventType.RUN_FAILED,
                         RunEventType.RUN_STOPPED,
@@ -1024,6 +1077,7 @@ class RunManager:
                     continue
                 yield event
                 if event.event_type in (
+                    RunEventType.RUN_PAUSED,
                     RunEventType.RUN_COMPLETED,
                     RunEventType.RUN_FAILED,
                     RunEventType.RUN_STOPPED,

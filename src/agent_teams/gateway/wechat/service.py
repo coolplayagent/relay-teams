@@ -492,21 +492,39 @@ class WeChatGatewayService:
                 "last_inbound_at": now.isoformat(),
             },
         )
-        command_response = self._im_session_command_service.handle_wechat_command(
+        command_result = self._im_session_command_service.handle_wechat_command(
             session_id=gateway_session.internal_session_id,
             gateway_session_id=gateway_session.gateway_session_id,
             text=text,
         )
-        if command_response is not None:
+        if command_result is not None:
+            response_text = (
+                command_result
+                if isinstance(command_result, str)
+                else command_result.text
+            )
             self._send_intermediate_text(
                 account_id=account.account_id,
                 gateway_session_id=gateway_session.gateway_session_id,
                 peer_user_id=peer_user_id,
                 context_token=message.context_token,
-                text=command_response,
+                text=response_text,
                 event_name="wechat.command.response",
                 failure_message="Failed to send WeChat command response",
             )
+            resumed_run_id = (
+                None
+                if isinstance(command_result, str)
+                else command_result.resumed_run_id
+            )
+            if resumed_run_id is not None:
+                self._start_run_watcher(
+                    account_id=account.account_id,
+                    gateway_session_id=gateway_session.gateway_session_id,
+                    run_id=resumed_run_id,
+                    peer_user_id=peer_user_id,
+                    context_token=message.context_token,
+                )
             return
         recovery_snapshot = self._session_service.get_recovery_snapshot(
             gateway_session.internal_session_id
@@ -538,29 +556,47 @@ class WeChatGatewayService:
         )
         self._run_service.ensure_run_started(run_id)
         self._send_typing(account, token, peer_user_id, message.context_token, 1)
-        if run_id not in self._watched_runs:
-            self._watched_runs.add(run_id)
-            future = asyncio.run_coroutine_threadsafe(
-                self._await_terminal_and_reply(
-                    account_id=account.account_id,
-                    gateway_session_id=gateway_session.gateway_session_id,
-                    run_id=run_id,
-                    peer_user_id=peer_user_id,
-                    context_token=message.context_token,
-                ),
-                self._require_loop(),
+        self._start_run_watcher(
+            account_id=account.account_id,
+            gateway_session_id=gateway_session.gateway_session_id,
+            run_id=run_id,
+            peer_user_id=peer_user_id,
+            context_token=message.context_token,
+        )
+
+    def _start_run_watcher(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        run_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+    ) -> None:
+        if run_id in self._watched_runs:
+            return
+        self._watched_runs.add(run_id)
+        future = asyncio.run_coroutine_threadsafe(
+            self._await_terminal_and_reply(
+                account_id=account_id,
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+                peer_user_id=peer_user_id,
+                context_token=context_token,
+            ),
+            self._require_loop(),
+        )
+
+        def on_reply_done(done: ConcurrentFuture[None]) -> None:
+            self._handle_reply_future(
+                account_id=account_id,
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+                peer_user_id=peer_user_id,
+                future=done,
             )
 
-            def on_reply_done(done: ConcurrentFuture[None]) -> None:
-                self._handle_reply_future(
-                    account_id=account.account_id,
-                    gateway_session_id=gateway_session.gateway_session_id,
-                    run_id=run_id,
-                    peer_user_id=peer_user_id,
-                    future=done,
-                )
-
-            future.add_done_callback(on_reply_done)
+        future.add_done_callback(on_reply_done)
 
     async def _await_terminal_and_reply(
         self,
@@ -573,6 +609,28 @@ class WeChatGatewayService:
     ) -> None:
         try:
             async for event in self._run_service.stream_run_events(run_id):
+                if event.event_type == RunEventType.RUN_PAUSED:
+                    account = self._repository.get_account(account_id)
+                    token = self._secret_store.get_bot_token(
+                        self._config_dir, account_id
+                    )
+                    if token is None:
+                        raise RuntimeError(
+                            f"WeChat reply failed because bot token is missing for {account_id}."
+                        )
+                    text = self._paused_text(event)
+                    self._send_typing(account, token, peer_user_id, context_token, 2)
+                    self._im_tool_service.send_text_to_wechat_peer(
+                        account_id=account_id,
+                        peer_user_id=peer_user_id,
+                        text=text,
+                        context_token=context_token,
+                    )
+                    self._record_pause_notice(
+                        account_id=account_id,
+                        occurred_at=datetime.now(tz=timezone.utc),
+                    )
+                    return
                 if event.event_type not in _TERMINAL_EVENT_TYPES:
                     continue
                 account = self._repository.get_account(account_id)
@@ -612,7 +670,7 @@ class WeChatGatewayService:
                 )
                 return
             raise RuntimeError(
-                f"WeChat reply watcher ended before a terminal run event for {run_id}."
+                f"WeChat reply watcher ended before a stop event for {run_id}."
             )
         except Exception as exc:
             self._record_reply_failure(
@@ -744,6 +802,19 @@ class WeChatGatewayService:
             account_id,
             last_error=error_message,
             last_event_at=datetime.now(tz=timezone.utc),
+        )
+
+    def _record_pause_notice(
+        self,
+        *,
+        account_id: str,
+        occurred_at: datetime,
+    ) -> None:
+        self._set_status(
+            account_id,
+            last_error=None,
+            last_outbound_at=occurred_at,
+            last_event_at=occurred_at,
         )
 
     def _clear_active_run(self, gateway_session_id: str) -> None:
@@ -908,6 +979,17 @@ class WeChatGatewayService:
         if isinstance(error, str) and error.strip():
             return f"Run failed: {error.strip()}"
         return "Run failed."
+
+    @staticmethod
+    def _paused_text(event) -> str:
+        try:
+            payload = json.loads(event.payload_json)
+        except json.JSONDecodeError:
+            payload = {}
+        error_message = payload.get("error_message")
+        if isinstance(error_message, str) and error_message.strip():
+            return f"Run paused: {error_message.strip()}\nSend resume to continue."
+        return "Run paused.\nSend resume to continue."
 
     @staticmethod
     def _normalize_qr_code_url(value: str) -> str:

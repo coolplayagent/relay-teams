@@ -29,6 +29,8 @@ This version is designed for Feishu chat workflows:
 - group chats require `@App Name` when `trigger_rule = "mention_only"`
 - single chats accept any text message and do not require mention
 - tool approvals are still resolved through the existing UI/API, not inside Feishu
+- session commands include `help`, `status`, `clear`, and `resume`
+- when a run enters `awaiting_recovery`, Feishu sends a pause hint and the user can reply with `resume`
 
 ## Account Model
 

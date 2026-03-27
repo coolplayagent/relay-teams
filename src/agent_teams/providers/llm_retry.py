@@ -34,6 +34,7 @@ class LlmRetryErrorInfo(BaseModel):
     error_code: str | None = None
     error_type: str | None = None
     retry_after_ms: int | None = Field(default=None, ge=0)
+    retryable: bool = False
     transport_error: bool = False
     timeout_error: bool = False
 
@@ -76,6 +77,7 @@ async def run_with_llm_retry(
             if (
                 not config.enabled
                 or error is None
+                or not error.retryable
                 or retries_used >= config.max_retries
                 or not is_retry_allowed()
             ):
@@ -138,31 +140,48 @@ def extract_retry_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
 
 def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
     if isinstance(exc, ModelHTTPError):
+        retryable = _is_retryable_status_code(exc.status_code)
         return LlmRetryErrorInfo(
             message=str(exc),
             status_code=exc.status_code,
             error_code=_status_code_error_code(exc.status_code),
+            retryable=retryable,
         )
     if isinstance(exc, ModelAPIError):
         parsed = _parse_message_metadata(str(exc))
         if parsed is None:
             return None
+        retryable = (
+            _is_retryable_status_code(parsed.status_code)
+            if parsed.status_code is not None
+            else True
+        )
         return LlmRetryErrorInfo(
             message=str(exc),
             status_code=parsed.status_code,
             error_code=parsed.error_code,
+            retryable=retryable,
         )
     if isinstance(exc, httpx.TimeoutException):
         return LlmRetryErrorInfo(
             message=str(exc) or "Connection timed out.",
             error_code="network_timeout",
+            retryable=True,
             transport_error=True,
             timeout_error=True,
+        )
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return LlmRetryErrorInfo(
+            message=str(exc) or "Stream transport was interrupted.",
+            error_code="network_stream_interrupted",
+            retryable=True,
+            transport_error=True,
         )
     if isinstance(exc, httpx.RequestError):
         return LlmRetryErrorInfo(
             message=str(exc) or "Network request failed.",
             error_code="network_error",
+            retryable=True,
             transport_error=True,
         )
 
@@ -170,6 +189,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         return LlmRetryErrorInfo(
             message=str(exc) or "Connection timed out.",
             error_code="network_timeout",
+            retryable=True,
             transport_error=True,
             timeout_error=True,
         )
@@ -177,6 +197,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         return LlmRetryErrorInfo(
             message=str(exc) or "Network request failed.",
             error_code="network_error",
+            retryable=True,
             transport_error=True,
         )
     if APIStatusError is not None and isinstance(exc, APIStatusError):
@@ -184,27 +205,34 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         headers = getattr(response, "headers", None)
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
+        status_code = getattr(exc, "status_code", None)
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
-            status_code=getattr(exc, "status_code", None),
-            error_code=error_payload.error_code
-            or _status_code_error_code(getattr(exc, "status_code", None)),
+            status_code=status_code,
+            error_code=error_payload.error_code or _status_code_error_code(status_code),
             error_type=error_payload.error_type,
             retry_after_ms=_parse_retry_after_ms(headers.get("retry-after"))
             if headers is not None
             else None,
+            retryable=_is_retryable_status_code(status_code),
         )
     if APIError is not None and isinstance(exc, APIError):
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         fallback = _parse_message_metadata(str(exc))
+        status_code = fallback.status_code if fallback is not None else None
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
-            status_code=fallback.status_code if fallback is not None else None,
+            status_code=status_code,
             error_code=error_payload.error_code
             or _optional_str(getattr(exc, "code", None))
             or (fallback.error_code if fallback is not None else None),
             error_type=error_payload.error_type,
+            retryable=(
+                _is_retryable_status_code(status_code)
+                if status_code is not None
+                else True
+            ),
         )
 
     return None
@@ -280,6 +308,12 @@ def _status_code_error_code(status_code: int | None) -> str | None:
     if status_code >= 500:
         return "provider_error"
     return "request_invalid"
+
+
+def _is_retryable_status_code(status_code: int | None) -> bool:
+    if status_code is None:
+        return False
+    return status_code == 429 or status_code >= 500
 
 
 def _parse_retry_after_ms(raw_value: str | None) -> int | None:

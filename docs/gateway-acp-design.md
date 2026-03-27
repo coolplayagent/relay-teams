@@ -371,6 +371,12 @@ Responsibilities:
 - channel-specific presentation or approval UX
 - resume and follow-up behavior
 
+ACP-specific paused run behavior:
+
+- `session/prompt` should treat `run_paused` as the end of the current turn, not as a protocol error.
+- gateway session state must keep `active_run_id` while a run is paused for `awaiting_recovery`.
+- `session/resume` resumes the gateway session's active recoverable run and starts a new event watch cycle.
+
 ### 11.2 Event Sources
 
 Webhook-like IM events belong in `triggers`.

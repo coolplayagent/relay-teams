@@ -114,6 +114,7 @@ class FeishuMessagePoolService:
         self._stop_event = Event()
         self._wake_event = Event()
         self._thread: Thread | None = None
+        self._pause_notice_keys: set[str] = set()
 
     def start(self) -> None:
         self._message_pool_repo.recover_stale_claims(
@@ -466,9 +467,12 @@ class FeishuMessagePoolService:
                 continue
             if runtime.status in {
                 RunRuntimeStatus.RUNNING,
-                RunRuntimeStatus.PAUSED,
                 RunRuntimeStatus.STOPPING,
             }:
+                continue
+            if runtime.status == RunRuntimeStatus.PAUSED:
+                if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
+                    progress = self._notify_recovery_pause(record, runtime) or progress
                 continue
             if runtime.status not in {
                 RunRuntimeStatus.COMPLETED,
@@ -486,6 +490,11 @@ class FeishuMessagePoolService:
         record: FeishuMessagePoolRecord,
         runtime: RunRuntimeRecord,
     ) -> None:
+        self._pause_notice_keys = {
+            key
+            for key in self._pause_notice_keys
+            if not key.startswith(f"{record.run_id}:")
+        }
         reply_text = _build_terminal_reply(
             run_id=str(record.run_id or ""),
             runtime_status=runtime.status,
@@ -647,6 +656,51 @@ class FeishuMessagePoolService:
             ack_status=FeishuMessageDeliveryStatus.SENT,
             last_error=None,
         )
+        return True
+
+    def _notify_recovery_pause(
+        self,
+        record: FeishuMessagePoolRecord,
+        runtime: RunRuntimeRecord,
+    ) -> bool:
+        pause_event_id, error_message = _latest_pause_event(
+            run_id=str(record.run_id or ""),
+            event_log=self._event_log,
+        )
+        if pause_event_id is None:
+            return False
+        dedupe_key = f"{record.run_id}:{pause_event_id}"
+        if dedupe_key in self._pause_notice_keys:
+            return False
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            record.trigger_id
+        )
+        if runtime_config is None or self._feishu_client is None:
+            return False
+        text = _build_pause_reply(
+            run_id=str(record.run_id or ""),
+            error_message=error_message or runtime.last_error,
+        )
+        try:
+            self._send_terminal_reply(
+                record=record,
+                text=text,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.message_pool.pause_notice_failed",
+                message="Failed to send Feishu paused-run notice",
+                payload={
+                    "message_pool_id": record.message_pool_id,
+                    "run_id": record.run_id,
+                    "error": str(exc),
+                },
+            )
+            return False
+        self._pause_notice_keys.add(dedupe_key)
         return True
 
     def _send_queue_reply(
@@ -881,6 +935,17 @@ def _build_terminal_reply(
     return f"Run {run_id} failed."
 
 
+def _build_pause_reply(
+    *,
+    run_id: str,
+    error_message: str | None,
+) -> str:
+    reason = str(error_message or "").strip()
+    if reason:
+        return f"运行已暂停：{reason}\n发送 resume 继续。"
+    return f"运行 {run_id} 已暂停。\n发送 resume 继续。"
+
+
 def _extract_terminal_output(payload: dict[str, object]) -> str:
     output_value = payload.get("output")
     if isinstance(output_value, str):
@@ -915,6 +980,36 @@ def _run_blocking_reason(runtime: RunRuntimeRecord | None) -> str | None:
         return "awaiting_tool_approval"
     if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP:
         return "awaiting_subagent_followup"
+    if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
+        return "awaiting_recovery"
     if runtime.status == RunRuntimeStatus.STOPPING:
         return "stopping"
     return None
+
+
+def _latest_pause_event(
+    *,
+    run_id: str,
+    event_log: EventLog,
+) -> tuple[int | None, str | None]:
+    try:
+        for event in reversed(event_log.list_by_trace_with_ids(run_id)):
+            if str(event.get("event_type") or "") != RunEventType.RUN_PAUSED.value:
+                continue
+            event_id = event.get("id")
+            if not isinstance(event_id, int):
+                continue
+            payload_json = str(event.get("payload_json") or "{}")
+            try:
+                payload = json.loads(payload_json)
+            except json.JSONDecodeError:
+                payload = {}
+            error_message = None
+            if isinstance(payload, dict):
+                raw_message = payload.get("error_message")
+                if isinstance(raw_message, str) and raw_message.strip():
+                    error_message = raw_message.strip()
+            return event_id, error_message
+    except Exception:
+        return None, None
+    return None, None

@@ -7,7 +7,7 @@
 1. **模型配置可用性探测**：在“设置 > 大模型设置”中提供一键探测，帮助用户在保存配置后快速验证可连通。
 2. **运行期自动重试**：在主流程（Coordinator/主 Agent）和 Subagent 的模型调用中，对网络抖动与暂时性故障自动重试。
 3. **前端可感知重试过程**：重试开始、每次退避、最终成功/失败都通过 SSE 事件实时透出。
-4. **超限暂停+人工恢复**：超过最大重试次数后，流程进入“暂停等待恢复”状态，前端提供“重试继续”按钮，恢复后从当前节点继续。
+4. **超限暂停+人工恢复**：超过最大重试次数后，流程进入“暂停等待恢复”状态，前端、ACP、IM 都可以显式恢复，恢复后从最近 checkpoint 继续。
 
 > 注：本方案是**向前演进设计**，不要求对旧行为做兼容层。
 
@@ -20,6 +20,7 @@
 - **主流程与 Subagent 一致语义**：统一重试策略、统一事件字段，便于前端复用。
 - **可观测**：每次重试有 request_id/trace_id、错误分类、退避时长。
 - **可恢复**：超过阈值后不中断上下文，进入 paused 状态，允许用户人工恢复。
+- **安全边界优先**：只有在当前 LLM step 尚未产生用户可见正文、工具事件或消息历史提交时，才允许后台自动重试；跨过该边界后改为 paused，等待显式恢复。
 
 ---
 
@@ -202,13 +203,14 @@ class RetryDecision(BaseModel):
 触发规则：
 
 1. 调用失败且可重试 -> 自动重试。
-2. 达到 `max_attempts` 仍失败 -> emit `model_retry_exhausted`，切 `paused`，emit `run_paused`。
-3. 用户调用 `:resume` -> 切 `running`，emit `run_resumed`，从失败节点继续。
+2. 达到 `max_attempts` 仍失败，或在安全边界之后遇到可重试断流 -> emit `model_retry_exhausted`（若适用），切 `paused/awaiting_recovery`，emit `run_paused`。
+3. 用户调用 `:resume`，或 ACP `session/resume`，或 IM `resume` 命令 -> 切 `running`，emit `run_resumed`，从最近 checkpoint 继续。
 
 恢复点要求：
 
 - 保留“当前未完成 step”的输入快照（prompt、工具结果、上下文游标）。
 - **长流输出中断策略（定案）**：当流式输出中途网络中断时，不尝试恢复原流的 token 级续传；直接丢弃中断流，从最近 checkpoint 重新执行当前 step。
+- **断流分类（定案）**：`httpx.RemoteProtocolError` / `incomplete chunked read` 归类为 `network_stream_interrupted`，属于可恢复错误。
 - `resume` 后由后端重新发起该 step 的流式输出，前端将其视为同一任务的继续执行。
 
 ## 4.4 幂等性设计（必须项）

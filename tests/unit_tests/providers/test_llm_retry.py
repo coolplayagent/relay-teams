@@ -50,6 +50,20 @@ def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
     assert info.message == "busy"
 
 
+def test_extract_retry_error_info_marks_remote_protocol_interrupt_as_retryable() -> (
+    None
+):
+    info = extract_retry_error_info(
+        httpx.RemoteProtocolError("incomplete chunked read")
+    )
+
+    assert info is not None
+    assert info.error_code == "network_stream_interrupted"
+    assert info.retryable is True
+    assert info.transport_error is True
+    assert info.timeout_error is False
+
+
 def test_compute_retry_delay_ms_uses_exponential_backoff_without_jitter() -> None:
     config = LlmRetryConfig(
         jitter=False,

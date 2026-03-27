@@ -70,6 +70,7 @@ class FakeRunManager:
         self.events_by_run: dict[str, tuple[RunEvent, ...]] = {}
         self.create_calls: list[IntentInput] = []
         self.ensure_started_calls: list[str] = []
+        self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
@@ -84,6 +85,10 @@ class FakeRunManager:
 
     def ensure_run_started(self, run_id: str) -> None:
         self.ensure_started_calls.append(run_id)
+
+    def resume_run(self, run_id: str) -> str:
+        self.resume_calls.append(run_id)
+        return "session-1"
 
     def stop_run(self, run_id: str) -> None:
         self.stop_calls.append(run_id)
@@ -209,7 +214,12 @@ async def test_session_prompt_streams_updates_and_usage(
     )
     response_result = _require_result_object(response)
 
-    assert response_result == {"stopReason": "end_turn"}
+    assert response_result == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
     assert len(run_manager.create_calls) == 1
     assert run_manager.create_calls[0] == IntentInput(
         session_id="session-1",
@@ -226,6 +236,106 @@ async def test_session_prompt_streams_updates_and_usage(
         "tool_call_update",
         "agent_message_chunk",
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_returns_paused_run_without_clearing_binding(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, notifications = _build_server(tmp_path)
+    run_manager.events_by_run["run-1"] = (
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.RUN_PAUSED,
+            {"error_message": "stream interrupted"},
+        ),
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "messageId": "user-msg-1",
+                "prompt": [{"type": "text", "text": "continue"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "paused",
+        "recoverable": True,
+    }
+    params = notifications[-1]["params"]
+    assert isinstance(params, dict)
+    update = params["update"]
+    assert isinstance(update, dict)
+    assert update["sessionUpdate"] == "agent_message_chunk"
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert (
+        content["text"]
+        == "Run paused: stream interrupted\nSend session/resume to continue."
+    )
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    assert record.active_run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_session_resume_restarts_active_run_and_returns_result(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, _notifications = _build_server(tmp_path)
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-9"}))
+    run_manager.events_by_run["run-9"] = (
+        _event("session-1", "run-9", RunEventType.RUN_COMPLETED, {}),
+    )
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/resume",
+            "params": {"sessionId": session_id},
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-9",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
+    assert run_manager.resume_calls == ["run-9"]
+    assert run_manager.ensure_started_calls == ["run-9"]
+    assert repository.get(session_id).active_run_id is None
 
 
 @pytest.mark.asyncio
@@ -288,7 +398,12 @@ async def test_session_prompt_streams_progress_updates_for_zed(
         }
     )
 
-    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == [
         "agent_thought_chunk",
@@ -342,7 +457,12 @@ async def test_session_prompt_includes_string_tool_raw_input_for_zed(
         }
     )
 
-    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
     params = notifications[0]["params"]
     assert isinstance(params, dict)
     update = params["update"]
@@ -510,7 +630,12 @@ async def test_session_prompt_preserves_whitespace_for_zed_chunks(
         }
     )
 
-    assert _require_result_object(response) == {"stopReason": "end_turn"}
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
     params = notifications[0]["params"]
     assert isinstance(params, dict)
     update = params["update"]
@@ -518,6 +643,37 @@ async def test_session_prompt_preserves_whitespace_for_zed_chunks(
     content = update["content"]
     assert isinstance(content, dict)
     assert content["text"] == formatted_text
+
+
+@pytest.mark.asyncio
+async def test_session_cancel_falls_back_to_persisted_active_run_binding(
+    tmp_path: Path,
+) -> None:
+    server, _, run_manager, _notifications = _build_server(tmp_path)
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-cancel"}))
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/cancel",
+            "params": {"sessionId": session_id},
+        }
+    )
+
+    assert _require_result_object(response) == {"status": "ok"}
+    assert run_manager.stop_calls == ["run-cancel"]
 
 
 @pytest.mark.asyncio

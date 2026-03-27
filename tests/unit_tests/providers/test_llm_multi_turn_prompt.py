@@ -46,6 +46,7 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
+from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -1767,11 +1768,13 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
         user_prompt="retry me",
     )
 
-    with pytest.raises(APIError):
+    with pytest.raises(RecoverableRunPauseError) as exc_info:
         await provider.generate(request)
 
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert exc_info.value.payload.error_code == "2062"
+    assert exc_info.value.payload.error_message == "busy"
 
 
 @pytest.mark.asyncio
@@ -1828,7 +1831,7 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
         user_prompt="retry me",
     )
 
-    with pytest.raises(APIError):
+    with pytest.raises(RecoverableRunPauseError) as exc_info:
         await provider.generate(request)
 
     event_types = [event.event_type for event in fake_hub.events]
@@ -1843,3 +1846,5 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     assert payload["attempt_number"] == 3
     assert payload["total_attempts"] == 3
     assert payload["error_message"] == "busy"
+    assert exc_info.value.payload.error_code == "2062"
+    assert exc_info.value.payload.retries_used == 2

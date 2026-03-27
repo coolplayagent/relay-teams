@@ -25,6 +25,7 @@ class RunStatePhase(str, Enum):
     STREAMING = "streaming"
     AWAITING_TOOL_APPROVAL = "awaiting_tool_approval"
     AWAITING_SUBAGENT_FOLLOWUP = "awaiting_subagent_followup"
+    AWAITING_RECOVERY = "awaiting_recovery"
     TERMINAL = "terminal"
 
 
@@ -82,6 +83,7 @@ _TERMINAL_STATES = {
 _STOPPED_STATE = RunStateStatus.STOPPED
 _CHECKPOINT_EVENT_TYPES = {
     RunEventType.RUN_STARTED,
+    RunEventType.RUN_PAUSED,
     RunEventType.RUN_RESUMED,
     RunEventType.MODEL_STEP_STARTED,
     RunEventType.TOOL_APPROVAL_REQUESTED,
@@ -94,6 +96,7 @@ _CHECKPOINT_EVENT_TYPES = {
     RunEventType.RUN_FAILED,
 }
 _STOPPED_FOLLOWUP_EVENT_TYPES = {
+    RunEventType.RUN_PAUSED,
     RunEventType.RUN_RESUMED,
     RunEventType.TOOL_APPROVAL_RESOLVED,
     RunEventType.SUBAGENT_RESUMED,
@@ -161,6 +164,10 @@ def apply_run_event_to_state(
     if event_type in {RunEventType.RUN_STARTED, RunEventType.RUN_RESUMED}:
         status = RunStateStatus.RUNNING
         phase = RunStatePhase.STREAMING
+        recoverable = True
+    elif event_type == RunEventType.RUN_PAUSED:
+        status = RunStateStatus.PAUSED
+        phase = RunStatePhase.AWAITING_RECOVERY
         recoverable = True
     elif event_type in {
         RunEventType.LLM_RETRY_SCHEDULED,
@@ -242,6 +249,8 @@ def apply_run_event_to_state(
         elif paused_subagent is not None:
             status = RunStateStatus.PAUSED
             phase = RunStatePhase.AWAITING_SUBAGENT_FOLLOWUP
+        elif status == RunStateStatus.PAUSED:
+            phase = RunStatePhase.AWAITING_RECOVERY
         elif status == RunStateStatus.QUEUED:
             phase = RunStatePhase.IDLE
         else:

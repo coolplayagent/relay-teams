@@ -155,6 +155,45 @@ async def test_await_terminal_and_reply_records_failure_when_send_fails() -> Non
     assert "run-1" not in service._watched_runs
 
 
+@pytest.mark.asyncio
+async def test_await_terminal_and_reply_sends_pause_notice_without_clearing_binding() -> (
+    None
+):
+    service, gateway_session_service, _, im_tool_service, _ = _build_service(
+        events=(
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "stream interrupted"},
+            ),
+        )
+    )
+    service._watched_runs.add("run-1")
+
+    await service._await_terminal_and_reply(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        run_id="run-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+    )
+
+    assert im_tool_service.send_text_calls == [
+        {
+            "account_id": "wx-account-1",
+            "peer_user_id": "wx-peer-1",
+            "text": "Run paused: stream interrupted\nSend resume to continue.",
+            "context_token": "ctx-1",
+        }
+    ]
+    assert gateway_session_service.bind_calls == []
+    snapshot = service._status("wx-account-1")
+    assert snapshot.last_error is None
+    assert snapshot.last_outbound_at is not None
+    assert snapshot.last_event_at == snapshot.last_outbound_at
+    assert "run-1" not in service._watched_runs
+
+
 def test_handle_reply_future_records_cancelled_future() -> None:
     service, gateway_session_service, _, _, _ = _build_service(events=())
     future: Future[None] = Future()

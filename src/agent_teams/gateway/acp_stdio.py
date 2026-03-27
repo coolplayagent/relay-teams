@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import BinaryIO
 from uuid import uuid4
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.env import get_env_var
 from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay
@@ -47,6 +47,17 @@ class AcpProtocolError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class _AcpRunStopResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stop_reason: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    run_status: str = Field(min_length=1)
+    recoverable: bool = False
+    error_message: str | None = None
+    clear_active_run: bool = True
 
 
 class AcpGatewayServer:
@@ -140,6 +151,8 @@ class AcpGatewayServer:
             return await self._load_session(params)
         if method == "session/prompt":
             return await self._prompt_session(params, message_id)
+        if method == "session/resume":
+            return await self._resume_session(params)
         if method == "session/cancel":
             return self._cancel_session(params)
         if method == "mcp/connect":
@@ -250,6 +263,7 @@ class AcpGatewayServer:
         params: dict[str, JsonValue],
         message_id: JsonRpcId,
     ) -> dict[str, JsonValue]:
+        _ = message_id
         gateway_session_id = _required_str(params, "sessionId")
         prompt_blocks = _required_list(params, "prompt")
         record = self._gateway_session_service.get_session(gateway_session_id)
@@ -288,32 +302,100 @@ class AcpGatewayServer:
                             "content": content,
                         },
                     )
+            result = await self._await_run_stop(
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+            )
 
-            stop_reason = "end_turn"
-            terminal_error: str | None = None
+        self._finalize_active_run_binding(
+            gateway_session_id=gateway_session_id,
+            run_id=run_id,
+            clear_active_run=result.clear_active_run,
+        )
+        if result.error_message is not None:
+            raise AcpProtocolError(-32000, result.error_message)
+        return {
+            "stopReason": result.stop_reason,
+            "runId": result.run_id,
+            "runStatus": result.run_status,
+            "recoverable": result.recoverable,
+        }
 
-            async for event in self._run_service.stream_run_events(run_id):
-                maybe_stop_reason, maybe_error = await self._map_run_event(
-                    gateway_session_id=gateway_session_id,
-                    event=event,
-                )
-                if maybe_stop_reason is not None:
-                    stop_reason = maybe_stop_reason
-                if maybe_error is not None:
-                    terminal_error = maybe_error
+    async def _resume_session(
+        self,
+        params: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        gateway_session_id = _required_str(params, "sessionId")
+        record = self._gateway_session_service.get_session(gateway_session_id)
+        run_id = str(record.active_run_id or "").strip()
+        if not run_id:
+            raise AcpProtocolError(-32602, "Session has no active run to resume")
+        with self._mcp_relay.session_scope(gateway_session_id):
+            self._run_service.resume_run(run_id)
+            self._run_service.ensure_run_started(run_id)
+            self._active_runs[gateway_session_id] = run_id
+            _ = self._gateway_session_service.bind_active_run(
+                gateway_session_id, run_id
+            )
+            result = await self._await_run_stop(
+                gateway_session_id=gateway_session_id,
+                run_id=run_id,
+            )
 
-        self._active_runs.pop(gateway_session_id, None)
-        _ = self._gateway_session_service.bind_active_run(gateway_session_id, None)
-        if terminal_error is not None:
-            raise AcpProtocolError(-32000, terminal_error)
-        return {"stopReason": stop_reason}
+        self._finalize_active_run_binding(
+            gateway_session_id=gateway_session_id,
+            run_id=run_id,
+            clear_active_run=result.clear_active_run,
+        )
+        if result.error_message is not None:
+            raise AcpProtocolError(-32000, result.error_message)
+        return {
+            "stopReason": result.stop_reason,
+            "runId": result.run_id,
+            "runStatus": result.run_status,
+            "recoverable": result.recoverable,
+        }
+
+    async def _await_run_stop(
+        self,
+        *,
+        gateway_session_id: str,
+        run_id: str,
+    ) -> _AcpRunStopResult:
+        stop_reason = "end_turn"
+        run_status = "running"
+        recoverable = True
+        terminal_error: str | None = None
+        clear_active_run = True
+
+        async for event in self._run_service.stream_run_events(run_id):
+            maybe_result = await self._map_run_event(
+                gateway_session_id=gateway_session_id,
+                event=event,
+            )
+            if maybe_result is None:
+                continue
+            stop_reason = maybe_result.stop_reason
+            run_status = maybe_result.run_status
+            recoverable = maybe_result.recoverable
+            terminal_error = maybe_result.error_message
+            clear_active_run = maybe_result.clear_active_run
+            return _AcpRunStopResult(
+                stop_reason=stop_reason,
+                run_id=run_id,
+                run_status=run_status,
+                recoverable=recoverable,
+                error_message=terminal_error,
+                clear_active_run=clear_active_run,
+            )
+        raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
 
     async def _map_run_event(
         self,
         *,
         gateway_session_id: str,
         event: RunEvent,
-    ) -> tuple[str | None, str | None]:
+    ) -> _AcpRunStopResult | None:
         payload = _load_payload(event.payload_json)
         if event.event_type == RunEventType.TEXT_DELTA:
             text = _optional_text(payload, "text")
@@ -328,7 +410,7 @@ class AcpGatewayServer:
                         },
                     },
                 )
-            return None, None
+            return None
         if event.event_type == RunEventType.OUTPUT_DELTA:
             for content in _typed_output_payload_to_acp_content(payload):
                 await self._publish_session_update(
@@ -338,7 +420,7 @@ class AcpGatewayServer:
                         "content": content,
                     },
                 )
-            return None, None
+            return None
         if event.event_type == RunEventType.GENERATION_PROGRESS:
             tool_call_id = f"generation_{event.run_id}"
             run_kind = _optional_str(payload, "run_kind") or "generation"
@@ -360,7 +442,7 @@ class AcpGatewayServer:
                         "status": "in_progress",
                     },
                 )
-                return None, None
+                return None
             update_payload: dict[str, JsonValue] = {
                 "sessionUpdate": "tool_call_update",
                 "toolCallId": tool_call_id,
@@ -370,7 +452,7 @@ class AcpGatewayServer:
             if preview_asset_id is not None:
                 update_payload["rawInput"] = preview_asset_id
             await self._publish_session_update(gateway_session_id, update_payload)
-            return None, None
+            return None
         if event.event_type == RunEventType.THINKING_DELTA:
             text = _optional_text(payload, "text")
             if text:
@@ -384,7 +466,7 @@ class AcpGatewayServer:
                         },
                     },
                 )
-            return None, None
+            return None
         if event.event_type == RunEventType.TOOL_CALL:
             tool_call_id = (
                 _optional_str(payload, "tool_call_id") or f"tool_{uuid4().hex[:12]}"
@@ -399,7 +481,7 @@ class AcpGatewayServer:
             if raw_input is not None:
                 update["rawInput"] = raw_input
             await self._publish_session_update(gateway_session_id, update)
-            return None, None
+            return None
         if event.event_type == RunEventType.TOOL_RESULT:
             tool_call_id = (
                 _optional_str(payload, "tool_call_id") or f"tool_{uuid4().hex[:12]}"
@@ -415,22 +497,89 @@ class AcpGatewayServer:
                     "content": content,
                 },
             )
-            return None, None
+            return None
+        if event.event_type == RunEventType.RUN_PAUSED:
+            pause_message = self._paused_run_message(payload)
+            await self._publish_session_update(
+                gateway_session_id,
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": pause_message,
+                    },
+                },
+            )
+            return _AcpRunStopResult(
+                stop_reason="end_turn",
+                run_id=event.run_id,
+                run_status="paused",
+                recoverable=True,
+                error_message=None,
+                clear_active_run=False,
+            )
         if event.event_type == RunEventType.RUN_STOPPED:
-            return "cancelled", None
+            return _AcpRunStopResult(
+                stop_reason="cancelled",
+                run_id=event.run_id,
+                run_status="stopped",
+                recoverable=True,
+                error_message=None,
+                clear_active_run=True,
+            )
         if event.event_type == RunEventType.RUN_FAILED:
             error_text = _optional_str(payload, "error") or "Run failed"
-            return "end_turn", error_text
+            return _AcpRunStopResult(
+                stop_reason="end_turn",
+                run_id=event.run_id,
+                run_status="failed",
+                recoverable=False,
+                error_message=error_text,
+                clear_active_run=True,
+            )
         if event.event_type == RunEventType.RUN_COMPLETED:
-            return "end_turn", None
-        return None, None
+            return _AcpRunStopResult(
+                stop_reason="end_turn",
+                run_id=event.run_id,
+                run_status="completed",
+                recoverable=False,
+                error_message=None,
+                clear_active_run=True,
+            )
+        return None
 
     def _cancel_session(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         run_id = self._active_runs.get(gateway_session_id)
+        if run_id is None:
+            record = self._gateway_session_service.get_session(gateway_session_id)
+            run_id = str(record.active_run_id or "").strip() or None
         if run_id is not None:
             self._run_service.stop_run(run_id)
         return {"status": "ok"}
+
+    def _finalize_active_run_binding(
+        self,
+        *,
+        gateway_session_id: str,
+        run_id: str,
+        clear_active_run: bool,
+    ) -> None:
+        if not clear_active_run:
+            self._active_runs[gateway_session_id] = run_id
+            _ = self._gateway_session_service.bind_active_run(
+                gateway_session_id, run_id
+            )
+            return
+        self._active_runs.pop(gateway_session_id, None)
+        _ = self._gateway_session_service.bind_active_run(gateway_session_id, None)
+
+    @staticmethod
+    def _paused_run_message(payload: dict[str, JsonValue]) -> str:
+        error_message = _optional_str(payload, "error_message")
+        if error_message:
+            return f"Run paused: {error_message}\nSend session/resume to continue."
+        return "Run paused. Send session/resume to continue."
 
     async def _mcp_connect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")

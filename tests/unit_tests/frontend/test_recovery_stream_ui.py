@@ -48,6 +48,9 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert (
         "Run is still stopping. Wait for it to stop before resuming." in recovery_script
     )
+    assert "activeRun.status === 'paused'" in recovery_script
+    assert "activeRun.phase === 'awaiting_recovery'" in recovery_script
+    assert "label: 'Resume Run'" in recovery_script
     assert (
         "Stop requested. Wait for the active worker to exit before attempting recovery."
         in recovery_script

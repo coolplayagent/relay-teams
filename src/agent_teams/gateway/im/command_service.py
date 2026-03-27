@@ -5,6 +5,8 @@ import logging
 from collections.abc import Mapping
 from typing import Protocol
 
+from pydantic import BaseModel, ConfigDict
+
 from agent_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuChatQueueClearResult,
@@ -19,9 +21,16 @@ from agent_teams.providers.token_usage_repo import SessionTokenUsage
 from agent_teams.sessions import ExternalSessionBindingRepository, SessionService
 from agent_teams.sessions.runs.run_manager import RunManager
 
-_SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear"})
+_SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear", "resume"})
 
 LOGGER = get_logger(__name__)
+
+
+class ImSessionCommandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str
+    resumed_run_id: str | None = None
 
 
 class _FeishuQueueLookup(Protocol):
@@ -67,18 +76,27 @@ class ImSessionCommandService:
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
         message: FeishuNormalizedMessage,
-    ) -> str | None:
+    ) -> ImSessionCommandResult | None:
         command = self._normalize_command(message.trigger_text)
         if command is None:
             return None
         if command == "help":
-            return self._cmd_help()
+            return ImSessionCommandResult(text=self._cmd_help())
         if command == "status":
-            return self._cmd_feishu_status(
-                runtime_config=runtime_config,
-                message=message,
+            return ImSessionCommandResult(
+                text=self._cmd_feishu_status(
+                    runtime_config=runtime_config,
+                    message=message,
+                )
             )
-        return self._cmd_feishu_clear(
+        if command == "clear":
+            return ImSessionCommandResult(
+                text=self._cmd_feishu_clear(
+                    runtime_config=runtime_config,
+                    message=message,
+                )
+            )
+        return self._cmd_feishu_resume(
             runtime_config=runtime_config,
             message=message,
         )
@@ -89,15 +107,24 @@ class ImSessionCommandService:
         session_id: str,
         gateway_session_id: str,
         text: str,
-    ) -> str | None:
+    ) -> ImSessionCommandResult | None:
         command = self._normalize_command(text)
         if command is None:
             return None
         if command == "help":
-            return self._cmd_help()
+            return ImSessionCommandResult(text=self._cmd_help())
         if command == "status":
-            return self._cmd_wechat_status(session_id=session_id)
-        return self._cmd_wechat_clear(
+            return ImSessionCommandResult(
+                text=self._cmd_wechat_status(session_id=session_id)
+            )
+        if command == "clear":
+            return ImSessionCommandResult(
+                text=self._cmd_wechat_clear(
+                    session_id=session_id,
+                    gateway_session_id=gateway_session_id,
+                )
+            )
+        return self._cmd_wechat_resume(
             session_id=session_id,
             gateway_session_id=gateway_session_id,
         )
@@ -117,6 +144,7 @@ class ImSessionCommandService:
             "help   - Show this help message",
             "status - Show current session state",
             "clear  - Clear session context",
+            "resume - Continue a paused run",
         ]
         return "\n".join(lines)
 
@@ -284,6 +312,111 @@ class ImSessionCommandService:
             f"Stopped {stopped_run_count} active runs."
         )
 
+    def _cmd_feishu_resume(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+    ) -> ImSessionCommandResult:
+        session_id = self._resolve_feishu_session_id(
+            runtime_config=runtime_config,
+            message=message,
+        )
+        return self._resume_session_command(session_id=session_id)
+
+    def _cmd_wechat_resume(
+        self,
+        *,
+        session_id: str,
+        gateway_session_id: str,
+    ) -> ImSessionCommandResult:
+        result = self._resume_session_command(session_id=session_id)
+        if result.resumed_run_id is not None:
+            try:
+                self._gateway_session_service.bind_active_run(
+                    gateway_session_id,
+                    result.resumed_run_id,
+                )
+            except KeyError as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="im.command.wechat.resume_binding_failed",
+                    message="Failed to bind resumed WeChat run",
+                    payload={
+                        "session_id": session_id,
+                        "gateway_session_id": gateway_session_id,
+                        "run_id": result.resumed_run_id,
+                        "error": str(exc),
+                    },
+                )
+        return result
+
+    def _resume_session_command(
+        self,
+        *,
+        session_id: str | None,
+    ) -> ImSessionCommandResult:
+        if session_id is None:
+            return ImSessionCommandResult(
+                text="[Resume] No active session. Nothing to resume."
+            )
+        resolved_session_id = self._require_existing_session_id(session_id)
+        if resolved_session_id is None:
+            return ImSessionCommandResult(
+                text="[Resume] Session not found. Nothing to resume."
+            )
+        recovery_snapshot = self._session_service.get_recovery_snapshot(
+            resolved_session_id
+        )
+        active_run = recovery_snapshot.get("active_run")
+        if not isinstance(active_run, Mapping):
+            return ImSessionCommandResult(
+                text="[Resume] No recoverable run is waiting."
+            )
+        run_id = str(active_run.get("run_id") or "").strip()
+        status = str(active_run.get("status") or "").strip()
+        phase = str(active_run.get("phase") or "").strip()
+        is_recoverable = bool(active_run.get("is_recoverable"))
+        if not run_id or not is_recoverable:
+            return ImSessionCommandResult(
+                text="[Resume] No recoverable run is waiting."
+            )
+        if phase == "awaiting_tool_approval":
+            return ImSessionCommandResult(
+                text="[Resume] This run is waiting for tool approval, not resume."
+            )
+        if phase == "awaiting_subagent_followup":
+            return ImSessionCommandResult(
+                text="[Resume] This run is waiting for subagent follow-up, not resume."
+            )
+        if phase != "awaiting_recovery" and status not in {"paused", "stopped"}:
+            return ImSessionCommandResult(
+                text=f"[Resume] Run {run_id} is not waiting for recovery."
+            )
+        try:
+            _ = self._run_service.resume_run(run_id)
+            self._run_service.ensure_run_started(run_id)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="im.command.resume_failed",
+                message="Failed to resume IM session run",
+                payload={
+                    "session_id": resolved_session_id,
+                    "run_id": run_id,
+                    "error": str(exc),
+                },
+            )
+            return ImSessionCommandResult(
+                text=f"[Resume] Failed to resume run {run_id}: {exc}"
+            )
+        return ImSessionCommandResult(
+            text=f"[Resume] Resumed run {run_id}.",
+            resumed_run_id=run_id,
+        )
+
     def _build_status_text(
         self,
         *,
@@ -368,7 +501,10 @@ class ImSessionCommandService:
             segments.append(f"status={status}")
         if phase:
             segments.append(f"phase={phase}")
-        return [" | ".join(segments)]
+        lines = [" | ".join(segments)]
+        if phase == "awaiting_recovery":
+            lines.append("Resume: send resume to continue this run.")
+        return lines
 
     def _resolve_feishu_session_id(
         self,
