@@ -262,6 +262,6 @@ else:
         return JSONResponse(
             {
                 "status": "frontend_not_built",
-                "message": "Frontend build artifacts were not found in ./frontend/dist",
+                "message": f"Frontend build artifacts were not found in {FRONTEND_DIST_DIR}",
             }
         )
