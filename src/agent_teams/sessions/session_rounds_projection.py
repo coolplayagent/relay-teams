@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from datetime import datetime
 import json
 from typing import cast
 
@@ -480,11 +481,15 @@ def _attach_marker_before(
     marker_index = 0
     pending_marker: dict[str, object] | None = None
     for round_item in rounds:
-        created_at = str(round_item.get("created_at") or "")
+        created_at = _parse_timestamp(round_item.get("created_at"))
         while marker_index < len(markers):
             marker = markers[marker_index]
-            marker_created_at = str(marker.get("created_at") or "")
-            if marker_created_at > created_at:
+            marker_created_at = _parse_timestamp(marker.get("created_at"))
+            if (
+                marker_created_at is None
+                or created_at is None
+                or marker_created_at > created_at
+            ):
                 break
             pending_marker = marker
             marker_index += 1
@@ -534,3 +539,16 @@ def _round_matches_compaction_marker(
     if not isinstance(first_message, dict):
         return False
     return str(first_message.get("conversation_id") or "") == conversation_id
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None

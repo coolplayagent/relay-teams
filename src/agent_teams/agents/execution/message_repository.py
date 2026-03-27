@@ -6,7 +6,7 @@ from pydantic import JsonValue
 import json
 import sqlite3
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
@@ -134,32 +134,19 @@ class MessageRepository:
     ) -> None:
         if not messages:
             return
-        now = datetime.now(tz=timezone.utc).isoformat()
         resolved_conversation_id = conversation_id or instance_id
-        rows = [
-            (
-                session_id,
-                workspace_id,
-                resolved_conversation_id,
-                agent_role_id or "",
-                instance_id,
-                task_id,
-                trace_id,
-                _role(msg),
-                _sanitize_message_json(
-                    ModelMessagesTypeAdapter.dump_json([msg]).decode()
-                ),
-                now,
-            )
-            for msg in messages
-        ]
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
-            operation=lambda: self._conn.executemany(
-                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rows,
+            operation=lambda: self._append_rows(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                resolved_conversation_id=resolved_conversation_id,
+                agent_role_id=agent_role_id or "",
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                messages=messages,
             ),
             lock=self._lock,
             repository_name="MessageRepository",
@@ -352,7 +339,6 @@ class MessageRepository:
         if not target:
             return False
         resolved_conversation_id = conversation_id or instance_id
-        now = datetime.now(tz=timezone.utc).isoformat()
         message_json = _sanitize_message_json(
             ModelMessagesTypeAdapter.dump_json(
                 [ModelRequest(parts=[UserPromptPart(content=target)])]
@@ -387,6 +373,7 @@ class MessageRepository:
             )
             if _history_ends_with_user_prompt(history, target):
                 return False
+            now = self._next_created_at(session_id=session_id)
             self._conn.execute(
                 "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -533,6 +520,63 @@ class MessageRepository:
             repository_name="MessageRepository",
             operation_name="hide_conversation_messages_for_compaction",
         )
+
+    def _append_rows(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        resolved_conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: Sequence[ModelMessage],
+    ) -> None:
+        now = self._next_created_at(session_id=session_id)
+        rows = [
+            (
+                session_id,
+                workspace_id,
+                resolved_conversation_id,
+                agent_role_id,
+                instance_id,
+                task_id,
+                trace_id,
+                _role(msg),
+                _sanitize_message_json(
+                    ModelMessagesTypeAdapter.dump_json([msg]).decode()
+                ),
+                now,
+            )
+            for msg in messages
+        ]
+        self._conn.executemany(
+            "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+    def _next_created_at(self, *, session_id: str) -> str:
+        candidate = datetime.now(tz=timezone.utc)
+        latest_message_row = self._conn.execute(
+            "SELECT created_at FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        candidate = _ensure_after_iso_value(
+            candidate,
+            None
+            if latest_message_row is None
+            else str(latest_message_row["created_at"]),
+        )
+        if self._session_history_marker_repo is not None:
+            latest_clear = self._session_history_marker_repo.get_latest(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is not None:
+                candidate = _ensure_after_datetime(candidate, latest_clear.created_at)
+        return candidate.isoformat()
 
     def _filter_rows_for_read(
         self,
@@ -772,3 +816,24 @@ def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
         if isinstance(row_id, int):
             safe_ids.add(row_id)
     return safe_ids
+
+
+def _ensure_after_iso_value(candidate: datetime, raw_value: str | None) -> datetime:
+    if raw_value is None:
+        return candidate
+    try:
+        reference = datetime.fromisoformat(raw_value)
+    except ValueError:
+        return candidate
+    return _ensure_after_datetime(candidate, reference)
+
+
+def _ensure_after_datetime(candidate: datetime, reference: datetime) -> datetime:
+    normalized_reference = (
+        reference.replace(tzinfo=timezone.utc)
+        if reference.tzinfo is None
+        else reference.astimezone(timezone.utc)
+    )
+    if candidate > normalized_reference:
+        return candidate
+    return normalized_reference + timedelta(microseconds=1)

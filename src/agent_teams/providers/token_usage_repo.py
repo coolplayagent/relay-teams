@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
@@ -166,8 +166,8 @@ class TokenUsageRepository:
         requests: int = 0,
         tool_calls: int = 0,
     ) -> None:
-        now = datetime.now(tz=timezone.utc).isoformat()
         with self._lock:
+            now = self._next_recorded_at(session_id=session_id)
             self._conn.execute(
                 """
                 INSERT INTO token_usage
@@ -187,7 +187,7 @@ class TokenUsageRepository:
                     self._coerce_non_negative_int(reasoning_output_tokens),
                     self._coerce_non_negative_int(requests),
                     self._coerce_non_negative_int(tool_calls),
-                    now,
+                    now.isoformat(),
                 ),
             )
             self._conn.commit()
@@ -349,6 +349,25 @@ class TokenUsageRepository:
             return None
         return latest_clear.created_at.isoformat()
 
+    def _next_recorded_at(self, *, session_id: str) -> datetime:
+        candidate = datetime.now(tz=timezone.utc)
+        latest_usage_row = self._conn.execute(
+            "SELECT recorded_at FROM token_usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        candidate = _ensure_after_iso_value(
+            candidate,
+            None if latest_usage_row is None else str(latest_usage_row["recorded_at"]),
+        )
+        if self._session_history_marker_repo is not None:
+            latest_clear = self._session_history_marker_repo.get_latest(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is not None:
+                candidate = _ensure_after_datetime(candidate, latest_clear.created_at)
+        return candidate
+
     def _sanitize_numeric_columns(self) -> None:
         assignments = ", ".join(
             f"{column}=COALESCE({column}, 0)" for column in self._NUMERIC_COLUMNS
@@ -386,3 +405,24 @@ class TokenUsageRepository:
                 except ValueError:
                     return 0
         return 0
+
+
+def _ensure_after_iso_value(candidate: datetime, raw_value: str | None) -> datetime:
+    if raw_value is None:
+        return candidate
+    try:
+        reference = datetime.fromisoformat(raw_value)
+    except ValueError:
+        return candidate
+    return _ensure_after_datetime(candidate, reference)
+
+
+def _ensure_after_datetime(candidate: datetime, reference: datetime) -> datetime:
+    normalized_reference = (
+        reference.replace(tzinfo=timezone.utc)
+        if reference.tzinfo is None
+        else reference.astimezone(timezone.utc)
+    )
+    if candidate > normalized_reference:
+        return candidate
+    return normalized_reference + timedelta(microseconds=1)
