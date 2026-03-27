@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
@@ -24,6 +23,11 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
+)
+from agent_teams.sessions.runs.terminal_payload import (
+    extract_terminal_error,
+    extract_terminal_output,
+    parse_terminal_payload_json,
 )
 
 logger = get_logger(__name__)
@@ -384,25 +388,22 @@ def _build_terminal_message(
     fallback_error: str | None,
 ) -> str:
     output = ""
+    terminal_error = ""
     for event in reversed(event_log.list_by_trace_with_ids(run_id)):
         event_type = str(event.get("event_type") or "")
         if event_type not in {"run_completed", "run_failed"}:
             continue
-        payload_json = str(event.get("payload_json") or "{}")
-        try:
-            payload = json.loads(payload_json)
-        except json.JSONDecodeError:
-            payload = {}
-        if isinstance(payload, dict):
-            output_value = payload.get("output")
-            if isinstance(output_value, str):
-                output = output_value.strip()
+        payload = parse_terminal_payload_json(event.get("payload_json"))
+        output = extract_terminal_output(payload)
+        terminal_error = extract_terminal_error(payload)
         break
     if runtime_status == RunRuntimeStatus.COMPLETED:
         if output:
             return output
         return ""
-    failure_detail = output or str(fallback_error or "").strip() or "未知错误。"
+    failure_detail = (
+        output or terminal_error or str(fallback_error or "").strip() or "未知错误。"
+    )
     return f"定时任务 {project_name} 执行失败。\n\n{failure_detail}"
 
 

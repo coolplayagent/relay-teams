@@ -26,10 +26,11 @@ from agent_teams.gateway.wechat.models import (
 )
 from agent_teams.gateway.wechat.secret_store import WeChatSecretStore
 from agent_teams.gateway.wechat.service import WeChatGatewayService
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import RunEvent
+from agent_teams.sessions.runs.run_models import RunEvent, RunResult
 from agent_teams.sessions.session_models import SessionMode
 
 _RECEIPT_CREATED = "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
@@ -153,6 +154,45 @@ async def test_await_terminal_and_reply_records_failure_when_send_fails() -> Non
     assert snapshot.last_outbound_at is None
     assert snapshot.last_event_at is not None
     assert "run-1" not in service._watched_runs
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_and_reply_uses_structured_completed_output() -> None:
+    service, _, _, im_tool_service, _ = _build_service(
+        events=(
+            RunEvent(
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+                event_type=RunEventType.RUN_COMPLETED,
+                payload_json=RunResult(
+                    trace_id="run-1",
+                    root_task_id="task-root-1",
+                    status="completed",
+                    output=content_parts_from_text("Structured reply"),
+                ).model_dump_json(),
+                occurred_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+    )
+    service._watched_runs.add("run-1")
+
+    await service._await_terminal_and_reply(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        run_id="run-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+    )
+
+    assert im_tool_service.send_text_calls == [
+        {
+            "account_id": "wx-account-1",
+            "peer_user_id": "wx-peer-1",
+            "text": "Structured reply",
+            "context_token": "ctx-1",
+        }
+    ]
 
 
 @pytest.mark.asyncio

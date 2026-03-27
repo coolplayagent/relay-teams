@@ -10,6 +10,7 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from agent_teams.sessions.runs.terminal_payload import extract_terminal_output
 from agent_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerType,
 )
@@ -147,7 +148,7 @@ def build_session_rounds(
             continue
         if event_type == RunEventType.RUN_COMPLETED.value:
             payload = _parse_event_payload(event.get("payload_json"))
-            output = str(payload.get("output") or "").strip()
+            output = extract_terminal_output(payload)
             if output:
                 completed_output_by_run[run_id] = {
                     "output": output,

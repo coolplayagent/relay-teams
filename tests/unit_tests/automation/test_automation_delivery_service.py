@@ -15,9 +15,10 @@ from agent_teams.automation import (
     AutomationScheduleMode,
 )
 from agent_teams.gateway.feishu.models import FeishuEnvironment
+from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.run_models import RunEvent
+from agent_teams.sessions.runs.run_models import RunEvent, RunResult
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -222,3 +223,90 @@ def test_process_pending_skips_completed_message_when_run_has_no_output(
     assert persisted.terminal_status.value == "skipped"
     assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
     assert persisted.terminal_message == ""
+
+
+def test_process_pending_sends_structured_completed_message_when_run_finishes(
+    tmp_path: Path,
+) -> None:
+    service, feishu_client, run_runtime_repo, event_log, repository = _build_service(
+        tmp_path
+    )
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json=RunResult(
+                trace_id="run-1",
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text("Daily report is ready."),
+            ).model_dump_json(),
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    assert progressed is True
+    assert len(feishu_client.sent_messages) == 2
+    assert feishu_client.sent_messages[1]["text"] == "Daily report is ready."
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.terminal_status.value == "sent"
+    assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+
+
+def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
+    tmp_path: Path,
+) -> None:
+    service, feishu_client, run_runtime_repo, event_log, repository = _build_service(
+        tmp_path
+    )
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.FAILED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_FAILED,
+            payload_json='{"status":"failed","output":"","error":"provider timeout"}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    assert progressed is True
+    assert len(feishu_client.sent_messages) == 2
+    assert "provider timeout" in feishu_client.sent_messages[1]["text"]
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.terminal_status.value == "sent"
+    assert persisted.terminal_event == AutomationDeliveryEvent.FAILED

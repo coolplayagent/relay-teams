@@ -25,7 +25,6 @@ from agent_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from agent_teams.logger import get_logger, log_event
-from agent_teams.media import ContentPartsAdapter, content_parts_to_text
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -33,6 +32,10 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
+)
+from agent_teams.sessions.runs.terminal_payload import (
+    extract_terminal_error,
+    extract_terminal_output,
 )
 
 logger = get_logger(__name__)
@@ -947,23 +950,11 @@ def _build_pause_reply(
 
 
 def _extract_terminal_output(payload: dict[str, object]) -> str:
-    output_value = payload.get("output")
-    if isinstance(output_value, str):
-        return output_value.strip()
-    if isinstance(output_value, (list, tuple)):
-        try:
-            parts = ContentPartsAdapter.validate_python(tuple(output_value))
-        except Exception:
-            return ""
-        return content_parts_to_text(parts)
-    return ""
+    return extract_terminal_output(payload)
 
 
 def _extract_terminal_error(payload: dict[str, object]) -> str:
-    error_value = payload.get("error")
-    if isinstance(error_value, str):
-        return error_value.strip()
-    return ""
+    return extract_terminal_error(payload)
 
 
 def _build_intent_preview(intent_text: str, max_length: int = 48) -> str:

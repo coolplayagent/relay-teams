@@ -247,6 +247,8 @@ class WeChatUploadUrlResponse(BaseModel):
     errmsg: str | None = None
     upload_param: str | None = None
     thumb_upload_param: str | None = None
+    upload_full_url: str | None = None
+    thumb_upload_full_url: str | None = None
 
 
 class WeChatUploadedMedia(BaseModel):

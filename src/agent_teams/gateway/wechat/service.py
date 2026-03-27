@@ -28,6 +28,11 @@ from agent_teams.sessions.runs import RunEventHub
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.terminal_payload import (
+    extract_terminal_error,
+    extract_terminal_output,
+    parse_terminal_payload_json,
+)
 from agent_teams.agents.orchestration import OrchestrationSettingsService
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionMode
@@ -964,23 +969,20 @@ class WeChatGatewayService:
 
     @staticmethod
     def _terminal_text(event) -> str:
-        try:
-            payload = json.loads(event.payload_json)
-        except json.JSONDecodeError:
-            payload = {}
+        payload = parse_terminal_payload_json(event.payload_json)
         if event.event_type == RunEventType.RUN_COMPLETED:
-            output = payload.get("output")
-            if isinstance(output, str) and output.strip():
-                return output.strip()
+            output = extract_terminal_output(payload)
+            if output:
+                return output
             return "Completed."
         if event.event_type == RunEventType.RUN_STOPPED:
             return "Run stopped."
-        output = payload.get("output")
-        if isinstance(output, str) and output.strip():
-            return output.strip()
-        error = payload.get("error")
-        if isinstance(error, str) and error.strip():
-            return f"Run failed: {error.strip()}"
+        output = extract_terminal_output(payload)
+        if output:
+            return output
+        error = extract_terminal_error(payload)
+        if error:
+            return f"Run failed: {error}"
         return "Run failed."
 
     @staticmethod

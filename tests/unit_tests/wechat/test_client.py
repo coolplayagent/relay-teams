@@ -431,6 +431,229 @@ def test_send_file_routes_image_as_image_message(
     ]
 
 
+def test_send_file_extracts_nested_upload_param(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_url = "https://ilinkai.weixin.qq.com"
+    cdn_base_url = "https://cdn.example.test/c2c"
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"hello wechat file")
+    fake_client = _FakeSyncHttpClient(
+        [
+            _response(
+                200,
+                {"ret": 0, "data": {"upload_param": "upload-token"}},
+                method="POST",
+                url=f"{base_url}/ilink/bot/getuploadurl",
+            ),
+            _response(
+                200,
+                {},
+                method="POST",
+                url=(
+                    f"{cdn_base_url}/upload?encrypted_query_param=upload-token"
+                    "&filekey=nested-key"
+                ),
+                headers={"x-encrypted-param": "download-token"},
+            ),
+            _response(
+                200,
+                {"ret": 0},
+                method="POST",
+                url=f"{base_url}/ilink/bot/sendmessage",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        lambda _: "nested-key",
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
+    )
+
+    result = WeChatClient().send_file(
+        account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
+        token="bot-token",
+        to_user_id="wx-peer",
+        file_path=file_path,
+        context_token=None,
+    )
+
+    assert result == "file sent (report.pdf)"
+    assert len(fake_client.requests) == 3
+
+
+def test_send_file_extracts_nested_camel_case_upload_param(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_url = "https://ilinkai.weixin.qq.com"
+    cdn_base_url = "https://cdn.example.test/c2c"
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"hello wechat file")
+    fake_client = _FakeSyncHttpClient(
+        [
+            _response(
+                200,
+                {"ret": 0, "data": [{"uploadParam": "upload-token"}]},
+                method="POST",
+                url=f"{base_url}/ilink/bot/getuploadurl",
+            ),
+            _response(
+                200,
+                {},
+                method="POST",
+                url=(
+                    f"{cdn_base_url}/upload?encrypted_query_param=upload-token"
+                    "&filekey=camel-key"
+                ),
+                headers={"x-encrypted-param": "download-token"},
+            ),
+            _response(
+                200,
+                {"ret": 0},
+                method="POST",
+                url=f"{base_url}/ilink/bot/sendmessage",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        lambda _: "camel-key",
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
+    )
+
+    result = WeChatClient().send_file(
+        account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
+        token="bot-token",
+        to_user_id="wx-peer",
+        file_path=file_path,
+        context_token=None,
+    )
+
+    assert result == "file sent (report.pdf)"
+    assert len(fake_client.requests) == 3
+
+
+def test_send_file_uses_upload_full_url_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_url = "https://ilinkai.weixin.qq.com"
+    cdn_base_url = "https://cdn.example.test/c2c"
+    upload_full_url = (
+        "https://upload.example.test/c2c/upload?"
+        "encrypted_query_param=upload-token&filekey=full-url-key"
+    )
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"hello wechat file")
+    fake_client = _FakeSyncHttpClient(
+        [
+            _response(
+                200,
+                {"upload_full_url": upload_full_url},
+                method="POST",
+                url=f"{base_url}/ilink/bot/getuploadurl",
+            ),
+            _response(
+                200,
+                {},
+                method="POST",
+                url=upload_full_url,
+                headers={"x-encrypted-param": "download-token"},
+            ),
+            _response(
+                200,
+                {"ret": 0},
+                method="POST",
+                url=f"{base_url}/ilink/bot/sendmessage",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        lambda _: "full-url-key",
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
+    )
+
+    result = WeChatClient().send_file(
+        account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
+        token="bot-token",
+        to_user_id="wx-peer",
+        file_path=file_path,
+        context_token=None,
+    )
+
+    assert result == "file sent (report.pdf)"
+    assert len(fake_client.requests) == 3
+    assert fake_client.requests[1][1] == upload_full_url
+
+
+def test_send_file_raises_diagnostic_error_when_upload_param_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_url = "https://ilinkai.weixin.qq.com"
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"hello wechat file")
+    fake_client = _FakeSyncHttpClient(
+        [
+            _response(
+                200,
+                {"ret": 0, "data": {"message": "ok"}},
+                method="POST",
+                url=f"{base_url}/ilink/bot/getuploadurl",
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        lambda _: "missing-key",
+    )
+    monkeypatch.setattr(
+        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
+    )
+
+    with pytest.raises(RuntimeError, match="top_level_keys"):
+        WeChatClient().send_file(
+            account=_account_record(base_url=base_url),
+            token="bot-token",
+            to_user_id="wx-peer",
+            file_path=file_path,
+            context_token=None,
+        )
+
+
 def test_send_typing_raises_runtime_error_for_provider_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

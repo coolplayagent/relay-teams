@@ -18,6 +18,8 @@ from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.sessions.session_rounds_projection import build_session_rounds
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.media import content_parts_from_text
+from agent_teams.sessions.runs.run_models import RunResult
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -329,6 +331,67 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
     assert round_new["primary_role_id"] == "coordinator_agent"
     assert coordinator_messages[0]["reconstructed"] is True
     assert parts[0]["content"] == "reconstructed final output"
+
+
+def test_build_session_rounds_reconstructs_structured_completed_output(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_structured_output.db"
+    session_id = "session-1"
+    run_id = "run-structured"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-structured",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="coordinator_agent",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda sid: cast(
+            list[dict[str, object]],
+            message_repo.get_messages_by_session(sid, include_cleared=True),
+        ),
+        get_session_events=lambda _sid: [
+            {
+                "event_type": "run_completed",
+                "trace_id": run_id,
+                "payload_json": RunResult(
+                    trace_id=run_id,
+                    root_task_id="task-root-structured",
+                    status="completed",
+                    output=content_parts_from_text("structured reconstructed output"),
+                ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]],
+        round_item["coordinator_messages"],
+    )
+    reconstructed_message = cast(dict[str, object], coordinator_messages[0]["message"])
+    parts = cast(list[dict[str, object]], reconstructed_message["parts"])
+
+    assert coordinator_messages[0]["reconstructed"] is True
+    assert parts[0]["content"] == "structured reconstructed output"
 
 
 def test_build_session_rounds_marks_compaction_boundary_for_matching_conversation(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterable
 from pathlib import Path
 import json
 import hashlib
@@ -397,12 +398,38 @@ class WeChatClient:
             errmsg=parsed.errmsg,
             operation="get_upload_url",
         )
-        upload_param = (parsed.upload_param or "").strip()
-        if not upload_param:
-            raise RuntimeError("WeChat get_upload_url failed: missing upload_param")
-        download_query_param = self._upload_to_cdn(
+        upload_url = self._resolve_upload_url(
+            upload_response,
             cdn_base_url=account.cdn_base_url,
-            upload_param=upload_param,
+            filekey=filekey,
+        )
+        if not upload_url:
+            response_size = len(json.dumps(upload_response, ensure_ascii=False))
+            top_level_keys = sorted(upload_response.keys())
+            upload_full_url_paths = self._collect_upload_full_url_candidate_paths(
+                upload_response
+            )
+            upload_param_paths = self._collect_upload_param_candidate_paths(
+                upload_response
+            )
+            LOGGER.warning(
+                "WeChat get_upload_url response missing upload target",
+                extra={
+                    "top_level_keys": top_level_keys,
+                    "upload_full_url_paths": upload_full_url_paths,
+                    "upload_param_paths": upload_param_paths,
+                    "response_size": response_size,
+                },
+            )
+            raise RuntimeError(
+                "WeChat get_upload_url failed: missing upload target "
+                f"(top_level_keys={top_level_keys}, "
+                f"upload_full_url_paths={upload_full_url_paths}, "
+                f"upload_param_paths={upload_param_paths}, "
+                f"response_size={response_size})"
+            )
+        download_query_param = self._upload_to_cdn(
+            upload_url=upload_url,
             filekey=filekey,
             encrypted_bytes=encrypted_bytes,
         )
@@ -508,16 +535,10 @@ class WeChatClient:
     def _upload_to_cdn(
         self,
         *,
-        cdn_base_url: str,
-        upload_param: str,
+        upload_url: str,
         filekey: str,
         encrypted_bytes: bytes,
     ) -> str:
-        url = self._build_cdn_upload_url(
-            cdn_base_url=cdn_base_url,
-            upload_param=upload_param,
-            filekey=filekey,
-        )
         last_exception: Exception | None = None
         for attempt in range(1, _CDN_UPLOAD_MAX_RETRIES + 1):
             try:
@@ -526,7 +547,7 @@ class WeChatClient:
                 ) as client:
                     response = client.request(
                         method="POST",
-                        url=url,
+                        url=upload_url,
                         content=encrypted_bytes,
                         headers={"Content-Type": "application/octet-stream"},
                     )
@@ -614,6 +635,140 @@ class WeChatClient:
         if body_text:
             return body_text
         return "unknown_error"
+
+    @classmethod
+    def _resolve_upload_url(
+        cls,
+        payload: dict[str, object],
+        *,
+        cdn_base_url: str,
+        filekey: str,
+    ) -> str:
+        upload_full_url = cls._extract_upload_full_url(payload)
+        if upload_full_url:
+            return cls._normalize_upload_url(
+                cdn_base_url=cdn_base_url,
+                upload_url=upload_full_url,
+            )
+        upload_param = cls._extract_upload_param(payload)
+        if upload_param:
+            return cls._build_cdn_upload_url(
+                cdn_base_url=cdn_base_url,
+                upload_param=upload_param,
+                filekey=filekey,
+            )
+        return ""
+
+    @classmethod
+    def _extract_upload_full_url(cls, payload: dict[str, object]) -> str:
+        direct_upload_url = cls._normalize_upload_param_value(
+            payload.get("upload_full_url")
+        )
+        if direct_upload_url:
+            return direct_upload_url
+        direct_upload_url = cls._normalize_upload_param_value(
+            payload.get("uploadFullUrl")
+        )
+        if direct_upload_url:
+            return direct_upload_url
+        for _path, value in cls._iter_candidate_values(
+            payload,
+            candidate_keys=frozenset({"upload_full_url", "uploadFullUrl"}),
+        ):
+            normalized = cls._normalize_upload_param_value(value)
+            if normalized:
+                return normalized
+        return ""
+
+    @classmethod
+    def _extract_upload_param(cls, payload: dict[str, object]) -> str:
+        direct_upload_param = cls._normalize_upload_param_value(
+            payload.get("upload_param")
+        )
+        if direct_upload_param:
+            return direct_upload_param
+        direct_upload_param = cls._normalize_upload_param_value(
+            payload.get("uploadParam")
+        )
+        if direct_upload_param:
+            return direct_upload_param
+        for _path, value in cls._iter_candidate_values(
+            payload,
+            candidate_keys=frozenset({"upload_param", "uploadParam"}),
+        ):
+            normalized = cls._normalize_upload_param_value(value)
+            if normalized:
+                return normalized
+        return ""
+
+    @classmethod
+    def _collect_upload_full_url_candidate_paths(
+        cls, payload: dict[str, object]
+    ) -> tuple[str, ...]:
+        return tuple(
+            path
+            for path, _value in cls._iter_candidate_values(
+                payload,
+                candidate_keys=frozenset({"upload_full_url", "uploadFullUrl"}),
+            )
+        )
+
+    @classmethod
+    def _collect_upload_param_candidate_paths(
+        cls, payload: dict[str, object]
+    ) -> tuple[str, ...]:
+        return tuple(
+            path
+            for path, _value in cls._iter_candidate_values(
+                payload,
+                candidate_keys=frozenset({"upload_param", "uploadParam"}),
+            )
+        )
+
+    @classmethod
+    def _iter_candidate_values(
+        cls,
+        payload: object,
+        *,
+        candidate_keys: frozenset[str],
+        path: str = "",
+    ) -> Iterable[tuple[str, object]]:
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if not isinstance(key, str):
+                    continue
+                next_path = f"{path}.{key}" if path else key
+                if key in candidate_keys:
+                    yield next_path, value
+                yield from cls._iter_candidate_values(
+                    value,
+                    candidate_keys=candidate_keys,
+                    path=next_path,
+                )
+            return
+        if isinstance(payload, list):
+            for index, item in enumerate(payload):
+                next_path = f"{path}[{index}]" if path else f"[{index}]"
+                yield from cls._iter_candidate_values(
+                    item,
+                    candidate_keys=candidate_keys,
+                    path=next_path,
+                )
+
+    @classmethod
+    def _normalize_upload_url(cls, *, cdn_base_url: str, upload_url: str) -> str:
+        normalized_upload_url = upload_url.strip()
+        if not normalized_upload_url:
+            return ""
+        if normalized_upload_url.startswith(("http://", "https://")):
+            return normalized_upload_url
+        return cls._build_url(base_url=cdn_base_url, path=normalized_upload_url)
+
+    @staticmethod
+    def _normalize_upload_param_value(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
 
     @staticmethod
     def _raise_if_provider_error(
