@@ -1,7 +1,8 @@
-Read a file or directory from the workspace.
+Read a file or directory from disk.
 
 Usage:
-- `path` is resolved relative to the workspace root.
+- `path` may be absolute or relative.
+- Relative paths are resolved from the workspace root, but may point outside the workspace.
 - Files are returned with line numbers in the format `<line>: <content>`.
 - Directories are returned as one entry per line, with `/` appended for subdirectories.
 - Use `offset` and `limit` to page through large files or directories.

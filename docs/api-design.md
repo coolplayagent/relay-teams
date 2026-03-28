@@ -1036,14 +1036,17 @@ Request:
 
 ```json
 {
-  "name": "alpha-project-fork"
+  "name": "alpha-project-fork",
+  "start_ref": "origin/main"
 }
 ```
 
 Rules:
 - Source workspace must exist and its `root_path` must be inside a Git repository.
 - The backend normalizes `name` into the new `workspace_id`.
-- The fork creates branch `fork/{workspace_id}` from the source workspace current `HEAD`.
+- `start_ref` is optional. When omitted, the backend fetches `origin main` and forks from the resolved `origin/main` commit.
+- When `start_ref` is provided, the backend resolves that ref and forks from the resolved commit.
+- The fork creates branch `fork/{workspace_id}` from the resolved start commit.
 - The worktree directory is created under the managed workspace storage directory and becomes the new workspace `root_path`.
 - The returned workspace profile uses `file_scope.backend = "git_worktree"` and includes `source_root_path`, `branch_name`, and `forked_from_workspace_id`.
 

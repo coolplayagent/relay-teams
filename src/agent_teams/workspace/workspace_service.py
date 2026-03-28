@@ -289,6 +289,7 @@ class WorkspaceService:
         *,
         source_workspace_id: str,
         name: str,
+        start_ref: str | None = None,
     ) -> WorkspaceRecord:
         source_record = self._repository.get(source_workspace_id)
         normalized_workspace_id = self._normalize_workspace_id(name)
@@ -298,14 +299,24 @@ class WorkspaceService:
         repository_root = self._git_worktree_client.ensure_repository(
             source_record.root_path
         )
-        start_point = self._git_worktree_client.current_head(source_record.root_path)
+        if start_ref is None:
+            self._git_worktree_client.fetch_ref(
+                repository_root, remote="origin", ref="main"
+            )
+            resolved_start_ref = "origin/main"
+        else:
+            resolved_start_ref = start_ref
+        start_point = self._git_worktree_client.resolve_ref(
+            repository_root,
+            resolved_start_ref,
+        )
         target_path = self._workspace_storage_dir(normalized_workspace_id) / "worktree"
         if target_path.exists():
             raise ValueError(f"Workspace root already exists: {target_path}")
 
         branch_name = f"fork/{normalized_workspace_id}"
         self._git_worktree_client.add_worktree(
-            repository_root=source_record.root_path,
+            repository_root=repository_root,
             branch_name=branch_name,
             target_path=target_path,
             start_point=start_point,
@@ -328,10 +339,10 @@ class WorkspaceService:
             )
         except Exception:
             self._git_worktree_client.remove_worktree(
-                repository_root=source_record.root_path,
+                repository_root=repository_root,
                 target_path=target_path,
             )
-            self._git_worktree_client.prune(source_record.root_path)
+            self._git_worktree_client.prune(repository_root)
             shutil.rmtree(
                 self._workspace_storage_dir(normalized_workspace_id),
                 ignore_errors=True,

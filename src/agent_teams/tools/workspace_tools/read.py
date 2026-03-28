@@ -226,7 +226,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """
 
         async def _action() -> ToolResultProjection:
-            file_path = ctx.deps.workspace.resolve_path(path, write=False)
+            file_path = ctx.deps.workspace.resolve_read_path(path)
 
             if not file_path.exists():
                 raise ValueError(f"File not found: {path}")
