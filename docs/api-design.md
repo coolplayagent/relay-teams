@@ -680,7 +680,7 @@ Frontend behavior:
 - Retry countdowns are computed from the SSE event `occurred_at` timestamp plus `retry_in_ms`, so delayed delivery or page refresh does not restart the timer.
 - Later retry events replace the same card instead of stacking multiple historical cards.
 - Once a retried model attempt produces successful output, the retry card is removed.
-- If the run cannot safely retry within one `generate()` call but still qualifies for one backend auto-recovery pass, `llm_retry_exhausted` may be followed by `run_auto_resume_scheduled` and then `run_resumed` without surfacing `run_paused` to the user.
+- If the run cannot safely retry within one `generate()` call but still qualifies for backend auto-recovery, `llm_retry_exhausted` may be followed by `run_auto_resume_scheduled` and then `run_resumed` without surfacing `run_paused` to the user.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
 

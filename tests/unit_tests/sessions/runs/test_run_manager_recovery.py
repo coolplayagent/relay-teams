@@ -677,8 +677,13 @@ async def test_stream_run_events_stops_after_run_paused(
 
 
 @pytest.mark.asyncio
-async def test_worker_auto_resumes_recoverable_pause_once(
+@pytest.mark.parametrize(
+    "error_code",
+    ["network_stream_interrupted", "network_timeout", "network_error"],
+)
+async def test_worker_auto_resumes_network_recoverable_pause_with_retry_budget(
     tmp_path: Path,
+    error_code: str,
 ) -> None:
     db_path = tmp_path / "run_worker_paused.db"
     meta_agent = _ResumingMetaAgent()
@@ -743,7 +748,7 @@ async def test_worker_auto_resumes_recoverable_pause_once(
 
 
 @pytest.mark.asyncio
-async def test_worker_pauses_after_auto_resume_budget_is_exhausted(
+async def test_worker_pauses_after_network_auto_resume_budget_is_exhausted(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "run_worker_paused_exhausted.db"
@@ -758,7 +763,7 @@ async def test_worker_pauses_after_auto_resume_budget_is_exhausted(
     )
     _ = runtime_repo.update(
         "run-existing",
-        auto_resume_attempts=1,
+        auto_resume_attempts=3,
     )
     manager._active_run_registry.remember_active_run(
         session_id="session-1",
@@ -791,7 +796,7 @@ async def test_worker_pauses_after_auto_resume_budget_is_exhausted(
     assert runtime.status == RunRuntimeStatus.PAUSED
     assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
     assert runtime.last_error == "stream interrupted"
-    assert runtime.auto_resume_attempts == 1
+    assert runtime.auto_resume_attempts == 3
     assert runtime.last_recoverable_error_code == "network_stream_interrupted"
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
@@ -802,6 +807,59 @@ async def test_worker_pauses_after_auto_resume_budget_is_exhausted(
     assert not any(
         event_type == RunEventType.RUN_FAILED.value for event_type in event_types
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_auto_resume_non_network_recoverable_pause(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_non_network_pause.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="model_tool_args_invalid_json",
+        error_message="invalid tool args",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+    assert runtime.auto_resume_attempts == 0
+    assert runtime.last_recoverable_error_code == "model_tool_args_invalid_json"
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    event_types = [str(event["event_type"]) for event in events]
+    assert RunEventType.RUN_AUTO_RESUME_SCHEDULED.value not in event_types
+    assert events[-1]["event_type"] == RunEventType.RUN_PAUSED.value
 
 
 @pytest.mark.asyncio

@@ -213,7 +213,7 @@ class RetryDecision(BaseModel):
 - 保留“当前未完成 step”的输入快照（prompt、工具结果、上下文游标）。
 - **长流输出中断策略（定案）**：当流式输出中途网络中断时，不尝试恢复原流的 token 级续传；直接丢弃中断流，从最近 checkpoint 重新执行当前 step。
 - **断流分类（定案）**：`httpx.RemoteProtocolError` / `incomplete chunked read` 归类为 `network_stream_interrupted`，属于可恢复错误。
-- **自动恢复预算（定案）**：后端维护 run 级 `auto_resume_attempts` 计数；默认每个 run 最多自动恢复 1 次。这个预算只约束系统自动恢复，不限制用户手动 `resume`。
+- **自动恢复预算（定案）**：后端维护 run 级 `auto_resume_attempts` 计数；`network_error`、`network_timeout`、`network_stream_interrupted` 走同一套自动恢复入口，预算默认取该次 pause payload 的 `total_attempts`。这个预算只约束系统自动恢复，不限制用户手动 `resume`。
 - `resume` 后由后端重新发起该 step 的流式输出，前端将其视为同一任务的继续执行。
 
 ## 4.4 幂等性设计（必须项）

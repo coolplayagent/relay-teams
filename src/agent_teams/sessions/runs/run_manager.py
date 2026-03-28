@@ -59,7 +59,10 @@ from agent_teams.tools.runtime.approval_ticket_repo import (
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from agent_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -79,7 +82,9 @@ from agent_teams.workspace import build_conversation_id
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
-_AUTO_RESUME_LIMIT = 1
+_AUTO_RESUME_ERROR_CODES = frozenset(
+    {"network_error", "network_timeout", "network_stream_interrupted"}
+)
 
 
 class RunManager:
@@ -571,11 +576,27 @@ class RunManager:
             failure_event="run.event.publish_failed",
         )
 
-    def _should_auto_resume_recoverable_pause(self, *, run_id: str) -> bool:
+    def _auto_resume_limit_for_pause(
+        self,
+        *,
+        payload: RecoverableRunPausePayload,
+    ) -> int:
+        if payload.error_code not in _AUTO_RESUME_ERROR_CODES:
+            return 0
+        return max(0, int(payload.total_attempts))
+
+    def _should_auto_resume_recoverable_pause(
+        self,
+        *,
+        run_id: str,
+        payload: RecoverableRunPausePayload,
+    ) -> bool:
         runtime = self._runtime_for_run(run_id)
         if runtime is None:
             return False
-        return runtime.auto_resume_attempts < _AUTO_RESUME_LIMIT
+        return runtime.auto_resume_attempts < self._auto_resume_limit_for_pause(
+            payload=payload
+        )
 
     def _record_auto_resume_attempt(self, *, run_id: str, error_code: str) -> int:
         runtime = self._runtime_for_run(run_id)
@@ -943,7 +964,13 @@ class RunManager:
                         last_error=payload.error_message,
                         last_recoverable_error_code=payload.error_code or None,
                     )
-                    if not self._should_auto_resume_recoverable_pause(run_id=run_id):
+                    auto_resume_limit = self._auto_resume_limit_for_pause(
+                        payload=payload
+                    )
+                    if not self._should_auto_resume_recoverable_pause(
+                        run_id=run_id,
+                        payload=payload,
+                    ):
                         self._safe_publish_run_event(
                             RunEvent(
                                 session_id=session_id,
@@ -992,7 +1019,7 @@ class RunManager:
                                     "retries_used": payload.retries_used,
                                     "total_attempts": payload.total_attempts,
                                     "auto_resume_attempts": attempts,
-                                    "auto_resume_limit": _AUTO_RESUME_LIMIT,
+                                    "auto_resume_limit": auto_resume_limit,
                                 }
                             ),
                         ),
@@ -1011,7 +1038,7 @@ class RunManager:
                                 "task_id": payload.task_id,
                                 "instance_id": payload.instance_id,
                                 "auto_resume_attempts": attempts,
-                                "auto_resume_limit": _AUTO_RESUME_LIMIT,
+                                "auto_resume_limit": auto_resume_limit,
                             },
                         )
                     self._publish_run_resumed(
