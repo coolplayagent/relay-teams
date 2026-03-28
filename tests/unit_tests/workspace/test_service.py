@@ -39,6 +39,8 @@ class FakeGitWorktreeClient(GitWorktreeClient):
     def __init__(self) -> None:
         self.ensure_calls: list[Path] = []
         self.head_calls: list[Path] = []
+        self.fetch_calls: list[tuple[Path, str, str]] = []
+        self.resolve_ref_calls: list[tuple[Path, str]] = []
         self.add_calls: list[tuple[Path, str, Path, str]] = []
         self.remove_calls: list[tuple[Path, Path]] = []
         self.prune_calls: list[Path] = []
@@ -50,6 +52,19 @@ class FakeGitWorktreeClient(GitWorktreeClient):
     def current_head(self, repository_root: Path) -> str:
         self.head_calls.append(repository_root)
         return "abc123"
+
+    def fetch_ref(
+        self,
+        repository_root: Path,
+        *,
+        remote: str = "origin",
+        ref: str = "main",
+    ) -> None:
+        self.fetch_calls.append((repository_root, remote, ref))
+
+    def resolve_ref(self, repository_root: Path, ref_name: str) -> str:
+        self.resolve_ref_calls.append((repository_root, ref_name))
+        return f"resolved:{ref_name}"
 
     def add_worktree(
         self,
@@ -164,13 +179,50 @@ def test_workspace_service_forks_workspace_into_git_worktree(tmp_path: Path) -> 
     assert created.profile.file_scope.source_root_path == str(root_path.resolve())
     assert created.profile.file_scope.forked_from_workspace_id == "project-alpha"
     assert git_client.ensure_calls == [root_path.resolve()]
-    assert git_client.head_calls == [root_path.resolve()]
+    assert git_client.head_calls == []
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
     assert git_client.add_calls == [
         (
             root_path.resolve(),
             "fork/alpha-project-fork",
             (tmp_path / "storage" / "alpha-project-fork" / "worktree").resolve(),
-            "abc123",
+            "resolved:origin/main",
+        )
+    ]
+
+
+def test_workspace_service_forks_workspace_from_explicit_start_ref(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    created = service.fork_workspace(
+        source_workspace_id="project-alpha",
+        name="Release Fork",
+        start_ref="origin/release",
+    )
+
+    assert created.workspace_id == "release-fork"
+    assert git_client.fetch_calls == []
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/release")]
+    assert git_client.add_calls == [
+        (
+            root_path.resolve(),
+            "fork/release-fork",
+            (tmp_path / "storage" / "release-fork" / "worktree").resolve(),
+            "resolved:origin/release",
         )
     ]
 

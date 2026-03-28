@@ -1,8 +1,10 @@
-Find workspace files by path pattern.
+Find readable files by path pattern.
 
 Usage:
-- `pattern` is a glob matched relative to the workspace root.
+- `pattern` is a glob matched relative to the selected search root.
+- `path` selects the search root and defaults to the workspace root.
+- `path` may be absolute or relative; relative paths are resolved from the workspace root and may point outside the workspace.
 - Use this tool to discover candidate files when you know naming or directory conventions.
-- Results are returned as relative workspace paths.
+- Results are returned relative to the selected search root.
 - If you need to search file contents instead of file names, use `grep`.
 - If you already know the exact path, use `read` directly instead of globbing first.

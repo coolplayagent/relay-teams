@@ -39,11 +39,16 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def glob(
         ctx: ToolContext,
         pattern: str,
+        path: str = ".",
     ) -> dict[str, JsonValue]:
-        """Find workspace files whose paths match a glob pattern."""
+        """Find files whose paths match a glob pattern under a readable root."""
 
         async def _action() -> ToolResultProjection:
-            root = ctx.deps.workspace.resolve_path(".", write=False)
+            root = ctx.deps.workspace.resolve_read_path(path)
+            if not root.exists():
+                raise ValueError(f"Path not found: {path}")
+            if not root.is_dir():
+                raise ValueError(f"Path is not a directory: {path}")
 
             files, truncated = await ripgrep.enumerate_files(
                 cwd=root,
@@ -72,6 +77,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         return await execute_tool(
             ctx,
             tool_name="glob",
-            args_summary={"pattern": pattern},
+            args_summary={"pattern": pattern, "path": path},
             action=_action,
         )

@@ -46,7 +46,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """Search file contents under a workspace path using a regex pattern."""
 
         async def _action() -> ToolResultProjection:
-            root = ctx.deps.workspace.resolve_path(path, write=False)
+            root = ctx.deps.workspace.resolve_read_path(path)
 
             result = await ripgrep.grep_search(
                 cwd=root,

@@ -46,6 +46,7 @@ class ForkWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
+    start_ref: str | None = Field(default=None, min_length=1)
 
 
 @router.post("", response_model=WorkspaceRecord)
@@ -216,6 +217,7 @@ def fork_workspace(
         return service.fork_workspace(
             source_workspace_id=workspace_id,
             name=req.name,
+            start_ref=req.start_ref,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc

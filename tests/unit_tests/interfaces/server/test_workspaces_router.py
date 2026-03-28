@@ -13,6 +13,7 @@ from agent_teams.interfaces.server.routers import workspaces
 from agent_teams.workspace import (
     FileScopeBackend,
     GitWorktreeClient,
+    WorkspaceRecord,
     WorkspaceFileScope,
     WorkspaceProfile,
     WorkspaceRepository,
@@ -54,6 +55,19 @@ class FakeGitWorktreeClient(GitWorktreeClient):
 
     def current_head(self, repository_root: Path) -> str:
         return "abc123"
+
+    def fetch_ref(
+        self,
+        repository_root: Path,
+        *,
+        remote: str = "origin",
+        ref: str = "main",
+    ) -> None:
+        _ = (repository_root, remote, ref)
+
+    def resolve_ref(self, repository_root: Path, ref_name: str) -> str:
+        _ = repository_root
+        return f"resolved:{ref_name}"
 
     def add_worktree(
         self,
@@ -375,6 +389,41 @@ def test_fork_workspace(tmp_path: Path) -> None:
     )
     assert payload["profile"]["file_scope"]["backend"] == "git_worktree"
     assert payload["profile"]["file_scope"]["branch_name"] == "fork/alpha-project-fork"
+
+
+def test_fork_workspace_forwards_start_ref(tmp_path: Path) -> None:
+    class CaptureForkWorkspaceService(WorkspaceService):
+        def __init__(self) -> None:
+            super().__init__(
+                repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+            )
+            self.calls: list[tuple[str, str, str | None]] = []
+
+        def fork_workspace(
+            self,
+            *,
+            source_workspace_id: str,
+            name: str,
+            start_ref: str | None = None,
+        ):
+            self.calls.append((source_workspace_id, name, start_ref))
+            return WorkspaceRecord(
+                workspace_id="alpha-project-fork",
+                root_path=(tmp_path / "storage" / "alpha-project-fork").resolve(),
+            )
+
+    service = CaptureForkWorkspaceService()
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.post(
+        "/api/workspaces/project-alpha:fork",
+        json={"name": "Alpha Project Fork", "start_ref": "origin/release"},
+    )
+
+    assert response.status_code == 200
+    assert service.calls == [
+        ("project-alpha", "Alpha Project Fork", "origin/release")
+    ]
 
 
 def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None:
