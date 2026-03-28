@@ -459,6 +459,8 @@ class AcpGatewayServer:
         phase = str(active_run.get("phase") or "").strip()
         status = str(active_run.get("status") or "").strip()
         should_show_recover = active_run.get("should_show_recover") is True
+        if status == "running":
+            return None
         if phase == "awaiting_recovery" or status == "paused" or should_show_recover:
             return run_id
         return None
@@ -643,7 +645,7 @@ class AcpGatewayServer:
                 run_id=event.run_id,
                 run_status="paused",
                 recoverable=True,
-                error_message=None,
+                error_message=pause_message,
                 clear_active_run=False,
             )
         if event.event_type == RunEventType.RUN_STOPPED:

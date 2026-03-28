@@ -954,7 +954,7 @@ function getFooterActions(activeRun, approvals, pausedSubagent) {
         activeRun.status === 'stopped'
         || activeRun.phase === 'stopped'
         || activeRun.status === 'paused'
-        || activeRun.phase === 'awaiting_recovery'
+        || (activeRun.phase === 'awaiting_recovery' && activeRun.status !== 'running')
     ) {
         actions.push({
             action: 'resume-run',

@@ -905,12 +905,12 @@ class SessionService:
             return "stopping"
         if approval_count > 0:
             return "awaiting_tool_approval"
+        if runtime.status == RunRuntimeStatus.RUNNING:
+            return "running"
         if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP:
             return "awaiting_subagent_followup"
         if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
             return "awaiting_recovery"
-        if runtime.status == RunRuntimeStatus.RUNNING:
-            return "running"
         if runtime.status == RunRuntimeStatus.PAUSED:
             return (
                 "awaiting_subagent_followup"

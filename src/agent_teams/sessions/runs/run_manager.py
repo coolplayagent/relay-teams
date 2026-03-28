@@ -563,9 +563,7 @@ class RunManager:
         reason: str,
     ) -> None:
         runtime = self._runtime_for_run(run_id)
-        next_phase = RunRuntimePhase.COORDINATOR_RUNNING
-        if runtime is not None and runtime.phase != RunRuntimePhase.TERMINAL:
-            next_phase = runtime.phase
+        next_phase = self._resumed_phase_for_runtime(runtime)
         self._safe_runtime_update(
             run_id,
             status=RunRuntimeStatus.RUNNING,
@@ -583,6 +581,21 @@ class RunManager:
             ),
             failure_event="run.event.publish_failed",
         )
+
+    def _resumed_phase_for_runtime(
+        self,
+        runtime: RunRuntimeRecord | None,
+    ) -> RunRuntimePhase:
+        if runtime is None or runtime.phase == RunRuntimePhase.TERMINAL:
+            return RunRuntimePhase.COORDINATOR_RUNNING
+        if runtime.phase in {
+            RunRuntimePhase.IDLE,
+            RunRuntimePhase.AWAITING_RECOVERY,
+        }:
+            if runtime.active_subagent_instance_id:
+                return RunRuntimePhase.SUBAGENT_RUNNING
+            return RunRuntimePhase.COORDINATOR_RUNNING
+        return runtime.phase
 
     def _auto_resume_limit_for_pause(
         self,

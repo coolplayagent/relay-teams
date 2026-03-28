@@ -426,7 +426,7 @@ async def test_session_new_uses_gateway_default_normal_root_role(
 
 
 @pytest.mark.asyncio
-async def test_session_prompt_returns_paused_run_without_clearing_binding(
+async def test_session_prompt_returns_recoverable_pause_as_error_without_clearing_binding(
     tmp_path: Path,
 ) -> None:
     server, _, run_manager, notifications = _build_server(tmp_path)
@@ -462,11 +462,13 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
         }
     )
 
-    assert _require_result_object(response) == {
-        "stopReason": "end_turn",
-        "runId": "run-1",
-        "runStatus": "paused",
-        "recoverable": True,
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32000,
+            "message": "Run paused: stream interrupted\nSend a new prompt to continue, or use session/resume.",
+        },
     }
     params = notifications[-1]["params"]
     assert isinstance(params, dict)
@@ -482,6 +484,26 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     record = repository.get(session_id)
     assert record.active_run_id == "run-1"
+
+
+def test_recoverable_paused_run_id_ignores_running_snapshot_with_stale_phase(
+    tmp_path: Path,
+) -> None:
+    server, session_service, _run_manager, _notifications = _build_server(tmp_path)
+    session_service.recovery_snapshot_by_session["session-1"] = {
+        "active_run": {
+            "run_id": "run-1",
+            "status": "running",
+            "phase": "awaiting_recovery",
+            "is_recoverable": True,
+            "should_show_recover": True,
+        },
+        "pending_tool_approvals": [],
+        "paused_subagent": None,
+        "round_snapshot": None,
+    }
+
+    assert server._recoverable_paused_run_id("session-1") is None
 
 
 @pytest.mark.asyncio

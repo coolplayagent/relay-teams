@@ -537,6 +537,60 @@ def test_resume_run_rejects_stopping_run(tmp_path: Path) -> None:
         manager.resume_run("run-existing")
 
 
+@pytest.mark.parametrize(
+    ("active_subagent_instance_id", "expected_phase"),
+    [
+        (None, RunRuntimePhase.COORDINATOR_RUNNING),
+        ("subagent-1", RunRuntimePhase.SUBAGENT_RUNNING),
+    ],
+)
+def test_publish_run_resumed_restores_active_phase_after_recovery_pause(
+    tmp_path: Path,
+    active_subagent_instance_id: str | None,
+    expected_phase: RunRuntimePhase,
+) -> None:
+    db_path = tmp_path / "run_resume_phase_restore.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+        active_instance_id=(
+            active_subagent_instance_id
+            if active_subagent_instance_id is not None
+            else "coordinator-1"
+        ),
+        active_task_id="task-root-1",
+        active_role_id=(
+            "worker_agent"
+            if active_subagent_instance_id is not None
+            else "coordinator_agent"
+        ),
+        active_subagent_instance_id=active_subagent_instance_id,
+        last_error="stream interrupted",
+    )
+
+    manager._publish_run_resumed(
+        run_id="run-existing",
+        session_id="session-1",
+        reason="resume",
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.RUNNING
+    assert runtime.phase == expected_phase
+    assert runtime.last_error is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result_status", "runtime_status", "terminal_event_type"),

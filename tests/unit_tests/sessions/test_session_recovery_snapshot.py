@@ -220,6 +220,43 @@ def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
     assert active_run.get("pending_tool_approval_count") == 0
 
 
+def test_get_recovery_snapshot_hides_stale_recovery_phase_for_running_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_running_stale_phase.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+        last_error=None,
+        auto_resume_attempts=2,
+        last_recoverable_error_code="network_stream_interrupted",
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("status") == "running"
+    assert active_run.get("phase") == "running"
+    assert active_run.get("is_recoverable") is True
+    assert active_run.get("should_show_recover") is True
+    assert active_run.get("auto_resume_attempts") == 2
+    assert active_run.get("last_recoverable_error_code") == "network_stream_interrupted"
+
+
 def test_get_recovery_snapshot_does_not_auto_stream_interrupted_running_run(
     tmp_path: Path,
 ) -> None:
