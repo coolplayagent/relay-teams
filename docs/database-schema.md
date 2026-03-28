@@ -512,6 +512,7 @@ Purpose: persistent mapping between an external gateway channel session and the 
 Notes:
 - `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio` and `wechat`.
 - `external_session_id` is the channel-visible session key; `internal_session_id` remains the core runtime session source of truth.
+- `cwd` stores the resolved absolute workspace root last provided by the gateway channel. For ACP stdio, `session/new.cwd` creates or reuses that workspace, and `session/load.cwd` may rebind the internal session to a different workspace when no active or recoverable run is attached.
 - `capabilities_json` stores channel-scoped capability negotiation data.
 - `session_mcp_servers_json` stores session-scoped MCP server declarations supplied through the gateway transport.
 - `mcp_connections_json` stores MCP connection state for gateway-managed transports such as MCP over ACP.

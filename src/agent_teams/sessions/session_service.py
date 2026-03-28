@@ -75,6 +75,9 @@ from agent_teams.workspace import (
 
 
 AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
+ACTIVE_RUN_REBIND_ERROR = (
+    "Cannot rebind workspace while session has active or recoverable run"
+)
 
 
 class SessionService:
@@ -254,6 +257,33 @@ class SessionService:
             session_mode=session_mode,
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
+        )
+        return self.get_session(session_id)
+
+    def rebind_session_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> SessionRecord:
+        session = self._session_repo.get(session_id)
+        if session.workspace_id == workspace_id:
+            return session
+        if self._workspace_service is not None:
+            self._workspace_service.require_workspace(workspace_id)
+        if self._select_active_run(session_id) is not None:
+            raise RuntimeError(ACTIVE_RUN_REBIND_ERROR)
+        project_id = session.project_id
+        if session.project_kind == ProjectKind.WORKSPACE:
+            project_id = workspace_id
+        self._session_repo.update_workspace(
+            session_id,
+            workspace_id=workspace_id,
+            project_id=project_id or workspace_id,
+        )
+        self._agent_repo.update_session_workspace(
+            session_id,
+            workspace_id=workspace_id,
         )
         return self.get_session(session_id)
 

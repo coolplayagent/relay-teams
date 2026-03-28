@@ -194,6 +194,8 @@ Example:
 
 Once the MCP server is active in Zed, `agent-teams` can receive it from ACP session setup, typically through `session/new` or `session/load`. Depending on how Zed provides that server, it may arrive as an ACP transport server or as a host-provided `stdio` server definition. No extra `agent-teams` bridge process or MCP config file is required for that Zed-provided server.
 
+When Zed supplies `cwd` on ACP session setup, `agent-teams` resolves it to an absolute workspace root. `session/new.cwd` binds the new internal session to that workspace. `session/load.cwd` reuses the same workspace when it points at the current root, or rebinds the loaded session to a different workspace when no active or recoverable run is attached.
+
 For Context7 specifically, prefer a custom context server entry such as:
 
 ```json

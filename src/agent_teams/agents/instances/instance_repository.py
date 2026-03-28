@@ -169,6 +169,24 @@ class AgentInstanceRepository:
             operation_name="mark_status",
         )
 
+    def update_session_workspace(self, session_id: str, *, workspace_id: str) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                """
+                UPDATE agent_instances
+                SET workspace_id=?, updated_at=?
+                WHERE session_id=?
+                """,
+                (workspace_id, now, session_id),
+            ),
+            lock=self._lock,
+            repository_name="AgentInstanceRepository",
+            operation_name="update_session_workspace",
+        )
+
     def mark_running_instances_failed(self) -> tuple[str, ...]:
         with self._lock:
             rows = self._conn.execute(
