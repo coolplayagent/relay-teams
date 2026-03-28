@@ -945,8 +945,8 @@ def _build_pause_reply(
 ) -> str:
     reason = str(error_message or "").strip()
     if reason:
-        return f"运行已暂停：{reason}\n发送 resume 继续。"
-    return f"运行 {run_id} 已暂停。\n发送 resume 继续。"
+        return f"运行已暂停：{reason}\n直接发送新消息继续，或发送 resume。"
+    return f"运行 {run_id} 已暂停。\n直接发送新消息继续，或发送 resume。"
 
 
 def _extract_terminal_output(payload: dict[str, object]) -> str:

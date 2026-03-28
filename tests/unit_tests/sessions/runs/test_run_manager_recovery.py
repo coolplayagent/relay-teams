@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Literal, cast
 
 import pytest
+from pydantic_ai.messages import UserPromptPart
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.media import content_parts_from_text
+from agent_teams.media import content_parts_from_text, content_parts_to_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
@@ -228,6 +229,55 @@ def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:
 
     assert run_id == "run-existing"
     assert session_id == "session-1"
+    assert "run-existing" in manager._resume_requested_runs
+
+
+def test_create_run_appends_followup_to_recoverable_run_history_and_intent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_recoverable_followup.db"
+    manager = _build_manager(db_path)
+    message_repo = MessageRepository(db_path)
+    intent_repo = RunIntentRepository(db_path)
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+    existing_intent = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("existing"),
+    )
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    intent_repo.upsert(
+        run_id="run-existing",
+        session_id="session-1",
+        intent=existing_intent,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    run_id, session_id = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("continue from checkpoint"),
+        )
+    )
+
+    history = message_repo.get_history_for_task("inst-1", "task-root-1")
+    persisted = intent_repo.get("run-existing")
+
+    assert run_id == "run-existing"
+    assert session_id == "session-1"
+    assert len(history) == 1
+    assert isinstance(history[-1].parts[0], UserPromptPart)
+    assert history[-1].parts[0].content == "continue from checkpoint"
+    assert content_parts_to_text(persisted.input) == "existing\n\ncontinue from checkpoint"
     assert "run-existing" in manager._resume_requested_runs
 
 

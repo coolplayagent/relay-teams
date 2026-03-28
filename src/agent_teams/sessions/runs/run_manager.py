@@ -393,6 +393,14 @@ class RunManager:
                 self._append_followup_to_coordinator(
                     active_run_id, intent.intent, enqueue=False
                 )
+                if self._run_intent_repo is not None:
+                    try:
+                        self._run_intent_repo.append_followup(
+                            run_id=active_run_id,
+                            content=intent.intent,
+                        )
+                    except KeyError:
+                        pass
                 self._update_run_yolo(
                     run_id=active_run_id,
                     session_id=session_id,

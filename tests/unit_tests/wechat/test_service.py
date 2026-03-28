@@ -222,7 +222,7 @@ async def test_await_terminal_and_reply_sends_pause_notice_without_clearing_bind
         {
             "account_id": "wx-account-1",
             "peer_user_id": "wx-peer-1",
-            "text": "Run paused: stream interrupted\nSend resume to continue.",
+            "text": "Run paused: stream interrupted\nSend a new message to continue, or send resume.",
             "context_token": "ctx-1",
         }
     ]

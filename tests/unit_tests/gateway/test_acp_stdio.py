@@ -13,7 +13,6 @@ from pydantic import JsonValue
 
 import agent_teams.gateway.acp_stdio as acp_stdio_module
 from agent_teams.gateway.acp_stdio import (
-    RECOVERABLE_PAUSED_RUN_MESSAGE,
     AcpGatewayServer,
     AcpStdioRuntime,
 )
@@ -137,11 +136,16 @@ class FakeRunManager:
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.stream_calls: list[tuple[str, int]] = []
+        self.next_create_result: tuple[str, str] | None = None
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        self.create_calls.append(intent.model_copy(deep=True))
+        if self.next_create_result is not None:
+            result = self.next_create_result
+            self.next_create_result = None
+            return result
         self._counter += 1
         run_id = f"run-{self._counter}"
-        self.create_calls.append(intent.model_copy(deep=True))
         return run_id, run_id
 
     async def stream_run_events(
@@ -473,7 +477,7 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
     assert isinstance(content, dict)
     assert (
         content["text"]
-        == "Run paused: stream interrupted\nSend session/resume to continue."
+        == "Run paused: stream interrupted\nSend a new prompt to continue, or use session/resume."
     )
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     record = repository.get(session_id)
@@ -481,7 +485,7 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
 
 
 @pytest.mark.asyncio
-async def test_session_prompt_rejects_recoverable_paused_run(
+async def test_session_prompt_continues_recoverable_paused_run(
     tmp_path: Path,
 ) -> None:
     server, session_service, run_manager, notifications = _build_server(tmp_path)
@@ -494,6 +498,10 @@ async def test_session_prompt_rejects_recoverable_paused_run(
         }
     )
     session_id = _require_str(_require_result_object(created), "sessionId")
+    run_manager.next_create_result = ("run-paused", "session-1")
+    run_manager.events_by_run["run-paused"] = (
+        _event("session-1", "run-paused", RunEventType.RUN_COMPLETED, {}),
+    )
     session_service.recovery_snapshot_by_session["session-1"] = {
         "active_run": {
             "run_id": "run-paused",
@@ -519,16 +527,15 @@ async def test_session_prompt_rejects_recoverable_paused_run(
         }
     )
 
-    assert response == {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "error": {
-            "code": -32000,
-            "message": RECOVERABLE_PAUSED_RUN_MESSAGE,
-        },
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-paused",
+        "runStatus": "completed",
+        "recoverable": False,
     }
-    assert run_manager.create_calls == []
-    assert notifications == []
+    assert len(run_manager.create_calls) == 1
+    assert run_manager.ensure_started_calls == ["run-paused"]
+    assert notifications != []
 
 
 @pytest.mark.asyncio

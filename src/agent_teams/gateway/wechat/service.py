@@ -993,8 +993,11 @@ class WeChatGatewayService:
             payload = {}
         error_message = payload.get("error_message")
         if isinstance(error_message, str) and error_message.strip():
-            return f"Run paused: {error_message.strip()}\nSend resume to continue."
-        return "Run paused.\nSend resume to continue."
+            return (
+                f"Run paused: {error_message.strip()}\n"
+                "Send a new message to continue, or send resume."
+            )
+        return "Run paused.\nSend a new message to continue, or send resume."
 
     @staticmethod
     def _normalize_qr_code_url(value: str) -> str:

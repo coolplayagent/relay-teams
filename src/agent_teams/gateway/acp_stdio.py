@@ -41,7 +41,7 @@ type AcpNotifier = Callable[[dict[str, JsonValue]], Awaitable[None]]
 
 LOGGER = get_logger(__name__)
 RECOVERABLE_PAUSED_RUN_MESSAGE = (
-    "Session has a recoverable paused run; use session/resume or session/cancel"
+    "Session has a recoverable paused run; send a new prompt to continue, or use session/resume or session/cancel"
 )
 
 
@@ -307,9 +307,6 @@ class AcpGatewayServer:
         prompt_blocks = _required_list(params, "prompt")
         record = self._gateway_session_service.get_session(gateway_session_id)
         session = self._session_service.get_session(record.internal_session_id)
-        paused_run_id = self._recoverable_paused_run_id(record.internal_session_id)
-        if paused_run_id is not None:
-            raise AcpProtocolError(-32000, RECOVERABLE_PAUSED_RUN_MESSAGE)
         prompt_input = self._prompt_blocks_to_content_parts(
             prompt_blocks=prompt_blocks,
             session_id=record.internal_session_id,
@@ -711,8 +708,11 @@ class AcpGatewayServer:
     def _paused_run_message(payload: dict[str, JsonValue]) -> str:
         error_message = _optional_str(payload, "error_message")
         if error_message:
-            return f"Run paused: {error_message}\nSend session/resume to continue."
-        return "Run paused. Send session/resume to continue."
+            return (
+                f"Run paused: {error_message}\n"
+                "Send a new prompt to continue, or use session/resume."
+            )
+        return "Run paused.\nSend a new prompt to continue, or use session/resume."
 
     async def _mcp_connect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")

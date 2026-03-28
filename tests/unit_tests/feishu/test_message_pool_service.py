@@ -585,7 +585,7 @@ def test_finalize_waiting_result_sends_recovery_pause_notice_once(
     assert record.processing_status == FeishuMessageProcessingStatus.WAITING_RESULT
     assert feishu_client.reply_messages[-1] == (
         "om_1",
-        "运行已暂停：stream interrupted\n发送 resume 继续。",
+        "运行已暂停：stream interrupted\n直接发送新消息继续，或发送 resume。",
     )
     assert service._finalize_waiting_results() is False
 

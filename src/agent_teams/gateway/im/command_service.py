@@ -503,7 +503,9 @@ class ImSessionCommandService:
             segments.append(f"phase={phase}")
         lines = [" | ".join(segments)]
         if phase == "awaiting_recovery":
-            lines.append("Resume: send resume to continue this run.")
+            lines.append(
+                "Resume: send a new message to continue this run, or send resume."
+            )
         return lines
 
     def _resolve_feishu_session_id(
