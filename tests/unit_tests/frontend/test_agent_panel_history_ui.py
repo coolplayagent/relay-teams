@@ -232,7 +232,7 @@ export const state = {
             updated_at: '2026-03-16T08:20:00Z',
             created_at: '2026-03-16T08:00:00Z',
             runtime_system_prompt: 'You are the runtime writer.',
-            runtime_tools_json: '{"local_tools":[{"source":"local","name":"read","description":"Read a file or directory from the workspace.","server_name":"","kind":"function","strict":null,"sequential":false,"parameters_json_schema":{}}],"skill_tools":[],"mcp_tools":[]}',
+            runtime_tools_json: '{"local_tools":[{"source":"local","name":"read","description":"Read a file or directory from disk.","server_name":"","kind":"function","strict":null,"sequential":false,"parameters_json_schema":{}}],"skill_tools":[],"mcp_tools":[]}',
         },
     ],
 };

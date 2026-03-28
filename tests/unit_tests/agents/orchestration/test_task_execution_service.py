@@ -962,7 +962,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
         "Create one or more run-scoped delegated task contracts."
     )
     assert writer_tools["read"].startswith(
-        "Read a file or directory from the workspace."
+        "Read a file or directory from disk."
     )
     assert writer_tools["write"].startswith(
         "Write full file contents to the workspace."
