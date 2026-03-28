@@ -546,6 +546,7 @@ class ServerContainer:
         self.gateway_session_service = GatewaySessionService(
             repository=self.gateway_session_repository,
             session_service=self.session_service,
+            workspace_service=self.workspace_service,
         )
         self.feishu_inbound_runtime = FeishuInboundRuntime(
             session_service=self.session_service,

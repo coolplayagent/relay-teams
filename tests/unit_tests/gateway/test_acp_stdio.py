@@ -25,6 +25,8 @@ from agent_teams.sessions.session_models import SessionRecord
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
+from agent_teams.workspace import WorkspaceService
+from agent_teams.workspace.workspace_models import WorkspaceRecord
 
 
 class FakeSessionService:
@@ -120,6 +122,24 @@ class FakeRunManager:
 
     def stop_run(self, run_id: str) -> None:
         self.stop_calls.append(run_id)
+
+
+class FakeWorkspaceService:
+    def __init__(self) -> None:
+        self.workspaces_by_root: dict[Path, WorkspaceRecord] = {}
+
+    def create_workspace_for_root(self, *, root_path: Path) -> WorkspaceRecord:
+        resolved_root = root_path.resolve()
+        existing = self.workspaces_by_root.get(resolved_root)
+        if existing is not None:
+            return existing
+        workspace_id = f"workspace-{len(self.workspaces_by_root) + 1}"
+        record = WorkspaceRecord(
+            workspace_id=workspace_id,
+            root_path=resolved_root,
+        )
+        self.workspaces_by_root[resolved_root] = record
+        return record
 
 
 @pytest.mark.asyncio
@@ -264,6 +284,33 @@ async def test_session_prompt_streams_updates_and_usage(
         "tool_call_update",
         "agent_message_chunk",
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_new_uses_cwd_backed_workspace_for_internal_session(
+    tmp_path: Path,
+) -> None:
+    workspace_service = FakeWorkspaceService()
+    server, session_service, _, _ = _build_server(
+        tmp_path,
+        workspace_service=workspace_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    record = GatewaySessionRepository(tmp_path / "gateway.db").get(session_id)
+    internal_session = session_service.get_session(record.internal_session_id)
+    assert internal_session.workspace_id == "workspace-1"
+    workspace_record = workspace_service.workspaces_by_root[tmp_path.resolve()]
+    assert workspace_record.root_path == tmp_path.resolve()
 
 
 @pytest.mark.asyncio
@@ -1092,6 +1139,8 @@ def test_acp_trace_messages_require_explicit_env(
 
 def _build_server(
     tmp_path: Path,
+    *,
+    workspace_service: FakeWorkspaceService | None = None,
 ) -> tuple[
     AcpGatewayServer,
     FakeSessionService,
@@ -1103,6 +1152,7 @@ def _build_server(
     gateway_session_service = GatewaySessionService(
         repository=repository,
         session_service=cast(SessionService, session_service),
+        workspace_service=cast(WorkspaceService | None, workspace_service),
     )
     run_manager = FakeRunManager()
     notifications: list[dict[str, JsonValue]] = []

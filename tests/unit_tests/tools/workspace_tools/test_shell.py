@@ -338,6 +338,7 @@ async def test_spawn_shell_creates_process_group(monkeypatch) -> None:
         assert captured_kwargs.get("creationflags", 0) != 0
     else:
         assert captured_kwargs.get("start_new_session") is True
+    assert captured_kwargs.get("stdin") == asyncio.subprocess.DEVNULL
 
 
 @pytest.mark.asyncio
@@ -440,6 +441,111 @@ async def test_spawn_shell_injects_github_token_and_bundled_path(
     assert env["GITHUB_TOKEN"] == "ghp_secret"
     assert env["GH_PROMPT_DISABLED"] == "1"
     assert str(gh.parent) == env["PATH"].split(os.pathsep)[0]
+
+
+@pytest.mark.asyncio
+async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_kwargs: dict[str, object] = {}
+    proc = _FakeProcess()
+
+    async def capturing_factory(*args: object, **kwargs: object) -> _FakeProcess:
+        captured_kwargs.update(kwargs)
+
+        async def _feed() -> None:
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+            await asyncio.sleep(0.01)
+            proc.returncode = 0
+            proc._wait_event.set()
+
+        asyncio.create_task(_feed())
+        return proc
+
+    monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_resolve_gh_path", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        shell_executor.asyncio,
+        "create_subprocess_exec",
+        capturing_factory,
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {
+            "PATH": "/usr/bin",
+            "BASH_ENV": "/tmp/hang.sh",
+            "ENV": "/tmp/posix.sh",
+            "PROMPT_COMMAND": "sleep 100",
+            "PS1": "bad-prompt",
+            "BASH_FUNC_module%%": "() { sleep 100; }",
+        },
+    )
+
+    _ = [
+        item
+        async for item in shell_executor.spawn_shell(
+            command="pwd",
+            cwd=Path("."),
+            timeout_ms=100,
+        )
+    ]
+
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert "PATH" in env
+    assert "BASH_ENV" not in env
+    assert "ENV" not in env
+    assert "PROMPT_COMMAND" not in env
+    assert "PS1" not in env
+    assert "BASH_FUNC_module%%" not in env
+
+
+def test_run_git_bash_strips_bash_startup_env(monkeypatch, tmp_path: Path) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_kwargs: dict[str, object] = {}
+
+    class _CompletedProcess:
+        returncode = 0
+        stdout = "/tmp\n"
+        stderr = ""
+
+    def fake_run(*args: object, **kwargs: object) -> _CompletedProcess:
+        _ = args
+        captured_kwargs.update(kwargs)
+        return _CompletedProcess()
+
+    monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_resolve_gh_path_sync", lambda: None)
+    monkeypatch.setattr(shell_executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {
+            "PATH": "/usr/bin",
+            "BASH_ENV": "/tmp/hang.sh",
+            "PROMPT_COMMAND": "sleep 100",
+            "BASH_FUNC_module%%": "() { sleep 100; }",
+        },
+    )
+
+    result = shell_executor.run_git_bash(
+        command="pwd",
+        workdir=tmp_path,
+        timeout_seconds=5,
+    )
+
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert "BASH_ENV" not in env
+    assert "PROMPT_COMMAND" not in env
+    assert "BASH_FUNC_module%%" not in env
+    assert captured_kwargs.get("stdin") == subprocess.DEVNULL
+    assert result == (0, "/tmp\n", "", False)
 
 
 # ---------------------------------------------------------------------------

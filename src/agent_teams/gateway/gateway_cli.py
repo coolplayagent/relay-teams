@@ -310,6 +310,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     gateway_session_service = GatewaySessionService(
         repository=gateway_session_repository,
         session_service=container.session_service,
+        workspace_service=container.workspace_service,
         session_model_profile_store=session_model_profile_store,
     )
     server = AcpGatewayServer(

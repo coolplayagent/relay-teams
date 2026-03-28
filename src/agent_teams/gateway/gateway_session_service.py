@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic import JsonValue
@@ -22,6 +23,7 @@ from agent_teams.gateway.gateway_session_model_profile_store import (
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionMode
+from agent_teams.workspace import WorkspaceService
 
 
 class GatewaySessionService:
@@ -30,10 +32,12 @@ class GatewaySessionService:
         *,
         repository: GatewaySessionRepository,
         session_service: SessionService,
+        workspace_service: WorkspaceService | None = None,
         session_model_profile_store: GatewaySessionModelProfileStore | None = None,
     ) -> None:
         self._repository = repository
         self._session_service = session_service
+        self._workspace_service = workspace_service
         self._session_model_profile_store = (
             session_model_profile_store or GatewaySessionModelProfileStore()
         )
@@ -53,7 +57,9 @@ class GatewaySessionService:
         now = self._utcnow()
         gateway_session_id = f"gws_{uuid4().hex[:12]}"
         resolved_external_session_id = external_session_id or gateway_session_id
-        internal_session = self._session_service.create_session(workspace_id="default")
+        internal_session = self._session_service.create_session(
+            workspace_id=self._resolve_workspace_id(cwd)
+        )
         record = GatewaySessionRecord(
             gateway_session_id=gateway_session_id,
             channel_type=channel_type,
@@ -279,6 +285,14 @@ class GatewaySessionService:
             }
         )
         return self._repository.update(updated)
+
+    def _resolve_workspace_id(self, cwd: str | None) -> str:
+        if cwd is None or self._workspace_service is None:
+            return "default"
+        workspace = self._workspace_service.create_workspace_for_root(
+            root_path=Path(cwd).expanduser()
+        )
+        return workspace.workspace_id
 
     @staticmethod
     def _utcnow() -> datetime:

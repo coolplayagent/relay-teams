@@ -25,6 +25,18 @@ WINDOWS_GIT_BASH_CANDIDATES = (
     Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
     Path(r"C:\Program Files (x86)\Git\usr\bin\bash.exe"),
 )
+_BASH_STARTUP_ENV_KEYS = frozenset(
+    {
+        "BASH_ENV",
+        "ENV",
+        "PROMPT_COMMAND",
+        "PS0",
+        "PS1",
+        "PS2",
+        "PS4",
+    }
+)
+_BASH_STARTUP_ENV_PREFIXES = ("BASH_FUNC_",)
 
 
 def resolve_bash_path() -> str:
@@ -180,6 +192,17 @@ def _start_new_session() -> bool:
     return not _is_windows()
 
 
+def _sanitize_bash_env(env: dict[str, str]) -> dict[str, str]:
+    sanitized = dict(env)
+    for key in tuple(sanitized.keys()):
+        if key in _BASH_STARTUP_ENV_KEYS:
+            sanitized.pop(key, None)
+            continue
+        if any(key.startswith(prefix) for prefix in _BASH_STARTUP_ENV_PREFIXES):
+            sanitized.pop(key, None)
+    return sanitized
+
+
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the process and its entire process tree."""
     if proc.returncode is not None:
@@ -241,6 +264,7 @@ async def spawn_shell(
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    shell_env = _sanitize_bash_env(shell_env)
 
     proc = await asyncio.create_subprocess_exec(
         bash,
@@ -248,6 +272,7 @@ async def spawn_shell(
         command,
         cwd=str(cwd),
         env=shell_env,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=_start_new_session(),
@@ -314,11 +339,13 @@ def run_git_bash(
     gh_path = _resolve_gh_path_sync()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    shell_env = _sanitize_bash_env(shell_env)
     try:
         proc = subprocess.run(
             [bash, "-lc", command],
             cwd=str(workdir),
             env=shell_env,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
