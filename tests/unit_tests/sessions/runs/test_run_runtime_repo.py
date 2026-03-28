@@ -113,3 +113,24 @@ def test_run_runtime_repo_marks_transient_runs_interrupted(tmp_path: Path) -> No
     assert queued.last_error == "interrupted_by_process_restart"
     assert paused.status == RunRuntimeStatus.PAUSED
     assert paused.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL
+
+
+def test_run_runtime_repo_persists_auto_resume_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_auto_resume.db"
+    repo = RunRuntimeRepository(db_path)
+    _ = repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        root_task_id="task-1",
+    )
+
+    _ = repo.update(
+        "run-1",
+        auto_resume_attempts=1,
+        last_recoverable_error_code="network_stream_interrupted",
+    )
+
+    record = repo.get("run-1")
+    assert record is not None
+    assert record.auto_resume_attempts == 1
+    assert record.last_recoverable_error_code == "network_stream_interrupted"

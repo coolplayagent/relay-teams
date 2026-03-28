@@ -79,6 +79,7 @@ from agent_teams.workspace import build_conversation_id
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
+_AUTO_RESUME_LIMIT = 1
 
 
 class RunManager:
@@ -272,6 +273,7 @@ class RunManager:
                             active_role_id=payload.role_id,
                             active_subagent_instance_id=None,
                             last_error=payload.error_message,
+                            last_recoverable_error_code=payload.error_code or None,
                         )
                     raise
                 if self._run_runtime_repo is not None:
@@ -515,26 +517,10 @@ class RunManager:
         self._running_run_ids.add(run_id)
         self._resume_requested_runs.discard(run_id)
         self._injection_manager.activate(run_id)
-        if self._run_runtime_repo is not None:
-            self._run_runtime_repo.update(
-                run_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=(
-                    runtime.phase
-                    if runtime.phase != RunRuntimePhase.TERMINAL
-                    else RunRuntimePhase.COORDINATOR_RUNNING
-                ),
-                last_error=None,
-            )
-        self._run_event_hub.publish(
-            RunEvent(
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                task_id=None,
-                event_type=RunEventType.RUN_RESUMED,
-                payload_json=dumps({"session_id": session_id, "reason": "resume"}),
-            )
+        self._publish_run_resumed(
+            run_id=run_id,
+            session_id=session_id,
+            reason="resume",
         )
         task = asyncio.create_task(
             self._worker(
@@ -555,6 +541,53 @@ class RunManager:
                 event="run.resumed",
                 message="Recoverable run resumed",
             )
+
+    def _publish_run_resumed(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        reason: str,
+    ) -> None:
+        runtime = self._runtime_for_run(run_id)
+        next_phase = RunRuntimePhase.COORDINATOR_RUNNING
+        if runtime is not None and runtime.phase != RunRuntimePhase.TERMINAL:
+            next_phase = runtime.phase
+        self._safe_runtime_update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=next_phase,
+            last_error=None,
+        )
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                event_type=RunEventType.RUN_RESUMED,
+                payload_json=dumps({"session_id": session_id, "reason": reason}),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+
+    def _should_auto_resume_recoverable_pause(self, *, run_id: str) -> bool:
+        runtime = self._runtime_for_run(run_id)
+        if runtime is None:
+            return False
+        return runtime.auto_resume_attempts < _AUTO_RESUME_LIMIT
+
+    def _record_auto_resume_attempt(self, *, run_id: str, error_code: str) -> int:
+        runtime = self._runtime_for_run(run_id)
+        if runtime is None:
+            return 0
+        attempts = runtime.auto_resume_attempts + 1
+        self._safe_runtime_update(
+            run_id,
+            auto_resume_attempts=attempts,
+            last_recoverable_error_code=error_code or None,
+        )
+        return attempts
 
     async def _resume_existing_run(self, run_id: str) -> RunResult:
         try:
@@ -801,201 +834,272 @@ class RunManager:
                 event="run.started",
                 message="Run worker started",
             )
+        current_runner = runner
         try:
-            result = await runner()
-            terminal_status = (
-                RunRuntimeStatus.COMPLETED
-                if result.status == "completed"
-                else RunRuntimeStatus.FAILED
-            )
-            terminal_event_type = (
-                RunEventType.RUN_COMPLETED
-                if result.status == "completed"
-                else RunEventType.RUN_FAILED
-            )
-            terminal_log_event = (
-                "run.completed" if result.status == "completed" else "run.failed"
-            )
-            terminal_log_level = (
-                logging.INFO if result.status == "completed" else logging.WARNING
-            )
-            notification_type = (
-                NotificationType.RUN_COMPLETED
-                if result.status == "completed"
-                else NotificationType.RUN_FAILED
-            )
-            notification_title = (
-                "Run Completed" if result.status == "completed" else "Run Failed"
-            )
-            output_text = result.output_text
-            notification_body = (
-                output_text
-                if result.status == "completed" and output_text
-                else f"Run {run_id} completed successfully."
-                if result.status == "completed"
-                else (
-                    f"Run {run_id} failed: {output_text}"
-                    if output_text
-                    else f"Run {run_id} failed."
-                )
-            )
-            self._safe_runtime_update(
-                run_id,
-                root_task_id=result.root_task_id,
-                status=terminal_status,
-                phase=RunRuntimePhase.TERMINAL,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error=output_text
-                if terminal_status == RunRuntimeStatus.FAILED
-                else None,
-            )
-            self._safe_publish_run_event(
-                RunEvent(
-                    session_id=session_id,
-                    run_id=run_id,
-                    trace_id=result.trace_id,
-                    task_id=result.root_task_id,
-                    event_type=terminal_event_type,
-                    payload_json=dumps(result.model_dump()),
-                ),
-                failure_event="run.event.publish_failed",
-            )
-            with bind_trace_context(
-                trace_id=run_id, run_id=run_id, session_id=session_id
-            ):
-                log_event(
-                    logger,
-                    terminal_log_level,
-                    event=terminal_log_event,
-                    message="Run completed"
-                    if result.status == "completed"
-                    else "Run failed",
-                    payload={
-                        "root_task_id": result.root_task_id,
-                        "status": result.status,
-                    },
-                )
-            self._emit_notification(
-                notification_type=notification_type,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title=notification_title,
-                body=notification_body,
-            )
-        except RecoverableRunPauseError as exc:
-            payload = exc.payload
-            self._safe_runtime_update(
-                run_id,
-                root_task_id=payload.task_id,
-                status=RunRuntimeStatus.PAUSED,
-                phase=RunRuntimePhase.AWAITING_RECOVERY,
-                active_instance_id=payload.instance_id,
-                active_task_id=payload.task_id,
-                active_role_id=payload.role_id,
-                active_subagent_instance_id=None,
-                last_error=payload.error_message,
-            )
-            self._safe_publish_run_event(
-                RunEvent(
-                    session_id=session_id,
-                    run_id=run_id,
-                    trace_id=payload.trace_id,
-                    task_id=payload.task_id,
-                    instance_id=payload.instance_id,
-                    role_id=payload.role_id,
-                    event_type=RunEventType.RUN_PAUSED,
-                    payload_json=payload.model_dump_json(),
-                ),
-                failure_event="run.event.publish_failed",
-            )
-            with bind_trace_context(
-                trace_id=run_id, run_id=run_id, session_id=session_id
-            ):
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    event="run.paused",
-                    message="Run paused awaiting recovery",
-                    payload=payload.model_dump(mode="json"),
-                )
-        except asyncio.CancelledError:
-            self._safe_runtime_update(
-                run_id,
-                status=RunRuntimeStatus.STOPPED,
-                phase=RunRuntimePhase.IDLE,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error="stopped_by_user",
-            )
-            self._run_control_manager.publish_run_stopped(
-                session_id=session_id,
-                run_id=run_id,
-                reason="stopped_by_user",
-            )
-            with bind_trace_context(
-                trace_id=run_id, run_id=run_id, session_id=session_id
-            ):
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    event="run.stopped",
-                    message="Run cancelled",
-                    payload={"reason": "stopped_by_user"},
-                )
-            self._emit_notification(
-                notification_type=NotificationType.RUN_STOPPED,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                title="Run Stopped",
-                body=f"Run {run_id} was stopped by user.",
-            )
-        except Exception as exc:
-            self._safe_runtime_update(
-                run_id,
-                status=RunRuntimeStatus.FAILED,
-                phase=RunRuntimePhase.TERMINAL,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error=str(exc),
-            )
-            self._safe_publish_run_event(
-                RunEvent(
-                    session_id=session_id,
-                    run_id=run_id,
-                    trace_id=run_id,
-                    task_id=None,
-                    event_type=RunEventType.RUN_FAILED,
-                    payload_json=dumps({"error": str(exc)}),
-                ),
-                failure_event="run.event.publish_failed",
-            )
-            with bind_trace_context(
-                trace_id=run_id, run_id=run_id, session_id=session_id
-            ):
-                log_event(
-                    logger,
-                    logging.ERROR,
-                    event="run.failed",
-                    message="Run failed",
-                    exc_info=exc,
-                )
-            self._emit_notification(
-                notification_type=NotificationType.RUN_FAILED,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                title="Run Failed",
-                body=f"Run {run_id} failed: {exc}",
-            )
+            while True:
+                try:
+                    result = await current_runner()
+                    terminal_status = (
+                        RunRuntimeStatus.COMPLETED
+                        if result.status == "completed"
+                        else RunRuntimeStatus.FAILED
+                    )
+                    terminal_event_type = (
+                        RunEventType.RUN_COMPLETED
+                        if result.status == "completed"
+                        else RunEventType.RUN_FAILED
+                    )
+                    terminal_log_event = (
+                        "run.completed"
+                        if result.status == "completed"
+                        else "run.failed"
+                    )
+                    terminal_log_level = (
+                        logging.INFO
+                        if result.status == "completed"
+                        else logging.WARNING
+                    )
+                    notification_type = (
+                        NotificationType.RUN_COMPLETED
+                        if result.status == "completed"
+                        else NotificationType.RUN_FAILED
+                    )
+                    notification_title = (
+                        "Run Completed"
+                        if result.status == "completed"
+                        else "Run Failed"
+                    )
+                    output_text = result.output_text
+                    notification_body = (
+                        output_text
+                        if result.status == "completed" and output_text
+                        else f"Run {run_id} completed successfully."
+                        if result.status == "completed"
+                        else (
+                            f"Run {run_id} failed: {output_text}"
+                            if output_text
+                            else f"Run {run_id} failed."
+                        )
+                    )
+                    self._safe_runtime_update(
+                        run_id,
+                        root_task_id=result.root_task_id,
+                        status=terminal_status,
+                        phase=RunRuntimePhase.TERMINAL,
+                        active_instance_id=None,
+                        active_task_id=None,
+                        active_role_id=None,
+                        active_subagent_instance_id=None,
+                        last_error=output_text
+                        if terminal_status == RunRuntimeStatus.FAILED
+                        else None,
+                    )
+                    self._safe_publish_run_event(
+                        RunEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            trace_id=result.trace_id,
+                            task_id=result.root_task_id,
+                            event_type=terminal_event_type,
+                            payload_json=dumps(result.model_dump()),
+                        ),
+                        failure_event="run.event.publish_failed",
+                    )
+                    with bind_trace_context(
+                        trace_id=run_id, run_id=run_id, session_id=session_id
+                    ):
+                        log_event(
+                            logger,
+                            terminal_log_level,
+                            event=terminal_log_event,
+                            message="Run completed"
+                            if result.status == "completed"
+                            else "Run failed",
+                            payload={
+                                "root_task_id": result.root_task_id,
+                                "status": result.status,
+                            },
+                        )
+                    self._emit_notification(
+                        notification_type=notification_type,
+                        session_id=session_id,
+                        run_id=run_id,
+                        trace_id=result.trace_id,
+                        title=notification_title,
+                        body=notification_body,
+                    )
+                    break
+                except RecoverableRunPauseError as exc:
+                    payload = exc.payload
+                    self._safe_runtime_update(
+                        run_id,
+                        root_task_id=payload.task_id,
+                        status=RunRuntimeStatus.PAUSED,
+                        phase=RunRuntimePhase.AWAITING_RECOVERY,
+                        active_instance_id=payload.instance_id,
+                        active_task_id=payload.task_id,
+                        active_role_id=payload.role_id,
+                        active_subagent_instance_id=None,
+                        last_error=payload.error_message,
+                        last_recoverable_error_code=payload.error_code or None,
+                    )
+                    if not self._should_auto_resume_recoverable_pause(run_id=run_id):
+                        self._safe_publish_run_event(
+                            RunEvent(
+                                session_id=session_id,
+                                run_id=run_id,
+                                trace_id=payload.trace_id,
+                                task_id=payload.task_id,
+                                instance_id=payload.instance_id,
+                                role_id=payload.role_id,
+                                event_type=RunEventType.RUN_PAUSED,
+                                payload_json=payload.model_dump_json(),
+                            ),
+                            failure_event="run.event.publish_failed",
+                        )
+                        with bind_trace_context(
+                            trace_id=run_id, run_id=run_id, session_id=session_id
+                        ):
+                            log_event(
+                                logger,
+                                logging.WARNING,
+                                event="run.paused",
+                                message="Run paused awaiting recovery",
+                                payload=payload.model_dump(mode="json"),
+                            )
+                        break
+
+                    attempts = self._record_auto_resume_attempt(
+                        run_id=run_id,
+                        error_code=payload.error_code,
+                    )
+                    self._safe_publish_run_event(
+                        RunEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            trace_id=payload.trace_id,
+                            task_id=payload.task_id,
+                            instance_id=payload.instance_id,
+                            role_id=payload.role_id,
+                            event_type=RunEventType.RUN_AUTO_RESUME_SCHEDULED,
+                            payload_json=dumps(
+                                {
+                                    "task_id": payload.task_id,
+                                    "instance_id": payload.instance_id,
+                                    "role_id": payload.role_id,
+                                    "error_code": payload.error_code,
+                                    "error_message": payload.error_message,
+                                    "retries_used": payload.retries_used,
+                                    "total_attempts": payload.total_attempts,
+                                    "auto_resume_attempts": attempts,
+                                    "auto_resume_limit": _AUTO_RESUME_LIMIT,
+                                }
+                            ),
+                        ),
+                        failure_event="run.event.publish_failed",
+                    )
+                    with bind_trace_context(
+                        trace_id=run_id, run_id=run_id, session_id=session_id
+                    ):
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            event="run.auto_resume.scheduled",
+                            message="Run auto-resume scheduled after recoverable pause",
+                            payload={
+                                "error_code": payload.error_code,
+                                "task_id": payload.task_id,
+                                "instance_id": payload.instance_id,
+                                "auto_resume_attempts": attempts,
+                                "auto_resume_limit": _AUTO_RESUME_LIMIT,
+                            },
+                        )
+                    self._publish_run_resumed(
+                        run_id=run_id,
+                        session_id=session_id,
+                        reason="auto_resume",
+                    )
+
+                    async def _resume_current_run() -> RunResult:
+                        return await self._resume_existing_run(run_id)
+
+                    current_runner = _resume_current_run
+                except asyncio.CancelledError:
+                    self._safe_runtime_update(
+                        run_id,
+                        status=RunRuntimeStatus.STOPPED,
+                        phase=RunRuntimePhase.IDLE,
+                        active_instance_id=None,
+                        active_task_id=None,
+                        active_role_id=None,
+                        active_subagent_instance_id=None,
+                        last_error="stopped_by_user",
+                    )
+                    self._run_control_manager.publish_run_stopped(
+                        session_id=session_id,
+                        run_id=run_id,
+                        reason="stopped_by_user",
+                    )
+                    with bind_trace_context(
+                        trace_id=run_id, run_id=run_id, session_id=session_id
+                    ):
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            event="run.stopped",
+                            message="Run cancelled",
+                            payload={"reason": "stopped_by_user"},
+                        )
+                    self._emit_notification(
+                        notification_type=NotificationType.RUN_STOPPED,
+                        session_id=session_id,
+                        run_id=run_id,
+                        trace_id=run_id,
+                        title="Run Stopped",
+                        body=f"Run {run_id} was stopped by user.",
+                    )
+                    break
+                except Exception as exc:
+                    self._safe_runtime_update(
+                        run_id,
+                        status=RunRuntimeStatus.FAILED,
+                        phase=RunRuntimePhase.TERMINAL,
+                        active_instance_id=None,
+                        active_task_id=None,
+                        active_role_id=None,
+                        active_subagent_instance_id=None,
+                        last_error=str(exc),
+                    )
+                    self._safe_publish_run_event(
+                        RunEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            trace_id=run_id,
+                            task_id=None,
+                            event_type=RunEventType.RUN_FAILED,
+                            payload_json=dumps({"error": str(exc)}),
+                        ),
+                        failure_event="run.event.publish_failed",
+                    )
+                    with bind_trace_context(
+                        trace_id=run_id, run_id=run_id, session_id=session_id
+                    ):
+                        log_event(
+                            logger,
+                            logging.ERROR,
+                            event="run.failed",
+                            message="Run failed",
+                            exc_info=exc,
+                        )
+                    self._emit_notification(
+                        notification_type=NotificationType.RUN_FAILED,
+                        session_id=session_id,
+                        run_id=run_id,
+                        trace_id=run_id,
+                        title="Run Failed",
+                        body=f"Run {run_id} failed: {exc}",
+                    )
+                    break
         finally:
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
 

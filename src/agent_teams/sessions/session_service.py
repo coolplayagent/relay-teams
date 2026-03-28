@@ -620,6 +620,8 @@ class SessionService:
             "status": runtime.status.value,
             "phase": self._public_phase(runtime, len(approvals)),
             "is_recoverable": self._is_runtime_publicly_recoverable(runtime),
+            "auto_resume_attempts": int(runtime.auto_resume_attempts),
+            "last_recoverable_error_code": runtime.last_recoverable_error_code,
             "last_event_id": (
                 int(run_state.last_event_id) if run_state is not None else 0
             ),

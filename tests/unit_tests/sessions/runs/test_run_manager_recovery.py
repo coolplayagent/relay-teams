@@ -42,11 +42,25 @@ from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 class _MetaAgent:
     async def handle_intent(
         self, intent, trace_id: str | None = None
-    ):  # pragma: no cover
+    ) -> RunResult:  # pragma: no cover
         raise AssertionError("not expected")
 
-    async def resume_run(self, *, trace_id: str):  # pragma: no cover
+    async def resume_run(self, *, trace_id: str) -> RunResult:  # pragma: no cover
         raise AssertionError(f"not expected: {trace_id}")
+
+
+class _ResumingMetaAgent(_MetaAgent):
+    def __init__(self) -> None:
+        self.resume_calls: list[str] = []
+
+    async def resume_run(self, *, trace_id: str) -> RunResult:
+        self.resume_calls.append(trace_id)
+        return RunResult(
+            trace_id=trace_id,
+            root_task_id="task-root-1",
+            status="completed",
+            output=content_parts_from_text("resumed"),
+        )
 
 
 class _SessionRepo:
@@ -76,7 +90,11 @@ class _EventBus:
         _ = event
 
 
-def _build_manager(db_path: Path) -> RunManager:
+def _build_manager(
+    db_path: Path,
+    *,
+    meta_agent: MetaAgent | None = None,
+) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
     agent_repo = AgentInstanceRepository(db_path)
@@ -98,7 +116,7 @@ def _build_manager(db_path: Path) -> RunManager:
         run_runtime_repo=run_runtime_repo,
     )
     return RunManager(
-        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
+        meta_agent=meta_agent or cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -659,12 +677,18 @@ async def test_stream_run_events_stops_after_run_paused(
 
 
 @pytest.mark.asyncio
-async def test_worker_marks_recoverable_pause_without_run_failed(
+async def test_worker_auto_resumes_recoverable_pause_once(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "run_worker_paused.db"
-    manager = _build_manager(db_path)
+    meta_agent = _ResumingMetaAgent()
+    manager = _build_manager(
+        db_path,
+        meta_agent=cast(MetaAgent, cast(object, meta_agent)),
+    )
     runtime_repo = RunRuntimeRepository(db_path)
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
     runtime_repo.ensure(
         run_id="run-existing",
         session_id="session-1",
@@ -700,15 +724,83 @@ async def test_worker_marks_recoverable_pause_without_run_failed(
 
     runtime = runtime_repo.get("run-existing")
     assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+    assert runtime.last_error is None
+    assert runtime.auto_resume_attempts == 1
+    assert runtime.last_recoverable_error_code == "network_stream_interrupted"
+    assert meta_agent.resume_calls == ["run-existing"]
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    event_types = [str(event["event_type"]) for event in events]
+    assert RunEventType.RUN_AUTO_RESUME_SCHEDULED.value in event_types
+    assert RunEventType.RUN_RESUMED.value in event_types
+    assert RunEventType.RUN_COMPLETED.value in event_types
+    assert RunEventType.RUN_PAUSED.value not in event_types
+    assert not any(
+        event_type == RunEventType.RUN_FAILED.value for event_type in event_types
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_pauses_after_auto_resume_budget_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_paused_exhausted.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = runtime_repo.update(
+        "run-existing",
+        auto_resume_attempts=1,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="network_stream_interrupted",
+        error_message="stream interrupted",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
     assert runtime.status == RunRuntimeStatus.PAUSED
     assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
     assert runtime.last_error == "stream interrupted"
+    assert runtime.auto_resume_attempts == 1
+    assert runtime.last_recoverable_error_code == "network_stream_interrupted"
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
     events = EventLog(db_path).list_by_session_with_ids("session-1")
+    event_types = [str(event["event_type"]) for event in events]
     assert events[-1]["event_type"] == RunEventType.RUN_PAUSED.value
+    assert RunEventType.RUN_AUTO_RESUME_SCHEDULED.value not in event_types
     assert not any(
-        str(event["event_type"]) == RunEventType.RUN_FAILED.value for event in events
+        event_type == RunEventType.RUN_FAILED.value for event_type in event_types
     )
 
 

@@ -45,6 +45,8 @@ class RunRuntimeRecord(BaseModel):
     active_role_id: str | None = None
     active_subagent_instance_id: str | None = None
     last_error: str | None = None
+    auto_resume_attempts: int = Field(default=0, ge=0)
+    last_recoverable_error_code: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -81,11 +83,25 @@ class RunRuntimeRepository:
                     active_role_id             TEXT,
                     active_subagent_instance_id TEXT,
                     last_error                 TEXT,
+                    auto_resume_attempts       INTEGER NOT NULL DEFAULT 0,
+                    last_recoverable_error_code TEXT,
                     created_at                 TEXT NOT NULL,
                     updated_at                 TEXT NOT NULL
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute("PRAGMA table_info(run_runtime)").fetchall()
+            }
+            if "auto_resume_attempts" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_runtime ADD COLUMN auto_resume_attempts INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_recoverable_error_code" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_runtime ADD COLUMN last_recoverable_error_code TEXT"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_run_runtime_session_updated ON run_runtime(session_id, updated_at DESC)"
             )
@@ -115,8 +131,9 @@ class RunRuntimeRepository:
                 """
                 INSERT INTO run_runtime(run_id, session_id, root_task_id, status, phase, active_instance_id,
                                         active_task_id, active_role_id, active_subagent_instance_id,
-                                        last_error, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        last_error, auto_resume_attempts, last_recoverable_error_code,
+                                        created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id)
                 DO UPDATE SET
                     session_id=excluded.session_id,
@@ -128,6 +145,8 @@ class RunRuntimeRepository:
                     active_role_id=excluded.active_role_id,
                     active_subagent_instance_id=excluded.active_subagent_instance_id,
                     last_error=excluded.last_error,
+                    auto_resume_attempts=excluded.auto_resume_attempts,
+                    last_recoverable_error_code=excluded.last_recoverable_error_code,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -141,6 +160,8 @@ class RunRuntimeRepository:
                     record.active_role_id,
                     record.active_subagent_instance_id,
                     record.last_error,
+                    record.auto_resume_attempts,
+                    record.last_recoverable_error_code,
                     created_at,
                     updated_at,
                 ),
@@ -305,6 +326,12 @@ class RunRuntimeRepository:
                 else None
             ),
             last_error=str(row["last_error"]) if row["last_error"] else None,
+            auto_resume_attempts=int(row["auto_resume_attempts"] or 0),
+            last_recoverable_error_code=(
+                str(row["last_recoverable_error_code"])
+                if row["last_recoverable_error_code"]
+                else None
+            ),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )

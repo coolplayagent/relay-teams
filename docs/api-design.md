@@ -481,7 +481,9 @@ Gets one round projection.
 Returns active run recovery state, pending tool approvals, paused subagent state, and round snapshot.
 
 `active_run` also includes:
+- `auto_resume_attempts`
 - `last_event_id`
+- `last_recoverable_error_code`
 - `checkpoint_event_id`
 - `stream_connected`
 - `should_show_recover`
@@ -670,6 +672,7 @@ Thinking events:
 Retry events:
 - `llm_retry_scheduled`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `retry_in_ms`, `error_code`, and `error_message`.
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
+- `run_auto_resume_scheduled`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, `auto_resume_attempts`, and `auto_resume_limit`.
 - `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`.
 
 Frontend behavior:
@@ -677,6 +680,7 @@ Frontend behavior:
 - Retry countdowns are computed from the SSE event `occurred_at` timestamp plus `retry_in_ms`, so delayed delivery or page refresh does not restart the timer.
 - Later retry events replace the same card instead of stacking multiple historical cards.
 - Once a retried model attempt produces successful output, the retry card is removed.
+- If the run cannot safely retry within one `generate()` call but still qualifies for one backend auto-recovery pass, `llm_retry_exhausted` may be followed by `run_auto_resume_scheduled` and then `run_resumed` without surfacing `run_paused` to the user.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
 
