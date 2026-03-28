@@ -180,6 +180,26 @@ class SessionRepository:
         if cursor.rowcount == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
 
+    def update_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+        project_id: str,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE sessions
+            SET workspace_id=?, project_id=?, updated_at=?
+            WHERE session_id=?
+            """,
+            (workspace_id, project_id, now, session_id),
+        )
+        self._conn.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
+
     def mark_started(self, session_id: str) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         cursor = self._conn.execute(

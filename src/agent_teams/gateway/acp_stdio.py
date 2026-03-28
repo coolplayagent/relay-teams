@@ -232,13 +232,16 @@ class AcpGatewayServer:
         model_profile_override = _parse_model_profile_override(
             params.get("modelProfileOverride")
         )
-        record = self._gateway_session_service.create_session(
-            channel_type=GatewayChannelType.ACP_STDIO,
-            cwd=cwd,
-            capabilities=capabilities,
-            session_mcp_servers=mcp_servers,
-            model_profile_override=model_profile_override,
-        )
+        try:
+            record = self._gateway_session_service.create_session(
+                channel_type=GatewayChannelType.ACP_STDIO,
+                cwd=cwd,
+                capabilities=capabilities,
+                session_mcp_servers=mcp_servers,
+                model_profile_override=model_profile_override,
+            )
+        except ValueError as exc:
+            raise AcpProtocolError(-32602, str(exc)) from exc
         self._mcp_relay.bind_session_servers(record.gateway_session_id, mcp_servers)
         return {"sessionId": record.gateway_session_id}
 
@@ -248,6 +251,18 @@ class AcpGatewayServer:
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         record = self._gateway_session_service.get_session(gateway_session_id)
+        if "cwd" in params:
+            cwd = _optional_str(params, "cwd")
+            if cwd is not None:
+                try:
+                    record = self._gateway_session_service.rebind_session_cwd(
+                        gateway_session_id,
+                        cwd=cwd,
+                    )
+                except ValueError as exc:
+                    raise AcpProtocolError(-32602, str(exc)) from exc
+                except RuntimeError as exc:
+                    raise AcpProtocolError(-32000, str(exc)) from exc
         if "mcpServers" in params:
             mcp_servers = _parse_mcp_servers(params.get("mcpServers"))
             record = self._gateway_session_service.set_session_mcp_servers(

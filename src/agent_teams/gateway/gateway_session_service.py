@@ -59,8 +59,12 @@ class GatewaySessionService:
         now = self._utcnow()
         gateway_session_id = f"gws_{uuid4().hex[:12]}"
         resolved_external_session_id = external_session_id or gateway_session_id
+        workspace_id, resolved_cwd = self._resolve_workspace_binding(
+            cwd,
+            fallback_workspace_id="default",
+        )
         internal_session = self._session_service.create_session(
-            workspace_id=self._resolve_workspace_id(cwd),
+            workspace_id=workspace_id,
             normal_root_role_id=self._default_normal_root_role_id,
         )
         record = GatewaySessionRecord(
@@ -70,7 +74,7 @@ class GatewaySessionService:
             internal_session_id=internal_session.session_id,
             peer_user_id=peer_user_id,
             peer_chat_id=peer_chat_id,
-            cwd=cwd,
+            cwd=resolved_cwd,
             capabilities=capabilities,
             channel_state=(
                 {"acp_model_profile_override": model_profile_override.to_public_state()}
@@ -146,6 +150,33 @@ class GatewaySessionService:
                     **normalized_channel_state,
                 },
                 "updated_at": now,
+            }
+        )
+        return self._repository.update(updated)
+
+    def rebind_session_cwd(
+        self,
+        gateway_session_id: str,
+        *,
+        cwd: str,
+    ) -> GatewaySessionRecord:
+        existing = self._repository.get(gateway_session_id)
+        current_session = self._session_service.get_session(
+            existing.internal_session_id
+        )
+        workspace_id, resolved_cwd = self._resolve_workspace_binding(
+            cwd,
+            fallback_workspace_id=current_session.workspace_id,
+        )
+        if workspace_id != current_session.workspace_id:
+            _ = self._session_service.rebind_session_workspace(
+                existing.internal_session_id,
+                workspace_id=workspace_id,
+            )
+        updated = existing.model_copy(
+            update={
+                "cwd": resolved_cwd,
+                "updated_at": self._utcnow(),
             }
         )
         return self._repository.update(updated)
@@ -289,13 +320,20 @@ class GatewaySessionService:
         )
         return self._repository.update(updated)
 
-    def _resolve_workspace_id(self, cwd: str | None) -> str:
-        if cwd is None or self._workspace_service is None:
-            return "default"
+    def _resolve_workspace_binding(
+        self,
+        cwd: str | None,
+        *,
+        fallback_workspace_id: str,
+    ) -> tuple[str, str | None]:
+        if cwd is None:
+            return fallback_workspace_id, None
+        if self._workspace_service is None:
+            return fallback_workspace_id, cwd
         workspace = self._workspace_service.create_workspace_for_root(
             root_path=Path(cwd).expanduser()
         )
-        return workspace.workspace_id
+        return workspace.workspace_id, str(workspace.root_path)
 
     @staticmethod
     def _utcnow() -> datetime:

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -20,9 +21,15 @@ from agent_teams.gateway.feishu import (
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.workspace import WorkspaceService
+from agent_teams.workspace.workspace_repository import WorkspaceRepository
 
 
-def _build_service(db_path: Path) -> SessionService:
+def _build_service(
+    db_path: Path,
+    *,
+    workspace_service: WorkspaceService | None = None,
+) -> SessionService:
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
@@ -63,7 +70,12 @@ def _build_service(db_path: Path) -> SessionService:
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         role_registry=role_registry,
+        workspace_service=workspace_service,
     )
+
+
+def _build_workspace_service(db_path: Path) -> WorkspaceService:
+    return WorkspaceService(repository=WorkspaceRepository(db_path))
 
 
 def test_update_session_replaces_metadata_and_refreshes_updated_at(
@@ -187,3 +199,94 @@ def test_create_session_defaults_project_scope_to_workspace(tmp_path: Path) -> N
 
     assert created.project_kind.value == "workspace"
     assert created.project_id == "default"
+
+
+def test_rebind_session_workspace_updates_workspace_project_and_agents(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_rebind.db"
+    workspace_service = _build_workspace_service(db_path)
+    default_root = tmp_path / "workspace-default"
+    target_root = tmp_path / "workspace-target"
+    default_root.mkdir()
+    target_root.mkdir()
+    default_workspace = workspace_service.create_workspace_for_root(
+        root_path=default_root
+    )
+    target_workspace = workspace_service.create_workspace_for_root(
+        root_path=target_root
+    )
+    service = _build_service(
+        db_path,
+        workspace_service=workspace_service,
+    )
+    created = service.create_session(
+        session_id="session-1",
+        workspace_id=default_workspace.workspace_id,
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id=default_workspace.workspace_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    updated = service.rebind_session_workspace(
+        "session-1",
+        workspace_id=target_workspace.workspace_id,
+    )
+
+    assert updated.workspace_id == target_workspace.workspace_id
+    assert updated.project_id == target_workspace.workspace_id
+    assert updated.updated_at >= created.updated_at
+    assert (
+        service.get_session("session-1").workspace_id == target_workspace.workspace_id
+    )
+    assert (
+        agent_repo.get_instance("inst-1").workspace_id == target_workspace.workspace_id
+    )
+
+
+def test_rebind_session_workspace_rejects_recoverable_run(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_rebind_active_run.db"
+    workspace_service = _build_workspace_service(db_path)
+    default_root = tmp_path / "workspace-default"
+    target_root = tmp_path / "workspace-target"
+    default_root.mkdir()
+    target_root.mkdir()
+    default_workspace = workspace_service.create_workspace_for_root(
+        root_path=default_root
+    )
+    target_workspace = workspace_service.create_workspace_for_root(
+        root_path=target_root
+    )
+    service = _build_service(
+        db_path,
+        workspace_service=workspace_service,
+    )
+    _ = service.create_session(
+        session_id="session-1",
+        workspace_id=default_workspace.workspace_id,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot rebind workspace while session has active or recoverable run",
+    ):
+        service.rebind_session_workspace(
+            "session-1",
+            workspace_id=target_workspace.workspace_id,
+        )
+
+    assert (
+        service.get_session("session-1").workspace_id == default_workspace.workspace_id
+    )

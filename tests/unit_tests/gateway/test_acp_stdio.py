@@ -38,6 +38,8 @@ class FakeSessionService:
         self.recovery_snapshot_by_session: dict[str, dict[str, object]] = {}
         self.usage_by_run: dict[str, RunTokenUsage] = {}
         self.create_session_calls: list[dict[str, object]] = []
+        self.rebind_session_calls: list[dict[str, object]] = []
+        self.active_run_session_ids: set[str] = set()
 
     def create_session(
         self,
@@ -73,6 +75,33 @@ class FakeSessionService:
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._sessions[session_id]
+
+    def rebind_session_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> SessionRecord:
+        if session_id in self.active_run_session_ids:
+            raise RuntimeError(
+                "Cannot rebind workspace while session has active or recoverable run"
+            )
+        current = self._sessions[session_id]
+        updated = current.model_copy(
+            update={
+                "workspace_id": workspace_id,
+                "project_id": workspace_id,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        )
+        self._sessions[session_id] = updated
+        self.rebind_session_calls.append(
+            {
+                "session_id": session_id,
+                "workspace_id": workspace_id,
+            }
+        )
+        return updated
 
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
         return list(self.messages_by_session.get(session_id, []))
@@ -143,6 +172,10 @@ class FakeWorkspaceService:
 
     def create_workspace_for_root(self, *, root_path: Path) -> WorkspaceRecord:
         resolved_root = root_path.resolve()
+        if not resolved_root.exists():
+            raise ValueError(f"Workspace root does not exist: {resolved_root}")
+        if not resolved_root.is_dir():
+            raise ValueError(f"Workspace root is not a directory: {resolved_root}")
         existing = self.workspaces_by_root.get(resolved_root)
         if existing is not None:
             return existing
@@ -322,8 +355,37 @@ async def test_session_new_uses_cwd_backed_workspace_for_internal_session(
     record = GatewaySessionRepository(tmp_path / "gateway.db").get(session_id)
     internal_session = session_service.get_session(record.internal_session_id)
     assert internal_session.workspace_id == "workspace-1"
+    assert record.cwd == str(tmp_path.resolve())
     workspace_record = workspace_service.workspaces_by_root[tmp_path.resolve()]
     assert workspace_record.root_path == tmp_path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_session_new_rejects_invalid_cwd(tmp_path: Path) -> None:
+    workspace_service = FakeWorkspaceService()
+    server, _, _, _ = _build_server(
+        tmp_path,
+        workspace_service=workspace_service,
+    )
+    missing_path = tmp_path / "missing-project"
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(missing_path), "mcpServers": []},
+        }
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": -32602,
+            "message": f"Workspace root does not exist: {missing_path.resolve()}",
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -800,6 +862,155 @@ async def test_session_load_persists_host_provided_mcp_servers(
     assert server_spec.transport == "stdio"
     assert server_spec.config["command"] == "npx"
     assert server_spec.config["args"] == ["-y", "@upstash/context7-mcp"]
+
+
+@pytest.mark.asyncio
+async def test_session_load_rebinds_internal_workspace_for_new_cwd(
+    tmp_path: Path,
+) -> None:
+    workspace_service = FakeWorkspaceService()
+    target_root = tmp_path / "project-b"
+    target_root.mkdir()
+    server, session_service, _, _ = _build_server(
+        tmp_path,
+        workspace_service=workspace_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    before = repository.get(session_id)
+    assert session_service.get_session(before.internal_session_id).workspace_id == (
+        "workspace-1"
+    )
+
+    loaded = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "cwd": str(target_root),
+                "mcpServers": [],
+            },
+        }
+    )
+
+    assert _require_result_object(loaded) == {"sessionId": session_id}
+    after = repository.get(session_id)
+    assert after.cwd == str(target_root.resolve())
+    assert session_service.get_session(after.internal_session_id).workspace_id == (
+        "workspace-2"
+    )
+    assert session_service.rebind_session_calls == [
+        {
+            "session_id": after.internal_session_id,
+            "workspace_id": "workspace-2",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_load_allows_same_workspace_when_active_run_exists(
+    tmp_path: Path,
+) -> None:
+    workspace_service = FakeWorkspaceService()
+    server, session_service, _, _ = _build_server(
+        tmp_path,
+        workspace_service=workspace_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    session_service.active_run_session_ids.add(record.internal_session_id)
+
+    loaded = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "cwd": str(tmp_path.resolve()),
+                "mcpServers": [],
+            },
+        }
+    )
+
+    assert _require_result_object(loaded) == {"sessionId": session_id}
+    assert session_service.rebind_session_calls == []
+    assert repository.get(session_id).cwd == str(tmp_path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_session_load_rejects_workspace_rebind_while_run_is_active(
+    tmp_path: Path,
+) -> None:
+    workspace_service = FakeWorkspaceService()
+    target_root = tmp_path / "project-b"
+    target_root.mkdir()
+    server, session_service, _, _ = _build_server(
+        tmp_path,
+        workspace_service=workspace_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    before = repository.get(session_id)
+    session_service.active_run_session_ids.add(before.internal_session_id)
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/load",
+            "params": {
+                "sessionId": session_id,
+                "cwd": str(target_root),
+                "mcpServers": [],
+            },
+        }
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32000,
+            "message": "Cannot rebind workspace while session has active or recoverable run",
+        },
+    }
+    after = repository.get(session_id)
+    assert after.cwd == str(tmp_path.resolve())
+    assert session_service.get_session(after.internal_session_id).workspace_id == (
+        "workspace-1"
+    )
+    assert session_service.rebind_session_calls == []
 
 
 @pytest.mark.asyncio
