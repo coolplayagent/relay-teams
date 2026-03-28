@@ -421,9 +421,7 @@ def test_fork_workspace_forwards_start_ref(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 200
-    assert service.calls == [
-        ("project-alpha", "Alpha Project Fork", "origin/release")
-    ]
+    assert service.calls == [("project-alpha", "Alpha Project Fork", "origin/release")]
 
 
 def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None:

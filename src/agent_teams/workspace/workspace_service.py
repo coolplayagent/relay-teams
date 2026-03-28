@@ -300,7 +300,9 @@ class WorkspaceService:
             source_record.root_path
         )
         if start_ref is None:
-            self._git_worktree_client.fetch_ref(repository_root, remote="origin", ref="main")
+            self._git_worktree_client.fetch_ref(
+                repository_root, remote="origin", ref="main"
+            )
             resolved_start_ref = "origin/main"
         else:
             resolved_start_ref = start_ref
