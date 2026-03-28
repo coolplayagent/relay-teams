@@ -1,0 +1,285 @@
+## 固定信源
+
+- [AI Digest 中文](https://ai-digest.liziran.com/zh/)
+- [AI Brief 中文](https://ai-brief.liziran.com/zh/)
+
+## RSS 博客池
+
+### Blogs
+
+- `simonwillison.net`  
+  RSS: <https://simonwillison.net/atom/everything/>  
+  Site: <https://simonwillison.net>
+- `jeffgeerling.com`  
+  RSS: <https://www.jeffgeerling.com/blog.xml>  
+  Site: <https://jeffgeerling.com>
+- `seangoedecke.com`  
+  RSS: <https://www.seangoedecke.com/rss.xml>  
+  Site: <https://seangoedecke.com>
+- `krebsonsecurity.com`  
+  RSS: <https://krebsonsecurity.com/feed/>  
+  Site: <https://krebsonsecurity.com>
+- `daringfireball.net`  
+  RSS: <https://daringfireball.net/feeds/main>  
+  Site: <https://daringfireball.net>
+- `ericmigi.com`  
+  RSS: <https://ericmigi.com/rss.xml>  
+  Site: <https://ericmigi.com>
+- `antirez.com`  
+  RSS: <http://antirez.com/rss>  
+  Site: <http://antirez.com>
+- `idiallo.com`  
+  RSS: <https://idiallo.com/feed.rss>  
+  Site: <https://idiallo.com>
+- `maurycyz.com`  
+  RSS: <https://maurycyz.com/index.xml>  
+  Site: <https://maurycyz.com>
+- `pluralistic.net`  
+  RSS: <https://pluralistic.net/feed/>  
+  Site: <https://pluralistic.net>
+- `shkspr.mobi`  
+  RSS: <https://shkspr.mobi/blog/feed/>  
+  Site: <https://shkspr.mobi>
+- `lcamtuf.substack.com`  
+  RSS: <https://lcamtuf.substack.com/feed>  
+  Site: <https://lcamtuf.substack.com>
+- `mitchellh.com`  
+  RSS: <https://mitchellh.com/feed.xml>  
+  Site: <https://mitchellh.com>
+- `dynomight.net`  
+  RSS: <https://dynomight.net/feed.xml>  
+  Site: <https://dynomight.net>
+- `utcc.utoronto.ca/~cks`  
+  RSS: <https://utcc.utoronto.ca/~cks/space/blog/?atom>  
+  Site: <https://utcc.utoronto.ca/~cks>
+- `xeiaso.net`  
+  RSS: <https://xeiaso.net/blog.rss>  
+  Site: <https://xeiaso.net>
+- `devblogs.microsoft.com/oldnewthing`  
+  RSS: <https://devblogs.microsoft.com/oldnewthing/feed>  
+  Site: <https://devblogs.microsoft.com/oldnewthing>
+- `righto.com`  
+  RSS: <https://www.righto.com/feeds/posts/default>  
+  Site: <https://righto.com>
+- `lucumr.pocoo.org`  
+  RSS: <https://lucumr.pocoo.org/feed.atom>  
+  Site: <https://lucumr.pocoo.org>
+- `skyfall.dev`  
+  RSS: <https://skyfall.dev/rss.xml>  
+  Site: <https://skyfall.dev>
+- `garymarcus.substack.com`  
+  RSS: <https://garymarcus.substack.com/feed>  
+  Site: <https://garymarcus.substack.com>
+- `rachelbythebay.com`  
+  RSS: <https://rachelbythebay.com/w/atom.xml>  
+  Site: <https://rachelbythebay.com>
+- `overreacted.io`  
+  RSS: <https://overreacted.io/rss.xml>  
+  Site: <https://overreacted.io>
+- `timsh.org`  
+  RSS: <https://timsh.org/rss/>  
+  Site: <https://timsh.org>
+- `johndcook.com`  
+  RSS: <https://www.johndcook.com/blog/feed/>  
+  Site: <https://johndcook.com>
+- `gilesthomas.com`  
+  RSS: <https://gilesthomas.com/feed/rss.xml>  
+  Site: <https://gilesthomas.com>
+- `matklad.github.io`  
+  RSS: <https://matklad.github.io/feed.xml>  
+  Site: <https://matklad.github.io>
+- `derekthompson.org`  
+  RSS: <https://www.theatlantic.com/feed/author/derek-thompson/>  
+  Site: <https://derekthompson.org>
+- `evanhahn.com`  
+  RSS: <https://evanhahn.com/feed.xml>  
+  Site: <https://evanhahn.com>
+- `terriblesoftware.org`  
+  RSS: <https://terriblesoftware.org/feed/>  
+  Site: <https://terriblesoftware.org>
+- `rakhim.exotext.com`  
+  RSS: <https://rakhim.exotext.com/rss.xml>  
+  Site: <https://rakhim.exotext.com>
+- `joanwestenberg.com`  
+  RSS: <https://joanwestenberg.com/rss>  
+  Site: <https://joanwestenberg.com>
+- `xania.org`  
+  RSS: <https://xania.org/feed>  
+  Site: <https://xania.org>
+- `micahflee.com`  
+  RSS: <https://micahflee.com/feed/>  
+  Site: <https://micahflee.com>
+- `nesbitt.io`  
+  RSS: <https://nesbitt.io/feed.xml>  
+  Site: <https://nesbitt.io>
+- `construction-physics.com`  
+  RSS: <https://www.construction-physics.com/feed>  
+  Site: <https://construction-physics.com>
+- `tedium.co`  
+  RSS: <https://feed.tedium.co/>  
+  Site: <https://tedium.co>
+- `susam.net`  
+  RSS: <https://susam.net/feed.xml>  
+  Site: <https://susam.net>
+- `entropicthoughts.com`  
+  RSS: <https://entropicthoughts.com/feed.xml>  
+  Site: <https://entropicthoughts.com>
+- `buttondown.com/hillelwayne`  
+  RSS: <https://buttondown.com/hillelwayne/rss>  
+  Site: <https://buttondown.com/hillelwayne>
+- `dwarkesh.com`  
+  RSS: <https://www.dwarkeshpatel.com/feed>  
+  Site: <https://dwarkesh.com>
+- `borretti.me`  
+  RSS: <https://borretti.me/feed.xml>  
+  Site: <https://borretti.me>
+- `wheresyoured.at`  
+  RSS: <https://www.wheresyoured.at/rss/>  
+  Site: <https://wheresyoured.at>
+- `jayd.ml`  
+  RSS: <https://jayd.ml/feed.xml>  
+  Site: <https://jayd.ml>
+- `minimaxir.com`  
+  RSS: <https://minimaxir.com/index.xml>  
+  Site: <https://minimaxir.com>
+- `geohot.github.io`  
+  RSS: <https://geohot.github.io/blog/feed.xml>  
+  Site: <https://geohot.github.io>
+- `paulgraham.com`  
+  RSS: <http://www.aaronsw.com/2002/feeds/pgessays.rss>  
+  Site: <https://paulgraham.com>
+- `filfre.net`  
+  RSS: <https://www.filfre.net/feed/>  
+  Site: <https://filfre.net>
+- `blog.jim-nielsen.com`  
+  RSS: <https://blog.jim-nielsen.com/feed.xml>  
+  Site: <https://blog.jim-nielsen.com>
+- `dfarq.homeip.net`  
+  RSS: <https://dfarq.homeip.net/feed/>  
+  Site: <https://dfarq.homeip.net>
+- `jyn.dev`  
+  RSS: <https://jyn.dev/atom.xml>  
+  Site: <https://jyn.dev>
+- `geoffreylitt.com`  
+  RSS: <https://www.geoffreylitt.com/feed.xml>  
+  Site: <https://geoffreylitt.com>
+- `downtowndougbrown.com`  
+  RSS: <https://www.downtowndougbrown.com/feed/>  
+  Site: <https://downtowndougbrown.com>
+- `brutecat.com`  
+  RSS: <https://brutecat.com/rss.xml>  
+  Site: <https://brutecat.com>
+- `eli.thegreenplace.net`  
+  RSS: <https://eli.thegreenplace.net/feeds/all.atom.xml>  
+  Site: <https://eli.thegreenplace.net>
+- `abortretry.fail`  
+  RSS: <https://www.abortretry.fail/feed>  
+  Site: <https://abortretry.fail>
+- `fabiensanglard.net`  
+  RSS: <https://fabiensanglard.net/rss.xml>  
+  Site: <https://fabiensanglard.net>
+- `oldvcr.blogspot.com`  
+  RSS: <https://oldvcr.blogspot.com/feeds/posts/default>  
+  Site: <https://oldvcr.blogspot.com>
+- `bogdanthegeek.github.io`  
+  RSS: <https://bogdanthegeek.github.io/blog/index.xml>  
+  Site: <https://bogdanthegeek.github.io>
+- `hugotunius.se`  
+  RSS: <https://hugotunius.se/feed.xml>  
+  Site: <https://hugotunius.se>
+- `gwern.net`  
+  RSS: <https://gwern.substack.com/feed>  
+  Site: <https://gwern.net>
+- `berthub.eu`  
+  RSS: <https://berthub.eu/articles/index.xml>  
+  Site: <https://berthub.eu>
+- `chadnauseam.com`  
+  RSS: <https://chadnauseam.com/rss.xml>  
+  Site: <https://chadnauseam.com>
+- `simone.org`  
+  RSS: <https://simone.org/feed/>  
+  Site: <https://simone.org>
+- `it-notes.dragas.net`  
+  RSS: <https://it-notes.dragas.net/feed/>  
+  Site: <https://it-notes.dragas.net>
+- `beej.us`  
+  RSS: <https://beej.us/blog/rss.xml>  
+  Site: <https://beej.us>
+- `hey.paris`  
+  RSS: <https://hey.paris/index.xml>  
+  Site: <https://hey.paris>
+- `danielwirtz.com`  
+  RSS: <https://danielwirtz.com/rss.xml>  
+  Site: <https://danielwirtz.com>
+- `matduggan.com`  
+  RSS: <https://matduggan.com/rss/>  
+  Site: <https://matduggan.com>
+- `refactoringenglish.com`  
+  RSS: <https://refactoringenglish.com/index.xml>  
+  Site: <https://refactoringenglish.com>
+- `worksonmymachine.substack.com`  
+  RSS: <https://worksonmymachine.substack.com/feed>  
+  Site: <https://worksonmymachine.substack.com>
+- `philiplaine.com`  
+  RSS: <https://philiplaine.com/index.xml>  
+  Site: <https://philiplaine.com>
+- `steveblank.com`  
+  RSS: <https://steveblank.com/feed/>  
+  Site: <https://steveblank.com>
+- `bernsteinbear.com`  
+  RSS: <https://bernsteinbear.com/feed.xml>  
+  Site: <https://bernsteinbear.com>
+- `danieldelaney.net`  
+  RSS: <https://danieldelaney.net/feed>  
+  Site: <https://danieldelaney.net>
+- `troyhunt.com`  
+  RSS: <https://www.troyhunt.com/rss/>  
+  Site: <https://troyhunt.com>
+- `herman.bearblog.dev`  
+  RSS: <https://herman.bearblog.dev/feed/>  
+  Site: <https://herman.bearblog.dev>
+- `tomrenner.com`  
+  RSS: <https://tomrenner.com/index.xml>  
+  Site: <https://tomrenner.com>
+- `blog.pixelmelt.dev`  
+  RSS: <https://blog.pixelmelt.dev/rss/>  
+  Site: <https://blog.pixelmelt.dev>
+- `martinalderson.com`  
+  RSS: <https://martinalderson.com/feed.xml>  
+  Site: <https://martinalderson.com>
+- `danielchasehooper.com`  
+  RSS: <https://danielchasehooper.com/feed.xml>  
+  Site: <https://danielchasehooper.com>
+- `chiark.greenend.org.uk/~sgtatham`  
+  RSS: <https://www.chiark.greenend.org.uk/~sgtatham/quasiblog/feed.xml>  
+  Site: <https://chiark.greenend.org.uk/~sgtatham>
+- `grantslatton.com`  
+  RSS: <https://grantslatton.com/rss.xml>  
+  Site: <https://grantslatton.com>
+- `experimental-history.com`  
+  RSS: <https://www.experimental-history.com/feed>  
+  Site: <https://experimental-history.com>
+- `anildash.com`  
+  RSS: <https://anildash.com/feed.xml>  
+  Site: <https://anildash.com>
+- `aresluna.org`  
+  RSS: <https://aresluna.org/main.rss>  
+  Site: <https://aresluna.org>
+- `michael.stapelberg.ch`  
+  RSS: <https://michael.stapelberg.ch/feed.xml>  
+  Site: <https://michael.stapelberg.ch>
+- `miguelgrinberg.com`  
+  RSS: <https://blog.miguelgrinberg.com/feed>  
+  Site: <https://miguelgrinberg.com>
+- `keygen.sh`  
+  RSS: <https://keygen.sh/blog/feed.xml>  
+  Site: <https://keygen.sh>
+- `mjg59.dreamwidth.org`  
+  RSS: <https://mjg59.dreamwidth.org/data/rss>  
+  Site: <https://mjg59.dreamwidth.org>
+- `computer.rip`  
+  RSS: <https://computer.rip/rss.xml>  
+  Site: <https://computer.rip>
+- `tedunangst.com`  
+  RSS: <https://www.tedunangst.com/flak/rss>  
+  Site: <https://tedunangst.com>

@@ -6,6 +6,8 @@ model_profile: default
 version: 1.0.0
 skills:
   - skill-installer
+  - pptx-craft
+  - deepresearch
 tools:
   - grep
   - glob
