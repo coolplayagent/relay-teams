@@ -12,7 +12,11 @@ import pytest
 from pydantic import JsonValue
 
 import agent_teams.gateway.acp_stdio as acp_stdio_module
-from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
+from agent_teams.gateway.acp_stdio import (
+    RECOVERABLE_PAUSED_RUN_MESSAGE,
+    AcpGatewayServer,
+    AcpStdioRuntime,
+)
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
@@ -474,6 +478,57 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     record = repository.get(session_id)
     assert record.active_run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_rejects_recoverable_paused_run(
+    tmp_path: Path,
+) -> None:
+    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    session_service.recovery_snapshot_by_session["session-1"] = {
+        "active_run": {
+            "run_id": "run-paused",
+            "status": "paused",
+            "phase": "awaiting_recovery",
+            "is_recoverable": True,
+            "should_show_recover": True,
+        },
+        "pending_tool_approvals": [],
+        "paused_subagent": None,
+        "round_snapshot": None,
+    }
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "keep going"}],
+            },
+        }
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32000,
+            "message": RECOVERABLE_PAUSED_RUN_MESSAGE,
+        },
+    }
+    assert run_manager.create_calls == []
+    assert notifications == []
 
 
 @pytest.mark.asyncio
