@@ -63,6 +63,21 @@ function loadConfig(configPath) {
   }
 }
 
+function createBrowserContext() {
+  return {
+    rectIntersectionAreaStr: utils.rectIntersectionArea.toString(),
+    isAncestorStr: utils.isAncestor.toString(),
+    isBackgroundOrDecorStr: utils.isBackgroundOrDecor.toString(),
+    detectSlideOverflowStr: slideOverflow.detectSlideOverflow.toString(),
+    buildOverflowElementsStr: childOverflow.buildOverflowElements.toString(),
+    detectChildOverflowStr: childOverflow.detectChildOverflow.toString(),
+    detectTextOverlapStr: elementOverlap.detectTextOverlap.toString(),
+    detectTextOcclusionStr: textOcclusion.detectTextOcclusion.toString(),
+    detectBlockOverlapStr: blockOverlap.detectBlockOverlap.toString(),
+    detectInBrowserStr: detectInBrowser.toString(),
+  };
+}
+
 async function detectLayoutIssues(options) {
   const { htmlPath, config: providedConfig } = options;
   const config = providedConfig || loadConfig();
@@ -133,12 +148,7 @@ async function detectLayoutIssues(options) {
       });
     }
 
-    const browserContext = {
-      detectInBrowserStr: detectInBrowser.toString(),
-      detectTextOverlapStr: elementOverlap.detectTextOverlap.toString(),
-      detectTextOcclusionStr: textOcclusion.detectTextOcclusion.toString(),
-      detectBlockOverlapStr: blockOverlap.detectBlockOverlap.toString(),
-    };
+    const browserContext = createBrowserContext();
 
     const results = await page.evaluate(
       ({
@@ -150,9 +160,17 @@ async function detectLayoutIssues(options) {
         disableTextOverlap,
         disableBlockOverlap,
       }) => {
+        eval(browserContext.rectIntersectionAreaStr);
+        eval(browserContext.isAncestorStr);
+        eval(browserContext.isBackgroundOrDecorStr);
+        eval(browserContext.detectSlideOverflowStr);
+        eval(browserContext.buildOverflowElementsStr);
+        eval(browserContext.detectChildOverflowStr);
         eval(browserContext.detectTextOverlapStr);
         eval(browserContext.detectTextOcclusionStr);
         eval(browserContext.detectBlockOverlapStr);
+        const slideOverflow = { detectSlideOverflow };
+        const childOverflow = { buildOverflowElements, detectChildOverflow };
         eval(browserContext.detectInBrowserStr);
         return detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, {
           disableChildOverflow,
@@ -721,6 +739,7 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
 
 module.exports = {
   detectLayoutIssues,
+  createBrowserContext,
   loadConfig,
   findConfigPath,
   parseJsonc,
