@@ -37,6 +37,7 @@ class FakeSessionService:
         self.global_events_by_session: dict[str, list[dict[str, object]]] = {}
         self.recovery_snapshot_by_session: dict[str, dict[str, object]] = {}
         self.usage_by_run: dict[str, RunTokenUsage] = {}
+        self.create_session_calls: list[dict[str, object]] = []
 
     def create_session(
         self,
@@ -44,8 +45,20 @@ class FakeSessionService:
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: object | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         _ = metadata
+        self.create_session_calls.append(
+            {
+                "session_id": session_id,
+                "workspace_id": workspace_id,
+                "session_mode": session_mode,
+                "normal_root_role_id": normal_root_role_id,
+                "orchestration_preset_id": orchestration_preset_id,
+            }
+        )
         self._counter += 1
         resolved_session_id = session_id or f"session-{self._counter}"
         record = SessionRecord(
@@ -311,6 +324,35 @@ async def test_session_new_uses_cwd_backed_workspace_for_internal_session(
     assert internal_session.workspace_id == "workspace-1"
     workspace_record = workspace_service.workspaces_by_root[tmp_path.resolve()]
     assert workspace_record.root_path == tmp_path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_session_new_uses_gateway_default_normal_root_role(
+    tmp_path: Path,
+) -> None:
+    server, session_service, _, _ = _build_server(
+        tmp_path,
+        default_normal_root_role_id="Crafter",
+    )
+
+    _ = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+
+    assert session_service.create_session_calls == [
+        {
+            "session_id": None,
+            "workspace_id": "default",
+            "session_mode": None,
+            "normal_root_role_id": "Crafter",
+            "orchestration_preset_id": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1141,6 +1183,7 @@ def _build_server(
     tmp_path: Path,
     *,
     workspace_service: FakeWorkspaceService | None = None,
+    default_normal_root_role_id: str | None = None,
 ) -> tuple[
     AcpGatewayServer,
     FakeSessionService,
@@ -1153,6 +1196,7 @@ def _build_server(
         repository=repository,
         session_service=cast(SessionService, session_service),
         workspace_service=cast(WorkspaceService | None, workspace_service),
+        default_normal_root_role_id=default_normal_root_role_id,
     )
     run_manager = FakeRunManager()
     notifications: list[dict[str, JsonValue]] = []

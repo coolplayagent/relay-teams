@@ -72,6 +72,12 @@ Windows example:
 uv --directory D:/openworkspace/agent_teams run agent-teams gateway acp stdio
 ```
 
+To start ACP with a specific normal-mode role instead of the default `MainAgent`:
+
+```powershell
+uv --directory D:/openworkspace/agent_teams run agent-teams gateway acp stdio --role Crafter
+```
+
 If the process starts and stays attached to the terminal, the ACP stdio gateway is up. Stop it with `Ctrl+C` after the check.
 
 Do not debug Zed first if this command fails. Fix the local startup issue first.
@@ -109,7 +115,9 @@ Typical user settings locations:
         "agent-teams",
         "gateway",
         "acp",
-        "stdio"
+        "stdio",
+        "--role",
+        "Crafter"
       ],
       "env": {
         "AGENT_LOG_LEVEL": "info"
@@ -133,7 +141,9 @@ Typical user settings locations:
         "agent-teams",
         "gateway",
         "acp",
-        "stdio"
+        "stdio",
+        "--role",
+        "Crafter"
       ],
       "env": {
         "AGENT_LOG_LEVEL": "info"
@@ -147,6 +157,8 @@ Notes:
 
 - `command` uses `uv`, and Zed launches the ACP agent as a stdio subprocess.
 - `--directory` pins the command to this repository so `uv run` does not depend on the currently opened Zed project directory.
+- optional `--role <role_id>` sets the default normal-mode root role for new ACP sessions created by that gateway process.
+- if `--role` is omitted, ACP-created sessions keep the default `MainAgent` behavior.
 - `env` is optional and mainly useful for debugging.
 - the stdio gateway already suppresses stdout console logging internally, so normal logs do not corrupt ACP responses
 

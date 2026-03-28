@@ -41,8 +41,17 @@ def build_gateway_app(
     wechat_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
     @acp_app.command("stdio")
-    def gateway_acp_stdio() -> None:
-        runtime = _build_acp_stdio_runtime()
+    def gateway_acp_stdio(
+        role: str | None = typer.Option(
+            None,
+            "--role",
+            help=(
+                "Select the normal mode root role for ACP-created sessions. "
+                "If omitted, the default MainAgent is used."
+            ),
+        ),
+    ) -> None:
+        runtime = _build_acp_stdio_runtime(role_id=role)
         asyncio.run(runtime.serve_forever())
 
     if request_json is not None and auto_start_if_needed is not None:
@@ -286,7 +295,7 @@ def build_gateway_app(
     return gateway_app
 
 
-def _build_acp_stdio_runtime() -> AcpStdioRuntime:
+def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
     config_dir = get_app_config_dir()
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
@@ -295,6 +304,10 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     container = ServerContainer(
         config_dir=config_dir,
         session_model_profile_lookup=session_model_profile_store.get,
+    )
+    default_normal_root_role_id = _resolve_acp_stdio_role_id(
+        container=container,
+        role_id=role_id,
     )
     mcp_relay = AcpMcpRelay()
     gateway_mcp_registry = GatewayAwareMcpRegistry(
@@ -312,6 +325,7 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
         session_service=container.session_service,
         workspace_service=container.workspace_service,
         session_model_profile_store=session_model_profile_store,
+        default_normal_root_role_id=default_normal_root_role_id,
     )
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
@@ -328,6 +342,26 @@ def _build_acp_stdio_runtime() -> AcpStdioRuntime:
     )
     server.set_notify(runtime.send_message)
     return runtime
+
+
+def _resolve_acp_stdio_role_id(
+    *,
+    container: ServerContainer,
+    role_id: str | None,
+) -> str | None:
+    normalized_role_id = str(role_id or "").strip() or None
+    if normalized_role_id is None:
+        return None
+    try:
+        return container.role_registry.resolve_normal_mode_role_id(normalized_role_id)
+    except ValueError as exc:
+        available_role_ids = ", ".join(
+            role.role_id for role in container.role_registry.list_normal_mode_roles()
+        )
+        raise typer.BadParameter(
+            f"Invalid --role '{normalized_role_id}'. "
+            f"Available normal mode roles: {available_role_ids}.",
+        ) from exc
 
 
 async def _noop_notify(_message: dict[str, JsonValue]) -> None:

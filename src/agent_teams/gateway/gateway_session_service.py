@@ -34,6 +34,7 @@ class GatewaySessionService:
         session_service: SessionService,
         workspace_service: WorkspaceService | None = None,
         session_model_profile_store: GatewaySessionModelProfileStore | None = None,
+        default_normal_root_role_id: str | None = None,
     ) -> None:
         self._repository = repository
         self._session_service = session_service
@@ -41,6 +42,7 @@ class GatewaySessionService:
         self._session_model_profile_store = (
             session_model_profile_store or GatewaySessionModelProfileStore()
         )
+        self._default_normal_root_role_id = default_normal_root_role_id
 
     def create_session(
         self,
@@ -58,7 +60,8 @@ class GatewaySessionService:
         gateway_session_id = f"gws_{uuid4().hex[:12]}"
         resolved_external_session_id = external_session_id or gateway_session_id
         internal_session = self._session_service.create_session(
-            workspace_id=self._resolve_workspace_id(cwd)
+            workspace_id=self._resolve_workspace_id(cwd),
+            normal_root_role_id=self._default_normal_root_role_id,
         )
         record = GatewaySessionRecord(
             gateway_session_id=gateway_session_id,

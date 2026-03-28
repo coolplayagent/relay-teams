@@ -16,10 +16,10 @@ def test_root_help_lists_gateway_module() -> None:
 
 
 def test_gateway_acp_help_lists_stdio_command() -> None:
-    result = runner.invoke(cli_app.app, ["gateway", "acp", "--help"])
+    result = runner.invoke(cli_app.app, ["gateway", "acp", "stdio", "--help"])
 
     assert result.exit_code == 0
-    assert "stdio" in result.output
+    assert "--role" in result.output
 
 
 def test_gateway_feishu_help_lists_management_commands() -> None:
