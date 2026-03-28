@@ -27,7 +27,7 @@ _SSL_VERIFY_ENV_KEYS: tuple[str, ...] = ("SSL_VERIFY",)
 _PROCESS_ENV_KEYS: tuple[str, ...] = _PROXY_ENV_KEYS + _SSL_VERIFY_ENV_KEYS
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
-_DEFAULT_SSL_VERIFY = True
+_DEFAULT_SSL_VERIFY = False
 
 
 class ProxyEnvConfig(BaseModel):

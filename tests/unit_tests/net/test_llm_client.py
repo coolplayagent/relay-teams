@@ -41,7 +41,7 @@ def test_build_llm_http_client_builds_direct_client_without_proxy_config() -> No
 
     assert client is not None
     assert client.trust_env is False
-    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
+    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_DISABLED
     assert client.timeout.connect == DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
     assert getattr(transport, "_http_proxy_transport") is None
     assert getattr(transport, "_https_proxy_transport") is None
@@ -111,7 +111,7 @@ def test_build_llm_http_client_builds_proxy_and_no_proxy_mounts() -> None:
     assert client is not None
     assert client.trust_env is False
     assert client.headers["User-Agent"]
-    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
+    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_DISABLED
     assert isinstance(http_proxy_transport, httpx.AsyncHTTPTransport)
     assert isinstance(https_proxy_transport, httpx.AsyncHTTPTransport)
     assert select_transport("http://service.example.net") is http_proxy_transport
@@ -166,3 +166,12 @@ def test_build_llm_http_client_creates_direct_client_when_only_ssl_verification_
     assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_DISABLED
     assert getattr(transport, "_http_proxy_transport") is None
     assert getattr(transport, "_https_proxy_transport") is None
+
+
+def test_build_llm_http_client_enables_ssl_verification_when_configured() -> None:
+    client = llm_client.build_llm_http_client(merged_env={"SSL_VERIFY": "true"})
+    transport = _routing_transport(client)
+    direct_transport = getattr(transport, "_direct_transport")
+
+    assert client is not None
+    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED

@@ -16,6 +16,7 @@ from agent_teams.env import (
     proxy_applies_to_url,
     resolve_proxy_env_config,
 )
+from agent_teams.env.proxy_env import resolve_ssl_verify
 
 
 def test_extract_proxy_env_vars_normalizes_upper_and_lowercase_keys() -> None:
@@ -94,6 +95,20 @@ def test_build_subprocess_env_uses_current_proxy_values(monkeypatch) -> None:
     assert subprocess_env["CUSTOM"] == "1"
     assert subprocess_env["HTTP_PROXY"] == "http://proxy.example:8080"
     assert subprocess_env["NO_PROXY"] == "localhost,127.0.0.1"
+
+
+def test_resolve_ssl_verify_defaults_to_disabled() -> None:
+    assert resolve_ssl_verify() is False
+
+
+def test_resolve_ssl_verify_prefers_explicit_override() -> None:
+    assert (
+        resolve_ssl_verify(
+            proxy_config=resolve_proxy_env_config({"SSL_VERIFY": "false"}),
+            explicit_ssl_verify=True,
+        )
+        is True
+    )
 
 
 def test_proxy_applies_to_url_respects_no_proxy() -> None:

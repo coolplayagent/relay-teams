@@ -34,7 +34,16 @@ def test_create_sync_http_client_routes_requests_with_runtime_proxy_rules() -> N
     assert select_transport("https://example.com") is direct_transport
     assert select_transport("https://127.0.0.1:8443") is direct_transport
     assert select_transport("https://printer") is direct_transport
-    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
+    assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_DISABLED
+
+
+def test_create_sync_http_client_enables_ssl_verification_when_configured() -> None:
+    with create_sync_http_client(merged_env={"SSL_VERIFY": "true"}) as client:
+        verify_mode = _transport_verify_mode(
+            getattr(client._transport, "_direct_transport")
+        )
+
+    assert verify_mode == _SSL_VERIFY_REQUIRED
 
 
 def test_create_sync_http_client_disables_ssl_verification_when_configured() -> None:

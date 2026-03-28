@@ -94,7 +94,7 @@ Literal profile `api_key` values are moved into the unified secret store before 
 ### `POST /system/configs/model:probe`
 
 Tests model connectivity for a saved profile and/or draft override.
-Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `true`.
+Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:discover`
@@ -129,7 +129,7 @@ Saves proxy values into app `~/.agent-teams/.env` and the unified secret store, 
 Blank values remove the corresponding proxy key.
 `proxy_username` and `proxy_password` are optional shared credentials.
 `ssl_verify` controls the default TLS certificate verification policy for Agent Teams outbound HTTP clients.
-When omitted or `null`, the backend removes `SSL_VERIFY` from `.env` and falls back to strict verification by default.
+When omitted or `null`, the backend removes `SSL_VERIFY` from `.env` and falls back to skipping certificate verification by default.
 On save, proxy passwords are persisted through the unified secret store. When a usable system keyring backend exists, the secret store uses keyring; otherwise it falls back to `~/.agent-teams/secrets.json`.
 The `.env` file stores proxy URLs without the password portion.
 Runtime loading still supports manual `.env` proxy URLs that already contain embedded passwords.
