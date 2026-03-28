@@ -1242,8 +1242,11 @@ const translations = {
     "sidebar.sort_name": "Sort by name",
     "sidebar.sort_recent": "Sort by recent",
     "sidebar.new_project": "New project",
+    "sidebar.new_automation": "New automation",
     "sidebar.fork": "Fork",
     "sidebar.remove": "Remove",
+    "sidebar.collapse": "Collapse",
+    "sidebar.show_all": "Show all ({count})",
     "sidebar.fork_project": "Fork Project",
     "sidebar.fork_project_message": "Enter the name for the forked project.",
     "sidebar.fork_project_placeholder": "Forked project name",
@@ -1253,6 +1256,10 @@ const translations = {
     "sidebar.remove_project_worktree_message": "Delete the git worktree for {workspace} too? Choose Cancel to keep the worktree on disk.",
     "sidebar.delete_worktree": "Delete Worktree",
     "sidebar.keep_worktree": "Keep Worktree",
+    "sidebar.rename_session_title": "Rename Session",
+    "sidebar.rename_session_message": "Enter a new name for this session.",
+    "sidebar.session_name_placeholder": "Session name",
+    "sidebar.log.queued_bound_session": "Queued automation run in bound IM session: {session_id}",
     "sidebar.no_projects_title": "No projects yet",
     "sidebar.no_projects_copy": "Add a project below to attach a workspace and start sessions.",
     "sidebar.workspace": "Workspace",
@@ -1264,6 +1271,13 @@ const translations = {
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",

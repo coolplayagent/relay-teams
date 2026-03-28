@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from agent_teams.interfaces.cli import app as cli_app
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _normalized_output(text: str) -> str:
+    return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
 def test_metrics_overview_command_renders_prettylog(monkeypatch) -> None:
@@ -55,5 +62,6 @@ def test_metrics_overview_command_renders_prettylog(monkeypatch) -> None:
 
 def test_metrics_breakdowns_command_requires_scope_id() -> None:
     result = runner.invoke(cli_app.app, ["metrics", "breakdowns", "--scope", "session"])
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
-    assert "--scope-id is required when scope is session or run" in result.output
+    assert "--scope-id is required when scope is session or run" in normalized_output
