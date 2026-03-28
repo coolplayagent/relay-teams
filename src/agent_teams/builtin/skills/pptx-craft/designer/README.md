@@ -89,8 +89,9 @@ npm run check-deps
 该脚本会检测：
 
 - Node.js 版本（需要 >= 18）
-
-并根据您的操作系统提供对应的安装指令。
+- 顶层运行时依赖（Playwright、pngjs）
+- 嵌套 `html-to-pptx` exporter 依赖和 bundle
+- Playwright Chromium 浏览器是否已安装
 
 #### 环境要求
 
@@ -114,10 +115,22 @@ npm install
 **步骤 2：安装 Chromium 浏览器**
 
 ```bash
-npx playwright install chromium
+npm run install-browser
 ```
 
-**步骤 3：安装系统依赖（重要！）**
+**步骤 3：执行依赖检查**
+
+```bash
+npm run check-deps
+```
+
+**步骤 4：运行 smoke test**
+
+```bash
+npm run smoke
+```
+
+**步骤 5：安装系统依赖（仅 Linux）**
 
 > **重要提示**：`playwright install-deps` 只适用于 Linux。Windows 和 macOS 不应执行这一步。
 
@@ -127,26 +140,31 @@ npx playwright install chromium
 
 ```powershell
 npm install
-npx playwright install chromium
+npm run install-browser
+npm run check-deps
+npm run smoke
 ```
 
 **macOS**:
 
 ```bash
 npm install
-npx playwright install chromium
-npx playwright install-deps chromium
+npm run install-browser
+npm run check-deps
+npm run smoke
 ```
 
 **Linux**:
 
 ```bash
 npm install
-npx playwright install chromium
+npm run install-browser
 npx playwright install-deps chromium
+npm run check-deps
+npm run smoke
 ```
 
-> **提示**：如需将 HTML 导出为 PPTX 文件，可使用独立的 `html-to-pptx` 技能（需要安装 Playwright 和其他依赖）。
+> `npm install` 会通过 `postinstall` 自动执行设计器初始化；嵌套 `html-to-pptx` exporter 是本 skill 的内部组成部分，不需要单独安装另一个 skill。
 
 ---
 

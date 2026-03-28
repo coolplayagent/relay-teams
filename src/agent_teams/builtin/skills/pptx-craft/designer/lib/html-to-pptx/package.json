@@ -1,0 +1,29 @@
+{
+  "name": "@agent-teams/pptx-craft-html-to-pptx",
+  "version": "1.0.0",
+  "description": "Internal HTML to PPTX exporter for the pptx-craft skill",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "check-deps": "node check-deps.cjs"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^6.7.2",
+    "@fortawesome/free-brands-svg-icons": "^6.7.2",
+    "@fortawesome/free-regular-svg-icons": "^6.7.2",
+    "@fortawesome/free-solid-svg-icons": "^6.7.2",
+    "@xmldom/xmldom": "^0.8.10",
+    "html2canvas": "^1.4.1",
+    "jszip": "^3.10.1",
+    "opentype.js": "^1.3.4",
+    "pako": "^2.1.0",
+    "pptxgenjs": "^3.12.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

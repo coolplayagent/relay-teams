@@ -16,6 +16,8 @@ frontend/.vite/
 node_modules
 package-lock.json
 package.json
+!src/agent_teams/builtin/skills/pptx-craft/package.json
+!src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/package.json
 .claude
 .agent_teams/evals/
 !.agent_teams/

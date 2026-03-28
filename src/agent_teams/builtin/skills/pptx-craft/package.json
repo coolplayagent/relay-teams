@@ -1,0 +1,30 @@
+{
+  "name": "pptx-craft",
+  "version": "1.0.0",
+  "description": "HTML 幻灯片生成技能，使用 HTML + Tailwind CSS 创建高信息密度、专业美观的演示文稿",
+  "private": true,
+  "scripts": {
+    "check-deps": "node scripts/check-deps.js",
+    "setup-designer": "node scripts/setup_designer.js",
+    "convert-pages": "node scripts/convert_pages.js",
+    "install-browser": "npx playwright install chromium",
+    "smoke": "node tests/smoke_convert.js",
+    "test-output-structure": "node tests/test_output_structure.js",
+    "postinstall": "node scripts/setup_designer.js --if-needed"
+  },
+  "keywords": [
+    "pptx",
+    "html",
+    "presentation",
+    "slides"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "pngjs": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

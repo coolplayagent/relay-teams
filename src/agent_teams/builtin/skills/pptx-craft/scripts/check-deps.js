@@ -19,13 +19,26 @@ function exists(targetPath) {
 }
 
 const issues = [];
+const exporterPackage = path.join(exporterRoot, "package.json");
+const topLevelPackages = ["playwright", "pngjs"];
 
 if (!versionOk()) {
   issues.push(`Node.js >= 18 is required. Current: ${process.versions.node}`);
 }
 
-if (!exists(path.join(skillRoot, "node_modules", "playwright"))) {
-  issues.push("Top-level dependency missing: playwright. Run `npm install`.");
+for (const packageName of topLevelPackages) {
+  if (!exists(path.join(skillRoot, "node_modules", packageName))) {
+    issues.push(`Top-level dependency missing: ${packageName}. Run \`npm install\`.`);
+  }
+}
+
+if (!exists(exporterPackage)) {
+  issues.push(
+    `Nested exporter package definition is missing: ${path.relative(
+      skillRoot,
+      exporterPackage
+    )}`
+  );
 }
 
 if (!exists(path.join(exporterRoot, "node_modules"))) {
@@ -38,6 +51,23 @@ if (!exists(exporterBundle) || !exists(exporterNodeBundle)) {
   issues.push(
     "Exporter bundle is missing. Run `npm run setup-designer` to build it."
   );
+}
+
+if (issues.length === 0) {
+  try {
+    const { chromium } = require("playwright");
+    const executablePath = chromium.executablePath();
+
+    if (!executablePath || !exists(executablePath)) {
+      issues.push(
+        "Chromium browser is not installed for Playwright. Run `npm run install-browser`."
+      );
+    }
+  } catch (error) {
+    issues.push(
+      `Playwright browser probe failed: ${error.message}. Run \`npm install\` and \`npm run install-browser\`.`
+    );
+  }
 }
 
 if (issues.length > 0) {
