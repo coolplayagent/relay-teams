@@ -455,19 +455,37 @@ const translations = {
     "settings.system.no_mcp_copy": "Add or enable a server, then reload to refresh the runtime view.",
     "settings.system.no_skills": "No skills loaded",
     "settings.system.no_skills_copy": "Reload after updating the configured skill directories.",
+    "settings.system.ready_state": "Ready",
+    "settings.system.loaded_state": "Loaded",
+    "settings.system.loading_state": "Loading..",
+    "settings.system.unavailable_state": "Unavailable",
     "settings.system.mcp_reloaded": "MCP Reloaded",
     "settings.system.skills_reloaded": "Skills Reloaded",
     "settings.system.reload_failed": "Reload Failed",
+    "settings.system.reload_failed_detail": "Reload failed: {error}",
     "settings.system.mcp_reloaded_message": "MCP config reloaded.",
     "settings.system.skills_reloaded_message": "Skills reloaded.",
     "settings.system.expand_all": "Expand all tools",
     "settings.system.collapse_all": "Collapse all tools",
     "settings.system.expand_tools": "Expand tools",
     "settings.system.collapse_tools": "Collapse tools",
+    "settings.system.loading_tools": "Loading tools...",
+    "settings.system.no_tools_exposed": "No tools exposed by this MCP server.",
+    "settings.system.no_description": "No description provided.",
+    "settings.system.load_tools_failed_detail": "Failed to load tools.",
+    "settings.system.server_count_loading": "{count} servers, {loading} loading.",
+    "settings.system.server_count_loaded": "{count} servers loaded.",
 };
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",

@@ -314,6 +314,12 @@ export function schedulePanelContextPreview() {
 const translations = {
     "subagent.reflect_title": "Refresh reflection memory",
     "subagent.reflect": "Reflect",
+    "subagent.reflecting": "Reflecting...",
+    "subagent.reflecting_title": "Refreshing reflection memory",
+    "subagent.reflected": "Reflected",
+    "subagent.reflected_title": "Reflection refreshed",
+    "subagent.retry_reflect": "Retry reflect",
+    "subagent.reflect_failed_title": "Reflection refresh failed",
     "subagent.stop_title": "Stop this subagent",
     "subagent.stop": "Stop",
     "subagent.sections": "Agent sections",
@@ -338,6 +344,13 @@ const translations = {
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",

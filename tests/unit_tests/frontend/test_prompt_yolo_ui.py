@@ -304,6 +304,13 @@ export function showToast() {
 export function t(key) {
     return key;
 }
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -638,6 +645,13 @@ export function showToast() {
 export function t(key) {
     return key;
 }
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -935,6 +949,13 @@ export function showToast() {
         """
 export function t(key) {
     return key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",

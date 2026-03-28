@@ -465,7 +465,9 @@ async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
 
     monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
     monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
-    monkeypatch.setattr(shell_executor, "_resolve_gh_path", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        shell_executor, "_resolve_gh_path", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr(
         shell_executor.asyncio,
         "create_subprocess_exec",

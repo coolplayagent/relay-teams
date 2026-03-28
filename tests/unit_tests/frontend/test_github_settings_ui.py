@@ -117,17 +117,29 @@ export function showToast(payload) {
         """
 const translations = {
     "settings.github.load_failed": "Load Failed",
+    "settings.github.load_failed_detail": "Failed to load GitHub settings: {error}",
     "settings.github.saved": "GitHub Settings Saved",
     "settings.github.saved_message": "GitHub settings saved.",
     "settings.github.save_failed": "Save Failed",
+    "settings.github.save_failed_detail": "Failed to save GitHub settings: {error}",
     "settings.github.enter_token": "Enter a GitHub token before testing the connection.",
     "settings.github.testing_message": "Testing GitHub CLI connectivity...",
+    "settings.github.probe_failed": "GitHub probe failed: {error}",
+    "settings.github.probe_success": "{username} via {version} in {latency_ms}ms",
+    "settings.github.probe_reason": "gh {version}: {reason}",
     "settings.github.test_connection": "Test Connection",
     "settings.github.testing": "Testing...",
 };
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",

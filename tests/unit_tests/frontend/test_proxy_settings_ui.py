@@ -238,17 +238,29 @@ export function showToast(payload) {
         """
 const translations = {
     "settings.proxy.load_failed": "Load Failed",
+    "settings.proxy.load_failed_detail": "Failed to load proxy settings: {error}",
     "settings.proxy.saved": "Proxy Saved",
     "settings.proxy.save_failed": "Save Failed",
+    "settings.proxy.save_failed_detail": "Failed to save proxy settings: {error}",
     "settings.proxy.saved_message": "Proxy settings saved and reloaded.",
     "settings.proxy.enter_url": "Enter a target URL before testing connectivity.",
     "settings.proxy.testing_message": "Testing connectivity...",
+    "settings.proxy.probe_failed": "Proxy probe failed: {error}",
+    "settings.proxy.probe_success": "{method} {status_code} in {latency_ms}ms",
+    "settings.proxy.probe_reason": "{status_text}: {reason}",
     "settings.proxy.test_url": "Test URL",
     "settings.proxy.testing": "Testing...",
 };
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",
