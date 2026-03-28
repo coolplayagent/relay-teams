@@ -40,6 +40,9 @@ type AcpNotifier = Callable[[dict[str, JsonValue]], Awaitable[None]]
 
 
 LOGGER = get_logger(__name__)
+RECOVERABLE_PAUSED_RUN_MESSAGE = (
+    "Session has a recoverable paused run; use session/resume or session/cancel"
+)
 
 
 class AcpProtocolError(ValueError):
@@ -304,6 +307,9 @@ class AcpGatewayServer:
         prompt_blocks = _required_list(params, "prompt")
         record = self._gateway_session_service.get_session(gateway_session_id)
         session = self._session_service.get_session(record.internal_session_id)
+        paused_run_id = self._recoverable_paused_run_id(record.internal_session_id)
+        if paused_run_id is not None:
+            raise AcpProtocolError(-32000, RECOVERABLE_PAUSED_RUN_MESSAGE)
         prompt_input = self._prompt_blocks_to_content_parts(
             prompt_blocks=prompt_blocks,
             session_id=record.internal_session_id,
@@ -442,6 +448,25 @@ class AcpGatewayServer:
                 clear_active_run=clear_active_run,
             )
         raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
+
+    def _recoverable_paused_run_id(self, internal_session_id: str) -> str | None:
+        recovery_snapshot = self._session_service.get_recovery_snapshot(
+            internal_session_id
+        )
+        active_run = recovery_snapshot.get("active_run")
+        if not isinstance(active_run, Mapping):
+            return None
+        run_id = str(active_run.get("run_id") or "").strip()
+        if not run_id:
+            return None
+        if active_run.get("is_recoverable") is not True:
+            return None
+        phase = str(active_run.get("phase") or "").strip()
+        status = str(active_run.get("status") or "").strip()
+        should_show_recover = active_run.get("should_show_recover") is True
+        if phase == "awaiting_recovery" or status == "paused" or should_show_recover:
+            return run_id
+        return None
 
     def _resume_after_event_id(self, *, internal_session_id: str, run_id: str) -> int:
         recovery_snapshot = self._session_service.get_recovery_snapshot(
