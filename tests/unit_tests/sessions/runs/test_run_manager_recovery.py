@@ -277,7 +277,9 @@ def test_create_run_appends_followup_to_recoverable_run_history_and_intent(
     assert len(history) == 1
     assert isinstance(history[-1].parts[0], UserPromptPart)
     assert history[-1].parts[0].content == "continue from checkpoint"
-    assert content_parts_to_text(persisted.input) == "existing\n\ncontinue from checkpoint"
+    assert (
+        content_parts_to_text(persisted.input) == "existing\n\ncontinue from checkpoint"
+    )
     assert "run-existing" in manager._resume_requested_runs
 
 

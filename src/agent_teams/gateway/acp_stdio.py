@@ -40,9 +40,7 @@ type AcpNotifier = Callable[[dict[str, JsonValue]], Awaitable[None]]
 
 
 LOGGER = get_logger(__name__)
-RECOVERABLE_PAUSED_RUN_MESSAGE = (
-    "Session has a recoverable paused run; send a new prompt to continue, or use session/resume or session/cancel"
-)
+RECOVERABLE_PAUSED_RUN_MESSAGE = "Session has a recoverable paused run; send a new prompt to continue, or use session/resume or session/cancel"
 
 
 class AcpProtocolError(ValueError):

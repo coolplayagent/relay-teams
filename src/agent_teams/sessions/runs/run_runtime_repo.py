@@ -92,7 +92,9 @@ class RunRuntimeRepository:
             )
             columns = {
                 str(row["name"])
-                for row in self._conn.execute("PRAGMA table_info(run_runtime)").fetchall()
+                for row in self._conn.execute(
+                    "PRAGMA table_info(run_runtime)"
+                ).fetchall()
             }
             if "auto_resume_attempts" not in columns:
                 self._conn.execute(

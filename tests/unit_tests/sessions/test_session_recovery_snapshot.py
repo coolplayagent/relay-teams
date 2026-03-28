@@ -185,10 +185,7 @@ def test_get_recovery_snapshot_exposes_awaiting_recovery_phase(
     assert active_run.get("is_recoverable") is True
     assert active_run.get("should_show_recover") is True
     assert active_run.get("auto_resume_attempts") == 1
-    assert (
-        active_run.get("last_recoverable_error_code")
-        == "network_stream_interrupted"
-    )
+    assert active_run.get("last_recoverable_error_code") == "network_stream_interrupted"
 
 
 def test_get_recovery_snapshot_marks_connected_stream_without_recover_button(
