@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 from typer.testing import CliRunner
 
@@ -11,6 +12,11 @@ from agent_teams.skills.discovery import SkillsDirectory
 from agent_teams.skills.skill_registry import SkillRegistry
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _normalized_output(text: str) -> str:
+    return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
 def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
@@ -114,35 +120,40 @@ def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> No
 
 def test_skills_help_explains_merge_order() -> None:
     result = runner.invoke(cli_app.app, ["skills", "--help"])
+    normalized_output = _normalized_output(result.output)
 
     assert result.exit_code == 0
     assert (
         "Inspect skills discovered from built-in defaults and the app directory."
-        in result.output
+        in normalized_output
     )
-    assert "~/.agent-teams/skills" in result.output
-    assert "both entries are kept" in result.output
-    assert "agent-teams skills show time" in result.output
+    assert "~/.agent-teams/skills" in normalized_output
+    assert "both entries are kept" in normalized_output
+    assert "agent-teams skills show time" in normalized_output
 
 
 def test_skills_list_help_includes_examples_and_source_behavior() -> None:
     result = runner.invoke(cli_app.app, ["skills", "list", "--help"])
+    normalized_output = _normalized_output(result.output)
 
     assert result.exit_code == 0
-    assert "List all discovered skills across builtin and app scopes." in result.output
-    assert "both entries are shown" in result.output
-    assert "--source" in result.output
-    assert "agent-teams skills list --source builtin" in result.output
+    assert (
+        "List all discovered skills across builtin and app scopes." in normalized_output
+    )
+    assert "both entries are shown" in normalized_output
+    assert "--source" in normalized_output
+    assert "agent-teams skills list --source builtin" in normalized_output
 
 
 def test_skills_show_help_describes_effective_skill_resolution() -> None:
     result = runner.invoke(cli_app.app, ["skills", "show", "--help"])
+    normalized_output = _normalized_output(result.output)
 
     assert result.exit_code == 0
-    assert "Show a single skill definition." in result.output
-    assert "canonical ref such as app:time or builtin:time" in result.output
-    assert "Skill canonical ref or unique plain name to inspect." in result.output
-    assert "agent-teams skills show time --format json" in result.output
+    assert "Show a single skill definition." in normalized_output
+    assert "canonical ref such as app:time or builtin:time" in normalized_output
+    assert "Skill canonical ref or unique plain name to inspect." in normalized_output
+    assert "agent-teams skills show time --format json" in normalized_output
 
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:

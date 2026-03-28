@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from agent_teams.interfaces.cli import app as cli_app
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _normalized_output(text: str) -> str:
+    return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
 def test_root_message_runs_single_prompt(monkeypatch) -> None:
@@ -253,10 +260,14 @@ def test_root_message_rejects_orchestration_without_mode() -> None:
         ["-m", "hello", "--orchestration", "default"],
     )
 
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
-    assert "--orchestration can only be used with --mode orchestration" in result.output
-    assert "Available quick prompt options:" in result.output
-    assert "--orchestration <id>" in result.output
+    assert (
+        "--orchestration can only be used with --mode orchestration"
+        in normalized_output
+    )
+    assert "Available quick prompt options:" in normalized_output
+    assert "--orchestration <id>" in normalized_output
 
 
 def test_root_message_rejects_role_with_orchestration_mode() -> None:
@@ -265,8 +276,9 @@ def test_root_message_rejects_role_with_orchestration_mode() -> None:
         ["-m", "hello", "--mode", "orchestration", "--role", "Crafter"],
     )
 
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
-    assert "--role can only be used with --mode normal" in result.output
+    assert "--role can only be used with --mode normal" in normalized_output
 
 
 def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
@@ -314,9 +326,10 @@ def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
 
     result = runner.invoke(cli_app.app, ["-m", "hello", "--role", "Missing"])
 
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
-    assert "Invalid --role 'Missing'" in result.output
-    assert "MainAgent, Crafter." in result.output
+    assert "Invalid --role 'Missing'" in normalized_output
+    assert "MainAgent, Crafter." in normalized_output
 
 
 def test_root_message_invalid_orchestration_id_lists_available_ids(
@@ -367,10 +380,11 @@ def test_root_message_invalid_orchestration_id_lists_available_ids(
         ],
     )
 
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
-    assert "Invalid --orchestration 'missing'" in result.output
-    assert "Available orchestration" in result.output
-    assert "ids: default, release." in result.output
+    assert "Invalid --orchestration 'missing'" in normalized_output
+    assert "Available orchestration" in normalized_output
+    assert "ids: default, release." in normalized_output
     assert calls == [
         ("POST", "/api/sessions", {"workspace_id": "default"}),
         (
@@ -393,14 +407,15 @@ def test_run_module_removed() -> None:
 
 def test_root_help_lists_env_module() -> None:
     result = runner.invoke(cli_app.app, ["--help"])
+    normalized_output = _normalized_output(result.output)
     assert result.exit_code == 0
-    assert "--mode" in result.output
-    assert "--role" in result.output
-    assert "--orchestration" in result.output
-    assert "env" in result.output
-    assert "mcp" in result.output
-    assert "agents" in result.output
-    assert "roles" in result.output
-    assert "skills" in result.output
-    assert "gateway" in result.output
-    assert "prompts" not in result.output
+    assert "--mode" in normalized_output
+    assert "--role" in normalized_output
+    assert "--orchestration" in normalized_output
+    assert "env" in normalized_output
+    assert "mcp" in normalized_output
+    assert "agents" in normalized_output
+    assert "roles" in normalized_output
+    assert "skills" in normalized_output
+    assert "gateway" in normalized_output
+    assert "prompts" not in normalized_output
