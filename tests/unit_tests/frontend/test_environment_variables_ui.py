@@ -302,10 +302,23 @@ const translations = {
     "settings.env.delete_failed": "Delete Failed",
     "settings.env.delete_title": "Delete Environment Variable",
     "settings.env.load_failed_title": "Failed to load environment variables",
+    "settings.env.saved_detail": "{key} saved in app scope.",
+    "settings.env.save_failed_detail": "Failed to save variable: {error}",
+    "settings.env.delete_confirm_message": "Remove {key} from {scope} scope?",
+    "settings.env.deleted_detail": "{key} removed from {scope} scope.",
+    "settings.env.delete_failed_detail": "Failed to delete variable: {error}",
+    "settings.action.add_variable": "Add variable",
 };
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
 }
 """.strip(),
         encoding="utf-8",
