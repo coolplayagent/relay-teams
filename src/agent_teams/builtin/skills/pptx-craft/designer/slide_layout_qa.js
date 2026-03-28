@@ -88,6 +88,10 @@ function pushIssue(jsonResult, failedPage, issue, severity) {
   }
 }
 
+function formatIssue(issue) {
+  return `  - [${issue.severity}] ${issue.type}: ${issue.detail}`;
+}
+
 function generateReport(results) {
   console.log(`\n${"=".repeat(60)}`);
   console.log("Slide Layout QA Report");
@@ -212,6 +216,9 @@ function generateReport(results) {
       jsonResult.passed = false;
       jsonResult.failed_pages.push(failedPage);
       console.log(`Page ${pageNumber}: FAIL (${failedPage.issues.length} issues)`);
+      failedPage.issues.forEach((issue) => {
+        console.log(formatIssue(issue));
+      });
     } else {
       jsonResult.passed_pages.push({
         file: slide.filePath || "unknown",
@@ -302,8 +309,10 @@ function mergeResults(allResults, outputDir) {
 }
 
 function writeJsonOutput(jsonResult, outputPath) {
-  fs.writeFileSync(outputPath, JSON.stringify(jsonResult, null, 2), "utf8");
-  console.log(`\nJSON saved to ${outputPath}`);
+  const absoluteOutputPath = path.resolve(outputPath);
+  fs.writeFileSync(absoluteOutputPath, JSON.stringify(jsonResult, null, 2), "utf8");
+  console.log(`\nJSON saved to ${absoluteOutputPath}`);
+  console.log(`JSON directory: ${path.dirname(absoluteOutputPath)}`);
 }
 
 async function main() {
@@ -369,10 +378,12 @@ async function main() {
 module.exports = {
   detectWithBrowser,
   detectSimple,
+  formatIssue,
   generateReport,
   parseArgs,
   findPageFiles,
   mergeResults,
+  writeJsonOutput,
 };
 
 if (require.main === module) {
