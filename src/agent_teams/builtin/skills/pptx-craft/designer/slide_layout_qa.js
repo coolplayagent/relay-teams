@@ -229,6 +229,34 @@ function generateReport(results) {
       );
     });
 
+    (slide.summaryBandCollisions || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "summary_band_collision",
+          severity: "error",
+          detail: `${issue.text} collides with summary band ${issue.band}`,
+        },
+        "error"
+      );
+    });
+
+    (slide.textOcclusions || []).forEach((occlusion) => {
+      if ((occlusion.occluder || "").includes("核心结论") || (occlusion.occluder || "").includes("纵向卡片 +")) {
+        pushIssue(
+          jsonResult,
+          failedPage,
+          {
+            type: "text_occlusion",
+            severity: "error",
+            detail: `${occlusion.occludedText} is occluded by ${occlusion.occluder}`,
+          },
+          "error"
+        );
+      }
+    });
+
     (slide.recursiveBlanks || []).forEach((blank) => {
       pushIssue(
         jsonResult,

@@ -774,6 +774,40 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
   });
 
   const siblingAlignmentIssues = [];
+  const summaryBandCollisions = [];
+  const summaryBands = [];
+  Array.from(slide.children || []).forEach((child) => {
+    const cls = typeof child.className === "string" ? child.className : "";
+    if (!/(summary|bottom|footer|tail)/i.test(cls)) return;
+    const rect = child.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    summaryBands.push({
+      el: child,
+      rect: {
+        left: rect.left - slideRect.left,
+        top: rect.top - slideRect.top,
+        right: rect.right - slideRect.left,
+        bottom: rect.bottom - slideRect.top,
+      },
+      desc: (child.innerText || "").trim().slice(0, 40) || `<${child.tagName.toLowerCase()}>`,
+    });
+  });
+  summaryBands.forEach((band) => {
+    textElements.forEach((textElement) => {
+      if (band.el.contains(textElement.el)) return;
+      if (textElement.el.contains && textElement.el.contains(band.el)) return;
+      const area = rectIntersectionArea(textElement.rect, band.rect);
+      if (area <= textOverlapMinArea) return;
+      const bottomGap = band.rect.top - textElement.rect.bottom;
+      if (bottomGap > minTextSafePadding) return;
+      summaryBandCollisions.push({
+        text: textElement.text,
+        band: band.desc,
+        overlapArea: Math.round(area),
+      });
+    });
+  });
+
   function collectAlignedSiblingGroups(root) {
     const groups = [];
     root.querySelectorAll("*").forEach((parent) => {
@@ -847,6 +881,7 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
       blockOverlaps: blockOverlaps.slice(0, 10),
       textSafePaddingIssues: textSafePaddingIssues.slice(0, 10),
       siblingAlignmentIssues: siblingAlignmentIssues.slice(0, 10),
+      summaryBandCollisions: summaryBandCollisions.slice(0, 10),
     },
   ];
 }
