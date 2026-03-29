@@ -198,6 +198,32 @@ function generateReport(results) {
       );
     });
 
+    (slide.textSafePaddingIssues || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "text_safe_padding",
+          severity: "error",
+          detail: `${issue.text} is too close to ${issue.container} (min gap ${issue.minGap}px)`,
+        },
+        "error"
+      );
+    });
+
+    (slide.siblingAlignmentIssues || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "sibling_alignment",
+          severity: "warning",
+          detail: `${issue.block} misaligned (top diff ${issue.topDiff}px, height diff ${issue.heightDiff}px)`,
+        },
+        "warning"
+      );
+    });
+
     (slide.recursiveBlanks || []).forEach((blank) => {
       pushIssue(
         jsonResult,
