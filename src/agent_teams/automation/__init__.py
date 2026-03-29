@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_teams.automation.automation_models import (
     AutomationBoundSessionQueueRecord,
     AutomationBoundSessionQueueStatus,
+    AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
     AutomationExecutionHandle,
@@ -52,6 +53,7 @@ __all__ = [
     "AutomationBoundSessionQueueService",
     "AutomationBoundSessionQueueStatus",
     "AutomationBoundSessionQueueWorker",
+    "AutomationCleanupStatus",
     "AutomationDeliveryEvent",
     "AutomationDeliveryRepository",
     "AutomationEventRepository",

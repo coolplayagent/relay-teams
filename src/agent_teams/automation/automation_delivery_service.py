@@ -11,6 +11,7 @@ from agent_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
 )
 from agent_teams.automation.automation_models import (
+    AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
     AutomationFeishuBinding,
@@ -21,6 +22,7 @@ from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
+    RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
@@ -34,6 +36,7 @@ logger = get_logger(__name__)
 
 _STARTED_MAX_ATTEMPTS = 3
 _TERMINAL_MAX_ATTEMPTS = 5
+_CLEANUP_MAX_ATTEMPTS = 5
 _CLAIM_STALE_AFTER_SECONDS = 60
 
 
@@ -54,6 +57,13 @@ class FeishuClientLike(Protocol):
         *,
         chat_id: str,
         text: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> str: ...
+
+    def delete_message(
+        self,
+        *,
+        message_id: str,
         environment: FeishuEnvironment | None = None,
     ) -> None: ...
 
@@ -155,10 +165,43 @@ class AutomationDeliveryService:
             stale_before=stale_before,
         ):
             progress = self._attempt_terminal_delivery(record) or progress
+        for record in self._repository.list_pending_started_cleanup(
+            limit=limit,
+            stale_before=stale_before,
+        ):
+            progress = self._attempt_started_cleanup(record) or progress
         return progress
 
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
+
+    def mark_terminal_delivery_skipped(
+        self,
+        *,
+        run_id: str,
+        terminal_message: str | None = None,
+    ) -> None:
+        try:
+            record = self._repository.get_by_run_id(run_id)
+        except KeyError:
+            return
+        if record.terminal_status == AutomationDeliveryStatus.SENT:
+            return
+        now = _utc_now()
+        _ = self._repository.update(
+            record.model_copy(
+                update={
+                    "terminal_event": AutomationDeliveryEvent.FAILED,
+                    "terminal_status": AutomationDeliveryStatus.SKIPPED,
+                    "terminal_message": (
+                        terminal_message
+                        if terminal_message is not None
+                        else record.terminal_message
+                    ),
+                    "updated_at": now,
+                }
+            )
+        )
 
     def _attempt_started_delivery(self, record: AutomationRunDeliveryRecord) -> bool:
         claim_cutoff = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
@@ -175,7 +218,7 @@ class AutomationDeliveryService:
             return False
         attempts = claimed.started_attempts + 1
         try:
-            self._send_text(
+            message_id = self._send_text(
                 trigger_id=claimed.binding.trigger_id,
                 chat_id=claimed.binding.chat_id,
                 text=str(claimed.started_message or "").strip(),
@@ -204,6 +247,7 @@ class AutomationDeliveryService:
                 update={
                     "started_attempts": attempts,
                     "started_status": AutomationDeliveryStatus.SENT,
+                    "started_message_id": message_id,
                     "started_sent_at": now,
                     "last_error": None,
                     "updated_at": now,
@@ -223,6 +267,8 @@ class AutomationDeliveryService:
             RunRuntimeStatus.COMPLETED,
             RunRuntimeStatus.FAILED,
         }:
+            return False
+        if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
             return False
         claim_cutoff = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
         claimed = self._repository.claim_terminal(
@@ -261,7 +307,7 @@ class AutomationDeliveryService:
             return True
         attempts = claimed.terminal_attempts + 1
         try:
-            self._send_text(
+            message_id = self._send_text(
                 trigger_id=claimed.binding.trigger_id,
                 chat_id=claimed.binding.chat_id,
                 text=terminal_message,
@@ -292,9 +338,15 @@ class AutomationDeliveryService:
                 update={
                     "terminal_event": terminal_event,
                     "terminal_message": terminal_message,
+                    "terminal_message_id": message_id,
                     "terminal_attempts": attempts,
                     "terminal_status": AutomationDeliveryStatus.SENT,
                     "terminal_sent_at": now,
+                    "started_cleanup_status": (
+                        AutomationCleanupStatus.PENDING
+                        if str(claimed.started_message_id or "").strip()
+                        else claimed.started_cleanup_status
+                    ),
                     "last_error": None,
                     "updated_at": now,
                 }
@@ -302,15 +354,99 @@ class AutomationDeliveryService:
         )
         return True
 
-    def _send_text(self, *, trigger_id: str, chat_id: str, text: str) -> None:
+    def _attempt_started_cleanup(self, record: AutomationRunDeliveryRecord) -> bool:
+        if record.started_cleanup_status not in {
+            AutomationCleanupStatus.PENDING,
+            AutomationCleanupStatus.CLEANING,
+        }:
+            return False
+        message_id = str(record.started_message_id or "").strip()
+        if not message_id:
+            now = _utc_now()
+            _ = self._repository.update(
+                record.model_copy(
+                    update={
+                        "started_cleanup_status": AutomationCleanupStatus.SKIPPED,
+                        "updated_at": now,
+                    }
+                )
+            )
+            return True
+        claim_cutoff = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
+        claimed = self._repository.claim_started_cleanup(
+            automation_delivery_id=record.automation_delivery_id,
+            stale_before=claim_cutoff,
+        )
+        if claimed is None:
+            return False
+        attempts = claimed.started_cleanup_attempts + 1
+        try:
+            self._delete_message(
+                trigger_id=claimed.binding.trigger_id,
+                message_id=message_id,
+            )
+        except RuntimeError as exc:
+            next_status = (
+                AutomationCleanupStatus.FAILED
+                if attempts >= _CLEANUP_MAX_ATTEMPTS
+                else AutomationCleanupStatus.PENDING
+            )
+            now = _utc_now()
+            _ = self._repository.update(
+                claimed.model_copy(
+                    update={
+                        "started_cleanup_status": next_status,
+                        "started_cleanup_attempts": attempts,
+                        "updated_at": now,
+                    }
+                )
+            )
+            log_event(
+                logger,
+                logging.WARNING,
+                event="automation.delivery.cleanup_failed",
+                message="Automation started-message cleanup failed",
+                payload={
+                    "run_id": claimed.run_id,
+                    "message_id": message_id,
+                    "attempt": attempts,
+                    "error": str(exc),
+                },
+            )
+            return True
+        now = _utc_now()
+        _ = self._repository.update(
+            claimed.model_copy(
+                update={
+                    "started_cleanup_status": AutomationCleanupStatus.CLEANED,
+                    "started_cleanup_attempts": attempts,
+                    "started_cleaned_at": now,
+                    "updated_at": now,
+                }
+            )
+        )
+        return True
+
+    def _send_text(self, *, trigger_id: str, chat_id: str, text: str) -> str:
         runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
             trigger_id
         )
         if runtime_config is None:
             raise RuntimeError("missing_runtime_config")
-        self._feishu_client.send_text_message(
+        return self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
+            environment=runtime_config.environment,
+        )
+
+    def _delete_message(self, *, trigger_id: str, message_id: str) -> None:
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            trigger_id
+        )
+        if runtime_config is None:
+            raise RuntimeError("missing_runtime_config")
+        self._feishu_client.delete_message(
+            message_id=message_id,
             environment=runtime_config.environment,
         )
 

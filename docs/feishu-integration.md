@@ -167,6 +167,17 @@ rule from inbound chat messages:
   fails and does not fall back to a new `MainAgent` automation session
 - for these automation-bound runs, receipts, terminal result messages, and `im_send`
   tool output all use direct send to the chat, not reply-to-message, even in group chats
+- when a bound run enters recoverable `awaiting_recovery`, the bound-session queue
+  persists auto-resume retry state and retries `resume` with exponential backoff
+  (`10s`, `20s`, `40s`, `80s`, `160s`) before sending a final failure
+- Feishu provider `message_id` values are persisted for automation queue receipts and
+  started/terminal messages so superseded non-terminal messages can be deleted later
+- queue receipts are best-effort deleted after the queued run actually starts or after
+  a final queue-owned failure replaces them
+- started automation messages are best-effort deleted after a terminal completed/failed
+  message is successfully sent
+- cleanup failures are logged and retried, but they do not roll back the primary send
+  or change the run's terminal state
 
 This separates three concerns:
 

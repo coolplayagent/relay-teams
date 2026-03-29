@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_teams.automation import (
+    AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryRepository,
     AutomationDeliveryService,
@@ -43,10 +44,19 @@ class _FakeRuntimeConfigLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, str]] = []
+        self.deleted_messages: list[str] = []
+        self.fail_delete = False
 
-    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> None:
+    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
+        return f"om_{len(self.sent_messages)}"
+
+    def delete_message(self, *, message_id: str, environment=None) -> None:
+        _ = environment
+        if self.fail_delete:
+            raise RuntimeError("delete_failed")
+        self.deleted_messages.append(message_id)
 
 
 def _build_project() -> AutomationProjectRecord:
@@ -118,6 +128,7 @@ def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
     assert feishu_client.sent_messages[0]["text"] == "定时任务 Daily Briefing 开始执行"
     persisted = repository.get_by_run_id("run-1")
     assert persisted.started_status.value == "sent"
+    assert persisted.started_message_id == "om_1"
     assert persisted.terminal_status.value == "pending"
 
 
@@ -182,6 +193,9 @@ def test_process_pending_sends_completed_message_when_run_finishes(
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status.value == "sent"
     assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+    assert persisted.terminal_message_id == "om_2"
+    assert persisted.started_cleanup_status == AutomationCleanupStatus.CLEANED
+    assert feishu_client.deleted_messages == ["om_1"]
 
 
 def test_process_pending_skips_completed_message_when_run_has_no_output(
@@ -223,6 +237,8 @@ def test_process_pending_skips_completed_message_when_run_has_no_output(
     assert persisted.terminal_status.value == "skipped"
     assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
     assert persisted.terminal_message == ""
+    assert persisted.started_cleanup_status == AutomationCleanupStatus.SKIPPED
+    assert feishu_client.deleted_messages == []
 
 
 def test_process_pending_sends_structured_completed_message_when_run_finishes(
@@ -269,6 +285,7 @@ def test_process_pending_sends_structured_completed_message_when_run_finishes(
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status.value == "sent"
     assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+    assert persisted.started_cleanup_status == AutomationCleanupStatus.CLEANED
 
 
 def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
@@ -310,3 +327,78 @@ def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status.value == "sent"
     assert persisted.terminal_event == AutomationDeliveryEvent.FAILED
+    assert persisted.started_cleanup_status == AutomationCleanupStatus.CLEANED
+
+
+def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
+    tmp_path: Path,
+) -> None:
+    service, feishu_client, run_runtime_repo, _event_log, repository = _build_service(
+        tmp_path
+    )
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.FAILED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+
+    progressed = service.process_pending()
+
+    persisted = repository.get_by_run_id("run-1")
+    assert progressed is False
+    assert len(feishu_client.sent_messages) == 1
+    assert persisted.terminal_status == AutomationDeliveryStatus.PENDING
+    assert persisted.terminal_message_id is None
+
+
+def test_process_pending_cleanup_failure_does_not_break_terminal_delivery(
+    tmp_path: Path,
+) -> None:
+    service, feishu_client, run_runtime_repo, event_log, repository = _build_service(
+        tmp_path
+    )
+    feishu_client.fail_delete = True
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"Daily report is ready."}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    persisted = repository.get_by_run_id("run-1")
+    assert progressed is True
+    assert len(feishu_client.sent_messages) == 2
+    assert feishu_client.deleted_messages == []
+    assert persisted.terminal_status == AutomationDeliveryStatus.SENT
+    assert persisted.started_cleanup_status == AutomationCleanupStatus.PENDING
+    assert persisted.started_cleanup_attempts == 1

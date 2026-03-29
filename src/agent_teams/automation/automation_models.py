@@ -36,6 +36,14 @@ class AutomationDeliveryStatus(str, Enum):
     FAILED = "failed"
 
 
+class AutomationCleanupStatus(str, Enum):
+    PENDING = "pending"
+    CLEANING = "cleaning"
+    CLEANED = "cleaned"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class AutomationBoundSessionQueueStatus(str, Enum):
     QUEUED = "queued"
     STARTING = "starting"
@@ -174,8 +182,13 @@ class AutomationRunDeliveryRecord(BaseModel):
     terminal_attempts: int = Field(default=0, ge=0)
     started_message: str | None = None
     terminal_message: str | None = None
+    started_message_id: str | None = None
+    terminal_message_id: str | None = None
     started_sent_at: datetime | None = None
     terminal_sent_at: datetime | None = None
+    started_cleanup_status: AutomationCleanupStatus = AutomationCleanupStatus.SKIPPED
+    started_cleanup_attempts: int = Field(default=0, ge=0)
+    started_cleaned_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -200,6 +213,14 @@ class AutomationBoundSessionQueueRecord(BaseModel):
     next_attempt_at: datetime = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc)
     )
+    resume_attempts: int = Field(default=0, ge=0)
+    resume_next_attempt_at: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc)
+    )
+    queue_message_id: str | None = None
+    queue_cleanup_status: AutomationCleanupStatus = AutomationCleanupStatus.SKIPPED
+    queue_cleanup_attempts: int = Field(default=0, ge=0)
+    queue_cleaned_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -218,6 +239,7 @@ class AutomationExecutionHandle(BaseModel):
 __all__ = [
     "AutomationBoundSessionQueueRecord",
     "AutomationBoundSessionQueueStatus",
+    "AutomationCleanupStatus",
     "AutomationDeliveryEvent",
     "AutomationDeliveryStatus",
     "AutomationExecutionHandle",

@@ -863,8 +863,13 @@ CREATE TABLE IF NOT EXISTS automation_deliveries (
     terminal_attempts INTEGER NOT NULL,
     started_message TEXT,
     terminal_message TEXT,
+    started_message_id TEXT,
+    terminal_message_id TEXT,
     started_sent_at TEXT,
     terminal_sent_at TEXT,
+    started_cleanup_status TEXT NOT NULL DEFAULT 'skipped',
+    started_cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+    started_cleaned_at TEXT,
     last_error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -879,6 +884,11 @@ CREATE INDEX IF NOT EXISTS idx_automation_deliveries_terminal
 ```
 
 Purpose: persists Feishu delivery state for automation runs so started/completed/failed messages can be retried and resumed after process restart.
+
+Notes:
+- `started_message_id` and `terminal_message_id` store the provider `message_id` returned by Feishu for sent automation messages.
+- `started_cleanup_status`, `started_cleanup_attempts`, and `started_cleaned_at` track best-effort cleanup for superseded non-terminal started messages after a terminal delivery succeeds.
+- terminal messages are persisted but are not automatically deleted by the current cleanup policy.
 
 ### 2.1.4 `automation_bound_session_queue`
 
@@ -899,6 +909,12 @@ CREATE TABLE IF NOT EXISTS automation_bound_session_queue (
     status TEXT NOT NULL,
     start_attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT NOT NULL,
+    resume_attempts INTEGER NOT NULL DEFAULT 0,
+    resume_next_attempt_at TEXT NOT NULL,
+    queue_message_id TEXT,
+    queue_cleanup_status TEXT NOT NULL DEFAULT 'skipped',
+    queue_cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+    queue_cleaned_at TEXT,
     last_error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -925,6 +941,9 @@ Notes:
   run is queued
 - `run_id` is populated only after the queued item has successfully started
 - `status` flows through `queued`, `starting`, `waiting_result`, then a terminal state
+- `resume_attempts` and `resume_next_attempt_at` persist the auto-resume retry state for recoverable `awaiting_recovery` runs bound to that session
+- `queue_message_id` stores the Feishu provider `message_id` for the queue receipt
+- `queue_cleanup_status`, `queue_cleanup_attempts`, and `queue_cleaned_at` track best-effort deletion of queue receipts once the queued run starts or a final failure message replaces them
 
 ### 2.1.5 `sessions` additions
 

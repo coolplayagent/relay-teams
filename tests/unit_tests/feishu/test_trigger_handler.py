@@ -146,9 +146,10 @@ class _FakeFeishuClient:
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         _ = environment
         self.sent_messages.append((chat_id, text))
+        return f"om_{len(self.sent_messages)}"
 
     def reply_text_message(
         self,
