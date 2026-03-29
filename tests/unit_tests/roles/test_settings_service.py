@@ -9,6 +9,7 @@ from agent_teams.computer import ExecutionSurface
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles import (
     RoleDocumentDraft,
+    RoleConfigSource,
     RoleRegistry,
     default_memory_profile,
 )
@@ -219,6 +220,63 @@ def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
     assert len(summaries) == 1
     assert summaries[0].role_id == "dirty"
     assert summaries[0].deletable is True
+
+
+def test_list_role_documents_returns_empty_tuple_when_no_role_files_exist(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    assert service.list_role_documents() == ()
+
+
+def test_list_role_documents_returns_app_roles_when_builtin_roles_are_missing(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "writer.md",
+        role_id="writer",
+        name="Writer",
+        description="Drafts user-facing content.",
+        version="1.0.0",
+        tools=("dispatch_task",),
+        system_prompt="Write clearly.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    summaries = service.list_role_documents()
+
+    assert len(summaries) == 1
+    assert summaries[0].role_id == "writer"
+    assert summaries[0].source == RoleConfigSource.APP
 
 
 def test_list_role_documents_marks_builtin_override_not_deletable(

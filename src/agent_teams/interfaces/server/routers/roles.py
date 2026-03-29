@@ -22,7 +22,9 @@ from agent_teams.roles import (
     RoleDocumentSummary,
     RoleRegistry,
     RoleSkillOption,
+    SystemRolesUnavailableError,
     RoleValidationResult,
+    ensure_required_system_roles,
 )
 from agent_teams.external_agents import ExternalAgentConfigService
 from agent_teams.roles.settings_service import RoleSettingsService
@@ -49,38 +51,42 @@ def get_role_config_options(
         get_external_agent_config_service
     ),
 ) -> RoleConfigOptions:
-    return RoleConfigOptions(
-        coordinator_role_id=role_registry.get_coordinator_role_id(),
-        main_agent_role_id=role_registry.get_main_agent_role_id(),
-        normal_mode_roles=tuple(
-            NormalModeRoleOption(
-                role_id=role.role_id,
-                name=role.name,
-                description=role.description,
-            )
-            for role in role_registry.list_normal_mode_roles()
-        ),
-        tools=tool_registry.list_configurable_names(),
-        mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
-        skills=tuple(
-            RoleSkillOption(
-                ref=skill.ref,
-                name=skill.name,
-                description=skill.description,
-                scope=skill.scope,
-            )
-            for skill in skill_registry.list_skill_options()
-        ),
-        agents=tuple(
-            RoleAgentOption(
-                agent_id=agent.agent_id,
-                name=agent.name,
-                transport=agent.transport.value,
-            )
-            for agent in external_agent_service.list_agent_options()
-        ),
-        execution_surfaces=tuple(surface for surface in ExecutionSurface),
-    )
+    try:
+        ensure_required_system_roles(role_registry)
+        return RoleConfigOptions(
+            coordinator_role_id=role_registry.get_coordinator_role_id(),
+            main_agent_role_id=role_registry.get_main_agent_role_id(),
+            normal_mode_roles=tuple(
+                NormalModeRoleOption(
+                    role_id=role.role_id,
+                    name=role.name,
+                    description=role.description,
+                )
+                for role in role_registry.list_normal_mode_roles()
+            ),
+            tools=tool_registry.list_configurable_names(),
+            mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
+            skills=tuple(
+                RoleSkillOption(
+                    ref=skill.ref,
+                    name=skill.name,
+                    description=skill.description,
+                    scope=skill.scope,
+                )
+                for skill in skill_registry.list_skill_options()
+            ),
+            agents=tuple(
+                RoleAgentOption(
+                    agent_id=agent.agent_id,
+                    name=agent.name,
+                    transport=agent.transport.value,
+                )
+                for agent in external_agent_service.list_agent_options()
+            ),
+            execution_surfaces=tuple(surface for surface in ExecutionSurface),
+        )
+    except SystemRolesUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get(
@@ -145,6 +151,8 @@ def validate_roles(
 ) -> dict[str, int | bool]:
     try:
         return service.validate_all_roles()
+    except SystemRolesUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

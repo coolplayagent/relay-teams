@@ -66,10 +66,8 @@ export function bindRoleSettingsHandlers() {
 
 export async function loadRoleSettingsPanel(preferredRoleId = '') {
     try {
-        const [summaries] = await Promise.all([
-            fetchRoleConfigs(),
-            refreshRoleSettingsDependencies(),
-        ]);
+        const summaries = await fetchRoleConfigs();
+        await refreshRoleSettingsDependencies();
         roleSummaries = Array.isArray(summaries) ? summaries.map(normalizeRoleSummary) : [];
         renderRolesList();
         if (roleSummaries.length === 0) {
@@ -818,14 +816,33 @@ async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}
     const selectedExecutionSurface = String(getInputValue('role-execution-surface-input')).trim()
         || currentExecutionSurface
         || 'api';
-    const [options, modelProfiles] = await Promise.all([
+    const [optionsResult, modelProfilesResult] = await Promise.allSettled([
         fetchRoleConfigOptions(),
         fetchModelProfiles(),
     ]);
-    roleConfigOptions = normalizeRoleConfigOptions(options);
-    const normalizedModelProfiles = normalizeModelProfiles(modelProfiles);
-    availableModelProfiles = normalizedModelProfiles.names;
-    defaultModelProfileName = normalizedModelProfiles.defaultName;
+    if (optionsResult.status === 'fulfilled') {
+        roleConfigOptions = normalizeRoleConfigOptions(optionsResult.value);
+    } else {
+        roleConfigOptions = normalizeRoleConfigOptions(null);
+        logError(
+            'frontend.roles_settings.dependencies.role_options_failed',
+            'Failed to load role options',
+            errorToPayload(optionsResult.reason),
+        );
+    }
+    if (modelProfilesResult.status === 'fulfilled') {
+        const normalizedModelProfiles = normalizeModelProfiles(modelProfilesResult.value);
+        availableModelProfiles = normalizedModelProfiles.names;
+        defaultModelProfileName = normalizedModelProfiles.defaultName;
+    } else {
+        availableModelProfiles = [];
+        defaultModelProfileName = '';
+        logError(
+            'frontend.roles_settings.dependencies.model_profiles_failed',
+            'Failed to load model profiles',
+            errorToPayload(modelProfilesResult.reason),
+        );
+    }
     if (!applyEditorState) {
         return;
     }
@@ -972,8 +989,13 @@ function formatDefaultProfileOptionLabel() {
 
 function isReservedSystemRoleId(roleId) {
     const safeRoleId = String(roleId || '').trim();
-    return safeRoleId === String(roleConfigOptions.coordinator_role_id || '').trim()
-        || safeRoleId === String(roleConfigOptions.main_agent_role_id || '').trim();
+    if (!safeRoleId) {
+        return false;
+    }
+    const coordinatorRoleId = String(roleConfigOptions.coordinator_role_id || '').trim();
+    const mainAgentRoleId = String(roleConfigOptions.main_agent_role_id || '').trim();
+    return (coordinatorRoleId !== '' && safeRoleId === coordinatorRoleId)
+        || (mainAgentRoleId !== '' && safeRoleId === mainAgentRoleId);
 }
 
 function renderRoleUsageChips(roleId) {

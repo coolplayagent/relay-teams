@@ -80,7 +80,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.container.start()
     health_payload = build_server_health_payload(
         config_dir=config_dir,
+        role_registry=app.state.container.role_registry,
         skill_registry=app.state.container.skill_registry,
+        tool_registry=app.state.container.tool_registry,
     )
     startup_payload = health_payload.model_dump(mode="json")
     log_event(
@@ -91,6 +93,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         payload=startup_payload,
     )
     skill_registry_sanity = health_payload.skill_registry_sanity
+    if (
+        health_payload.role_registry_sanity is not None
+        and health_payload.role_registry_sanity.builtin_role_count == 0
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            event="app.startup.builtin_roles_missing",
+            message="Builtin role discovery returned no roles",
+            payload=startup_payload,
+        )
+    if health_payload.role_registry_sanity is not None and (
+        not health_payload.role_registry_sanity.has_builtin_coordinator
+        or not health_payload.role_registry_sanity.has_builtin_main_agent
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            event="app.startup.expected_builtin_role_missing",
+            message="Expected builtin system roles are missing",
+            payload=startup_payload,
+        )
     if (
         skill_registry_sanity is not None
         and skill_registry_sanity.builtin_skill_count == 0
@@ -111,6 +135,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logging.WARNING,
             event="app.startup.expected_builtin_skill_missing",
             message="Expected builtin skill builtin:deepresearch is missing",
+            payload=startup_payload,
+        )
+    if (
+        health_payload.tool_registry_sanity is not None
+        and health_payload.tool_registry_sanity.unavailable_tool_count > 0
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            event="app.startup.local_tools_unavailable",
+            message="Local tool registration failed for one or more tools",
             payload=startup_payload,
         )
     yield

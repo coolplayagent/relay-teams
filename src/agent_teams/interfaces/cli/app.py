@@ -24,7 +24,13 @@ from agent_teams.interfaces.cli.run_prompt_cli import (
     stream_events as _stream_events_impl,
 )
 from agent_teams.interfaces.server.cli import build_server_app
+from agent_teams.interfaces.server.runtime_identity import (
+    ServerHealthPayload,
+    build_server_runtime_identity,
+    raise_if_runtime_mismatch,
+)
 from agent_teams.mcp.mcp_cli import mcp_app
+from agent_teams.paths import get_project_config_dir
 from agent_teams.roles.role_cli import build_roles_app
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.skills.skill_cli import skills_app
@@ -32,6 +38,7 @@ from agent_teams.skills.skill_cli import skills_app
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+_LOCAL_SERVER_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
 
 
 def _request_json(
@@ -77,14 +84,19 @@ def _request_json(
 
 
 def _is_server_healthy(base_url: str) -> bool:
+    health = _get_server_health(base_url)
+    return health is not None and health.status == "ok"
+
+
+def _get_server_health(base_url: str) -> ServerHealthPayload | None:
     try:
         health_response = _request_json(
             base_url, "GET", "/api/system/health", timeout_seconds=1.5
         )
         health = _require_object_response(health_response, "/api/system/health")
-        return health.get("status") == "ok"
+        return ServerHealthPayload.model_validate(health)
     except Exception:
-        return False
+        return None
 
 
 def _start_server_daemon(host: str, port: int) -> None:
@@ -139,7 +151,18 @@ def _wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
 
 
 def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
-    if _is_server_healthy(base_url):
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    live_health = _get_server_health(base_url)
+    if live_health is not None and live_health.status == "ok":
+        if host in _LOCAL_SERVER_HOSTS:
+            raise_if_runtime_mismatch(
+                health=live_health,
+                current=build_server_runtime_identity(
+                    config_dir=get_project_config_dir()
+                ),
+                display_url=base_url,
+            )
         return
 
     if not autostart:
@@ -147,8 +170,6 @@ def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
             "Agent Teams server is not running and --no-autostart was provided"
         )
 
-    parsed = urlparse(base_url)
-    host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if host not in {"127.0.0.1", "localhost"}:
         raise RuntimeError(

@@ -26,6 +26,7 @@ from agent_teams.roles import (
     RoleDocumentSummary,
     RoleRegistry,
     RoleSkillOption,
+    SystemRolesUnavailableError,
     RoleValidationResult,
 )
 from agent_teams.skills.skill_models import SkillOptionEntry, SkillScope
@@ -33,6 +34,8 @@ from agent_teams.roles import default_memory_profile
 
 
 class _FakeRoleSettingsService:
+    validate_all_error: Exception | None = None
+
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
         return (
             RoleDocumentSummary(
@@ -82,6 +85,8 @@ class _FakeRoleSettingsService:
         return RoleValidationResult(valid=True, role=self.get_role_document("writer"))
 
     def validate_all_roles(self) -> dict[str, int | bool]:
+        if self.validate_all_error is not None:
+            raise self.validate_all_error
         return {"valid": True, "loaded_count": 1}
 
     def delete_role_document(self, role_id: str) -> None:
@@ -139,47 +144,51 @@ class _FakeExternalAgentService:
         )
 
 
-def _create_test_client() -> TestClient:
+def _create_test_client(
+    *,
+    registry: RoleRegistry | None = None,
+    service: _FakeRoleSettingsService | None = None,
+) -> TestClient:
     app = FastAPI()
     app.include_router(roles.router, prefix="/api")
-    registry = RoleRegistry()
-    registry.register(
-        RoleDefinition(
-            role_id="Coordinator",
-            name="Coordinator",
-            description="Coordinates the run.",
-            version="1.0.0",
-            tools=("dispatch_task",),
-            model_profile="default",
-            system_prompt="Coordinate the run.",
+    resolved_registry = registry or RoleRegistry()
+    if registry is None:
+        resolved_registry.register(
+            RoleDefinition(
+                role_id="Coordinator",
+                name="Coordinator",
+                description="Coordinates the run.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                model_profile="default",
+                system_prompt="Coordinate the run.",
+            )
         )
-    )
-    registry.register(
-        RoleDefinition(
-            role_id="MainAgent",
-            name="Main Agent",
-            description="Executes normal-mode runs.",
-            version="1.0.0",
-            tools=("dispatch_task",),
-            model_profile="default",
-            system_prompt="Handle the run directly.",
+        resolved_registry.register(
+            RoleDefinition(
+                role_id="MainAgent",
+                name="Main Agent",
+                description="Executes normal-mode runs.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                model_profile="default",
+                system_prompt="Handle the run directly.",
+            )
         )
-    )
-    registry.register(
-        RoleDefinition(
-            role_id="writer",
-            name="Writer",
-            description="Drafts user-facing content.",
-            version="1.0.0",
-            tools=("dispatch_task",),
-            model_profile="default",
-            system_prompt="Write clearly.",
+        resolved_registry.register(
+            RoleDefinition(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                model_profile="default",
+                system_prompt="Write clearly.",
+            )
         )
-    )
-    app.dependency_overrides[get_role_registry] = lambda: registry
-    app.dependency_overrides[get_role_settings_service] = lambda: (
-        _FakeRoleSettingsService()
-    )
+    resolved_service = service or _FakeRoleSettingsService()
+    app.dependency_overrides[get_role_registry] = lambda: resolved_registry
+    app.dependency_overrides[get_role_settings_service] = lambda: resolved_service
     app.dependency_overrides[get_tool_registry] = lambda: _FakeToolRegistry()
     app.dependency_overrides[get_mcp_service] = lambda: _FakeMcpService()
     app.dependency_overrides[get_skill_registry] = lambda: _FakeSkillRegistry()
@@ -245,6 +254,40 @@ def test_validate_role_config() -> None:
     payload = response.json()
     assert payload["valid"] is True
     assert payload["role"]["role_id"] == "writer"
+
+
+def test_get_role_config_options_returns_503_when_system_roles_are_missing() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            model_profile="default",
+            system_prompt="Write clearly.",
+        )
+    )
+    client = _create_test_client(registry=registry)
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 503
+    assert "Required system roles are unavailable" in response.json()["detail"]
+
+
+def test_validate_roles_returns_503_when_system_roles_are_missing() -> None:
+    service = _FakeRoleSettingsService()
+    service.validate_all_error = SystemRolesUnavailableError(
+        "Required system roles are unavailable: main_agent: missing"
+    )
+    client = _create_test_client(service=service)
+
+    response = client.post("/api/roles:validate")
+
+    assert response.status_code == 503
+    assert "Required system roles are unavailable" in response.json()["detail"]
 
 
 def test_delete_role_config() -> None:

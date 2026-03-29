@@ -98,11 +98,14 @@ def test_roles_reload_updates_long_lived_role_registry_references(
 
     container._on_roles_reloaded(registry)
 
-    assert container.runtime_role_resolver._role_registry is registry
-    assert container.session_service._role_registry is registry
-    assert container.run_service._role_registry is registry
-    assert container.feishu_gateway_service._role_registry is registry
-    assert container.wechat_gateway_service._role_registry is registry
+    reloaded_registry = container.role_registry
+
+    assert reloaded_registry is not registry
+    assert container.runtime_role_resolver._role_registry is reloaded_registry
+    assert container.session_service._role_registry is reloaded_registry
+    assert container.run_service._role_registry is reloaded_registry
+    assert container.feishu_gateway_service._role_registry is reloaded_registry
+    assert container.wechat_gateway_service._role_registry is reloaded_registry
     assert (
         container.runtime_role_resolver.get_effective_role(
             run_id=None,
@@ -113,6 +116,25 @@ def test_roles_reload_updates_long_lived_role_registry_references(
     assert container.feishu_gateway_service._resolve_normal_root_role_id("planner") == (
         "planner"
     )
+
+
+def test_container_tolerates_missing_builtin_roles_on_startup(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    missing_builtin_roles_dir = tmp_path / "missing_builtin_roles"
+    missing_builtin_roles_dir.mkdir()
+    monkeypatch.setattr(
+        "agent_teams.interfaces.server.container.get_builtin_roles_dir",
+        lambda: missing_builtin_roles_dir,
+    )
+
+    container = ServerContainer(config_dir=config_dir)
+
+    assert container.role_registry.list_roles() == ()
 
 
 def test_saving_environment_variable_reloads_model_runtime(

@@ -16,6 +16,9 @@ const BUILTIN_DEFAULTS = {
   overflowTolerance: 2,
   textOverlapMinArea: 16,
   pixelBlankThreshold: 0.4,
+  minTextSafePadding: 8,
+  siblingAlignTolerance: 6,
+  minSlideSafeMargin: 24,
 };
 
 function parseJsonc(content) {
@@ -228,6 +231,9 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
   const disableChildOverflow = config.disableChildOverflow || false;
   const disableTextOverlap = config.disableTextOverlap || false;
   const disableBlockOverlap = config.disableBlockOverlap || false;
+  const minTextSafePadding = config.minTextSafePadding || 8;
+  const siblingAlignTolerance = config.siblingAlignTolerance || 6;
+  const minSlideSafeMargin = config.minSlideSafeMargin || 24;
 
   function isBackgroundOrDecor(el, style, rect, slideRect) {
     return rect.width >= slideRect.width && rect.height >= slideRect.height;
@@ -508,11 +514,21 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
     });
   });
 
-  const overflows = slideOverflow.detectSlideOverflow(
+  let overflows = slideOverflow.detectSlideOverflow(
     overflowElements,
     slideRect,
     overflowTolerance
   );
+  overflows = overflows.filter((overflow) => {
+    const detailSides = (overflow.details || []).map((item) => item.side);
+    const detailAmounts = (overflow.details || []).map((item) => item.amount || 0);
+    const maxAmount = detailAmounts.length > 0 ? Math.max(...detailAmounts) : 0;
+    const text = overflow.text || "";
+    if (maxAmount <= minSlideSafeMargin && /^<div>$/.test(text)) {
+      return false;
+    }
+    return true;
+  });
 
   const clippedElements = [];
   overflowElements.forEach((element) => {
@@ -713,6 +729,136 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
     ? []
     : detectBlockOverlap(directChildren, subtreeBlocks, slideRect, 2, textOverlapMinArea);
 
+  const textSafePaddingIssues = [];
+  const seenTextContainerPairs = new Set();
+  textElements.forEach((textElement) => {
+    let parent = textElement.el.parentElement;
+    while (parent && parent !== slide) {
+      const parentStyle = window.getComputedStyle(parent);
+      const borderWidths = [
+        parseFloat(parentStyle.borderTopWidth) || 0,
+        parseFloat(parentStyle.borderRightWidth) || 0,
+        parseFloat(parentStyle.borderBottomWidth) || 0,
+        parseFloat(parentStyle.borderLeftWidth) || 0,
+      ];
+      const borderSides = borderWidths.filter((width) => width > 0).length;
+      const hasFullBorder = borderSides >= 3 && parentStyle.borderStyle !== "none";
+      const bgColor = parentStyle.backgroundColor;
+      const hasBg = bgColor !== "rgba(0, 0, 0, 0)" && bgColor !== "transparent";
+      const parentRect = parent.getBoundingClientRect();
+      const parentAreaRatio = (parentRect.width * parentRect.height) / slideArea;
+      const paddingLeft = parseFloat(parentStyle.paddingLeft) || 0;
+      const paddingTop = parseFloat(parentStyle.paddingTop) || 0;
+      const paddingRight = parseFloat(parentStyle.paddingRight) || 0;
+      const paddingBottom = parseFloat(parentStyle.paddingBottom) || 0;
+      const hasRealPadding = Math.max(paddingLeft, paddingTop, paddingRight, paddingBottom) >= minTextSafePadding;
+      if ((hasFullBorder || (hasBg && hasRealPadding)) && parentAreaRatio < 0.7) {
+        const leftGap = textElement.rect.left - (parentRect.left - slideRect.left);
+        const topGap = textElement.rect.top - (parentRect.top - slideRect.top);
+        const rightGap = (parentRect.right - slideRect.left) - textElement.rect.right;
+        const bottomGap = (parentRect.bottom - slideRect.top) - textElement.rect.bottom;
+        const minGap = Math.min(leftGap, topGap, rightGap, bottomGap);
+        const pairKey = `${textElement.text}|${parent.tagName}|${parent.className || ''}`;
+        if (minGap < minTextSafePadding && !seenTextContainerPairs.has(pairKey)) {
+          seenTextContainerPairs.add(pairKey);
+          textSafePaddingIssues.push({
+            text: textElement.text,
+            container: `<${parent.tagName.toLowerCase()}${parent.className ? "." + String(parent.className).split(" ")[0] : ""}>`,
+            minGap: Math.round(minGap * 10) / 10,
+          });
+        }
+        break;
+      }
+      parent = parent.parentElement;
+    }
+  });
+
+  const siblingAlignmentIssues = [];
+  const summaryBandCollisions = [];
+  const summaryBands = [];
+  Array.from(slide.children || []).forEach((child) => {
+    const cls = typeof child.className === "string" ? child.className : "";
+    if (!/(summary|bottom|footer|tail)/i.test(cls)) return;
+    const rect = child.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    summaryBands.push({
+      el: child,
+      rect: {
+        left: rect.left - slideRect.left,
+        top: rect.top - slideRect.top,
+        right: rect.right - slideRect.left,
+        bottom: rect.bottom - slideRect.top,
+      },
+      desc: (child.innerText || "").trim().slice(0, 40) || `<${child.tagName.toLowerCase()}>`,
+    });
+  });
+  summaryBands.forEach((band) => {
+    textElements.forEach((textElement) => {
+      if (band.el.contains(textElement.el)) return;
+      if (textElement.el.contains && textElement.el.contains(band.el)) return;
+      const area = rectIntersectionArea(textElement.rect, band.rect);
+      if (area <= textOverlapMinArea) return;
+      const bottomGap = band.rect.top - textElement.rect.bottom;
+      if (bottomGap > minTextSafePadding) return;
+      summaryBandCollisions.push({
+        text: textElement.text,
+        band: band.desc,
+        overlapArea: Math.round(area),
+      });
+    });
+  });
+
+  function collectAlignedSiblingGroups(root) {
+    const groups = [];
+    root.querySelectorAll("*").forEach((parent) => {
+      const children = Array.from(parent.children || []).filter((child) => {
+        const style = window.getComputedStyle(child);
+        const rect = child.getBoundingClientRect();
+        return !(
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.opacity === "0" ||
+          rect.width <= 0 ||
+          rect.height <= 0
+        );
+      });
+      if (children.length < 3) return;
+      const rects = children.map((child) => child.getBoundingClientRect());
+      const widths = rects.map((rect) => rect.width);
+      const heights = rects.map((rect) => rect.height);
+      const minWidth = Math.min(...widths);
+      const maxWidth = Math.max(...widths);
+      const minHeight = Math.min(...heights);
+      const maxHeight = Math.max(...heights);
+      const sameRow = rects.every((rect) => Math.abs(rect.top - rects[0].top) <= siblingAlignTolerance * 2.5);
+      const similarWidth = maxWidth - minWidth <= Math.max(24, minWidth * 0.15);
+      const similarHeight = maxHeight - minHeight <= Math.max(28, minHeight * 0.18);
+      if (sameRow && similarWidth && similarHeight) {
+        groups.push(children.map((child, idx) => ({
+          el: child,
+          rect: rects[idx],
+          desc: (child.innerText || "").trim().slice(0, 30) || `<${child.tagName.toLowerCase()}>`,
+        })));
+      }
+    });
+    return groups;
+  }
+  const alignedGroups = collectAlignedSiblingGroups(slide);
+  alignedGroups.forEach((group) => {
+    const first = group[0];
+    group.slice(1).forEach((item) => {
+      const topDiff = Math.abs(item.rect.top - first.rect.top);
+      const heightDiff = Math.abs((item.rect.bottom - item.rect.top) - (first.rect.bottom - first.rect.top));
+      if (topDiff > siblingAlignTolerance || heightDiff > siblingAlignTolerance * 2) {
+        siblingAlignmentIssues.push({
+          block: item.desc,
+          topDiff: Math.round(topDiff * 10) / 10,
+          heightDiff: Math.round(heightDiff * 10) / 10,
+        });
+      }
+    });
+  });
+
   return [
     {
       index: 0,
@@ -733,6 +879,9 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
       textOcclusions: textOcclusions.slice(0, 10),
       childOverflows: childOverflows.slice(0, 10),
       blockOverlaps: blockOverlaps.slice(0, 10),
+      textSafePaddingIssues: textSafePaddingIssues.slice(0, 10),
+      siblingAlignmentIssues: siblingAlignmentIssues.slice(0, 10),
+      summaryBandCollisions: summaryBandCollisions.slice(0, 10),
     },
   ];
 }

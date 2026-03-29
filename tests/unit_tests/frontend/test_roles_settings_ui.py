@@ -548,6 +548,74 @@ console.log(JSON.stringify({
     assert "only used in normal mode" in cast(str, payload["statusText"])
 
 
+def test_role_settings_keeps_list_and_editor_usable_when_role_options_fail(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+globalThis.__roleConfigOptionsErrorMessage = "System roles unavailable.";
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+const initialListHtml = document.getElementById("roles-list").innerHTML;
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    initialListHtml,
+    editorDisplay: document.getElementById("role-editor-panel").style.display,
+    roleToolsHtml: document.getElementById("role-tools-picker").innerHTML,
+    roleSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    roleConfigOptionsCalls: globalThis.__fetchRoleConfigOptionsCount,
+    modelProfileCalls: globalThis.__fetchModelProfilesCount,
+}));
+""".strip(),
+    )
+
+    assert "Writer" in cast(str, payload["initialListHtml"])
+    assert "Reviewer" in cast(str, payload["initialListHtml"])
+    assert payload["editorDisplay"] == "block"
+    assert "read_file <em>Unavailable</em>" in cast(str, payload["roleToolsHtml"])
+    assert "builtin:diff <em>Unavailable</em>" in cast(str, payload["roleSkillsHtml"])
+    assert payload["roleConfigOptionsCalls"] == 2
+    assert payload["modelProfileCalls"] == 2
+
+
+def test_role_settings_add_role_stays_editable_when_role_options_fail(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+globalThis.__roleConfigOptionsErrorMessage = "System roles unavailable.";
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("add-role-btn").onclick();
+
+console.log(JSON.stringify({
+    roleIdReadonly: document.getElementById("role-id-input").readOnly,
+    roleNameReadonly: document.getElementById("role-name-input").readOnly,
+    roleDescriptionReadonly: document.getElementById("role-description-input").readOnly,
+    roleVersionReadonly: document.getElementById("role-version-input").readOnly,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["roleIdReadonly"] is False
+    assert payload["roleNameReadonly"] is False
+    assert payload["roleDescriptionReadonly"] is False
+    assert payload["roleVersionReadonly"] is False
+    assert payload["statusText"] == ""
+
+
 def _run_roles_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -665,6 +733,9 @@ export async function fetchRoleConfigs() {
 
 export async function fetchRoleConfigOptions() {
     globalThis.__fetchRoleConfigOptionsCount += 1;
+    if (globalThis.__roleConfigOptionsErrorMessage) {
+        throw new Error(globalThis.__roleConfigOptionsErrorMessage);
+    }
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
@@ -1059,6 +1130,7 @@ function installGlobals(elements) {{
     globalThis.__deleteRoleShouldFail = false;
     globalThis.__deleteRoleErrorMessage = "";
     globalThis.__confirmResult = true;
+    globalThis.__roleConfigOptionsErrorMessage = "";
     globalThis.__roleConfigOptionsOverride = previousRoleConfigOptionsOverride;
     globalThis.__modelProfilesOverride = previousModelProfilesOverride;
 }}
