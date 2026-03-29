@@ -56,9 +56,12 @@ export function parseMarkdown(source = '') {
         if (pre.parentElement?.classList.contains('markdown-code-block')) return;
         const code = pre.querySelector('code');
         if (!code) return;
+
+        const language = extractCodeLanguage(code);
+        applyHighlight(code, language);
+
         const wrapper = document.createElement('div');
         wrapper.className = 'markdown-code-block';
-        const language = extractCodeLanguage(code);
         wrapper.dataset.language = language;
 
         const header = document.createElement('div');
@@ -99,19 +102,14 @@ function getMarkedRuntime() {
     if (
         !runtime
         || typeof runtime.parse !== 'function'
-        || typeof runtime.setOptions !== 'function'
     ) {
         return null;
     }
 
     if (!markedConfigured) {
-        runtime.setOptions({
-            gfm: true,
-            breaks: true,
-            highlight(code, lang) {
-                return highlightCode(code, lang);
-            },
-        });
+        if (typeof runtime.setOptions === 'function') {
+            runtime.setOptions({ gfm: true, breaks: true });
+        }
         markedConfigured = true;
     }
 
@@ -255,6 +253,19 @@ function highlightCode(code, lang) {
         ? requestedLanguage
         : 'plaintext';
     return highlightRuntime.highlight(source, { language }).value;
+}
+
+function applyHighlight(codeElement, language) {
+    const hljs = getHighlightRuntime();
+    if (!hljs) return;
+    const source = codeElement.textContent || '';
+    const lang = hljs.getLanguage(language) ? language : null;
+    if (lang) {
+        codeElement.innerHTML = hljs.highlight(source, { language: lang }).value;
+    } else {
+        const result = hljs.highlightAuto(source);
+        codeElement.innerHTML = result.value;
+    }
 }
 
 function normalizeCodeLanguage(language) {

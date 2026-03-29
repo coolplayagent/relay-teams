@@ -19,13 +19,18 @@ import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings
 import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from './triggerSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
+import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
 let settingsModal = null;
-let currentTab = 'model';
+let currentTab = 'appearance';
 let initialized = false;
 
 const TAB_METADATA = {
+    appearance: {
+        titleKey: 'settings.panel.appearance.title',
+        descriptionKey: 'settings.panel.appearance.description',
+    },
     model: {
         titleKey: 'settings.panel.model.title',
         descriptionKey: 'settings.panel.model.description',
@@ -94,7 +99,10 @@ function createModal() {
                     <h2 data-i18n="settings.shell">Settings</h2>
                 </div>
                 <div class="settings-tabs" role="tablist" aria-label="Settings Sections" data-i18n-aria-label="settings.sections">
-                    <button class="settings-tab active" data-tab="model">
+                    <button class="settings-tab active" data-tab="appearance">
+                        <span class="settings-tab-label" data-i18n="settings.tab.appearance">Appearance</span>
+                    </button>
+                    <button class="settings-tab" data-tab="model">
                         <span class="settings-tab-label" data-i18n="settings.tab.model">Model</span>
                     </button>
                     <button class="settings-tab" data-tab="skills">
@@ -135,13 +143,91 @@ function createModal() {
             <section class="settings-main">
                 <div class="modal-header settings-modal-header">
                     <div class="settings-modal-heading">
-                        <h2 id="settings-panel-title">Model</h2>
-                        <p id="settings-panel-description">Manage providers, endpoints, request limits, and sampling defaults.</p>
+                        <h2 id="settings-panel-title" data-i18n="settings.panel.appearance.title">Appearance</h2>
+                        <p id="settings-panel-description" data-i18n="settings.panel.appearance.description">Customize colors, fonts, and density. Changes apply in real time.</p>
                     </div>
                     <button class="close-btn" id="settings-close" aria-label="Close Settings" data-i18n-aria-label="settings.close_title" data-i18n-title="settings.close_title">&times;</button>
                 </div>
                 <div class="settings-body">
-                    <div class="settings-panel" id="model-panel">
+                    <div class="settings-panel" id="appearance-panel">
+                        <div class="settings-section">
+                            <div class="settings-content-stack">
+                                <section class="proxy-form-section">
+                                    <div class="proxy-form-section-header"><h5 data-i18n="settings.appearance.colors">Colors</h5></div>
+                                    <div class="appearance-grid">
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.accent">Accent</label>
+                                            <div class="appearance-color-field" id="appearance-accent">
+                                                <input type="color" value="#91a698">
+                                                <input type="text" placeholder="#91a698" spellcheck="false">
+                                            </div>
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.background">Background</label>
+                                            <div class="appearance-color-field" id="appearance-background">
+                                                <input type="color" value="#161718">
+                                                <input type="text" placeholder="#161718" spellcheck="false">
+                                            </div>
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.foreground">Foreground</label>
+                                            <div class="appearance-color-field" id="appearance-foreground">
+                                                <input type="color" value="#f0eee8">
+                                                <input type="text" placeholder="#f0eee8" spellcheck="false">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                                <section class="proxy-form-section">
+                                    <div class="proxy-form-section-header"><h5 data-i18n="settings.appearance.fonts">Fonts</h5></div>
+                                    <div class="appearance-grid">
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.ui_font">UI Font</label>
+                                            <input type="text" id="appearance-ui-font" class="appearance-text-input" placeholder="IBM Plex Sans, sans-serif" spellcheck="false">
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.code_font">Code Font</label>
+                                            <input type="text" id="appearance-code-font" class="appearance-text-input" placeholder="IBM Plex Mono, monospace" spellcheck="false">
+                                        </div>
+                                    </div>
+                                </section>
+                                <section class="proxy-form-section">
+                                    <div class="proxy-form-section-header"><h5 data-i18n="settings.appearance.sizing">Sizing</h5></div>
+                                    <div class="appearance-grid">
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.ui_font_size">UI Font Size</label>
+                                            <div class="appearance-range-field">
+                                                <input type="range" id="appearance-ui-font-size" min="11" max="20" value="15" step="1">
+                                                <span class="appearance-range-value">15px</span>
+                                            </div>
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.code_font_size">Code Font Size</label>
+                                            <div class="appearance-range-field">
+                                                <input type="range" id="appearance-code-font-size" min="10" max="18" value="13" step="1">
+                                                <span class="appearance-range-value">13px</span>
+                                            </div>
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.line_height">Line Height</label>
+                                            <div class="appearance-range-field">
+                                                <input type="range" id="appearance-line-height" min="120" max="200" value="148" step="2">
+                                                <span class="appearance-range-value">1.48</span>
+                                            </div>
+                                        </div>
+                                        <div class="appearance-row">
+                                            <label data-i18n="settings.appearance.msg_density">Message Spacing</label>
+                                            <div class="appearance-range-field">
+                                                <input type="range" id="appearance-msg-density" min="30" max="150" value="85" step="5">
+                                                <span class="appearance-range-value">0.85</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="model-panel" style="display:none;">
                         <div class="settings-section settings-section-model">
                             <div class="settings-content-stack settings-model-stack">
                                 <div class="profiles-list" id="profiles-list"></div>
@@ -753,6 +839,7 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
                         </div>
                     </div>
                 </div>
@@ -793,6 +880,7 @@ function setupEventListeners() {
     bindGitHubSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
+    try { bindAppearanceHandlers(); } catch (e) { console.error('appearance bind failed', e); }
     if (typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
             if (!settingsModal) {
@@ -852,6 +940,8 @@ async function showPanel(tab) {
         await loadMcpStatusPanel();
     } else if (tab === 'skills') {
         await loadSkillsStatusPanel();
+    } else if (tab === 'appearance') {
+        loadAppearancePanel();
     }
 }
 
@@ -916,6 +1006,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'skills') {
         document.getElementById('reload-skills-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'appearance') {
+        document.getElementById('reset-appearance-btn').style.display = 'inline-flex';
         return;
     }
     if (actionsBar) actionsBar.style.display = 'none';
