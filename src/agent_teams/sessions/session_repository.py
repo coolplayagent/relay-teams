@@ -72,6 +72,13 @@ class SessionRepository:
             )
         if "started_at" not in columns:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN started_at TEXT")
+        self._conn.execute(
+            """
+            UPDATE sessions
+            SET started_at=NULL
+            WHERE TRIM(COALESCE(started_at, ''))=''
+            """
+        )
         self._conn.commit()
 
     def create(
@@ -278,6 +285,8 @@ class SessionRepository:
         session_id = str(row["session_id"])
         workspace_id = str(row["workspace_id"])
         project_id = str(row["project_id"] or "").strip() or str(row["workspace_id"])
+        started_at_raw = str(row["started_at"] or "").strip()
+        started_at = datetime.fromisoformat(started_at_raw) if started_at_raw else None
         return SessionRecord(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -288,12 +297,8 @@ class SessionRepository:
             normal_root_role_id=str(row["normal_root_role_id"] or "").strip() or None,
             orchestration_preset_id=str(row["orchestration_preset_id"] or "").strip()
             or None,
-            started_at=(
-                datetime.fromisoformat(str(row["started_at"]))
-                if row["started_at"] is not None
-                else None
-            ),
-            can_switch_mode=row["started_at"] is None,
+            started_at=started_at,
+            can_switch_mode=started_at is None,
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
