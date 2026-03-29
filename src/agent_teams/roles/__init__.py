@@ -21,6 +21,10 @@ from agent_teams.roles.memory_repository import RoleMemoryRepository
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
 from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from agent_teams.roles.role_registry import (
+    SystemRolesUnavailableError,
+    ensure_required_system_roles,
+)
 from agent_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
     TemporaryRoleSource,
@@ -44,9 +48,11 @@ __all__ = [
     "RoleMemoryRepository",
     "RoleMemoryService",
     "RoleRegistry",
+    "SystemRolesUnavailableError",
     "RoleSkillOption",
     "RoleValidationResult",
     "RuntimeRoleResolver",
+    "ensure_required_system_roles",
     "TemporaryRoleRecord",
     "TemporaryRoleRepository",
     "TemporaryRoleSource",

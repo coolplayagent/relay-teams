@@ -74,6 +74,31 @@ console.log(JSON.stringify({
     assert payload["listDisplay"] == "block"
 
 
+def test_orchestration_list_loads_when_role_options_fail(tmp_path: Path) -> None:
+    payload = _run_orchestration_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindOrchestrationSettingsHandlers, loadOrchestrationSettingsPanel } from "./orchestrationSettings.mjs";
+
+installGlobals(createElements());
+globalThis.__roleConfigOptionsErrorMessage = "System roles unavailable.";
+bindOrchestrationSettingsHandlers();
+await loadOrchestrationSettingsPanel();
+
+console.log(JSON.stringify({
+    listHtml: document.getElementById("orchestration-preset-list").innerHTML,
+    listDisplay: document.getElementById("orchestration-preset-list").style.display,
+    editorDisplay: document.getElementById("orchestration-editor-panel").style.display,
+}));
+""".strip(),
+    )
+
+    assert "Default Orchestration" in cast(str, payload["listHtml"])
+    assert "Shipping Orchestration" in cast(str, payload["listHtml"])
+    assert payload["listDisplay"] == "block"
+    assert payload["editorDisplay"] == "none"
+
+
 def _run_orchestration_settings_script(
     tmp_path: Path, runner_source: str
 ) -> dict[str, object]:
@@ -137,6 +162,9 @@ export async function fetchRoleConfigs() {
 }
 
 export async function fetchRoleConfigOptions() {
+    if (globalThis.__roleConfigOptionsErrorMessage) {
+        throw new Error(globalThis.__roleConfigOptionsErrorMessage);
+    }
     return {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
@@ -401,6 +429,7 @@ function installGlobals(elements) {{
     globalThis.__confirmCalls = [];
     globalThis.__confirmResult = true;
     globalThis.__saveCalls = [];
+    globalThis.__roleConfigOptionsErrorMessage = "";
     globalThis.__syncEditorFields = html => {{
         const idMatch = html.match(/id="orchestration-id-input" value="([^"]*)"/);
         const nameMatch = html.match(/id="orchestration-name-input" value="([^"]*)"/);

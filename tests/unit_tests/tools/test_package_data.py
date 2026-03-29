@@ -37,6 +37,11 @@ def _tool_description_files(project_root: Path) -> tuple[Path, ...]:
     return tuple(sorted(tool_root.rglob("*.txt")))
 
 
+def _builtin_role_files(project_root: Path) -> tuple[Path, ...]:
+    builtin_root = project_root / "src" / "agent_teams" / "builtin" / "roles"
+    return tuple(sorted(builtin_root.glob("*.md")))
+
+
 def test_tool_description_files_are_declared_in_package_data() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
@@ -85,3 +90,42 @@ def test_tool_package_data_declarations_match_existing_description_files() -> No
             stale_declarations.append(package_name)
 
     assert stale_declarations == []
+
+
+def test_builtin_role_files_are_declared_in_package_data() -> None:
+    project_root = _project_root()
+    package_data = _load_package_data(project_root)
+    role_files = _builtin_role_files(project_root)
+    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
+    builtin_patterns = package_data.get("agent_teams.builtin", ())
+
+    missing_files = [
+        str(role_file.relative_to(project_root / "src"))
+        for role_file in role_files
+        if not any(
+            role_file.relative_to(builtin_package_root).match(pattern)
+            for pattern in builtin_patterns
+        )
+    ]
+
+    assert missing_files == []
+
+
+def test_builtin_package_data_includes_live_role_matches() -> None:
+    project_root = _project_root()
+    package_data = _load_package_data(project_root)
+    role_files = _builtin_role_files(project_root)
+    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
+    builtin_patterns = package_data.get("agent_teams.builtin", ())
+
+    matching_patterns = [
+        pattern
+        for pattern in builtin_patterns
+        if any(
+            role_file.relative_to(builtin_package_root).match(pattern)
+            for role_file in role_files
+        )
+    ]
+
+    assert role_files != []
+    assert matching_patterns != []

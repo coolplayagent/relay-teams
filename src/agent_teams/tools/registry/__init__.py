@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agent_teams.tools.registry.defaults import build_default_registry
     from agent_teams.tools.registry.registry import (
+        ToolAvailabilityRecord,
         ToolImplicitResolver,
         ToolRegister,
         ToolRegistry,
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "ToolAvailabilityRecord",
     "ToolImplicitResolver",
     "ToolRegister",
     "ToolRegistry",
@@ -22,6 +24,10 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "ToolAvailabilityRecord": (
+        "agent_teams.tools.registry.registry",
+        "ToolAvailabilityRecord",
+    ),
     "ToolImplicitResolver": (
         "agent_teams.tools.registry.registry",
         "ToolImplicitResolver",

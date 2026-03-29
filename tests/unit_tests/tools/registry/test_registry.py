@@ -14,6 +14,12 @@ def _register_beta(_: object) -> None:
     return None
 
 
+def _register_unavailable(_: object) -> None:
+    raise ModuleNotFoundError(
+        "No module named 'agent_teams.tools.workspace_tools.write_tmp'"
+    )
+
+
 def test_registry_require_deduplicates_and_preserves_first_seen_order() -> None:
     registry = ToolRegistry(
         {
@@ -91,3 +97,32 @@ def test_registry_resolve_known_ignores_unknown_tools_when_strict_is_false() -> 
     )
 
     assert resolved == ("beta", "alpha")
+
+
+def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resolution() -> (
+    None
+):
+    registry = ToolRegistry(
+        {
+            "alpha": _register_alpha,
+            "write_tmp": _register_unavailable,
+        }
+    )
+
+    assert registry.list_names() == ("alpha",)
+    unavailable_tools = registry.list_unavailable_tools()
+    assert len(unavailable_tools) == 1
+    assert unavailable_tools[0].name == "write_tmp"
+    assert unavailable_tools[0].error_type == "ModuleNotFoundError"
+    assert "write_tmp" in unavailable_tools[0].message
+
+    with pytest.raises(ValueError, match="Unavailable tools"):
+        registry.validate_known(("write_tmp",))
+
+    resolved = registry.resolve_known(
+        ("write_tmp", "alpha"),
+        strict=False,
+        consumer="tests.unit_tests.tools.registry.test_registry",
+    )
+
+    assert resolved == ("alpha",)

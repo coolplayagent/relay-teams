@@ -43,6 +43,37 @@ Task status values:
 
 Returns service health.
 
+Response fields:
+- `status`
+- `version`
+- `python_executable`
+- `package_root`
+- `config_dir`
+- `builtin_roles_dir`
+- `builtin_skills_dir`
+- `role_registry_sanity`
+  - `builtin_role_count`
+  - `builtin_role_ids`
+  - `has_builtin_coordinator`
+  - `has_builtin_main_agent`
+- `skill_registry_sanity`
+  - `builtin_skill_count`
+  - `builtin_skill_refs`
+  - `has_builtin_deepresearch`
+- `tool_registry_sanity`
+  - `available_tool_count`
+  - `available_tool_names`
+  - `unavailable_tool_count`
+  - `unavailable_tools[]`
+    - `name`
+    - `error_type`
+    - `message`
+  - `has_write_tmp`
+
+Notes:
+- Health stays `200 ok` for a reachable server even when builtin roles or local
+  tools are degraded; inspect the `*_sanity` fields for diagnosis.
+
 ### `GET /system/configs`
 
 Returns runtime config load status for model, MCP, skills, and effective proxy settings.
@@ -843,6 +874,8 @@ Response fields:
 Notes:
 - Same-name builtin/app skills are both returned. Frontends must treat `ref` as
   the stable identity and use `name` only for display.
+- Returns `503` when required builtin/system roles such as `Coordinator` or
+  `MainAgent` are unavailable in the current runtime.
 
 ### `GET /roles/configs`
 
@@ -851,6 +884,10 @@ Lists editable role document summaries for the settings UI.
 Existing saved role files are still listed when they contain unknown `tools`,
 `mcp_servers`, or `skills`. Those stale capability references are ignored for
 read/reload flows so the settings UI can still load.
+
+When no builtin or app role files are available, this endpoint returns `200 []`
+instead of failing the whole request. If builtin role files are missing but app
+role files exist, the response contains the app-backed documents only.
 
 Response fields:
 - `role_id`
@@ -930,6 +967,8 @@ Validates role files against registered tools and skills.
 
 Constraint:
 - `depends_on` is invalid in role front matter. Ordering is runtime task orchestration state, not role metadata.
+- Returns `503` when required builtin/system roles are unavailable in the
+  current runtime.
 
 ### `POST /roles:validate-config`
 

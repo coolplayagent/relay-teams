@@ -214,34 +214,19 @@ class ServerContainer:
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             app_config_dir=config_dir
         )
-        self.role_registry: RoleRegistry = RoleLoader().load_builtin_and_app(
-            builtin_roles_dir=get_builtin_roles_dir(),
-            app_roles_dir=runtime.paths.roles_dir,
-        )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
             app_config_dir=config_dir
         )
-
-        for role in self.role_registry.list_roles():
-            self.tool_registry.resolve_known(
-                role.tools,
-                context=ToolResolutionContext(session_id=""),
-                strict=False,
-                consumer=f"interfaces.server.container.role:{role.role_id}",
+        self.role_registry = self._sanitize_role_registry(
+            RoleLoader().load_builtin_and_app(
+                builtin_roles_dir=get_builtin_roles_dir(),
+                app_roles_dir=runtime.paths.roles_dir,
+                allow_empty=True,
             )
-            self.mcp_registry.resolve_server_names(
-                role.mcp_servers,
-                strict=False,
-                consumer=f"interfaces.server.container.role:{role.role_id}",
-            )
-            self.skill_registry.resolve_known(
-                role.skills,
-                strict=False,
-                consumer=f"interfaces.server.container.role:{role.role_id}",
-            )
+        )
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
         self.shared_store: SharedStateRepository = SharedStateRepository(
@@ -825,6 +810,34 @@ class ServerContainer:
         await self.external_acp_session_manager.close()
         return None
 
+    def _sanitize_role_registry(self, role_registry: RoleRegistry) -> RoleRegistry:
+        sanitized_registry = RoleRegistry()
+        for role in role_registry.list_roles():
+            consumer = f"interfaces.server.container.role:{role.role_id}"
+            sanitized_registry.register(
+                role.model_copy(
+                    update={
+                        "tools": self.tool_registry.resolve_known(
+                            role.tools,
+                            context=ToolResolutionContext(session_id=""),
+                            strict=False,
+                            consumer=consumer,
+                        ),
+                        "mcp_servers": self.mcp_registry.resolve_server_names(
+                            role.mcp_servers,
+                            strict=False,
+                            consumer=consumer,
+                        ),
+                        "skills": self.skill_registry.resolve_known(
+                            role.skills,
+                            strict=False,
+                            consumer=consumer,
+                        ),
+                    }
+                )
+            )
+        return sanitized_registry
+
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
         self.meta_agent.coordinator.role_registry = self.role_registry
@@ -860,7 +873,7 @@ class ServerContainer:
         self._refresh_runtime_dependents()
 
     def _on_roles_reloaded(self, role_registry: RoleRegistry) -> None:
-        self.role_registry = role_registry
+        self.role_registry = self._sanitize_role_registry(role_registry)
         self.mcp_config_reload_service = McpConfigReloadService(
             mcp_config_manager=self.mcp_config_manager,
             role_registry=self.role_registry,

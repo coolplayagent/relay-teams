@@ -21,6 +21,7 @@ from agent_teams.interfaces.server.runtime_identity import (
     ServerHealthPayload,
     ServerRuntimeIdentity,
     build_server_runtime_identity,
+    raise_if_runtime_mismatch,
 )
 from agent_teams.paths import get_project_config_dir
 
@@ -188,7 +189,11 @@ def _start_daemon(host: str, port: int) -> None:
     if existing is not None and _is_process_running(existing.pid):
         health = get_server_health(check_url)
         if health is not None and health.status == "ok":
-            _raise_if_runtime_mismatch(health=health, display_url=display_url)
+            raise_if_runtime_mismatch(
+                health=health,
+                current=_get_current_runtime_identity(),
+                display_url=display_url,
+            )
             typer.echo(
                 f"Agent Teams server is already running on http://{host}:{port} "
                 f"(pid {existing.pid})"
@@ -198,7 +203,11 @@ def _start_daemon(host: str, port: int) -> None:
 
     live_health = get_server_health(check_url)
     if live_health is not None and live_health.status == "ok":
-        _raise_if_runtime_mismatch(health=live_health, display_url=display_url)
+        raise_if_runtime_mismatch(
+            health=live_health,
+            current=_get_current_runtime_identity(),
+            display_url=display_url,
+        )
         typer.echo(f"Agent Teams server is already running on {display_url}")
         return
 
@@ -265,7 +274,11 @@ def restart(
 
     live_health = get_server_health(check_url)
     if live_health is not None and live_health.status == "ok":
-        _raise_if_runtime_mismatch(health=live_health, display_url=display_url)
+        raise_if_runtime_mismatch(
+            health=live_health,
+            current=_get_current_runtime_identity(),
+            display_url=display_url,
+        )
         raise RuntimeError(
             f"Agent Teams server is already responding at {display_url}, "
             "but it is not managed by this CLI."
@@ -478,47 +491,3 @@ def _run_hidden_windows_command(command: list[str]) -> subprocess.CompletedProce
 
 def _get_current_runtime_identity() -> ServerRuntimeIdentity:
     return build_server_runtime_identity(config_dir=get_project_config_dir())
-
-
-def _health_has_runtime_identity(health: ServerHealthPayload) -> bool:
-    return (
-        isinstance(health.python_executable, str)
-        and bool(health.python_executable.strip())
-        and isinstance(health.package_root, str)
-        and bool(health.package_root.strip())
-    )
-
-
-def _runtime_identity_matches(
-    *,
-    health: ServerHealthPayload,
-    current: ServerRuntimeIdentity,
-) -> bool:
-    return (
-        health.python_executable == current.python_executable
-        and health.package_root == current.package_root
-    )
-
-
-def _raise_if_runtime_mismatch(
-    *,
-    health: ServerHealthPayload,
-    display_url: str,
-) -> None:
-    current_identity = _get_current_runtime_identity()
-    if not _health_has_runtime_identity(health):
-        raise RuntimeError(
-            f"Agent Teams server is already responding at {display_url}, "
-            "but it does not expose runtime identity metadata. "
-            "Stop the conflicting server first, then retry."
-        )
-    if _runtime_identity_matches(health=health, current=current_identity):
-        return
-    raise RuntimeError(
-        "Agent Teams server runtime mismatch at "
-        f"{display_url}. Current CLI runtime uses "
-        f"{current_identity.python_executable} from {current_identity.package_root}, "
-        "but the live server uses "
-        f"{health.python_executable} from {health.package_root}. "
-        "Stop the conflicting server first, then retry."
-    )
