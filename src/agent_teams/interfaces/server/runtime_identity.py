@@ -194,6 +194,8 @@ def health_has_runtime_identity(health: ServerHealthPayload) -> bool:
         and bool(health.python_executable.strip())
         and isinstance(health.package_root, str)
         and bool(health.package_root.strip())
+        and isinstance(health.builtin_roles_dir, str)
+        and bool(health.builtin_roles_dir.strip())
     )
 
 
@@ -205,6 +207,7 @@ def runtime_identity_matches(
     return (
         health.python_executable == current.python_executable
         and health.package_root == current.package_root
+        and health.builtin_roles_dir == current.builtin_roles_dir
     )
 
 
@@ -225,8 +228,10 @@ def raise_if_runtime_mismatch(
     raise RuntimeError(
         "Agent Teams server runtime mismatch at "
         f"{display_url}. Current CLI runtime uses "
-        f"{current.python_executable} from {current.package_root}, "
+        f"{current.python_executable} from {current.package_root} "
+        f"with builtin roles at {current.builtin_roles_dir}, "
         "but the live server uses "
-        f"{health.python_executable} from {health.package_root}. "
+        f"{health.python_executable} from {health.package_root} "
+        f"with builtin roles at {health.builtin_roles_dir}. "
         "Stop the conflicting server first, then retry."
     )

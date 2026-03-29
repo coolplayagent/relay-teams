@@ -20,6 +20,7 @@ from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.roles.role_registry import (
     LEGACY_COORDINATOR_IDENTIFIERS,
     MAIN_AGENT_IDENTIFIERS,
+    SystemRolesUnavailableError,
 )
 from agent_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
@@ -179,7 +180,7 @@ class SessionService:
                 self._orchestration_settings_service.default_orchestration_preset_id()
             )
         if resolved_normal_root_role_id is None and self._role_registry is not None:
-            resolved_normal_root_role_id = self._role_registry.get_main_agent_role_id()
+            resolved_normal_root_role_id = self._require_main_agent_role_id()
         resolved_normal_root_role_id = self._resolve_normal_root_role_id(
             resolved_normal_root_role_id
         )
@@ -291,7 +292,20 @@ class SessionService:
         if self._role_registry is None:
             normalized = str(role_id or "").strip()
             return normalized or None
+        _ = self._require_main_agent_role_id()
         return self._role_registry.resolve_normal_mode_role_id(role_id)
+
+    def _require_main_agent_role_id(self) -> str:
+        if self._role_registry is None:
+            raise SystemRolesUnavailableError(
+                "Required system roles are unavailable: main_agent: role registry is not configured"
+            )
+        try:
+            return self._role_registry.get_main_agent_role_id()
+        except (KeyError, ValueError) as exc:
+            raise SystemRolesUnavailableError(
+                f"Required system roles are unavailable: main_agent: {exc}"
+            ) from exc
 
     def delete_session(self, session_id: str) -> None:
         session = self._session_repo.get(session_id)

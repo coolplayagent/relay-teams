@@ -19,7 +19,7 @@ from agent_teams.gateway.feishu import (
     SESSION_TITLE_SOURCE_MANUAL,
 )
 from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
+from agent_teams.roles.role_registry import RoleRegistry, SystemRolesUnavailableError
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.workspace import WorkspaceService
 from agent_teams.workspace.workspace_repository import WorkspaceRepository
@@ -113,6 +113,36 @@ def test_update_session_raises_for_unknown_session(tmp_path: Path) -> None:
 
     with pytest.raises(KeyError, match="missing-session"):
         service.update_session("missing-session", {"title": "Nope"})
+
+
+def test_create_session_raises_when_main_agent_role_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_update_missing_main_agent.db"
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    service = SessionService(
+        session_repo=SessionRepository(db_path),
+        task_repo=TaskRepository(db_path),
+        agent_repo=AgentInstanceRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        token_usage_repo=TokenUsageRepository(db_path),
+        role_registry=role_registry,
+    )
+
+    with pytest.raises(SystemRolesUnavailableError, match="main_agent"):
+        service.create_session(session_id="session-1", workspace_id="default")
 
 
 def test_update_session_preserves_explicit_auto_title_source(tmp_path: Path) -> None:
