@@ -67,6 +67,7 @@
 - Changed behavior must come with tests.
 - `tests/unit_tests/` should mirror `src/agent_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
+- When a user reports a PPT layout defect (for example遮挡、重叠、溢出、页脚挤压), do not stop at fixing the generated file. Capture the reusable rule in repository docs and proactively prepare a PR so the iteration becomes part of the system, not a one-off repair.
 
 ## Interface Boundaries
 - Public backend contract is `/api/*`.
