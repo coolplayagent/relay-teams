@@ -14,7 +14,8 @@
     "test-slide-layout-qa": "node tests/slide_layout_qa_regression.js",
     "test-slide-layout-qa-report": "node tests/slide_layout_qa_report_output.js",
     "test-output-structure": "node tests/test_output_structure.js",
-    "postinstall": "node scripts/setup_designer.js --if-needed"
+    "postinstall": "node scripts/setup_designer.js --if-needed",
+    "test-slide-layout-three-card": "node tests/slide_layout_three_card_footer_regression.js"
   },
   "keywords": [
     "pptx",
