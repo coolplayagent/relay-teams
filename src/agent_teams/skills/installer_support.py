@@ -24,7 +24,7 @@ from agent_teams.roles import RoleDocumentDraft, default_memory_profile
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.skills.discovery import get_app_skills_dir
 from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.mcp.mcp_config_manager import McpConfigManager
 from agent_teams.tools.registry import build_default_registry
 
 _DEFAULT_GITHUB_API_BASE = "https://api.github.com"
@@ -669,11 +669,14 @@ def mount_skills_to_roles(
     if not normalized_skill_names:
         return ()
 
+    app_config_dir = get_app_config_dir().resolve()
     role_service = RoleSettingsService(
-        roles_dir=get_app_config_dir().resolve() / "roles",
+        roles_dir=app_config_dir / "roles",
         builtin_roles_dir=get_builtin_roles_dir(),
         get_tool_registry=build_default_registry,
-        get_mcp_registry=McpRegistry,
+        get_mcp_registry=lambda: McpConfigManager(
+            app_config_dir=app_config_dir
+        ).load_registry(),
         get_skill_registry=lambda: SkillRegistry.from_default_scopes(),
         get_external_agent_service=None,
         on_roles_reloaded=lambda registry: None,

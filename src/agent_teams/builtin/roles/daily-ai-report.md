@@ -4,6 +4,8 @@ name: daily-ai-report
 description: daily-ai-report
 model_profile: default
 version: 1.0.0
+mcp_servers:
+- chrome-devtools
 tools:
 - edit
 - glob

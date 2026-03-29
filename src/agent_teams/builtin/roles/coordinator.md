@@ -4,6 +4,8 @@ name: Coordinator
 description: Orchestrates delegated work across specialist roles.
 model_profile: default
 version: 1.0.0
+mcp_servers:
+  - chrome-devtools
 tools:
   - create_tasks
   - create_temporary_role

@@ -8,6 +8,8 @@ skills:
   - skill-installer
   - pptx-craft
   - deepresearch
+mcp_servers:
+  - chrome-devtools
 tools:
   - grep
   - glob

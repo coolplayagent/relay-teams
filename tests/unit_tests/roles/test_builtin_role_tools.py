@@ -27,3 +27,8 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "write" not in explorer.tools
     assert "write_tmp" in gater.tools
     assert "write" not in gater.tools
+    assert crafter.mcp_servers == ("chrome-devtools",)
+    assert designer.mcp_servers == ("chrome-devtools",)
+    assert explorer.mcp_servers == ("chrome-devtools",)
+    assert gater.mcp_servers == ("chrome-devtools",)
+    assert main_agent.mcp_servers == ("chrome-devtools",)

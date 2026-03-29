@@ -274,6 +274,21 @@ def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> No
     os.environ["HOME"] = home_value
     os.environ["USERPROFILE"] = home_value
     try:
+        app_config_dir = tmp_path / ".agent-teams"
+        app_config_dir.mkdir(parents=True, exist_ok=True)
+        (app_config_dir / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "chrome-devtools": {
+                            "command": "chrome-devtools-mcp",
+                            "args": ["--browserPath", "/usr/bin/chromium-browser"],
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         mounted_roles = installer_support.mount_skills_to_roles(
             role_ids=("MainAgent",),
             skill_names=("demo-skill",),
@@ -423,17 +438,26 @@ def _run_script(
 ) -> subprocess.CompletedProcess[str]:
     script_path = get_builtin_skills_dir() / "skill-installer" / "scripts" / script_name
     env = os.environ.copy()
-    existing_python_path = env.get("PYTHONPATH", "").strip()
-    source_path = (repo_root / "src").resolve().as_posix()
-    env["PYTHONPATH"] = (
-        source_path
-        if not existing_python_path
-        else source_path + os.pathsep + existing_python_path
-    )
+    env.update(extra_env)
     home_value = home_dir.resolve().as_posix()
     env["HOME"] = home_value
     env["USERPROFILE"] = home_value
-    env.update(extra_env)
+    env["PYTHONPATH"] = str(repo_root / "src")
+    app_config_dir = home_dir / ".agent-teams"
+    app_config_dir.mkdir(parents=True, exist_ok=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "chrome-devtools": {
+                        "command": "chrome-devtools-mcp",
+                        "args": ["--browserPath", "/usr/bin/chromium-browser"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     return subprocess.run(
         [sys.executable, str(script_path), *args],
         cwd=str(repo_root),
