@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from agent_teams.sessions.session_repository import SessionRepository
 
 
@@ -60,14 +62,18 @@ def test_list_all_filters_non_string_metadata_values(tmp_path: Path) -> None:
     }
 
 
-def test_list_all_tolerates_blank_started_at(tmp_path: Path) -> None:
+@pytest.mark.parametrize("started_at", ["", "None", "null"])
+def test_list_all_tolerates_missing_or_none_like_started_at(
+    tmp_path: Path,
+    started_at: str,
+) -> None:
     db_path = tmp_path / "session_repository_blank_started_at.db"
     repository = SessionRepository(db_path)
     _insert_session_row(
         db_path,
         session_id="session-blank-started-at",
         metadata_json="{}",
-        started_at="",
+        started_at=started_at,
     )
 
     records = repository.list_all()
@@ -78,8 +84,51 @@ def test_list_all_tolerates_blank_started_at(tmp_path: Path) -> None:
     assert records[0].can_switch_mode is True
 
 
-def test_repository_init_normalizes_blank_started_at_for_mark_started(
+def test_list_all_tolerates_blank_created_at_by_falling_back_to_updated_at(
     tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_repository_blank_created_at.db"
+    repository = SessionRepository(db_path)
+    updated_at = datetime.now(tz=timezone.utc).isoformat()
+    _insert_session_row(
+        db_path,
+        session_id="session-blank-created-at",
+        metadata_json="{}",
+        created_at="",
+        updated_at=updated_at,
+    )
+
+    records = repository.list_all()
+
+    assert len(records) == 1
+    assert records[0].session_id == "session-blank-created-at"
+    assert records[0].created_at == datetime.fromisoformat(updated_at)
+    assert records[0].updated_at == datetime.fromisoformat(updated_at)
+
+
+def test_list_all_skips_rows_with_blank_session_id(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_blank_session_id.db"
+    repository = SessionRepository(db_path)
+    _insert_session_row(
+        db_path,
+        session_id="session-valid",
+        metadata_json="{}",
+    )
+    _insert_session_row(
+        db_path,
+        session_id="",
+        metadata_json="{}",
+    )
+
+    records = repository.list_all()
+
+    assert [record.session_id for record in records] == ["session-valid"]
+
+
+@pytest.mark.parametrize("started_at", ["", "None", "null"])
+def test_repository_init_normalizes_missing_or_none_like_started_at_for_mark_started(
+    tmp_path: Path,
+    started_at: str,
 ) -> None:
     db_path = tmp_path / "session_repository_started_at_cleanup.db"
     now = datetime.now(tz=timezone.utc).isoformat()
@@ -127,7 +176,7 @@ def test_repository_init_normalizes_blank_started_at_for_mark_started(
             "normal",
             None,
             None,
-            "",
+            started_at,
             now,
             now,
         ),
@@ -149,6 +198,8 @@ def _insert_session_row(
     session_id: str,
     metadata_json: str,
     started_at: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -179,8 +230,8 @@ def _insert_session_row(
             None,
             None,
             started_at,
-            now,
-            now,
+            now if created_at is None else created_at,
+            now if updated_at is None else updated_at,
         ),
     )
     connection.commit()

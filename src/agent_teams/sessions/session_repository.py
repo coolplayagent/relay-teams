@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite
@@ -76,7 +76,7 @@ class SessionRepository:
             """
             UPDATE sessions
             SET started_at=NULL
-            WHERE TRIM(COALESCE(started_at, ''))=''
+            WHERE LOWER(TRIM(COALESCE(started_at, ''))) IN ('', 'none', 'null')
             """
         )
         self._conn.commit()
@@ -275,18 +275,55 @@ class SessionRepository:
         rows = self._conn.execute(
             "SELECT * FROM sessions ORDER BY created_at DESC"
         ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        records: list[SessionRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
+        return tuple(records)
 
     def delete(self, session_id: str) -> None:
         self._conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
         self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
-        session_id = str(row["session_id"])
-        workspace_id = str(row["workspace_id"])
-        project_id = str(row["project_id"] or "").strip() or str(row["workspace_id"])
-        started_at_raw = str(row["started_at"] or "").strip()
-        started_at = datetime.fromisoformat(started_at_raw) if started_at_raw else None
+        session_id = _require_session_text(row["session_id"], field_name="session_id")
+        workspace_id = _require_session_text(
+            row["workspace_id"],
+            field_name="workspace_id",
+        )
+        project_id = str(row["project_id"] or "").strip() or workspace_id
+        started_at_raw = _normalize_persisted_text(row["started_at"])
+        started_at = _parse_isoformat_or_none(started_at_raw)
+        if started_at_raw is not None and started_at is None:
+            _log_invalid_session_timestamp(
+                session_id=session_id,
+                field_name="started_at",
+                raw_preview=started_at_raw,
+                fallback_iso=None,
+            )
+        created_at_raw = _normalize_persisted_text(row["created_at"])
+        updated_at_raw = _normalize_persisted_text(row["updated_at"])
+        created_at = _parse_isoformat_or_none(created_at_raw)
+        updated_at = _parse_isoformat_or_none(updated_at_raw)
+        fallback_now = datetime.now(tz=timezone.utc)
+        if created_at is None:
+            created_at = updated_at or fallback_now
+            _log_invalid_session_timestamp(
+                session_id=session_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=created_at.isoformat(),
+            )
+        if updated_at is None:
+            updated_at = created_at
+            _log_invalid_session_timestamp(
+                session_id=session_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=updated_at.isoformat(),
+            )
         return SessionRecord(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -299,8 +336,8 @@ class SessionRepository:
             or None,
             started_at=started_at,
             can_switch_mode=started_at is None,
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
 
@@ -359,6 +396,41 @@ def _metadata_from_json(value: object, *, session_id: str) -> dict[str, str]:
     return normalized
 
 
+def _normalize_persisted_text(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if normalized.lower() in {"none", "null"}:
+        return None
+    return normalized
+
+
+def _parse_isoformat_or_none(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _require_session_text(value: object, *, field_name: str) -> str:
+    if value is None:
+        raise ValueError(f"Missing session {field_name} in persisted row")
+    normalized = str(value).strip()
+    if not normalized:
+        raise ValueError(f"Blank session {field_name} in persisted row")
+    return normalized
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
 def _log_invalid_metadata(
     *,
     session_id: str,
@@ -375,5 +447,46 @@ def _log_invalid_metadata(
         logging.WARNING,
         event="sessions.repository.metadata_invalid",
         message="Ignoring invalid session metadata from persisted row",
+        payload=payload,
+    )
+
+
+def _log_invalid_session_timestamp(
+    *,
+    session_id: str,
+    field_name: str,
+    raw_preview: str,
+    fallback_iso: str | None,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "session_id": session_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.repository.timestamp_invalid",
+        message="Using fallback for invalid persisted session timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_session_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "workspace_id": _persisted_value_preview(row["workspace_id"]),
+        "started_at": _persisted_value_preview(row["started_at"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.repository.row_invalid",
+        message="Skipping invalid persisted session row",
         payload=payload,
     )
