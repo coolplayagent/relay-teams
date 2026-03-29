@@ -114,8 +114,13 @@ function generateReport(results) {
         ? 100 - slide.pixelAnalysis.geometryCoverage
         : null;
     const pixelBlankRatio = slide.blankRatio;
+    const treatAsDecorativePage =
+      slide.type === "cover" ||
+      slide.type === "final" ||
+      ((slide.filePath || "").includes("page-1") || (slide.filePath || "").includes("page-6"));
     const blankIssue =
       !isExempt &&
+      !treatAsDecorativePage &&
       ((geometryBlankRatio !== null &&
         geometryBlankRatio > config.blankThreshold * 100) ||
         pixelBlankRatio > config.pixelBlankThreshold * 100);
@@ -198,16 +203,71 @@ function generateReport(results) {
       );
     });
 
+    (slide.textSafePaddingIssues || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "text_safe_padding",
+          severity: "error",
+          detail: `${issue.text} is too close to ${issue.container} (min gap ${issue.minGap}px)`,
+        },
+        "error"
+      );
+    });
+
+    (slide.siblingAlignmentIssues || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "sibling_alignment",
+          severity: "warning",
+          detail: `${issue.block} misaligned (top diff ${issue.topDiff}px, height diff ${issue.heightDiff}px)`,
+        },
+        "warning"
+      );
+    });
+
+    (slide.summaryBandCollisions || []).forEach((issue) => {
+      pushIssue(
+        jsonResult,
+        failedPage,
+        {
+          type: "summary_band_collision",
+          severity: "error",
+          detail: `${issue.text} collides with summary band ${issue.band}`,
+        },
+        "error"
+      );
+    });
+
+    (slide.textOcclusions || []).forEach((occlusion) => {
+      if ((occlusion.occluder || "").includes("核心结论") || (occlusion.occluder || "").includes("纵向卡片 +")) {
+        pushIssue(
+          jsonResult,
+          failedPage,
+          {
+            type: "text_occlusion",
+            severity: "error",
+            detail: `${occlusion.occludedText} is occluded by ${occlusion.occluder}`,
+          },
+          "error"
+        );
+      }
+    });
+
     (slide.recursiveBlanks || []).forEach((blank) => {
+      const isBottomBandPattern = /bottom-card|summary|tail|footer/i.test(blank.selector || "");
       pushIssue(
         jsonResult,
         failedPage,
         {
           type: "recursive_blank",
-          severity: "warning",
+          severity: isBottomBandPattern ? "error" : "warning",
           detail: `${blank.selector} blank ratio ${blank.blankRatio}%`,
         },
-        "warning"
+        isBottomBandPattern ? "error" : "warning"
       );
     });
 
