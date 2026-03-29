@@ -7,3 +7,5 @@ export {
     openSettings,
     closeSettings,
 } from './settings/index.js';
+
+export { initAppearanceOnStartup } from './settings/appearanceSettings.js';

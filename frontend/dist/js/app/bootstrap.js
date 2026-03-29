@@ -2,7 +2,7 @@
  * app/bootstrap.js
  * UI bindings and application startup sequence.
  */
-import { initSettings, openSettings } from "../components/settings.js";
+import { initSettings, openSettings, initAppearanceOnStartup } from "../components/settings.js";
 import { initializeProjectView } from "../components/projectView.js";
 import { initializeContextIndicators } from "../components/contextIndicators.js";
 import { initializeSessionTokenUsage } from "../components/sessionTokenUsage.js";
@@ -112,6 +112,7 @@ export async function initApp(selectSession, handleSend) {
   initializeObservability();
   initializeProjectView();
   setupEventBindings(handleSend);
+  initAppearanceOnStartup();
   initSettings();
   setupSettingsButton();
   await loadProjects();

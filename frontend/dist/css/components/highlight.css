@@ -1,0 +1,165 @@
+/* Syntax highlighting - dark theme (default) */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-name {
+    color: #c2a0e0;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable {
+    color: #a8c78a;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-type,
+.hljs-params {
+    color: #d4a76a;
+}
+
+.hljs-comment,
+.hljs-doctag {
+    color: #6a7a6e;
+    font-style: italic;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+    color: #7ab8d4;
+}
+
+.hljs-variable,
+.hljs-symbol {
+    color: #d4b37a;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+    color: #8aa4b0;
+}
+
+.hljs-regexp {
+    color: #d48a8a;
+}
+
+.hljs-addition {
+    color: #a8c78a;
+    background: rgba(168, 199, 138, 0.1);
+}
+
+.hljs-deletion {
+    color: #d48a8a;
+    background: rgba(212, 138, 138, 0.1);
+}
+
+.hljs-selector-class,
+.hljs-selector-id {
+    color: #8abbd4;
+}
+
+.hljs-attribute {
+    color: #c2a0e0;
+}
+
+.hljs-tag {
+    color: #d48a8a;
+}
+
+.hljs-tag .hljs-name {
+    color: #d48a8a;
+}
+
+.hljs-tag .hljs-attr {
+    color: #d4a76a;
+}
+
+.hljs-emphasis {
+    font-style: italic;
+}
+
+.hljs-strong {
+    font-weight: 600;
+}
+
+/* Syntax highlighting - light theme overrides */
+body.light-theme .hljs-keyword,
+body.light-theme .hljs-selector-tag,
+body.light-theme .hljs-built_in,
+body.light-theme .hljs-name {
+    color: #7b3bb3;
+}
+
+body.light-theme .hljs-string,
+body.light-theme .hljs-attr,
+body.light-theme .hljs-template-tag,
+body.light-theme .hljs-template-variable {
+    color: #4d7a2a;
+}
+
+body.light-theme .hljs-number,
+body.light-theme .hljs-literal,
+body.light-theme .hljs-type,
+body.light-theme .hljs-params {
+    color: #a85d00;
+}
+
+body.light-theme .hljs-comment,
+body.light-theme .hljs-doctag {
+    color: #7d8a80;
+    font-style: italic;
+}
+
+body.light-theme .hljs-title,
+body.light-theme .hljs-title.function_,
+body.light-theme .hljs-section {
+    color: #2a6f8f;
+}
+
+body.light-theme .hljs-variable,
+body.light-theme .hljs-symbol {
+    color: #946b2d;
+}
+
+body.light-theme .hljs-meta,
+body.light-theme .hljs-meta .hljs-keyword {
+    color: #4a7080;
+}
+
+body.light-theme .hljs-regexp {
+    color: #b34040;
+}
+
+body.light-theme .hljs-addition {
+    color: #4d7a2a;
+    background: rgba(77, 122, 42, 0.08);
+}
+
+body.light-theme .hljs-deletion {
+    color: #b34040;
+    background: rgba(179, 64, 64, 0.08);
+}
+
+body.light-theme .hljs-selector-class,
+body.light-theme .hljs-selector-id {
+    color: #2a6f8f;
+}
+
+body.light-theme .hljs-attribute {
+    color: #7b3bb3;
+}
+
+body.light-theme .hljs-tag {
+    color: #b34040;
+}
+
+body.light-theme .hljs-tag .hljs-name {
+    color: #b34040;
+}
+
+body.light-theme .hljs-tag .hljs-attr {
+    color: #a85d00;
+}
