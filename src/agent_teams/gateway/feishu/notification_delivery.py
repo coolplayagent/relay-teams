@@ -41,7 +41,7 @@ class FeishuMessageSender(Protocol):
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
     def send_card_message(
         self,
@@ -49,7 +49,7 @@ class FeishuMessageSender(Protocol):
         chat_id: str,
         card: dict[str, object],
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
 
 class TerminalNotificationSuppressor(Protocol):

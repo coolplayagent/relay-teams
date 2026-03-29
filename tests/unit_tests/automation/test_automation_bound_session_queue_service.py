@@ -7,6 +7,8 @@ from typing import cast
 from agent_teams.automation import (
     AutomationBoundSessionQueueRepository,
     AutomationBoundSessionQueueService,
+    AutomationBoundSessionQueueStatus,
+    AutomationCleanupStatus,
     AutomationDeliveryService,
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
@@ -41,6 +43,8 @@ class _FakeRunService:
     def __init__(self) -> None:
         self.created_intents: list[IntentInput] = []
         self.started_run_ids: list[str] = []
+        self.resume_run_ids: list[str] = []
+        self.resume_errors: list[str] = []
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         self.created_intents.append(intent)
@@ -49,14 +53,29 @@ class _FakeRunService:
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
 
+    def resume_run(self, run_id: str) -> str:
+        self.resume_run_ids.append(run_id)
+        if self.resume_errors:
+            raise RuntimeError(self.resume_errors.pop(0))
+        return "session-1"
+
 
 class _FakeDeliveryService:
     def __init__(self) -> None:
         self.register_calls: list[dict[str, object]] = []
+        self.skipped_terminal_runs: list[tuple[str, str | None]] = []
 
     def register_run(self, **kwargs: object) -> None:
         self.register_calls.append(kwargs)
         return None
+
+    def mark_terminal_delivery_skipped(
+        self,
+        *,
+        run_id: str,
+        terminal_message: str | None = None,
+    ) -> None:
+        self.skipped_terminal_runs.append((run_id, terminal_message))
 
 
 class _FakeRuntimeConfigLookup:
@@ -77,10 +96,16 @@ class _FakeRuntimeConfigLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, str]] = []
+        self.deleted_messages: list[str] = []
 
-    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> None:
+    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
+        return f"om_{len(self.sent_messages)}"
+
+    def delete_message(self, *, message_id: str, environment=None) -> None:
+        _ = environment
+        self.deleted_messages.append(message_id)
 
 
 class _FakeProjectRepository:
@@ -177,6 +202,55 @@ def _build_service(
     )
 
 
+def _queue_and_start_bound_run(
+    tmp_path: Path,
+) -> tuple[
+    AutomationBoundSessionQueueService,
+    AutomationBoundSessionQueueRepository,
+    RunRuntimeRepository,
+    _FakeRunService,
+    _FakeDeliveryService,
+    _FakeFeishuClient,
+    _FakeProjectRepository,
+]:
+    (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        delivery_service,
+        feishu_client,
+        project_repo,
+    ) = _build_service(tmp_path)
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="active-run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+        )
+    )
+    _ = service.materialize_execution(project=_build_project(), reason="schedule")
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="active-run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    _ = service.process_pending()
+    return (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        delivery_service,
+        feishu_client,
+        project_repo,
+    )
+
+
 def test_materialize_execution_starts_in_bound_session_when_idle(
     tmp_path: Path,
 ) -> None:
@@ -254,6 +328,8 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
         queued_records[0].queue_message
         == "定时任务 Daily Briefing 准备执行，当前任务前面有 1 个消息"
     )
+    assert queued_records[0].queue_message_id == "om_1"
+    assert queued_records[0].queue_cleanup_status == AutomationCleanupStatus.SKIPPED
     assert feishu_client.sent_messages == [
         {
             "chat_id": "oc_123",
@@ -304,10 +380,12 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert run_service.started_run_ids == ["run-1"]
     assert len(waiting_records) == 1
     assert waiting_records[0].run_id == "run-1"
+    assert waiting_records[0].queue_cleanup_status == AutomationCleanupStatus.CLEANED
     assert len(delivery_service.register_calls) == 1
     assert delivery_service.register_calls[0]["send_started"] is False
     assert project_repo.project.last_session_id == "session-1"
     assert project_repo.project.last_run_started_at is not None
+    assert _feishu_client.deleted_messages == ["om_1"]
 
 
 def test_materialize_execution_fails_when_bound_session_is_missing(
@@ -342,3 +420,162 @@ def test_materialize_execution_fails_when_bound_session_is_missing(
     else:
         raise AssertionError("Expected missing bound session to fail")
     assert run_service.created_intents == []
+
+
+def test_process_pending_schedules_recoverable_resume_with_backoff(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        _delivery_service,
+        _feishu_client,
+        _project_repo,
+    ) = _queue_and_start_bound_run(tmp_path)
+    waiting = queue_repo.list_waiting_for_result(limit=10)[0]
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id=str(waiting.run_id),
+            session_id="session-1",
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+
+    progressed = service.process_pending()
+
+    updated = queue_repo.list_waiting_for_result(limit=10)[0]
+    assert progressed is True
+    assert run_service.resume_run_ids == []
+    assert updated.resume_attempts == 0
+    assert updated.last_error == "stream interrupted"
+    assert updated.resume_next_attempt_at > updated.updated_at
+
+
+def test_process_pending_requests_resume_after_backoff_elapsed(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        _delivery_service,
+        _feishu_client,
+        _project_repo,
+    ) = _queue_and_start_bound_run(tmp_path)
+    waiting = queue_repo.list_waiting_for_result(limit=10)[0]
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id=str(waiting.run_id),
+            session_id="session-1",
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+    _ = queue_repo.update(
+        waiting.model_copy(
+            update={
+                "resume_next_attempt_at": datetime.now(tz=timezone.utc),
+            }
+        )
+    )
+
+    progressed = service.process_pending()
+
+    updated = queue_repo.list_waiting_for_result(limit=10)[0]
+    assert progressed is True
+    assert run_service.resume_run_ids == ["run-1"]
+    assert updated.resume_attempts == 1
+    assert updated.last_error is None
+
+
+def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        _delivery_service,
+        feishu_client,
+        _project_repo,
+    ) = _build_service(tmp_path)
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="active-run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.FAILED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+
+    handle = service.materialize_execution(project=_build_project(), reason="schedule")
+
+    assert handle is not None
+    assert handle.queued is True
+    assert run_service.created_intents == []
+    queued_records = queue_repo.list_ready_to_start(
+        ready_at=datetime.now(tz=timezone.utc),
+        limit=10,
+    )
+    assert len(queued_records) == 1
+    assert feishu_client.sent_messages[0]["text"].startswith(
+        "定时任务 Daily Briefing 准备执行"
+    )
+    repaired = run_runtime_repo.get("active-run-1")
+    assert repaired is not None
+    assert repaired.status == RunRuntimeStatus.PAUSED
+
+
+def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        delivery_service,
+        feishu_client,
+        _project_repo,
+    ) = _queue_and_start_bound_run(tmp_path)
+    waiting = queue_repo.list_waiting_for_result(limit=10)[0]
+    run_service.resume_errors = ["still paused"]
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id=str(waiting.run_id),
+            session_id="session-1",
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+    _ = queue_repo.update(
+        waiting.model_copy(
+            update={
+                "resume_attempts": 4,
+                "resume_next_attempt_at": datetime.now(tz=timezone.utc),
+            }
+        )
+    )
+
+    progressed = service.process_pending()
+
+    failed_record = queue_repo.get(waiting.automation_queue_id)
+    assert failed_record is not None
+    assert progressed is True
+    assert run_service.resume_run_ids == ["run-1"]
+    assert failed_record.status == AutomationBoundSessionQueueStatus.FAILED
+    assert failed_record.queue_cleanup_status == AutomationCleanupStatus.CLEANED
+    assert "自动恢复失败" in feishu_client.sent_messages[-1]["text"]
+    assert feishu_client.deleted_messages == ["om_1"]
+    assert delivery_service.skipped_terminal_runs == [
+        ("run-1", feishu_client.sent_messages[-1]["text"])
+    ]

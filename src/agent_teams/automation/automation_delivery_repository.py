@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import RLock
 
 from agent_teams.automation.automation_models import (
+    AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
     AutomationFeishuBinding,
@@ -44,8 +45,13 @@ class AutomationDeliveryRepository:
                     terminal_attempts INTEGER NOT NULL,
                     started_message TEXT,
                     terminal_message TEXT,
+                    started_message_id TEXT,
+                    terminal_message_id TEXT,
                     started_sent_at TEXT,
                     terminal_sent_at TEXT,
+                    started_cleanup_status TEXT NOT NULL DEFAULT 'skipped',
+                    started_cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+                    started_cleaned_at TEXT,
                     last_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -70,6 +76,31 @@ class AutomationDeliveryRepository:
                 ON automation_deliveries(terminal_status, updated_at ASC)
                 """
             )
+            self._ensure_column(
+                "automation_deliveries",
+                "started_message_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                "automation_deliveries",
+                "terminal_message_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                "automation_deliveries",
+                "started_cleanup_status",
+                "TEXT NOT NULL DEFAULT 'skipped'",
+            )
+            self._ensure_column(
+                "automation_deliveries",
+                "started_cleanup_attempts",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "automation_deliveries",
+                "started_cleaned_at",
+                "TEXT",
+            )
 
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -79,6 +110,12 @@ class AutomationDeliveryRepository:
             repository_name="AutomationDeliveryRepository",
             operation_name="init_tables",
         )
+
+    def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        columns = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(str(row["name"]) == column for row in columns):
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def create(
         self, record: AutomationRunDeliveryRecord
@@ -104,13 +141,18 @@ class AutomationDeliveryRepository:
                     terminal_attempts,
                     started_message,
                     terminal_message,
+                    started_message_id,
+                    terminal_message_id,
                     started_sent_at,
                     terminal_sent_at,
+                    started_cleanup_status,
+                    started_cleanup_attempts,
+                    started_cleaned_at,
                     last_error,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(record),
             ),
@@ -142,8 +184,13 @@ class AutomationDeliveryRepository:
                     terminal_attempts=?,
                     started_message=?,
                     terminal_message=?,
+                    started_message_id=?,
+                    terminal_message_id=?,
                     started_sent_at=?,
                     terminal_sent_at=?,
+                    started_cleanup_status=?,
+                    started_cleanup_attempts=?,
+                    started_cleaned_at=?,
                     last_error=?,
                     updated_at=?
                 WHERE automation_delivery_id=?
@@ -164,8 +211,13 @@ class AutomationDeliveryRepository:
                     record.terminal_attempts,
                     record.started_message,
                     record.terminal_message,
+                    record.started_message_id,
+                    record.terminal_message_id,
                     _to_iso(record.started_sent_at),
                     _to_iso(record.terminal_sent_at),
+                    record.started_cleanup_status.value,
+                    record.started_cleanup_attempts,
+                    _to_iso(record.started_cleaned_at),
                     record.last_error,
                     record.updated_at.isoformat(),
                     record.automation_delivery_id,
@@ -352,6 +404,89 @@ class AutomationDeliveryRepository:
             return None
         return self._to_record(row)
 
+    def list_pending_started_cleanup(
+        self,
+        *,
+        limit: int = 20,
+        stale_before: datetime | None = None,
+    ) -> tuple[AutomationRunDeliveryRecord, ...]:
+        if stale_before is None:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM automation_deliveries
+                WHERE started_cleanup_status=?
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                (AutomationCleanupStatus.PENDING.value, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM automation_deliveries
+                WHERE started_cleanup_status=?
+                   OR (started_cleanup_status=? AND updated_at<=?)
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                (
+                    AutomationCleanupStatus.PENDING.value,
+                    AutomationCleanupStatus.CLEANING.value,
+                    stale_before.isoformat(),
+                    limit,
+                ),
+            ).fetchall()
+        return tuple(self._to_record(row) for row in rows)
+
+    def claim_started_cleanup(
+        self,
+        *,
+        automation_delivery_id: str,
+        stale_before: datetime,
+    ) -> AutomationRunDeliveryRecord | None:
+        claimed_at = stale_before.isoformat()
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+        updated = run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: (
+                self._conn.execute(
+                    """
+                UPDATE automation_deliveries
+                SET started_cleanup_status=?,
+                    updated_at=?
+                WHERE automation_delivery_id=?
+                  AND (
+                    started_cleanup_status=?
+                    OR (started_cleanup_status=? AND updated_at<=?)
+                  )
+                """,
+                    (
+                        AutomationCleanupStatus.CLEANING.value,
+                        updated_at,
+                        automation_delivery_id,
+                        AutomationCleanupStatus.PENDING.value,
+                        AutomationCleanupStatus.CLEANING.value,
+                        claimed_at,
+                    ),
+                ).rowcount
+            ),
+            lock=self._lock,
+            repository_name="AutomationDeliveryRepository",
+            operation_name="claim_started_cleanup",
+        )
+        if updated <= 0:
+            return None
+        row = self._conn.execute(
+            "SELECT * FROM automation_deliveries WHERE automation_delivery_id=?",
+            (automation_delivery_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._to_record(row)
+
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -382,8 +517,13 @@ class AutomationDeliveryRepository:
             record.terminal_attempts,
             record.started_message,
             record.terminal_message,
+            record.started_message_id,
+            record.terminal_message_id,
             _to_iso(record.started_sent_at),
             _to_iso(record.terminal_sent_at),
+            record.started_cleanup_status.value,
+            record.started_cleanup_attempts,
+            _to_iso(record.started_cleaned_at),
             record.last_error,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
@@ -419,8 +559,23 @@ class AutomationDeliveryRepository:
                 if row["terminal_message"] is not None
                 else None
             ),
+            started_message_id=(
+                str(row["started_message_id"])
+                if row["started_message_id"] is not None
+                else None
+            ),
+            terminal_message_id=(
+                str(row["terminal_message_id"])
+                if row["terminal_message_id"] is not None
+                else None
+            ),
             started_sent_at=_from_iso(row["started_sent_at"]),
             terminal_sent_at=_from_iso(row["terminal_sent_at"]),
+            started_cleanup_status=AutomationCleanupStatus(
+                str(row["started_cleanup_status"])
+            ),
+            started_cleanup_attempts=int(row["started_cleanup_attempts"] or 0),
+            started_cleaned_at=_from_iso(row["started_cleaned_at"]),
             last_error=str(row["last_error"])
             if row["last_error"] is not None
             else None,

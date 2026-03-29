@@ -218,12 +218,13 @@ def test_send_text_message_uses_net_client_request_chain(monkeypatch) -> None:
     client = FeishuClient()
     environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
 
-    client.send_text_message(
+    message_id = client.send_text_message(
         chat_id="oc_group_1",
         text="hello",
         environment=environment,
     )
 
+    assert message_id == "om_1"
     assert [request[:2] for request in fake_client.requests] == [
         ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
         ("POST", f"{base_url}/open-apis/im/v1/messages"),
@@ -234,6 +235,47 @@ def test_send_text_message_uses_net_client_request_chain(monkeypatch) -> None:
         "msg_type": "text",
         "content": '{"text": "hello"}',
     }
+
+
+def test_delete_message_uses_delete_endpoint(monkeypatch) -> None:
+    base_url = "https://open.feishu.cn"
+    fake_client = _FakeSyncHttpClient(
+        {
+            (
+                "POST",
+                f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+            ): [
+                _response(
+                    200,
+                    {"code": 0, "tenant_access_token": "token-1", "expire": 7200},
+                    method="POST",
+                    url=f"{base_url}/open-apis/auth/v3/tenant_access_token/internal",
+                )
+            ],
+            ("DELETE", f"{base_url}/open-apis/im/v1/messages/om_1"): [
+                _response(
+                    200,
+                    {"code": 0, "data": {}},
+                    method="DELETE",
+                    url=f"{base_url}/open-apis/im/v1/messages/om_1",
+                )
+            ],
+        }
+    )
+
+    monkeypatch.setattr(
+        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        lambda **_: fake_client,
+    )
+    client = FeishuClient()
+    environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
+
+    client.delete_message(message_id="om_1", environment=environment)
+
+    assert [request[:2] for request in fake_client.requests] == [
+        ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
+        ("DELETE", f"{base_url}/open-apis/im/v1/messages/om_1"),
+    ]
 
 
 def test_reply_text_message_uses_reply_endpoint(monkeypatch) -> None:

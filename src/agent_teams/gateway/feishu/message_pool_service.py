@@ -86,7 +86,7 @@ class FeishuClientLike(Protocol):
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
     def resolve_user_name(
         self,

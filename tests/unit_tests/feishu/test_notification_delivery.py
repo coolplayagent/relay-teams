@@ -74,8 +74,9 @@ class _FakeFeishuClient:
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         self.sent.append(("text", chat_id, text, environment))
+        return "om_text"
 
     def send_card_message(
         self,
@@ -83,8 +84,9 @@ class _FakeFeishuClient:
         chat_id: str,
         card: dict[str, object],
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         self.sent.append(("card", chat_id, card, environment))
+        return "om_card"
 
 
 class _FakeTerminalNotificationSuppressor:

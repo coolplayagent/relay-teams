@@ -33,7 +33,7 @@ class _FeishuSender(Protocol):
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
     def send_file(
         self,

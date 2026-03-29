@@ -10,6 +10,7 @@ from threading import RLock
 from agent_teams.automation.automation_models import (
     AutomationBoundSessionQueueRecord,
     AutomationBoundSessionQueueStatus,
+    AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
     AutomationRunConfig,
@@ -51,6 +52,12 @@ class AutomationBoundSessionQueueRepository:
                     status                 TEXT NOT NULL,
                     start_attempts         INTEGER NOT NULL DEFAULT 0,
                     next_attempt_at        TEXT NOT NULL,
+                    resume_attempts        INTEGER NOT NULL DEFAULT 0,
+                    resume_next_attempt_at TEXT NOT NULL,
+                    queue_message_id       TEXT,
+                    queue_cleanup_status   TEXT NOT NULL DEFAULT 'skipped',
+                    queue_cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+                    queue_cleaned_at       TEXT,
                     last_error             TEXT,
                     created_at             TEXT NOT NULL,
                     updated_at             TEXT NOT NULL,
@@ -76,6 +83,36 @@ class AutomationBoundSessionQueueRepository:
                 ON automation_bound_session_queue(automation_project_id, created_at DESC)
                 """
             )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "resume_attempts",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "resume_next_attempt_at",
+                "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'",
+            )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "queue_message_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "queue_cleanup_status",
+                "TEXT NOT NULL DEFAULT 'skipped'",
+            )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "queue_cleanup_attempts",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                "automation_bound_session_queue",
+                "queue_cleaned_at",
+                "TEXT",
+            )
 
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -85,6 +122,12 @@ class AutomationBoundSessionQueueRepository:
             repository_name="AutomationBoundSessionQueueRepository",
             operation_name="init_tables",
         )
+
+    def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        columns = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(str(row["name"]) == column for row in columns):
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def create(
         self,
@@ -110,12 +153,18 @@ class AutomationBoundSessionQueueRepository:
                     status,
                     start_attempts,
                     next_attempt_at,
+                    resume_attempts,
+                    resume_next_attempt_at,
+                    queue_message_id,
+                    queue_cleanup_status,
+                    queue_cleanup_attempts,
+                    queue_cleaned_at,
                     last_error,
                     created_at,
                     updated_at,
                     completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(record),
             ),
@@ -153,6 +202,12 @@ class AutomationBoundSessionQueueRepository:
                     status=?,
                     start_attempts=?,
                     next_attempt_at=?,
+                    resume_attempts=?,
+                    resume_next_attempt_at=?,
+                    queue_message_id=?,
+                    queue_cleanup_status=?,
+                    queue_cleanup_attempts=?,
+                    queue_cleaned_at=?,
                     last_error=?,
                     updated_at=?,
                     completed_at=?
@@ -172,6 +227,12 @@ class AutomationBoundSessionQueueRepository:
                     record.status.value,
                     record.start_attempts,
                     record.next_attempt_at.isoformat(),
+                    record.resume_attempts,
+                    record.resume_next_attempt_at.isoformat(),
+                    record.queue_message_id,
+                    record.queue_cleanup_status.value,
+                    record.queue_cleanup_attempts,
+                    _to_iso(record.queue_cleaned_at),
                     record.last_error,
                     record.updated_at.isoformat(),
                     _to_iso(record.completed_at),
@@ -333,6 +394,85 @@ class AutomationBoundSessionQueueRepository:
             return None
         return self.get(automation_queue_id)
 
+    def list_pending_queue_cleanup(
+        self,
+        *,
+        limit: int = 20,
+        stale_before: datetime | None = None,
+    ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
+        safe_limit = max(1, min(limit, 100))
+        if stale_before is None:
+            with self._lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT *
+                    FROM automation_bound_session_queue
+                    WHERE queue_cleanup_status=?
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (AutomationCleanupStatus.PENDING.value, safe_limit),
+                ).fetchall()
+        else:
+            with self._lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT *
+                    FROM automation_bound_session_queue
+                    WHERE queue_cleanup_status=?
+                       OR (queue_cleanup_status=? AND updated_at<=?)
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (
+                        AutomationCleanupStatus.PENDING.value,
+                        AutomationCleanupStatus.CLEANING.value,
+                        stale_before.isoformat(),
+                        safe_limit,
+                    ),
+                ).fetchall()
+        return tuple(self._to_record(row) for row in rows)
+
+    def claim_queue_cleanup(
+        self,
+        *,
+        automation_queue_id: str,
+        stale_before: datetime,
+    ) -> AutomationBoundSessionQueueRecord | None:
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+        updated = run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: (
+                self._conn.execute(
+                    """
+                    UPDATE automation_bound_session_queue
+                    SET queue_cleanup_status=?,
+                        updated_at=?
+                    WHERE automation_queue_id=?
+                      AND (
+                        queue_cleanup_status=?
+                        OR (queue_cleanup_status=? AND updated_at<=?)
+                      )
+                    """,
+                    (
+                        AutomationCleanupStatus.CLEANING.value,
+                        updated_at,
+                        automation_queue_id,
+                        AutomationCleanupStatus.PENDING.value,
+                        AutomationCleanupStatus.CLEANING.value,
+                        stale_before.isoformat(),
+                    ),
+                ).rowcount
+            ),
+            lock=self._lock,
+            repository_name="AutomationBoundSessionQueueRepository",
+            operation_name="claim_queue_cleanup",
+        )
+        if updated <= 0:
+            return None
+        return self.get(automation_queue_id)
+
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -365,6 +505,12 @@ class AutomationBoundSessionQueueRepository:
             record.status.value,
             record.start_attempts,
             record.next_attempt_at.isoformat(),
+            record.resume_attempts,
+            record.resume_next_attempt_at.isoformat(),
+            record.queue_message_id,
+            record.queue_cleanup_status.value,
+            record.queue_cleanup_attempts,
+            _to_iso(record.queue_cleaned_at),
             record.last_error,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
@@ -389,6 +535,20 @@ class AutomationBoundSessionQueueRepository:
             status=AutomationBoundSessionQueueStatus(str(row["status"])),
             start_attempts=int(row["start_attempts"] or 0),
             next_attempt_at=datetime.fromisoformat(str(row["next_attempt_at"])),
+            resume_attempts=int(row["resume_attempts"] or 0),
+            resume_next_attempt_at=datetime.fromisoformat(
+                str(row["resume_next_attempt_at"])
+            ),
+            queue_message_id=(
+                str(row["queue_message_id"])
+                if row["queue_message_id"] is not None
+                else None
+            ),
+            queue_cleanup_status=AutomationCleanupStatus(
+                str(row["queue_cleanup_status"])
+            ),
+            queue_cleanup_attempts=int(row["queue_cleanup_attempts"] or 0),
+            queue_cleaned_at=_from_iso(row["queue_cleaned_at"]),
             last_error=str(row["last_error"])
             if row["last_error"] is not None
             else None,

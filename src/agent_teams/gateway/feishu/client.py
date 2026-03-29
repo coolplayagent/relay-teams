@@ -101,8 +101,8 @@ class FeishuClient:
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
-        self._send_message(
+    ) -> str:
+        return self._send_message(
             chat_id=chat_id,
             msg_type="text",
             content={"text": text},
@@ -159,8 +159,8 @@ class FeishuClient:
         chat_id: str,
         card: dict[str, object],
         environment: FeishuEnvironment | None = None,
-    ) -> None:
-        self._send_message(
+    ) -> str:
+        return self._send_message(
             chat_id=chat_id,
             msg_type="interactive",
             content={"card": card},
@@ -363,8 +363,8 @@ class FeishuClient:
         chat_id: str,
         image_key: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
-        self._send_message(
+    ) -> str:
+        return self._send_message(
             chat_id=chat_id,
             msg_type="image",
             content={"image_key": image_key},
@@ -378,12 +378,28 @@ class FeishuClient:
         file_key: str,
         file_name: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
-        self._send_message(
+    ) -> str:
+        return self._send_message(
             chat_id=chat_id,
             msg_type="file",
             content={"file_key": file_key, "file_name": file_name},
             environment=environment,
+        )
+
+    def delete_message(
+        self,
+        *,
+        message_id: str,
+        environment: FeishuEnvironment | None = None,
+    ) -> None:
+        normalized_message_id = str(message_id).strip()
+        if not normalized_message_id:
+            raise RuntimeError("Feishu delete requires a message_id.")
+        _ = self._request_json(
+            method="DELETE",
+            path=f"/open-apis/im/v1/messages/{normalized_message_id}",
+            environment=self.require_environment(environment),
+            error_context="delete message",
         )
 
     def send_file(
@@ -426,8 +442,8 @@ class FeishuClient:
         msg_type: str,
         content: dict[str, object],
         environment: FeishuEnvironment | None,
-    ) -> None:
-        self._request_json(
+    ) -> str:
+        response_json = self._request_json(
             method="POST",
             path="/open-apis/im/v1/messages",
             params={"receive_id_type": "chat_id"},
@@ -439,6 +455,14 @@ class FeishuClient:
             environment=self.require_environment(environment),
             error_context="send message",
         )
+        response_data = _require_json_object(
+            response_json.get("data"),
+            error_context="send message",
+        )
+        message_id = str(response_data.get("message_id", "")).strip()
+        if not message_id:
+            raise RuntimeError("Feishu API failed to send message: missing message_id")
+        return message_id
 
     def _upload_asset(
         self,
