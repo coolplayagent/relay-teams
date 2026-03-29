@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_teams.interfaces.server.deps import get_session_service
+from agent_teams.roles import SystemRolesUnavailableError
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 
@@ -43,11 +44,14 @@ def create_session(
     req: CreateSessionRequest,
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
-    return service.create_session(
-        session_id=req.session_id,
-        workspace_id=req.workspace_id,
-        metadata=req.metadata,
-    )
+    try:
+        return service.create_session(
+            session_id=req.session_id,
+            workspace_id=req.workspace_id,
+            metadata=req.metadata,
+        )
+    except SystemRolesUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("", response_model=list[SessionRecord])
@@ -96,6 +100,8 @@ def update_session_topology(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
+    except SystemRolesUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

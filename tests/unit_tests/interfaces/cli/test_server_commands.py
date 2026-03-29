@@ -411,6 +411,29 @@ def test_start_fails_for_mismatched_live_server_runtime(monkeypatch) -> None:
         raise AssertionError("start should reject mismatched live runtimes")
 
 
+def test_start_fails_for_mismatched_live_builtin_roles_dir(monkeypatch) -> None:
+    monkeypatch.setattr(server_cli, "_load_managed_server", lambda **kwargs: None)
+    monkeypatch.setattr(
+        server_cli, "_get_current_runtime_identity", lambda: _runtime_identity()
+    )
+    monkeypatch.setattr(
+        server_cli,
+        "get_server_health",
+        lambda base_url: _health_payload(
+            builtin_roles_dir="D:/workspace/other/src/agent_teams/builtin/roles"
+        ),
+    )
+
+    try:
+        server_cli.start(host="127.0.0.1", port=8000, daemon=True)
+    except RuntimeError as exc:
+        assert "runtime mismatch" in str(exc)
+        assert "builtin roles" in str(exc)
+        assert "Stop the conflicting server first" in str(exc)
+    else:
+        raise AssertionError("start should reject builtin role path mismatches")
+
+
 def test_root_cli_autostart_rejects_mismatched_local_runtime(monkeypatch) -> None:
     started: list[tuple[str, int]] = []
 
@@ -440,5 +463,38 @@ def test_root_cli_autostart_rejects_mismatched_local_runtime(monkeypatch) -> Non
         assert "Stop the conflicting server first" in str(exc)
     else:
         raise AssertionError("root CLI should reject mismatched local runtimes")
+
+    assert started == []
+
+
+def test_root_cli_autostart_rejects_mismatched_builtin_roles_dir(monkeypatch) -> None:
+    started: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(
+        cli_app,
+        "_get_server_health",
+        lambda base_url: _health_payload(
+            builtin_roles_dir="D:/workspace/other/src/agent_teams/builtin/roles"
+        ),
+    )
+    monkeypatch.setattr(
+        cli_app,
+        "build_server_runtime_identity",
+        lambda *, config_dir=None: _runtime_identity(),
+    )
+    monkeypatch.setattr(
+        cli_app,
+        "_start_server_daemon",
+        lambda host, port: started.append((host, port)),
+    )
+
+    try:
+        cli_app._auto_start_if_needed("http://127.0.0.1:8000", autostart=True)
+    except RuntimeError as exc:
+        assert "runtime mismatch" in str(exc)
+        assert "builtin roles" in str(exc)
+        assert "Stop the conflicting server first" in str(exc)
+    else:
+        raise AssertionError("root CLI should reject builtin role path mismatches")
 
     assert started == []
