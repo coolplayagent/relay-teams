@@ -30,7 +30,10 @@ function detectTextOcclusion(
       const vHeight = visibleElement.rect.bottom - visibleElement.rect.top;
       const verticalDistance = Math.abs(textElement.rect.top - visibleElement.rect.top);
       const maxHeight = Math.max(tHeight, vHeight);
-      if (verticalDistance >= maxHeight * 0.5) continue;
+      const textCenterY = (textElement.rect.top + textElement.rect.bottom) / 2;
+      const occluderCenterY = (visibleElement.rect.top + visibleElement.rect.bottom) / 2;
+      const centerDistance = Math.abs(textCenterY - occluderCenterY);
+      if (verticalDistance >= maxHeight * 0.5 || centerDistance >= maxHeight * 0.65) continue;
 
       const tOrder = domOrderMap.get(textElement.el) || 0;
       if (visibleElement.domOrder > tOrder) {
