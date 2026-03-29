@@ -3,7 +3,7 @@
  * Tool block rendering and mutation helpers.
  */
 import { syncApprovalStateFromEnvelope } from './approval.js';
-import { renderRichContent } from './content.js';
+import { appendStructuredContentPart, renderRichContent } from './content.js';
 
 export function buildToolBlock(toolName, args, toolCallId = null) {
     const tb = document.createElement('div');
@@ -63,8 +63,7 @@ export function applyToolReturn(toolBlock, content) {
         resultEl.classList.remove('warning-text');
     }
 
-    const val = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
-    renderRichContent(resultEl, val);
+    renderToolResultContent(resultEl, content);
     syncApprovalStateFromEnvelope(toolBlock, content);
 }
 
@@ -118,6 +117,88 @@ function formatValidationDetails(payload) {
 
 function isToolEnvelopeError(content) {
     return !!(content && typeof content === 'object' && content.ok === false);
+}
+
+function renderToolResultContent(targetEl, content) {
+    targetEl.replaceChildren();
+    if (content && typeof content === 'object' && typeof content.ok === 'boolean') {
+        renderEnvelopeResult(targetEl, content);
+        return;
+    }
+    if (renderStructuredPayload(targetEl, content)) {
+        return;
+    }
+    const val = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
+    renderRichContent(targetEl, val);
+}
+
+function renderEnvelopeResult(targetEl, envelope) {
+    if (envelope.ok !== true) {
+        const error = envelope.error && typeof envelope.error === 'object'
+            ? envelope.error.message || JSON.stringify(envelope.error, null, 2)
+            : JSON.stringify(envelope, null, 2);
+        renderRichContent(targetEl, String(error || 'Tool execution failed.'));
+        return;
+    }
+    if (renderStructuredPayload(targetEl, envelope.data, envelope.meta)) {
+        return;
+    }
+    const val = typeof envelope.data === 'object'
+        ? JSON.stringify(envelope.data, null, 2)
+        : String(envelope.data ?? '');
+    renderRichContent(targetEl, val);
+}
+
+function renderStructuredPayload(targetEl, payload, meta = null) {
+    if (!payload || typeof payload !== 'object') return false;
+
+    const hasStructuredContent = Array.isArray(payload.content);
+    const hasText = typeof payload.text === 'string' && payload.text.trim();
+    const computer = payload.computer && typeof payload.computer === 'object' ? payload.computer : null;
+    if (!hasStructuredContent && !hasText && !computer) {
+        return false;
+    }
+
+    if (computer) {
+        const metaEl = document.createElement('div');
+        metaEl.className = 'tool-computer-meta';
+        metaEl.textContent = [
+            computer.source ? `source ${computer.source}` : '',
+            computer.action ? `action ${computer.action}` : '',
+            computer.risk_level ? `risk ${computer.risk_level}` : '',
+            computer.target_summary ? `target ${computer.target_summary}` : '',
+        ].filter(Boolean).join(' · ');
+        if (metaEl.textContent) {
+            targetEl.appendChild(metaEl);
+        }
+    } else if (meta && typeof meta === 'object') {
+        const metaEl = document.createElement('div');
+        metaEl.className = 'tool-computer-meta';
+        metaEl.textContent = [
+            typeof meta.source === 'string' && meta.source ? `source ${meta.source}` : '',
+            typeof meta.risk_level === 'string' && meta.risk_level ? `risk ${meta.risk_level}` : '',
+            typeof meta.target_summary === 'string' && meta.target_summary ? `target ${meta.target_summary}` : '',
+        ].filter(Boolean).join(' · ');
+        if (metaEl.textContent) {
+            targetEl.appendChild(metaEl);
+        }
+    }
+
+    if (hasText) {
+        const textEl = document.createElement('div');
+        textEl.className = 'msg-text';
+        renderRichContent(textEl, String(payload.text || ''));
+        targetEl.appendChild(textEl);
+    }
+    if (hasStructuredContent) {
+        payload.content.forEach(part => {
+            appendStructuredContentPart(targetEl, part);
+        });
+    }
+    if (!hasText && !hasStructuredContent) {
+        renderRichContent(targetEl, JSON.stringify(payload, null, 2));
+    }
+    return true;
 }
 
 function pendingToolKey(toolName, toolCallId) {

@@ -24,6 +24,7 @@ from agent_teams.builtin import (
     get_builtin_roles_dir,
     get_builtin_skills_dir,
 )
+from agent_teams.computer import build_default_computer_runtime
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.agents.orchestration import (
     OrchestrationSettingsConfigManager,
@@ -267,6 +268,7 @@ class ServerContainer:
             repository=self.media_asset_repo,
             workspace_manager=self.workspace_manager,
         )
+        self.computer_runtime = build_default_computer_runtime(project_root=Path.cwd())
         self.event_log: EventLog = EventLog(runtime.paths.db_path)
         self.agent_repo: AgentInstanceRepository = AgentInstanceRepository(
             runtime.paths.db_path
@@ -432,6 +434,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             run_event_hub=self.run_event_hub,
             workspace_manager=self.workspace_manager,
+            media_asset_service=self.media_asset_service,
             task_repo=self.task_repo,
             shared_store=self.shared_store,
             event_bus=self.event_log,
@@ -454,6 +457,7 @@ class ServerContainer:
             resolve_model_config=self._resolve_external_agent_model_config,
             metric_recorder=self.metric_recorder,
             im_tool_service=self.im_tool_service,
+            computer_runtime=self.computer_runtime,
         )
         self.run_control_manager.bind_runtime(
             run_event_hub=self.run_event_hub,
@@ -711,6 +715,7 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
+            computer_runtime=self.computer_runtime,
             role_memory_service=self.role_memory_service,
             subagent_reflection_service=self.subagent_reflection_service,
             tool_registry=self.tool_registry,

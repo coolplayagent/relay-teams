@@ -6,7 +6,7 @@ import base64
 import json
 import sys
 from collections.abc import Awaitable, Callable, Mapping
-from typing import BinaryIO
+from typing import BinaryIO, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -1175,6 +1175,13 @@ def _tool_result_payload_to_acp_content(
     payload: dict[str, JsonValue],
 ) -> list[JsonValue]:
     raw_content = payload.get("content")
+    if not isinstance(raw_content, list):
+        result = payload.get("result")
+        if isinstance(result, dict):
+            result_map = cast(dict[str, JsonValue], result)
+            data = result_map.get("data")
+            if isinstance(data, dict):
+                raw_content = cast(dict[str, JsonValue], data).get("content")
     if isinstance(raw_content, list):
         blocks: list[JsonValue] = []
         for item in raw_content:
@@ -1187,7 +1194,14 @@ def _tool_result_payload_to_acp_content(
             blocks.append({"type": "content", "content": block})
         if blocks:
             return blocks
-    result_text = json.dumps(payload.get("result"), ensure_ascii=False, default=str)
+    result_payload = payload.get("result")
+    if isinstance(result_payload, dict):
+        data = cast(dict[str, JsonValue], result_payload).get("data")
+        if isinstance(data, dict):
+            text = cast(dict[str, JsonValue], data).get("text")
+            if isinstance(text, str) and text.strip():
+                return [{"type": "content", "content": {"type": "text", "text": text}}]
+    result_text = json.dumps(result_payload, ensure_ascii=False, default=str)
     return [{"type": "content", "content": {"type": "text", "text": result_text}}]
 
 

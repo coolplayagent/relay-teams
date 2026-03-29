@@ -11,7 +11,7 @@ import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from json import dumps
-from typing import cast
+from typing import Protocol, cast
 from uuid import uuid4
 
 from agent_teams.logger import get_logger, log_event, log_tool_error
@@ -26,11 +26,14 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRunti
 from agent_teams.trace import trace_span
 from agent_teams.tools.runtime.context import ToolContext
 from agent_teams.tools.runtime.models import (
+    ToolApprovalDecision,
+    ToolApprovalRequest,
     ToolError,
     ToolInternalRecord,
     ToolResultEnvelope,
     ToolResultProjection,
 )
+from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.tools.runtime.persisted_state import (
     ToolApprovalStatus,
     ToolExecutionStatus,
@@ -46,6 +49,7 @@ async def execute_tool(
     tool_name: str,
     args_summary: dict[str, JsonValue],
     action: Callable[[], object | Awaitable[object]] | object,
+    approval_request: ToolApprovalRequest | None = None,
 ) -> dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
     tool_call_id = ctx.tool_call_id or f"toolcall_{uuid4().hex[:12]}"
@@ -84,6 +88,7 @@ async def execute_tool(
             args_summary=args_summary,
             meta=meta,
             tool_call_id=tool_call_id,
+            approval_request=approval_request,
         )
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -91,6 +96,7 @@ async def execute_tool(
             envelope = _visible_envelope(
                 ok=False,
                 error=approval_error,
+                meta=meta,
             )
             _persist_tool_record(
                 ctx=ctx,
@@ -155,6 +161,7 @@ async def execute_tool(
             envelope = _visible_envelope(
                 ok=True,
                 data=visible_data,
+                meta=meta,
             )
             _persist_tool_record(
                 ctx=ctx,
@@ -204,6 +211,7 @@ async def execute_tool(
             envelope = _visible_envelope(
                 ok=False,
                 error=error,
+                meta=meta,
             )
             _persist_tool_record(
                 ctx=ctx,
@@ -326,10 +334,26 @@ async def _handle_tool_approval(
     args_summary: dict[str, JsonValue],
     meta: dict[str, JsonValue],
     tool_call_id: str,
+    approval_request: ToolApprovalRequest | None = None,
 ) -> tuple[str | None, ToolError | None]:
-    approval_required = ctx.deps.tool_approval_policy.requires_approval(tool_name)
+    decision = _evaluate_tool_approval_policy(
+        policy=ctx.deps.tool_approval_policy,
+        tool_name=tool_name,
+        approval_request=approval_request,
+    )
+    approval_required = decision.required
     args_preview = _safe_json(args_summary)
     meta["approval_required"] = approval_required
+    if decision.permission_scope is not None:
+        meta["permission_scope"] = decision.permission_scope.value
+    if decision.risk_level is not None:
+        meta["risk_level"] = decision.risk_level.value
+    if decision.target_summary:
+        meta["target_summary"] = decision.target_summary
+    if decision.source:
+        meta["source"] = decision.source
+    if decision.execution_surface is not None:
+        meta["execution_surface"] = decision.execution_surface.value
     if not approval_required:
         meta["approval_status"] = "not_required"
         return None, None
@@ -355,6 +379,7 @@ async def _handle_tool_approval(
                 tool_name=tool_name,
                 args_preview=args_preview,
                 meta=meta,
+                decision=decision,
             )
         if reusable_ticket.status == ApprovalTicketStatus.DENIED:
             meta["approval_status"] = "deny"
@@ -388,6 +413,7 @@ async def _handle_tool_approval(
         tool_name=tool_name,
         args_preview=args_preview,
         meta=meta,
+        decision=decision,
         publish_request=True,
     )
 
@@ -399,6 +425,7 @@ async def _wait_for_ticket_resolution(
     tool_name: str,
     args_preview: str,
     meta: dict[str, JsonValue],
+    decision: ToolApprovalDecision,
     publish_request: bool = False,
 ) -> tuple[str | None, ToolError | None]:
     existing_approval = ctx.deps.tool_approval_manager.get_approval(
@@ -413,7 +440,9 @@ async def _wait_for_ticket_resolution(
             role_id=ctx.deps.role_id,
             tool_name=tool_name,
             args_preview=args_preview,
-            risk_level="high",
+            risk_level=(
+                decision.risk_level.value if decision.risk_level is not None else "high"
+            ),
         )
         publish_request = True
 
@@ -452,7 +481,23 @@ async def _wait_for_ticket_resolution(
                 "args_preview": args_preview,
                 "instance_id": ctx.deps.instance_id,
                 "role_id": ctx.deps.role_id,
-                "risk_level": "high",
+                "risk_level": (
+                    decision.risk_level.value
+                    if decision.risk_level is not None
+                    else "high"
+                ),
+                "permission_scope": (
+                    decision.permission_scope.value
+                    if decision.permission_scope is not None
+                    else ""
+                ),
+                "target_summary": decision.target_summary,
+                "source": decision.source,
+                "execution_surface": (
+                    decision.execution_surface.value
+                    if decision.execution_surface is not None
+                    else ""
+                ),
             },
         )
         _publish_tool_approval_notification(
@@ -631,13 +676,48 @@ def _visible_envelope(
     ok: bool,
     data: JsonValue = None,
     error: ToolError | None = None,
+    meta: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     envelope = ToolResultEnvelope(
         ok=ok,
         data=data,
         error=error,
+        meta={} if meta is None else dict(meta),
     )
     return cast(dict[str, JsonValue], envelope.model_dump(mode="json"))
+
+
+def _evaluate_tool_approval_policy(
+    *,
+    policy: ToolApprovalPolicy | _RequiresApprovalPolicy,
+    tool_name: str,
+    approval_request: ToolApprovalRequest | None,
+) -> ToolApprovalDecision:
+    if isinstance(policy, ToolApprovalPolicy):
+        return policy.evaluate(tool_name, approval_request)
+    required = cast(bool, policy.requires_approval(tool_name))
+    return ToolApprovalDecision(
+        required=required,
+        permission_scope=(
+            approval_request.permission_scope if approval_request is not None else None
+        ),
+        risk_level=approval_request.risk_level
+        if approval_request is not None
+        else None,
+        target_summary=(
+            approval_request.target_summary if approval_request is not None else ""
+        ),
+        source=approval_request.source if approval_request is not None else "",
+        execution_surface=(
+            approval_request.execution_surface if approval_request is not None else None
+        ),
+    )
+
+
+class _RequiresApprovalPolicy(Protocol):
+    timeout_seconds: float
+
+    def requires_approval(self, tool_name: str) -> bool: ...
 
 
 def _internal_record(

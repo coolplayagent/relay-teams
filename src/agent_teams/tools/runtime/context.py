@@ -16,8 +16,10 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskDraft,
     TaskUpdate,
 )
+from agent_teams.computer import ComputerRuntime
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import MetricRecorder
+from agent_teams.media import MediaAssetService
 from agent_teams.notifications import NotificationService
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.roles.memory_service import RoleMemoryService
@@ -121,6 +123,8 @@ class ToolDeps(BaseModel):
     agent_repo: SkipValidation[AgentInstanceRepository]
     workspace: SkipValidation[WorkspaceHandle]
     role_memory: SkipValidation[RoleMemoryService | None] = None
+    media_asset_service: SkipValidation[MediaAssetService | None] = None
+    computer_runtime: SkipValidation[ComputerRuntime | None] = None
     run_id: str
     trace_id: str
     task_id: str

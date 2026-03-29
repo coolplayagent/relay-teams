@@ -195,6 +195,7 @@ class RoleSettingsService:
             version=definition.version,
             model_profile=definition.model_profile,
             bound_agent_id=definition.bound_agent_id,
+            execution_surface=definition.execution_surface,
             source=source,
             deletable=self._is_role_deletable(
                 role_id=definition.role_id,
@@ -223,6 +224,7 @@ class RoleSettingsService:
             skills=definition.skills,
             model_profile=definition.model_profile,
             bound_agent_id=definition.bound_agent_id,
+            execution_surface=definition.execution_surface,
             memory_profile=definition.memory_profile,
             system_prompt=definition.system_prompt,
             source=source,
@@ -256,6 +258,7 @@ class RoleSettingsService:
             "model_profile": draft.model_profile,
             "version": draft.version,
             "tools": list(draft.tools),
+            "execution_surface": draft.execution_surface.value,
         }
         if draft.bound_agent_id:
             front_matter["bound_agent_id"] = draft.bound_agent_id

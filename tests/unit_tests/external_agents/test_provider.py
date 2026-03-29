@@ -31,6 +31,7 @@ from agent_teams.external_agents.models import (
 )
 from agent_teams.external_agents.provider import (
     _ActivePromptState,
+    _annotate_external_computer_tool_result,
     _ConversationHandle,
     _conversation_key,
     _extract_tool_result,
@@ -1158,6 +1159,33 @@ def test_extract_tool_result_converts_image_content_to_text_data_url() -> None:
     )
 
     assert result == {"text": "data:image/png;base64,aGVsbG8="}
+
+
+def test_annotate_external_computer_tool_result_wraps_known_desktop_tools() -> None:
+    result = _annotate_external_computer_tool_result(
+        tool_name="press_key",
+        tool_result={
+            "text": "Pressed Enter.",
+            "content": [
+                {
+                    "kind": "media_ref",
+                    "asset_id": "asset-1",
+                    "session_id": "session-1",
+                    "modality": "image",
+                    "mime_type": "image/png",
+                    "url": "/api/sessions/session-1/media/asset-1/file",
+                }
+            ],
+            "observation": {"focused_window": "Chrome DevTools"},
+        },
+    )
+
+    assert isinstance(result, dict)
+    computer = result["computer"]
+    assert isinstance(computer, dict)
+    assert computer["source"] == "acp"
+    assert computer["runtime_kind"] == "external_acp"
+    assert result["text"] == "Pressed Enter."
 
 
 @pytest.mark.asyncio

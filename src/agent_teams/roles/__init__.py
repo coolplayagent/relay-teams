@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.roles.role_models import (
     NormalModeRoleOption,
     RoleAgentOption,
@@ -30,6 +31,7 @@ from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
 
 __all__ = [
     "default_memory_profile",
+    "ExecutionSurface",
     "MemoryProfile",
     "NormalModeRoleOption",
     "RoleAgentOption",

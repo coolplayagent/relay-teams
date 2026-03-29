@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
 from agent_teams.interfaces.server.deps import (
     get_external_agent_config_service,
@@ -202,6 +203,7 @@ def test_list_role_configs() -> None:
             "description": "Drafts user-facing content.",
             "version": "1.0.0",
             "model_profile": "default",
+            "execution_surface": "api",
             "source": "app",
             "deletable": True,
         }
@@ -217,6 +219,7 @@ def test_get_role_config() -> None:
     payload = response.json()
     assert payload["role_id"] == "writer"
     assert payload["file_name"] == "writer.md"
+    assert payload["execution_surface"] == "api"
 
 
 def test_validate_role_config() -> None:
@@ -315,4 +318,5 @@ def test_get_role_config_options() -> None:
                 transport="stdio",
             ),
         ),
+        execution_surfaces=tuple(surface for surface in ExecutionSurface),
     ).model_dump(mode="json")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
@@ -78,6 +79,7 @@ def get_role_config_options(
             )
             for agent in external_agent_service.list_agent_options()
         ),
+        execution_surfaces=tuple(surface for surface in ExecutionSurface),
     )
 
 

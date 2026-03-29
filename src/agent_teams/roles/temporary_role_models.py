@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
+from agent_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.roles.role_models import RoleDefinition
@@ -26,6 +27,7 @@ class TemporaryRoleSpec(BaseModel):
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default", min_length=1)
     bound_agent_id: str | None = None
+    execution_surface: ExecutionSurface = ExecutionSurface.API
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
     template_role_id: str | None = None
@@ -41,6 +43,7 @@ class TemporaryRoleSpec(BaseModel):
             skills=self.skills,
             model_profile=self.model_profile,
             bound_agent_id=self.bound_agent_id,
+            execution_surface=self.execution_surface,
             memory_profile=self.memory_profile,
             system_prompt=self.system_prompt,
         )

@@ -15,6 +15,7 @@ from agent_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
 )
 from agent_teams.agents.execution.llm_session import AgentLlmSession
+from agent_teams.computer import ComputerRuntime
 from agent_teams.media import ContentPart, MediaAssetService, MediaModality
 from agent_teams.metrics import MetricRecorder
 from agent_teams.net.llm_client import build_llm_http_client
@@ -108,6 +109,7 @@ class OpenAICompatibleProvider(LLMProvider):
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
         im_tool_service: ImToolService | None = None,
+        computer_runtime: ComputerRuntime | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -123,6 +125,7 @@ class OpenAICompatibleProvider(LLMProvider):
             run_runtime_repo=run_runtime_repo,
             run_intent_repo=run_intent_repo,
             workspace_manager=workspace_manager,
+            media_asset_service=media_asset_service,
             role_memory_service=role_memory_service,
             subagent_reflection_service=subagent_reflection_service,
             conversation_compaction_service=ConversationCompactionService(
@@ -149,6 +152,7 @@ class OpenAICompatibleProvider(LLMProvider):
             metric_recorder=metric_recorder,
             retry_config=retry_config,
             im_tool_service=im_tool_service,
+            computer_runtime=computer_runtime,
         )
 
     @override

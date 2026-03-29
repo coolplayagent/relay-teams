@@ -13,9 +13,11 @@ if TYPE_CHECKING:
         build_default_registry,
     )
     from agent_teams.tools.runtime import (
+        ToolApprovalDecision,
         ToolApprovalAction,
         ToolApprovalManager,
         ToolApprovalPolicy,
+        ToolApprovalRequest,
         ToolContext,
         ToolDeps,
         ToolError,
@@ -27,8 +29,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ToolApprovalAction",
+    "ToolApprovalDecision",
     "ToolApprovalManager",
     "ToolApprovalPolicy",
+    "ToolApprovalRequest",
     "ToolContext",
     "ToolDeps",
     "ToolError",
@@ -48,6 +52,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.tools.runtime",
         "ToolApprovalAction",
     ),
+    "ToolApprovalDecision": (
+        "agent_teams.tools.runtime",
+        "ToolApprovalDecision",
+    ),
     "ToolApprovalManager": (
         "agent_teams.tools.runtime",
         "ToolApprovalManager",
@@ -55,6 +63,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolApprovalPolicy": (
         "agent_teams.tools.runtime",
         "ToolApprovalPolicy",
+    ),
+    "ToolApprovalRequest": (
+        "agent_teams.tools.runtime",
+        "ToolApprovalRequest",
     ),
     "ToolContext": ("agent_teams.tools.runtime", "ToolContext"),
     "ToolDeps": ("agent_teams.tools.runtime", "ToolDeps"),

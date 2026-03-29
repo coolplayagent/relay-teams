@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from agent_teams.tools.runtime.context import ToolContext, ToolDeps
     from agent_teams.tools.runtime.execution import execute_tool
     from agent_teams.tools.runtime.models import (
+        ToolApprovalDecision,
+        ToolApprovalRequest,
         ToolError,
         ToolInternalRecord,
         ToolResultEnvelope,
@@ -30,8 +32,10 @@ __all__ = [
     "ApprovalTicketRepository",
     "ApprovalTicketStatus",
     "ToolApprovalAction",
+    "ToolApprovalDecision",
     "ToolApprovalManager",
     "ToolApprovalPolicy",
+    "ToolApprovalRequest",
     "ToolContext",
     "ToolDeps",
     "ToolError",
@@ -59,6 +63,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.tools.runtime.approval_state",
         "ToolApprovalAction",
     ),
+    "ToolApprovalDecision": (
+        "agent_teams.tools.runtime.models",
+        "ToolApprovalDecision",
+    ),
     "ToolApprovalManager": (
         "agent_teams.tools.runtime.approval_state",
         "ToolApprovalManager",
@@ -66,6 +74,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolApprovalPolicy": (
         "agent_teams.tools.runtime.policy",
         "ToolApprovalPolicy",
+    ),
+    "ToolApprovalRequest": (
+        "agent_teams.tools.runtime.models",
+        "ToolApprovalRequest",
     ),
     "ToolContext": ("agent_teams.tools.runtime.context", "ToolContext"),
     "ToolDeps": ("agent_teams.tools.runtime.context", "ToolDeps"),

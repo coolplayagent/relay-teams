@@ -86,6 +86,13 @@ def integration_env(
         fake_llm_v1_base_url=fake_llm_v1_base_url,
     )
     assert_integration_model_config_uses_fake_llm(config_dir=config_dir)
+    demo_screenshot_source = repo_root / "docs" / "agent_teams.png"
+    if demo_screenshot_source.exists():
+        demo_docs_dir = runtime_root / "docs"
+        demo_docs_dir.mkdir(parents=True, exist_ok=True)
+        (demo_docs_dir / "agent_teams.png").write_bytes(
+            demo_screenshot_source.read_bytes()
+        )
 
     original_home_env = _capture_home_env()
     _apply_home_env(runtime_root)
@@ -97,6 +104,7 @@ def integration_env(
     if existing_pythonpath:
         python_paths.append(existing_pythonpath)
     shared_env["PYTHONPATH"] = os.pathsep.join(python_paths)
+    shared_env["AGENT_TEAMS_COMPUTER_RUNTIME"] = "fake"
 
     fake_llm_log_file = runtime_root / "fake-llm.log"
     backend_log_file = runtime_root / "backend.log"

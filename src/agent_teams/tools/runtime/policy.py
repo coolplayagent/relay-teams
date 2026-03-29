@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from agent_teams.computer import ComputerActionRisk
 from pydantic import BaseModel, ConfigDict
+
+from agent_teams.tools.runtime.models import ToolApprovalDecision, ToolApprovalRequest
 
 
 DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
@@ -27,9 +30,38 @@ class ToolApprovalPolicy(BaseModel):
     timeout_seconds: float = 300.0
 
     def requires_approval(self, tool_name: str) -> bool:
+        return self.evaluate(tool_name).required
+
+    def evaluate(
+        self,
+        tool_name: str,
+        request: ToolApprovalRequest | None = None,
+    ) -> ToolApprovalDecision:
         if self.yolo:
-            return False
-        return tool_name in self.approval_required_tools
+            return ToolApprovalDecision(required=False)
+        if request is not None:
+            if request.risk_level in {
+                ComputerActionRisk.GUARDED,
+                ComputerActionRisk.DESTRUCTIVE,
+            }:
+                return ToolApprovalDecision(
+                    required=True,
+                    permission_scope=request.permission_scope,
+                    risk_level=request.risk_level,
+                    target_summary=request.target_summary,
+                    source=request.source,
+                    execution_surface=request.execution_surface,
+                )
+            if request.risk_level == ComputerActionRisk.SAFE:
+                return ToolApprovalDecision(
+                    required=False,
+                    permission_scope=request.permission_scope,
+                    risk_level=request.risk_level,
+                    target_summary=request.target_summary,
+                    source=request.source,
+                    execution_surface=request.execution_surface,
+                )
+        return ToolApprovalDecision(required=tool_name in self.approval_required_tools)
 
     def with_yolo(self, yolo: bool) -> ToolApprovalPolicy:
         if yolo == self.yolo:

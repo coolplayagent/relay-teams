@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 
+from agent_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
@@ -25,6 +26,7 @@ class RoleDefinition(BaseModel):
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default")
     bound_agent_id: str | None = None
+    execution_surface: ExecutionSurface = ExecutionSurface.API
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -38,6 +40,7 @@ class RoleDocumentSummary(BaseModel):
     version: str = Field(min_length=1)
     model_profile: str = Field(min_length=1)
     bound_agent_id: str | None = None
+    execution_surface: ExecutionSurface = ExecutionSurface.API
     source: RoleConfigSource = RoleConfigSource.APP
     deletable: bool = False
 
@@ -55,6 +58,7 @@ class RoleDocumentDraft(BaseModel):
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default", min_length=1)
     bound_agent_id: str | None = None
+    execution_surface: ExecutionSurface = ExecutionSurface.API
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -107,3 +111,6 @@ class RoleConfigOptions(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[RoleSkillOption, ...] = ()
     agents: tuple[RoleAgentOption, ...] = ()
+    execution_surfaces: tuple[ExecutionSurface, ...] = Field(
+        default=tuple(surface for surface in ExecutionSurface)
+    )

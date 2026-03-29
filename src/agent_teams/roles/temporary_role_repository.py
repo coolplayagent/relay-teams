@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.roles.memory_models import MemoryProfile
 from agent_teams.roles.temporary_role_models import (
@@ -40,6 +41,7 @@ class TemporaryRoleRepository:
                     skills_json TEXT NOT NULL,
                     model_profile TEXT NOT NULL,
                     bound_agent_id TEXT,
+                    execution_surface TEXT NOT NULL DEFAULT 'api',
                     memory_profile_json TEXT NOT NULL,
                     system_prompt TEXT NOT NULL,
                     template_role_id TEXT,
@@ -49,6 +51,14 @@ class TemporaryRoleRepository:
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in self._conn.execute("PRAGMA table_info(temporary_roles)")
+            }
+            if "execution_surface" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE temporary_roles ADD COLUMN execution_surface TEXT NOT NULL DEFAULT 'api'"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_temp_roles_run ON temporary_roles(run_id, created_at ASC)"
             )
@@ -71,10 +81,10 @@ class TemporaryRoleRepository:
                 INSERT INTO temporary_roles(
                     run_id, session_id, role_id, source, name, description, version,
                     tools_json, mcp_servers_json, skills_json, model_profile,
-                    bound_agent_id, memory_profile_json, system_prompt, template_role_id,
+                    bound_agent_id, execution_surface, memory_profile_json, system_prompt, template_role_id,
                     created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, role_id)
                 DO UPDATE SET
                     session_id=excluded.session_id,
@@ -87,6 +97,7 @@ class TemporaryRoleRepository:
                     skills_json=excluded.skills_json,
                     model_profile=excluded.model_profile,
                     bound_agent_id=excluded.bound_agent_id,
+                    execution_surface=excluded.execution_surface,
                     memory_profile_json=excluded.memory_profile_json,
                     system_prompt=excluded.system_prompt,
                     template_role_id=excluded.template_role_id,
@@ -105,6 +116,7 @@ class TemporaryRoleRepository:
                     _json_tuple(record.role.skills),
                     record.role.model_profile,
                     record.role.bound_agent_id,
+                    record.role.execution_surface.value,
                     record.role.memory_profile.model_dump_json(),
                     record.role.system_prompt,
                     record.role.template_role_id,
@@ -173,6 +185,9 @@ class TemporaryRoleRepository:
                     str(row["bound_agent_id"])
                     if row["bound_agent_id"] is not None
                     else None
+                ),
+                execution_surface=ExecutionSurface(
+                    str(row["execution_surface"] or ExecutionSurface.API.value)
                 ),
                 memory_profile=_memory_profile_from_json(
                     str(row["memory_profile_json"])

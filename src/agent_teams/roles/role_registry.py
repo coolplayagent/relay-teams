@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from agent_teams.roles.role_models import RoleConfigSource
 from agent_teams.roles.role_models import RoleDefinition
@@ -261,6 +262,9 @@ class RoleLoader:
                 str(parsed["bound_agent_id"]).strip()
                 if "bound_agent_id" in parsed and parsed["bound_agent_id"] is not None
                 else None
+            ),
+            execution_surface=ExecutionSurface(
+                str(parsed.get("execution_surface", ExecutionSurface.API.value))
             ),
             memory_profile=memory_profile,
             system_prompt=body.strip(),

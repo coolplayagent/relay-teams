@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from agent_teams.computer import (
+    ComputerActionRisk,
+    ComputerPermissionScope,
+    ExecutionSurface,
+)
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
@@ -18,6 +23,7 @@ class ToolResultEnvelope(BaseModel):
     ok: bool
     data: JsonValue | None = None
     error: ToolError | None = None
+    meta: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ToolInternalRecord(BaseModel):
@@ -34,3 +40,24 @@ class ToolResultProjection(BaseModel):
 
     visible_data: JsonValue | None = None
     internal_data: JsonValue | None = None
+
+
+class ToolApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    permission_scope: ComputerPermissionScope | None = None
+    risk_level: ComputerActionRisk | None = None
+    target_summary: str = ""
+    source: str = ""
+    execution_surface: ExecutionSurface | None = None
+
+
+class ToolApprovalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    required: bool
+    permission_scope: ComputerPermissionScope | None = None
+    risk_level: ComputerActionRisk | None = None
+    target_summary: str = ""
+    source: str = ""
+    execution_surface: ExecutionSurface | None = None

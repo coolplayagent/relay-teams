@@ -98,6 +98,7 @@ class RuntimeRoleResolver:
             if role.model_profile == "default"
             else role.model_profile,
             bound_agent_id=role.bound_agent_id or template.bound_agent_id,
+            execution_surface=role.execution_surface,
             memory_profile=role.memory_profile,
             system_prompt=role.system_prompt,
             template_role_id=role.template_role_id,

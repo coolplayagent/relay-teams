@@ -17,6 +17,11 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
 from pydantic_ai.messages import UserPromptPart
 
+from agent_teams.computer import (
+    ComputerRuntime,
+    build_computer_tool_payload,
+    describe_external_acp_tool,
+)
 from agent_teams.external_agents.acp_client import (
     AcpProtocolError,
     AcpTransportClient,
@@ -38,6 +43,7 @@ from agent_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
 from agent_teams.logger import get_logger, log_event
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
@@ -145,8 +151,10 @@ class ExternalAcpSessionManager:
         resolve_model_config: (
             Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
         ) = None,
+        media_asset_service: MediaAssetService | None = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
+        computer_runtime: ComputerRuntime | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._config_service = config_service
@@ -154,6 +162,7 @@ class ExternalAcpSessionManager:
         self._message_repo = message_repo
         self._run_event_hub = run_event_hub
         self._workspace_manager = workspace_manager
+        self._media_asset_service = media_asset_service
         self._task_repo = task_repo
         self._shared_store = shared_store
         self._event_bus = event_bus
@@ -176,6 +185,7 @@ class ExternalAcpSessionManager:
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
+        self._computer_runtime = computer_runtime
         self._conversations: dict[str, _ConversationHandle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -832,6 +842,11 @@ class ExternalAcpSessionManager:
             return
         if update_name == "tool_call_update":
             tool_result = _extract_tool_result(update)
+            tool_title = _optional_str(update.get("title")) or "tool"
+            tool_result = _annotate_external_computer_tool_result(
+                tool_name=tool_title,
+                tool_result=tool_result,
+            )
             handle.active_prompt.note_tool_result(tool_result)
             self._run_event_hub.publish(
                 RunEvent(
@@ -845,7 +860,7 @@ class ExternalAcpSessionManager:
                     payload_json=json.dumps(
                         {
                             "tool_call_id": update.get("toolCallId"),
-                            "tool_name": _optional_str(update.get("title")) or "tool",
+                            "tool_name": tool_title,
                             "result": tool_result,
                             "error": _optional_str(update.get("status")) == "failed",
                         },
@@ -909,6 +924,7 @@ class ExternalAcpSessionManager:
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             workspace_manager=self._workspace_manager,
+            media_asset_service=self._media_asset_service,
             role_memory_service=self._role_memory_service,
             tool_registry=self._tool_registry,
             message_repo=self._message_repo,
@@ -923,6 +939,7 @@ class ExternalAcpSessionManager:
             get_notification_service=self._get_notification_service,
             metric_recorder=self._metric_recorder,
             im_tool_service=self._im_tool_service,
+            computer_runtime=self._computer_runtime,
         )
 
     def _resolve_transport_agent_config(
@@ -1390,6 +1407,63 @@ def _extract_tool_result(update: dict[str, JsonValue]) -> JsonValue:
         return cast(JsonValue, json.loads(text))
     except json.JSONDecodeError:
         return {"text": text}
+
+
+def _annotate_external_computer_tool_result(
+    *,
+    tool_name: str,
+    tool_result: JsonValue,
+) -> JsonValue:
+    descriptor = describe_external_acp_tool(tool_name)
+    if descriptor is None:
+        return tool_result
+    if isinstance(tool_result, dict):
+        result_map = cast(dict[str, JsonValue], tool_result)
+        if isinstance(result_map.get("computer"), dict):
+            return tool_result
+        content = result_map.get("content")
+        content_blocks: tuple[dict[str, JsonValue], ...] = ()
+        if isinstance(content, list):
+            content_blocks = tuple(
+                {
+                    str(key): cast(JsonValue, value)
+                    for key, value in item.items()
+                    if isinstance(key, str)
+                }
+                for item in content
+                if isinstance(item, dict)
+            )
+        observation = result_map.get("observation")
+        observation_map = (
+            {
+                str(key): cast(JsonValue, value)
+                for key, value in observation.items()
+                if isinstance(key, str)
+            }
+            if isinstance(observation, dict)
+            else None
+        )
+        payload = build_computer_tool_payload(
+            descriptor=descriptor,
+            text=_extract_tool_result_text(tool_result)
+            or json.dumps(tool_result, ensure_ascii=False, default=str),
+            content=content_blocks,
+            observation=observation_map,
+            data={
+                key: value
+                for key, value in result_map.items()
+                if key not in {"text", "content", "computer", "observation"}
+            }
+            or None,
+        )
+        return cast(JsonValue, payload)
+    return cast(
+        JsonValue,
+        build_computer_tool_payload(
+            descriptor=descriptor,
+            text=json.dumps(tool_result, ensure_ascii=False, default=str),
+        ),
+    )
 
 
 def _extract_tool_result_text(tool_result: JsonValue) -> str | None:
