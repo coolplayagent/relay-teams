@@ -86,17 +86,25 @@ function historicalApprovalLabel(status) {
 }
 
 function formatPendingApprovalResult(approval) {
+    const details = [
+        approval?.source ? `source: ${approval.source}` : '',
+        approval?.risk_level ? `risk: ${approval.risk_level}` : '',
+        approval?.permission_scope ? `scope: ${approval.permission_scope}` : '',
+        approval?.target_summary ? `target: ${approval.target_summary}` : '',
+    ].filter(Boolean).join('\n');
     const status = String(approval?.status || 'requested').toLowerCase();
     if (status === 'deny') {
-        return t('approval.result.denied');
+        return details ? `${t('approval.result.denied')}\n\n${details}` : t('approval.result.denied');
     }
     if (status === 'timeout') {
-        return t('approval.result.timeout');
+        return details ? `${t('approval.result.timeout')}\n\n${details}` : t('approval.result.timeout');
     }
     if (status === 'approve') {
-        return t('approval.result.approved_no_result');
+        return details
+            ? `${t('approval.result.approved_no_result')}\n\n${details}`
+            : t('approval.result.approved_no_result');
     }
-    return t('approval.result.pending');
+    return details ? `${t('approval.result.pending')}\n\n${details}` : t('approval.result.pending');
 }
 
 function extractApprovalMeta(envelope) {

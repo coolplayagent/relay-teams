@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_teams.computer import ExecutionSurface
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles import (
     RoleDocumentDraft,
@@ -58,6 +59,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
             mcp_servers=(),
             skills=(),
             model_profile="default",
+            execution_surface=ExecutionSurface.HYBRID,
             memory_profile=default_memory_profile(),
             system_prompt="Write with more detail.",
         ),
@@ -65,8 +67,10 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
 
     assert saved.role_id == "writer_v2"
     assert saved.file_name == "writer_v2.md"
+    assert saved.execution_surface == ExecutionSurface.HYBRID
     assert not (roles_dir / "writer.md").exists()
     assert (roles_dir / "writer_v2.md").exists()
+    assert "execution_surface: hybrid" in saved.content
     assert captured_registry[-1].get("writer_v2").name == "Writer V2"
 
 
@@ -139,6 +143,7 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
 
     assert record.file_name == "reviewer.md"
     assert record.role_id == "reviewer"
+    assert record.execution_surface == ExecutionSurface.API
     assert "role_id: reviewer" in record.content
     assert "Review carefully." in record.content
 

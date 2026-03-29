@@ -459,6 +459,11 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
         "ok": True,
         "data": {"output": "/tmp", "exit_code": 0},
         "error": None,
+        "meta": {
+            "approval_required": False,
+            "approval_status": "not_required",
+            "duration_ms": 0,
+        },
     }
     assert state is not None
     assert state.result_envelope is not None

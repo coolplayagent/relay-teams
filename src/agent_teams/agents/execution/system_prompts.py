@@ -231,6 +231,11 @@ async def build_runtime_system_prompt_result(
 
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
     workspace_context_sections.append(env_prompt)
+    workspace_context_sections.append(
+        "## Execution Surface\n"
+        f"- Declared surface: {data.role.execution_surface.value}\n"
+        "- Use desktop or browser computer-use tools only when the role and runtime actually expose them."
+    )
     loaded_instructions = await _load_runtime_prompt_instructions(
         instruction_resolver=instruction_resolver,
         working_directory=data.working_directory,

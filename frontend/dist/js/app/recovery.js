@@ -1196,7 +1196,12 @@ function renderApprovalItem(activeRun, approval) {
     const statusText = error || (busy ? t('recovery.applying') : '');
     const actor = humanizeRoleLabel(approval?.role_id || approval?.instance_id || 'Agent');
     const title = approvalTitle(approval);
-    const subtitle = formatMessage('recovery.requested_by', { actor });
+    const subtitle = [
+        formatMessage('recovery.requested_by', { actor }),
+        approval?.source ? `source ${approval.source}` : '',
+        approval?.risk_level ? `risk ${approval.risk_level}` : '',
+        approval?.target_summary ? `target ${approval.target_summary}` : '',
+    ].filter(Boolean).join(' · ');
 
     return `
         <section class="recovery-approval-item">

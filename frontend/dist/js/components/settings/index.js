@@ -398,6 +398,10 @@ function createModal() {
                                                         <label for="role-bound-agent-input">Bound Agent</label>
                                                         <select id="role-bound-agent-input"></select>
                                                     </div>
+                                                    <div class="form-group">
+                                                        <label for="role-execution-surface-input">Execution Surface</label>
+                                                        <select id="role-execution-surface-input"></select>
+                                                    </div>
                                                 </div>
                                             </section>
                                             <section class="role-editor-section">

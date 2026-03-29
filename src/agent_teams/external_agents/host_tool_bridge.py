@@ -27,6 +27,8 @@ from pydantic_ai.usage import RunUsage
 from agent_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
 )
+from agent_teams.computer import ComputerRuntime
+from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.roles.memory_service import RoleMemoryService
@@ -126,8 +128,10 @@ class ExternalAcpHostToolBridge:
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        media_asset_service: MediaAssetService | None = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
+        computer_runtime: ComputerRuntime | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._shared_store = shared_store
@@ -139,6 +143,7 @@ class ExternalAcpHostToolBridge:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._workspace_manager = workspace_manager
+        self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._message_repo = message_repo
@@ -153,6 +158,7 @@ class ExternalAcpHostToolBridge:
         self._get_notification_service = get_notification_service
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
+        self._computer_runtime = computer_runtime
 
         self._catalog_by_name: dict[str, HostedToolDefinition] = {}
         self._catalog_signature = ""
@@ -456,6 +462,8 @@ class ExternalAcpHostToolBridge:
                 conversation_id=resolved_conversation_id,
             ),
             role_memory=self._role_memory_service,
+            media_asset_service=self._media_asset_service,
+            computer_runtime=self._computer_runtime,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

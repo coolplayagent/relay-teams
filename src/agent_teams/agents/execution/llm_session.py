@@ -81,6 +81,13 @@ from agent_teams.agents.execution.coordination_agent_builder import (
 from agent_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
+from agent_teams.computer import (
+    ComputerActionDescriptor,
+    build_computer_tool_payload,
+    describe_builtin_tool,
+    describe_mcp_tool,
+)
+from agent_teams.media import MediaAssetService
 from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from agent_teams.tools.runtime import (
     ToolApprovalManager,
@@ -102,6 +109,7 @@ if TYPE_CHECKING:
     from agent_teams.agents.orchestration.task_execution_service import (
         TaskExecutionService,
     )
+    from agent_teams.computer import ComputerRuntime
     from agent_teams.roles.role_registry import RoleRegistry
     from agent_teams.gateway.im import ImToolService
 
@@ -135,6 +143,41 @@ def _resolve_allowed_tools(
         return allowed_tools
 
 
+def _display_text(value: JsonValue | None) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _object_payload(value: JsonValue | None) -> dict[str, JsonValue] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        str(key): cast(JsonValue, item)
+        for key, item in value.items()
+        if isinstance(key, str)
+    }
+
+
+def _content_payload(value: JsonValue | None) -> tuple[dict[str, JsonValue], ...]:
+    if not isinstance(value, list):
+        return ()
+    items: list[dict[str, JsonValue]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                str(key): cast(JsonValue, element)
+                for key, element in item.items()
+                if isinstance(key, str)
+            }
+        )
+    return tuple(items)
+
+
 class AgentLlmSession:
     def __init__(
         self,
@@ -150,6 +193,7 @@ class AgentLlmSession:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         workspace_manager: WorkspaceManager,
+        media_asset_service: MediaAssetService | None,
         role_memory_service: RoleMemoryService | None,
         subagent_reflection_service: SubagentReflectionService | None,
         conversation_compaction_service: ConversationCompactionService | None,
@@ -171,6 +215,7 @@ class AgentLlmSession:
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
         im_tool_service: "ImToolService | None" = None,
+        computer_runtime: "ComputerRuntime | None" = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -183,6 +228,7 @@ class AgentLlmSession:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._workspace_manager = workspace_manager
+        self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
         self._subagent_reflection_service = subagent_reflection_service
         self._conversation_compaction_service = conversation_compaction_service
@@ -204,6 +250,7 @@ class AgentLlmSession:
         self._metric_recorder = metric_recorder
         self._retry_config = retry_config or LlmRetryConfig()
         self._im_tool_service = im_tool_service
+        self._computer_runtime = computer_runtime
 
     async def run(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
@@ -296,6 +343,8 @@ class AgentLlmSession:
                 conversation_id=resolved_conversation_id,
             ),
             role_memory=self._role_memory_service,
+            media_asset_service=self._media_asset_service,
+            computer_runtime=self._computer_runtime,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,
@@ -1682,6 +1731,80 @@ class AgentLlmSession:
                 last_safe_index = index
         return last_safe_index
 
+    def _maybe_enrich_tool_result_payload(
+        self,
+        *,
+        tool_name: str,
+        result_payload: JsonValue,
+    ) -> JsonValue:
+        descriptor = describe_builtin_tool(tool_name)
+        if descriptor is None:
+            try:
+                server_names = self._mcp_registry.list_names()
+            except AttributeError:
+                server_names = ()
+            for server_name in server_names:
+                if not tool_name.startswith(f"{server_name}_"):
+                    continue
+                descriptor = describe_mcp_tool(
+                    effective_tool_name=tool_name,
+                    server_name=server_name,
+                    source_scope=self._mcp_registry.get_spec(server_name).source,
+                )
+                break
+        if descriptor is None:
+            return result_payload
+        if isinstance(result_payload, dict):
+            payload_map = cast(dict[str, JsonValue], result_payload)
+            if isinstance(payload_map.get("computer"), dict):
+                return result_payload
+            if "ok" in payload_map:
+                next_payload = dict(payload_map)
+                next_payload["data"] = self._computer_payload_from_raw_result(
+                    descriptor=descriptor,
+                    raw_result=payload_map.get("data"),
+                )
+                return cast(JsonValue, next_payload)
+        return self._computer_payload_from_raw_result(
+            descriptor=descriptor,
+            raw_result=result_payload,
+        )
+
+    def _computer_payload_from_raw_result(
+        self,
+        *,
+        descriptor: ComputerActionDescriptor,
+        raw_result: JsonValue | None,
+    ) -> JsonValue:
+        if isinstance(raw_result, dict):
+            raw_map = cast(dict[str, JsonValue], raw_result)
+            if isinstance(raw_map.get("computer"), dict):
+                return raw_result
+            content = _content_payload(raw_map.get("content"))
+            observation = _object_payload(raw_map.get("observation"))
+            data = {
+                key: value
+                for key, value in raw_map.items()
+                if key not in {"text", "content", "computer", "observation"}
+            }
+            return cast(
+                JsonValue,
+                build_computer_tool_payload(
+                    descriptor=descriptor,
+                    text=_display_text(raw_result),
+                    content=content,
+                    observation=observation,
+                    data=data or None,
+                ),
+            )
+        return cast(
+            JsonValue,
+            build_computer_tool_payload(
+                descriptor=descriptor,
+                text=_display_text(raw_result),
+            ),
+        )
+
     def _publish_tool_call_events_from_messages(
         self,
         *,
@@ -1730,6 +1853,10 @@ class AgentLlmSession:
                         sanitize_task_status_payload(
                             self._to_json_compatible(cast(object, part.content))
                         ),
+                    )
+                    result_payload = self._maybe_enrich_tool_result_payload(
+                        tool_name=str(part.tool_name),
+                        result_payload=result_payload,
                     )
                     is_error = False
                     if isinstance(result_payload, dict):

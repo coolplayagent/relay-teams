@@ -33,6 +33,7 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
+from agent_teams.computer import ComputerRuntime
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -80,6 +81,7 @@ def create_provider_factory(
     tool_approval_policy: ToolApprovalPolicy,
     notification_service: NotificationService | None,
     get_task_execution_service: Callable[[], TaskExecutionService],
+    computer_runtime: ComputerRuntime | None = None,
     token_usage_repo: TokenUsageRepository | None = None,
     metric_recorder: MetricRecorder | None = None,
     im_tool_service: ImToolService | None = None,
@@ -134,6 +136,7 @@ def create_provider_factory(
                 run_intent_repo=run_intent_repo,
                 workspace_manager=workspace_manager,
                 media_asset_service=media_asset_service,
+                computer_runtime=computer_runtime,
                 role_memory_service=role_memory_service,
                 subagent_reflection_service=subagent_reflection_service,
                 tool_registry=tool_registry,

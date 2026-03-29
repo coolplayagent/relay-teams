@@ -55,6 +55,7 @@ async def _run_stdio_server() -> None:
         run_runtime_repo=container.run_runtime_repo,
         run_intent_repo=container.run_intent_repo,
         workspace_manager=container.workspace_manager,
+        media_asset_service=container.media_asset_service,
         role_memory_service=container.role_memory_service,
         tool_registry=container.tool_registry,
         message_repo=container.message_repo,
@@ -69,6 +70,7 @@ async def _run_stdio_server() -> None:
         get_notification_service=lambda: container.notification_service,
         metric_recorder=container.metric_recorder,
         im_tool_service=container.im_tool_service,
+        computer_runtime=container.computer_runtime,
     )
 
     async def unavailable_request(

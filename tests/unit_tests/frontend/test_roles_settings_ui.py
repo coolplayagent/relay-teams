@@ -31,6 +31,7 @@ console.log(JSON.stringify({
     selectedRoleId: document.getElementById("role-id-input").value,
     selectedRoleName: document.getElementById("role-name-input").value,
     selectedRoleDescription: document.getElementById("role-description-input").value,
+    selectedExecutionSurface: document.getElementById("role-execution-surface-input").value,
     boundAgentValue: document.getElementById("role-bound-agent-input").value,
     boundAgentHtml: document.getElementById("role-bound-agent-input").innerHTML,
     memoryEnabled: document.getElementById("role-memory-enabled-input").value,
@@ -52,6 +53,7 @@ console.log(JSON.stringify({
     assert payload["selectedRoleId"] == "reviewer"
     assert payload["selectedRoleName"] == "Reviewer"
     assert payload["selectedRoleDescription"] == "Reviews delivered work."
+    assert payload["selectedExecutionSurface"] == "browser"
     assert payload["boundAgentValue"] == ""
     assert 'value="" selected>Local runtime</option>' in cast(
         str, payload["boundAgentHtml"]
@@ -95,6 +97,7 @@ toolOptions[1].checked = true;
 toolOptions[1].onchange();
 
 document.getElementById("role-model-profile-input").value = "editor";
+document.getElementById("role-execution-surface-input").value = "desktop";
 document.getElementById("role-bound-agent-input").value = "codex_local";
 document.getElementById("role-description-input").value = "Drafts user-facing content with structure.";
 document.getElementById("role-memory-enabled-input").value = "false";
@@ -109,6 +112,7 @@ document.getElementById("role-name-input").value = "New Role";
 document.getElementById("role-description-input").value = "Starts from a blank role.";
 document.getElementById("role-version-input").value = "1.0.0";
 document.getElementById("role-model-profile-input").value = "default";
+document.getElementById("role-execution-surface-input").value = "hybrid";
 document.getElementById("role-system-prompt-input").value = "Start from a blank role.";
 
 const newToolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
@@ -142,6 +146,7 @@ console.log(JSON.stringify({
     )
     assert validate_payload["tools"] == ["read_file", "write_file"]
     assert validate_payload["bound_agent_id"] == "codex_local"
+    assert validate_payload["execution_surface"] == "desktop"
     assert validate_payload["memory_profile"] == {
         "enabled": False,
     }
@@ -153,6 +158,7 @@ console.log(JSON.stringify({
     assert second_saved_payload["role_id"] == "new_role"
     assert second_saved_payload["description"] == "Starts from a blank role."
     assert second_saved_payload["bound_agent_id"] is None
+    assert second_saved_payload["execution_surface"] == "hybrid"
     assert second_saved_payload["tools"] == ["read_file"]
     assert second_saved_payload["memory_profile"] == {
         "enabled": True,
@@ -640,6 +646,7 @@ const defaultRoleRecords = {
         description: "Drafts user-facing content.",
         version: "1.0.0",
         bound_agent_id: "codex_local",
+        execution_surface: "desktop",
         tools: ["read_file"],
         mcp_servers: [],
         skills: [],
@@ -657,6 +664,7 @@ const defaultRoleRecords = {
         description: "Reviews delivered work.",
         version: "1.0.0",
         bound_agent_id: null,
+        execution_surface: "browser",
         tools: ["read_file", "write_file"],
         mcp_servers: ["docs"],
         skills: ["builtin:diff"],
@@ -674,6 +682,7 @@ const defaultRoleRecords = {
         description: "Handles normal-mode runs directly.",
         version: "1.0.0",
         bound_agent_id: null,
+        execution_surface: "api",
         tools: ["read_file"],
         mcp_servers: [],
         skills: [],
@@ -691,6 +700,7 @@ const defaultRoleRecords = {
         description: "Coordinates delegated work.",
         version: "1.0.0",
         bound_agent_id: null,
+        execution_surface: "api",
         tools: ["create_tasks", "dispatch_task"],
         mcp_servers: [],
         skills: [],
@@ -716,6 +726,7 @@ export async function fetchRoleConfigs() {
         version: record.version,
         bound_agent_id: record.bound_agent_id,
         model_profile: record.model_profile,
+        execution_surface: record.execution_surface,
         deletable: record.deletable === true,
     }));
 }
@@ -738,6 +749,7 @@ export async function fetchRoleConfigOptions() {
             { agent_id: "codex_local", name: "Codex Local", transport: "stdio" },
             { agent_id: "claude_http", name: "Claude HTTP", transport: "streamable_http" },
         ],
+        execution_surfaces: ["api", "browser", "desktop", "hybrid"],
     };
     return {
         ...defaults,
@@ -1075,6 +1087,7 @@ function createElements() {{
         ["role-description-input", createElement("block")],
         ["role-version-input", createElement("block")],
         ["role-model-profile-input", createElement("block")],
+        ["role-execution-surface-input", createElement("block")],
         ["role-bound-agent-input", createElement("block")],
         ["role-tools-picker", createElement("block")],
         ["role-mcp-picker", createElement("block")],

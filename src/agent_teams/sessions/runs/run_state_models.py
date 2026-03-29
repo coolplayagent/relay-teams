@@ -40,6 +40,11 @@ class PendingToolApprovalState(BaseModel):
     requested_at: str = ""
     status: str = "requested"
     feedback: str = ""
+    risk_level: str = ""
+    permission_scope: str = ""
+    target_summary: str = ""
+    source: str = ""
+    execution_surface: str = ""
 
 
 class PausedSubagentState(BaseModel):
@@ -197,6 +202,11 @@ def apply_run_event_to_state(
                 requested_at=event.occurred_at.isoformat(),
                 status="requested",
                 feedback="",
+                risk_level=_payload_str(payload, "risk_level"),
+                permission_scope=_payload_str(payload, "permission_scope"),
+                target_summary=_payload_str(payload, "target_summary"),
+                source=_payload_str(payload, "source"),
+                execution_surface=_payload_str(payload, "execution_surface"),
             )
         status = RunStateStatus.PAUSED
         phase = RunStatePhase.AWAITING_TOOL_APPROVAL

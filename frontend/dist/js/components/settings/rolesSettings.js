@@ -37,6 +37,7 @@ let currentSelections = {
     skills: [],
 };
 let currentBoundAgentId = '';
+let currentExecutionSurface = 'api';
 let languageBound = false;
 
 export function bindRoleSettingsHandlers() {
@@ -105,6 +106,7 @@ function normalizeRoleSummary(role) {
         version: String(role?.version || '').trim(),
         model_profile: String(role?.model_profile || 'default').trim() || 'default',
         bound_agent_id: role?.bound_agent_id == null ? null : String(role.bound_agent_id).trim(),
+        execution_surface: String(role?.execution_surface || 'api').trim() || 'api',
         source: String(role?.source || '').trim(),
         deletable: role?.deletable === true,
     };
@@ -117,6 +119,9 @@ function normalizeRoleConfigOptions(options) {
         tools: normalizeOptionNames(options?.tools),
         mcp_servers: normalizeOptionNames(options?.mcp_servers),
         skills: normalizeSkillOptions(options?.skills),
+        execution_surfaces: normalizeOptionNames(
+            options?.execution_surfaces || ['api', 'browser', 'desktop', 'hybrid'],
+        ),
         agents: Array.isArray(options?.agents) ? options.agents.map(agent => ({
             agent_id: String(agent?.agent_id || '').trim(),
             name: String(agent?.name || '').trim(),
@@ -289,6 +294,7 @@ function renderRolesList() {
                     <div class="role-record-meta">
                         <span>v${escapeHtml(role.version)}</span>
                         <span>${escapeHtml(role.model_profile)}</span>
+                        <span>${escapeHtml(role.execution_surface || 'api')}</span>
                         ${renderRoleBoundAgentMeta(role.bound_agent_id)}
                         ${renderRoleUsageMeta(role.role_id)}
                     </div>
@@ -354,6 +360,7 @@ function applyRoleRecord(record) {
 
     currentMemoryProfile = normalizeMemoryProfile(record.memory_profile);
     currentBoundAgentId = String(record.bound_agent_id || '').trim();
+    currentExecutionSurface = String(record.execution_surface || 'api').trim() || 'api';
     currentSelections = {
         tools: normalizeOptionNames(record.tools),
         mcp_servers: normalizeOptionNames(record.mcp_servers),
@@ -366,6 +373,7 @@ function applyRoleRecord(record) {
     setInputValue('role-version-input', record.version || '');
     renderModelProfileSelect(record.model_profile || 'default');
     renderBoundAgentSelect(currentBoundAgentId);
+    renderExecutionSurfaceSelect(currentExecutionSurface);
     renderRoleOptionPickers();
     renderMemoryProfileSelects(currentMemoryProfile);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
@@ -518,6 +526,26 @@ function renderBoundAgentSelect(selectedAgentId) {
     };
 }
 
+function renderExecutionSurfaceSelect(selectedSurface) {
+    const selectEl = document.getElementById('role-execution-surface-input');
+    if (!selectEl) return;
+
+    const safeSelectedSurface = String(selectedSurface || '').trim() || 'api';
+    const availableSurfaces = Array.isArray(roleConfigOptions.execution_surfaces)
+        ? roleConfigOptions.execution_surfaces
+        : ['api', 'browser', 'desktop', 'hybrid'];
+    const options = availableSurfaces.includes(safeSelectedSurface)
+        ? availableSurfaces
+        : [...availableSurfaces, safeSelectedSurface];
+    selectEl.innerHTML = options.map(surface => {
+        const selected = surface === safeSelectedSurface ? ' selected' : '';
+        return `<option value="${escapeHtml(surface)}"${selected}>${escapeHtml(surface)}</option>`;
+    }).join('');
+    selectEl.onchange = event => {
+        currentExecutionSurface = String(event?.target?.value || '').trim() || 'api';
+    };
+}
+
 function renderSkillsShellAdvisory() {
     const container = document.getElementById('role-skills-picker');
     if (!container) return;
@@ -649,6 +677,7 @@ function handleAddRole() {
         skills: [],
         model_profile: 'default',
         bound_agent_id: null,
+        execution_surface: 'api',
         memory_profile: { enabled: true },
         system_prompt: '',
         file_name: '',
@@ -757,6 +786,8 @@ function buildDraftFromForm() {
     const selectedModelProfile = resolveSelectedModelProfile();
     const selectedBoundAgentId = String(getInputValue('role-bound-agent-input')).trim();
     currentBoundAgentId = selectedBoundAgentId;
+    const selectedExecutionSurface = String(getInputValue('role-execution-surface-input')).trim() || 'api';
+    currentExecutionSurface = selectedExecutionSurface;
     const memoryProfile = {
         ...(currentMemoryProfile || {}),
         enabled: getBooleanSelectValue('role-memory-enabled-input', true),
@@ -770,6 +801,7 @@ function buildDraftFromForm() {
         version: String(getInputValue('role-version-input')).trim(),
         model_profile: selectedModelProfile,
         bound_agent_id: selectedBoundAgentId || null,
+        execution_surface: selectedExecutionSurface,
         tools: [...currentSelections.tools],
         mcp_servers: [...currentSelections.mcp_servers],
         skills: [...currentSelections.skills],
@@ -781,6 +813,9 @@ function buildDraftFromForm() {
 async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}) {
     const selectedModelProfile = resolveSelectedModelProfile();
     const selectedBoundAgentId = currentBoundAgentId || String(getInputValue('role-bound-agent-input')).trim();
+    const selectedExecutionSurface = String(getInputValue('role-execution-surface-input')).trim()
+        || currentExecutionSurface
+        || 'api';
     const [optionsResult, modelProfilesResult] = await Promise.allSettled([
         fetchRoleConfigOptions(),
         fetchModelProfiles(),
@@ -813,6 +848,8 @@ async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}
     }
     renderModelProfileSelect(selectedModelProfile);
     renderBoundAgentSelect(selectedBoundAgentId);
+    currentExecutionSurface = selectedExecutionSurface;
+    renderExecutionSurfaceSelect(selectedExecutionSurface);
     renderRoleOptionPickers();
 }
 
