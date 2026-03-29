@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_teams.tools.registry import (
+        ToolAvailabilityRecord,
         ToolImplicitResolver,
         ToolRegister,
         ToolRegistry,
@@ -29,6 +30,7 @@ __all__ = [
     "ToolApprovalAction",
     "ToolApprovalManager",
     "ToolApprovalPolicy",
+    "ToolAvailabilityRecord",
     "ToolContext",
     "ToolDeps",
     "ToolError",
@@ -55,6 +57,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ToolApprovalPolicy": (
         "agent_teams.tools.runtime",
         "ToolApprovalPolicy",
+    ),
+    "ToolAvailabilityRecord": (
+        "agent_teams.tools.registry",
+        "ToolAvailabilityRecord",
     ),
     "ToolContext": ("agent_teams.tools.runtime", "ToolContext"),
     "ToolDeps": ("agent_teams.tools.runtime", "ToolDeps"),

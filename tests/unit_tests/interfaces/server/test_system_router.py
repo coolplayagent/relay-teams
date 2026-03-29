@@ -369,11 +369,20 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     assert payload["python_executable"]
     assert payload["package_root"]
     assert payload["config_dir"]
+    assert payload["builtin_roles_dir"]
     assert payload["builtin_skills_dir"]
+    role_registry_sanity = payload["role_registry_sanity"]
+    assert role_registry_sanity["builtin_role_count"] >= 1
+    assert role_registry_sanity["has_builtin_coordinator"] is True
+    assert role_registry_sanity["has_builtin_main_agent"] is True
     skill_registry_sanity = payload["skill_registry_sanity"]
     assert skill_registry_sanity["builtin_skill_count"] >= 1
     assert "builtin:deepresearch" in skill_registry_sanity["builtin_skill_refs"]
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
+    tool_registry_sanity = payload["tool_registry_sanity"]
+    assert tool_registry_sanity["available_tool_count"] >= 1
+    assert "write_tmp" in tool_registry_sanity["available_tool_names"]
+    assert tool_registry_sanity["has_write_tmp"] is True
 
 
 def test_get_notification_config() -> None:

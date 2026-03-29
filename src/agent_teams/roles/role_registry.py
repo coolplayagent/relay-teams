@@ -48,6 +48,10 @@ def is_reserved_system_role_definition(role: RoleDefinition) -> bool:
     return is_coordinator_role_definition(role) or is_main_agent_role_definition(role)
 
 
+class SystemRolesUnavailableError(RuntimeError):
+    pass
+
+
 class RoleRegistry:
     def __init__(self) -> None:
         self._roles: list[RoleDefinition] = []
@@ -167,11 +171,11 @@ class RoleLoader:
     )
     OPTIONAL_FIELDS = ("model_profile",)
 
-    def load_all(self, roles_dir: Path) -> RoleRegistry:
+    def load_all(self, roles_dir: Path, *, allow_empty: bool = False) -> RoleRegistry:
         registry = RoleRegistry()
         for md_file in sorted(roles_dir.glob("*.md")):
             registry.register(self.load_one(md_file))
-        if not registry.list_roles():
+        if not allow_empty and not registry.list_roles():
             raise ValueError(f"No role files found in {roles_dir}")
         return registry
 
@@ -180,13 +184,14 @@ class RoleLoader:
         *,
         builtin_roles_dir: Path,
         app_roles_dir: Path,
+        allow_empty: bool = False,
     ) -> RoleRegistry:
         registry = RoleRegistry()
         for md_file in sorted(builtin_roles_dir.glob("*.md")):
             registry.register(self.load_one(md_file))
         for md_file in sorted(app_roles_dir.glob("*.md")):
             registry.register(self.load_one(md_file))
-        if not registry.list_roles():
+        if not allow_empty and not registry.list_roles():
             raise ValueError(
                 f"No role files found in {builtin_roles_dir} or {app_roles_dir}"
             )
@@ -287,3 +292,19 @@ class RoleLoader:
         front_matter = "".join(lines[1:end_index])
         body = "".join(lines[end_index + 1 :])
         return front_matter, body
+
+
+def ensure_required_system_roles(registry: RoleRegistry) -> None:
+    errors: list[str] = []
+    try:
+        registry.get_coordinator_role_id()
+    except (KeyError, ValueError) as exc:
+        errors.append(f"coordinator: {exc}")
+    try:
+        registry.get_main_agent_role_id()
+    except (KeyError, ValueError) as exc:
+        errors.append(f"main_agent: {exc}")
+    if errors:
+        raise SystemRolesUnavailableError(
+            "Required system roles are unavailable: " + "; ".join(errors)
+        )

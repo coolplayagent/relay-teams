@@ -4,17 +4,19 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 
+from agent_teams.paths import get_project_root_or_none
+
 
 def get_builtin_root() -> Path:
     return Path(__file__).resolve().parent
 
 
 def get_builtin_roles_dir() -> Path:
-    return get_builtin_root() / "roles"
+    return _resolve_builtin_dir("roles", "*.md")
 
 
 def get_builtin_skills_dir() -> Path:
-    return get_builtin_root() / "skills"
+    return _resolve_builtin_dir("skills", "*/SKILL.md")
 
 
 def get_builtin_logger_ini_path() -> Path:
@@ -72,3 +74,18 @@ def copy_builtin_file_if_missing(*, source_path: Path, target_path: Path) -> Non
         return
     resolved_target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_path, resolved_target_path)
+
+
+def _resolve_builtin_dir(directory_name: str, expected_pattern: str) -> Path:
+    builtin_dir = get_builtin_root() / directory_name
+    if any(builtin_dir.glob(expected_pattern)):
+        return builtin_dir
+
+    project_root = get_project_root_or_none(start_dir=Path.cwd())
+    if project_root is None:
+        return builtin_dir
+
+    fallback_dir = project_root / "src" / "agent_teams" / "builtin" / directory_name
+    if any(fallback_dir.glob(expected_pattern)):
+        return fallback_dir
+    return builtin_dir

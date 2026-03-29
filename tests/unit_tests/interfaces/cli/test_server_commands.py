@@ -28,12 +28,14 @@ def _runtime_identity(
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
     package_root: str = "D:/workspace/agent_teams/src/agent_teams",
     config_dir: str = "C:/Users/test/.agent-teams",
+    builtin_roles_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/roles",
     builtin_skills_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
 ) -> ServerRuntimeIdentity:
     return ServerRuntimeIdentity(
         python_executable=python_executable,
         package_root=package_root,
         config_dir=config_dir,
+        builtin_roles_dir=builtin_roles_dir,
         builtin_skills_dir=builtin_skills_dir,
     )
 
@@ -43,6 +45,7 @@ def _health_payload(
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
     package_root: str = "D:/workspace/agent_teams/src/agent_teams",
     config_dir: str = "C:/Users/test/.agent-teams",
+    builtin_roles_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/roles",
     builtin_skills_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
 ) -> ServerHealthPayload:
     return ServerHealthPayload(
@@ -51,6 +54,7 @@ def _health_payload(
         python_executable=python_executable,
         package_root=package_root,
         config_dir=config_dir,
+        builtin_roles_dir=builtin_roles_dir,
         builtin_skills_dir=builtin_skills_dir,
         skill_registry_sanity=SkillRegistrySanity(
             builtin_skill_count=4,
@@ -405,3 +409,36 @@ def test_start_fails_for_mismatched_live_server_runtime(monkeypatch) -> None:
         assert "Stop the conflicting server first" in str(exc)
     else:
         raise AssertionError("start should reject mismatched live runtimes")
+
+
+def test_root_cli_autostart_rejects_mismatched_local_runtime(monkeypatch) -> None:
+    started: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(
+        cli_app,
+        "_get_server_health",
+        lambda base_url: _health_payload(
+            python_executable="C:/Python312/python.exe",
+            package_root="C:/Users/test/AppData/Local/Programs/Python/Python312/Lib/site-packages/agent_teams",
+        ),
+    )
+    monkeypatch.setattr(
+        cli_app,
+        "build_server_runtime_identity",
+        lambda *, config_dir=None: _runtime_identity(),
+    )
+    monkeypatch.setattr(
+        cli_app,
+        "_start_server_daemon",
+        lambda host, port: started.append((host, port)),
+    )
+
+    try:
+        cli_app._auto_start_if_needed("http://127.0.0.1:8000", autostart=True)
+    except RuntimeError as exc:
+        assert "runtime mismatch" in str(exc)
+        assert "Stop the conflicting server first" in str(exc)
+    else:
+        raise AssertionError("root CLI should reject mismatched local runtimes")
+
+    assert started == []

@@ -22,10 +22,18 @@ def test_health_endpoint(api_client: httpx.Client) -> None:
     assert body["python_executable"]
     assert body["package_root"]
     assert body["config_dir"]
+    assert body["builtin_roles_dir"]
     assert body["builtin_skills_dir"]
+    role_registry_sanity = body["role_registry_sanity"]
+    assert role_registry_sanity["builtin_role_count"] >= 1
+    assert role_registry_sanity["has_builtin_coordinator"] is True
+    assert role_registry_sanity["has_builtin_main_agent"] is True
     skill_registry_sanity = body["skill_registry_sanity"]
     assert skill_registry_sanity["builtin_skill_count"] >= 1
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
+    tool_registry_sanity = body["tool_registry_sanity"]
+    assert tool_registry_sanity["available_tool_count"] >= 1
+    assert tool_registry_sanity["has_write_tmp"] is True
 
 
 def test_manual_run_stream_reaches_terminal(api_client: httpx.Client) -> None:

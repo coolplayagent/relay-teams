@@ -19,6 +19,7 @@ from agent_teams.roles.role_models import (
 from agent_teams.roles.role_registry import RoleLoader, RoleRegistry
 from agent_teams.roles.role_registry import (
     COORDINATOR_REQUIRED_TOOLS,
+    ensure_required_system_roles,
     is_coordinator_role_definition,
     is_reserved_system_role_definition,
 )
@@ -52,19 +53,24 @@ class RoleSettingsService:
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
 
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
-        role_sources = self._load_role_sources()
         builtin_role_ids = self._load_builtin_role_ids()
-        documents = [
-            self._summary_from_definition(
-                definition,
-                source=role_sources.get(definition.role_id, RoleConfigSource.APP),
-                builtin_role_ids=builtin_role_ids,
-            )
-            for definition in self._load_registry(
+        documents: list[RoleDocumentSummary] = []
+        for role_id, (role_path, source) in self._loader.build_effective_role_map(
+            builtin_roles_dir=self._builtin_roles_dir,
+            app_roles_dir=self._roles_dir,
+        ).items():
+            definition = self._validate_definition(
+                self._loader.load_one(role_path),
                 strict_capability_validation=False,
-                consumer_prefix="roles.settings_service.list_role_documents",
-            ).list_roles()
-        ]
+                consumer=f"roles.settings_service.list_role_documents.role:{role_id}",
+            )
+            documents.append(
+                self._summary_from_definition(
+                    definition,
+                    source=source,
+                    builtin_role_ids=builtin_role_ids,
+                )
+            )
         return tuple(documents)
 
     def get_role_document(self, role_id: str) -> RoleDocumentRecord:
@@ -176,6 +182,7 @@ class RoleSettingsService:
             strict_capability_validation=True,
             consumer_prefix="roles.settings_service.validate_all_roles",
         )
+        ensure_required_system_roles(registry)
         return {
             "valid": True,
             "loaded_count": len(registry.list_roles()),
@@ -283,6 +290,7 @@ class RoleSettingsService:
         registry = self._loader.load_builtin_and_app(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
+            allow_empty=True,
         )
         sanitized_registry = RoleRegistry()
         for definition in registry.list_roles():
