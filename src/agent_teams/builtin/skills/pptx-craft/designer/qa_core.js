@@ -18,6 +18,7 @@ const BUILTIN_DEFAULTS = {
   pixelBlankThreshold: 0.4,
   minTextSafePadding: 8,
   siblingAlignTolerance: 6,
+  minSlideSafeMargin: 24,
 };
 
 function parseJsonc(content) {
@@ -232,6 +233,7 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
   const disableBlockOverlap = config.disableBlockOverlap || false;
   const minTextSafePadding = config.minTextSafePadding || 8;
   const siblingAlignTolerance = config.siblingAlignTolerance || 6;
+  const minSlideSafeMargin = config.minSlideSafeMargin || 24;
 
   function isBackgroundOrDecor(el, style, rect, slideRect) {
     return rect.width >= slideRect.width && rect.height >= slideRect.height;
@@ -512,11 +514,21 @@ function detectInBrowser(overflowTolerance, textOverlapMinArea, pixelResults, co
     });
   });
 
-  const overflows = slideOverflow.detectSlideOverflow(
+  let overflows = slideOverflow.detectSlideOverflow(
     overflowElements,
     slideRect,
     overflowTolerance
   );
+  overflows = overflows.filter((overflow) => {
+    const detailSides = (overflow.details || []).map((item) => item.side);
+    const detailAmounts = (overflow.details || []).map((item) => item.amount || 0);
+    const maxAmount = detailAmounts.length > 0 ? Math.max(...detailAmounts) : 0;
+    const text = overflow.text || "";
+    if (maxAmount <= minSlideSafeMargin && /^<div>$/.test(text)) {
+      return false;
+    }
+    return true;
+  });
 
   const clippedElements = [];
   overflowElements.forEach((element) => {

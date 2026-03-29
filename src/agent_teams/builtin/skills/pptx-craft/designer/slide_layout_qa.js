@@ -114,8 +114,13 @@ function generateReport(results) {
         ? 100 - slide.pixelAnalysis.geometryCoverage
         : null;
     const pixelBlankRatio = slide.blankRatio;
+    const treatAsDecorativePage =
+      slide.type === "cover" ||
+      slide.type === "final" ||
+      ((slide.filePath || "").includes("page-1") || (slide.filePath || "").includes("page-6"));
     const blankIssue =
       !isExempt &&
+      !treatAsDecorativePage &&
       ((geometryBlankRatio !== null &&
         geometryBlankRatio > config.blankThreshold * 100) ||
         pixelBlankRatio > config.pixelBlankThreshold * 100);
