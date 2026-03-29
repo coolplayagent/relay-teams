@@ -258,15 +258,16 @@ function generateReport(results) {
     });
 
     (slide.recursiveBlanks || []).forEach((blank) => {
+      const isBottomBandPattern = /bottom-card|summary|tail|footer/i.test(blank.selector || "");
       pushIssue(
         jsonResult,
         failedPage,
         {
           type: "recursive_blank",
-          severity: "warning",
+          severity: isBottomBandPattern ? "error" : "warning",
           detail: `${blank.selector} blank ratio ${blank.blankRatio}%`,
         },
-        "warning"
+        isBottomBandPattern ? "error" : "warning"
       );
     });
 
