@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import sqlite3
 from typing import cast
 
 import pytest
@@ -201,6 +202,51 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
         getattr(run_manager.create_calls[0], "intent")
         == "触发定时任务 “one-shot-report”：\nRun once."
     )
+
+
+def test_process_due_projects_skips_invalid_persisted_projects(
+    tmp_path: Path,
+) -> None:
+    service, run_manager, _ = _build_service(tmp_path)
+    run_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="healthy-one-shot",
+            workspace_id="default",
+            prompt="Run once.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            run_at=run_at,
+            timezone="UTC",
+        )
+    )
+    invalid = service.create_project(
+        AutomationProjectCreateInput(
+            name="invalid-one-shot",
+            workspace_id="default",
+            prompt="This row will be corrupted.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            run_at=run_at,
+            timezone="UTC",
+        )
+    )
+    connection = sqlite3.connect(tmp_path / "automation.db")
+    connection.execute(
+        """
+        UPDATE automation_projects
+        SET workspace_id=?
+        WHERE automation_project_id=?
+        """,
+        ("None", invalid.automation_project_id),
+    )
+    connection.commit()
+    connection.close()
+
+    processed = service.process_due_projects(now=run_at + timedelta(minutes=1))
+
+    assert processed == (created.automation_project_id,)
+    assert run_manager.started_run_ids == ["run-1"]
+    with pytest.raises(KeyError):
+        service.get_project(invalid.automation_project_id)
 
 
 def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> None:
