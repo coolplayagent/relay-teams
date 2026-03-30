@@ -4,9 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import Future as ThreadFuture
-from json import dumps
+from json import dumps, loads
 from typing import Awaitable, Callable, TypeVar, cast
 
+from pydantic import JsonValue
 from pydantic_ai.messages import (
     BinaryContent,
     FilePart,
@@ -60,6 +61,7 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPausePayload
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -79,6 +81,16 @@ from agent_teams.workspace import build_conversation_id
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
+AUTO_RECOVERY_ERROR_CODE = "model_tool_args_invalid_json"
+AUTO_RECOVERY_REASON = "auto_recovery_invalid_tool_args_json"
+AUTO_RECOVERY_MAX_ATTEMPTS = 1
+AUTO_RECOVERY_PROMPT = (
+    "The previous tool call arguments were not valid JSON. "
+    "Do not repeat already successful tool calls. "
+    "Continue from the latest successful tool results already in the conversation. "
+    "If you call a tool again, output strict JSON only, with double-quoted property names "
+    "and arguments that exactly match the tool schema."
+)
 
 
 class RunManager:
@@ -136,6 +148,7 @@ class RunManager:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
+        self._auto_recovery_attempts: dict[str, int] = {}
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
     def replace_runtime_dependencies(
@@ -236,7 +249,13 @@ class RunManager:
                 result = (
                     await self._run_media_generation(run_id=run_id, intent=intent)
                     if intent.run_kind != RunKind.CONVERSATION
-                    else await self._meta_agent.handle_intent(intent, trace_id=run_id)
+                    else await self._run_with_auto_recovery(
+                        run_id=run_id,
+                        session_id=session_id,
+                        runner=lambda: self._meta_agent.handle_intent(
+                            intent, trace_id=run_id
+                        ),
+                    )
                 )
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
@@ -516,26 +535,10 @@ class RunManager:
         self._running_run_ids.add(run_id)
         self._resume_requested_runs.discard(run_id)
         self._injection_manager.activate(run_id)
-        if self._run_runtime_repo is not None:
-            self._run_runtime_repo.update(
-                run_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=(
-                    runtime.phase
-                    if runtime.phase != RunRuntimePhase.TERMINAL
-                    else RunRuntimePhase.COORDINATOR_RUNNING
-                ),
-                last_error=None,
-            )
-        self._run_event_hub.publish(
-            RunEvent(
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                task_id=None,
-                event_type=RunEventType.RUN_RESUMED,
-                payload_json=dumps({"session_id": session_id, "reason": "resume"}),
-            )
+        resume_payload = self._transition_run_to_resumed(
+            run_id=run_id,
+            session_id=session_id,
+            reason="resume",
         )
         task = asyncio.create_task(
             self._worker(
@@ -555,6 +558,7 @@ class RunManager:
                 logging.INFO,
                 event="run.resumed",
                 message="Recoverable run resumed",
+                payload=resume_payload,
             )
 
     async def _resume_existing_run(self, run_id: str) -> RunResult:
@@ -571,6 +575,47 @@ class RunManager:
             )
             return await self._meta_agent.handle_intent(intent, trace_id=run_id)
         return await self._meta_agent.resume_run(trace_id=run_id)
+
+    async def _run_with_auto_recovery(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        runner: Callable[[], Awaitable[RunResult]],
+    ) -> RunResult:
+        async def _resume_runner() -> RunResult:
+            return await self._resume_existing_run(run_id)
+
+        current_runner = runner
+        while True:
+            try:
+                return await current_runner()
+            except RecoverableRunPauseError as exc:
+                attempt = self._next_auto_recovery_attempt(exc.payload)
+                if attempt is None:
+                    raise
+                self._record_auto_recovery_attempt(run_id=run_id, attempt=attempt)
+                self._queue_auto_recovery_prompt(payload=exc.payload)
+                resume_payload = self._transition_run_to_resumed(
+                    run_id=run_id,
+                    session_id=session_id,
+                    reason=AUTO_RECOVERY_REASON,
+                    attempt=attempt,
+                    max_attempts=AUTO_RECOVERY_MAX_ATTEMPTS,
+                )
+                with bind_trace_context(
+                    trace_id=run_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event="run.auto_recovery.resumed",
+                        message="Run resumed automatically after invalid tool args JSON",
+                        payload=resume_payload,
+                    )
+                current_runner = _resume_runner
 
     async def _run_media_generation(
         self,
@@ -808,7 +853,11 @@ class RunManager:
                 message="Run worker started",
             )
         try:
-            result = await runner()
+            result = await self._run_with_auto_recovery(
+                run_id=run_id,
+                session_id=session_id,
+                runner=runner,
+            )
             terminal_status = (
                 RunRuntimeStatus.COMPLETED
                 if result.status == "completed"
@@ -894,6 +943,7 @@ class RunManager:
             )
         except RecoverableRunPauseError as exc:
             payload = exc.payload
+            paused_payload = self._build_run_paused_payload(payload)
             self._safe_runtime_update(
                 run_id,
                 root_task_id=payload.task_id,
@@ -914,7 +964,7 @@ class RunManager:
                     instance_id=payload.instance_id,
                     role_id=payload.role_id,
                     event_type=RunEventType.RUN_PAUSED,
-                    payload_json=payload.model_dump_json(),
+                    payload_json=dumps(paused_payload),
                 ),
                 failure_event="run.event.publish_failed",
             )
@@ -926,7 +976,7 @@ class RunManager:
                     logging.WARNING,
                     event="run.paused",
                     message="Run paused awaiting recovery",
-                    payload=payload.model_dump(mode="json"),
+                    payload=paused_payload,
                 )
         except asyncio.CancelledError:
             self._safe_runtime_update(
@@ -1015,6 +1065,7 @@ class RunManager:
         if runtime is not None and runtime.is_recoverable:
             self._remember_active_run(session_id, run_id)
             return
+        _ = self._auto_recovery_attempts.pop(run_id, None)
         if self._runtime_role_resolver is not None:
             self._runtime_role_resolver.cleanup_run(run_id=run_id)
         self._drop_active_run(session_id, run_id)
@@ -1413,6 +1464,68 @@ class RunManager:
                 return record
         raise KeyError(f"No root task found for run_id={run_id}")
 
+    def _append_followup_to_instance(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        task_id: str,
+        content: str,
+        enqueue: bool,
+        source: InjectionSource,
+    ) -> bool:
+        try:
+            record = self._require_agent_repo().get_instance(instance_id)
+            if record.run_id != run_id:
+                raise KeyError(
+                    f"Instance {instance_id} does not belong to run {run_id}"
+                )
+            appended = self._require_message_repo().append_user_prompt_if_missing(
+                session_id=record.session_id,
+                workspace_id=record.workspace_id,
+                conversation_id=record.conversation_id,
+                agent_role_id=record.role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=run_id,
+                content=content,
+            )
+            if enqueue and self._injection_manager.is_active(run_id):
+                created = self._injection_manager.enqueue(
+                    run_id=run_id,
+                    recipient_instance_id=instance_id,
+                    source=source,
+                    content=content,
+                )
+                self._publish_injection_event(
+                    run_id=run_id,
+                    record=record,
+                    payload=created.model_dump_json(),
+                )
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=record.session_id,
+                instance_id=instance_id,
+                role_id=record.role_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="run.followup.attached",
+                    message="Follow-up appended to agent conversation",
+                    payload={
+                        "enqueue": enqueue,
+                        "source": source.value,
+                        "length": len(content),
+                        "task_id": task_id,
+                        "appended": appended,
+                    },
+                )
+            return True
+        except KeyError:
+            return False
+
     def _append_followup_to_coordinator(
         self,
         run_id: str,
@@ -1648,6 +1761,133 @@ class RunManager:
         if current_intent is None:
             return True
         return current_intent.run_kind == RunKind.CONVERSATION
+
+    def _next_auto_recovery_attempt(
+        self, payload: "RecoverableRunPausePayload"
+    ) -> int | None:
+        if payload.error_code != AUTO_RECOVERY_ERROR_CODE:
+            return None
+        attempts = self._count_auto_recovery_attempts(payload.run_id)
+        if attempts >= AUTO_RECOVERY_MAX_ATTEMPTS:
+            return None
+        return attempts + 1
+
+    def _count_auto_recovery_attempts(self, run_id: str) -> int:
+        persisted_attempts = self._count_persisted_auto_recovery_attempts(run_id)
+        in_memory_attempts = self._auto_recovery_attempts.get(run_id, 0)
+        return max(persisted_attempts, in_memory_attempts)
+
+    def _count_persisted_auto_recovery_attempts(self, run_id: str) -> int:
+        if self._event_log is None:
+            return 0
+        count = 0
+        for event in self._event_log.list_by_trace(run_id):
+            if str(event.get("event_type") or "") != RunEventType.RUN_RESUMED.value:
+                continue
+            raw_payload = event.get("payload_json")
+            if not isinstance(raw_payload, str) or not raw_payload.strip():
+                continue
+            try:
+                parsed = loads(raw_payload)
+            except ValueError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            if str(parsed.get("reason") or "") == AUTO_RECOVERY_REASON:
+                count += 1
+        return count
+
+    def _record_auto_recovery_attempt(self, *, run_id: str, attempt: int) -> None:
+        current = self._auto_recovery_attempts.get(run_id, 0)
+        self._auto_recovery_attempts[run_id] = max(current, attempt)
+
+    def _queue_auto_recovery_prompt(
+        self, *, payload: "RecoverableRunPausePayload"
+    ) -> None:
+        if self._append_followup_to_instance(
+            run_id=payload.run_id,
+            instance_id=payload.instance_id,
+            task_id=payload.task_id,
+            content=AUTO_RECOVERY_PROMPT,
+            enqueue=False,
+            source=InjectionSource.SYSTEM,
+        ):
+            return
+        self._append_followup_to_coordinator(
+            payload.run_id,
+            AUTO_RECOVERY_PROMPT,
+            enqueue=False,
+        )
+
+    def _build_run_resumed_payload(
+        self,
+        *,
+        session_id: str,
+        reason: str,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "session_id": session_id,
+            "reason": reason,
+        }
+        if attempt is not None:
+            payload["attempt"] = attempt
+        if max_attempts is not None:
+            payload["max_attempts"] = max_attempts
+        return payload
+
+    def _transition_run_to_resumed(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        reason: str,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, JsonValue]:
+        runtime = self._runtime_for_run(run_id)
+        phase = RunRuntimePhase.COORDINATOR_RUNNING
+        if runtime is not None and runtime.phase != RunRuntimePhase.TERMINAL:
+            phase = runtime.phase
+        self._safe_runtime_update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=phase,
+            last_error=None,
+        )
+        payload = self._build_run_resumed_payload(
+            session_id=session_id,
+            reason=reason,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                event_type=RunEventType.RUN_RESUMED,
+                payload_json=dumps(payload),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+        return payload
+
+    def _build_run_paused_payload(
+        self, payload: "RecoverableRunPausePayload"
+    ) -> dict[str, JsonValue]:
+        paused_payload: dict[str, JsonValue] = payload.model_dump(mode="json")
+        if payload.error_code != AUTO_RECOVERY_ERROR_CODE:
+            return paused_payload
+        attempts = self._count_auto_recovery_attempts(payload.run_id)
+        paused_payload["auto_recovery_exhausted"] = (
+            attempts >= AUTO_RECOVERY_MAX_ATTEMPTS
+        )
+        paused_payload["attempt"] = attempts
+        paused_payload["max_attempts"] = AUTO_RECOVERY_MAX_ATTEMPTS
+        return paused_payload
 
     def _require_task_repo(self) -> TaskRepository:
         if self._task_repo is None:

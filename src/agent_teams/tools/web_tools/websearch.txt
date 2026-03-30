@@ -1,3 +1,4 @@
 Search the web with the configured provider and return a text summary for the query.
 
 Use this when you need fresh external information that is not available in the workspace.
+Keep arguments minimal: provide the query and optionally the number of results. Provider-specific search knobs are handled internally.
