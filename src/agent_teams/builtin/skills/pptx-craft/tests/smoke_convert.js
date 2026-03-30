@@ -89,6 +89,7 @@ function main() {
   const tempRoot = makeTempDir();
   const pagesDir = path.join(tempRoot, "pages");
   const outputPath = path.join(tempRoot, "pages.pptx");
+  const exportQaJsonPath = path.join(tempRoot, "export_qa_result.json");
 
   fs.mkdirSync(pagesDir, { recursive: true });
   writeFixtureHtml(path.join(pagesDir, "page-1.pptx.html"));
@@ -106,6 +107,15 @@ function main() {
   assert.strictEqual(result.status, 0, "smoke conversion should exit successfully");
   assert.ok(fs.existsSync(outputPath), "pages.pptx should be created");
   assert.ok(fs.statSync(outputPath).size > 0, "pages.pptx should be non-empty");
+  assert.ok(fs.existsSync(exportQaJsonPath), "export_qa_result.json should be created");
+
+  const exportQaResult = JSON.parse(fs.readFileSync(exportQaJsonPath, "utf8"));
+  assert.strictEqual(exportQaResult.passed, true, "export QA should pass for the smoke deck");
+  assert.match(
+    exportQaResult.mode,
+    /^(visual\+structural|structural_only)$/u,
+    "export QA should report its execution mode"
+  );
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
