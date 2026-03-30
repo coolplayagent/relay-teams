@@ -229,7 +229,7 @@ class TaskExecutionService(BaseModel):
                 role=role_for_run,
                 task=task,
                 working_directory=workspace.resolve_workdir(),
-                worktree_root=workspace.locations.worktree_root or workspace.root_path,
+                worktree_root=workspace.scope_root,
                 shared_state_snapshot=snapshot,
                 objective=self._resolve_turn_objective(
                     task=task,

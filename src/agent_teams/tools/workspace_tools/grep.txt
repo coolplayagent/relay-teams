@@ -2,7 +2,8 @@ Search workspace file contents with ripgrep.
 
 Usage:
 - `pattern` is treated as a regular expression.
-- `path` limits the search root and defaults to the workspace root.
+- `path` limits the search root and defaults to the workspace execution root.
+- Use `path="tmp"` to search inside the managed workspace tmp directory.
 - `include` narrows matches to files matching a glob such as `*.py`.
 - Set `case_sensitive=true` only when exact casing matters.
 - Use this tool to locate symbols, strings, or code patterns before reading files in detail.

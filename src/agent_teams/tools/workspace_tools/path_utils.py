@@ -5,6 +5,8 @@ from pathlib import Path
 
 from agent_teams.workspace import WorkspaceHandle
 
+_TMP_PATTERN_PREFIXES = ("tmp/", "tmp\\")
+
 
 def resolve_workspace_path(workspace_root: Path, relative_path: str) -> Path:
     candidate = (workspace_root / relative_path).resolve()
@@ -18,20 +20,14 @@ def resolve_workspace_tmp_path(
     workspace: WorkspaceHandle,
     relative_path: str,
 ) -> Path:
-    requested_path = Path(relative_path)
-    if requested_path.is_absolute():
-        raise ValueError(
-            f"Path must be relative to the workspace tmp directory: {relative_path}"
-        )
+    return workspace.resolve_tmp_path(relative_path, write=True)
 
-    workspace_root = workspace.root_path.resolve()
-    tmp_root = (workspace_root / "tmp").resolve()
-    candidate = (tmp_root / requested_path).resolve()
 
-    if candidate == tmp_root:
-        raise ValueError("Path must point to a file inside the workspace tmp directory")
-    if tmp_root not in candidate.parents:
-        raise ValueError(f"Path is outside workspace tmp directory: {relative_path}")
-
-    workspace_relative_path = candidate.relative_to(workspace_root).as_posix()
-    return workspace.resolve_path(workspace_relative_path, write=True)
+def resolve_workspace_glob_scope(
+    workspace: WorkspaceHandle,
+    pattern: str,
+) -> tuple[Path, str, str | None]:
+    if pattern == "tmp" or pattern.startswith(_TMP_PATTERN_PREFIXES):
+        relative_pattern = pattern.removeprefix("tmp").lstrip("/\\")
+        return workspace.tmp_root, relative_pattern or "**", "tmp"
+    return workspace.execution_root, pattern, None

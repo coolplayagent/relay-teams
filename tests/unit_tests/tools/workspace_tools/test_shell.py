@@ -620,7 +620,7 @@ class TestSaveOverflowOutput:
         assert result is not None
         assert result.exists()
         assert result.read_text(encoding="utf-8") == content
-        assert "shell_output" in str(result)
+        assert result.parent == (tmp_path / "tmp" / "shell_output").resolve()
 
     @staticmethod
     def _make_workspace(tmp_path: Path):
@@ -628,7 +628,7 @@ class TestSaveOverflowOutput:
         from unittest.mock import MagicMock
 
         workspace = MagicMock()
-        workspace.locations.workspace_dir = tmp_path
+        workspace.tmp_root = tmp_path / "tmp"
         return workspace
 
 

@@ -133,7 +133,7 @@ async def preview_prompts(
             conversation_id="prompt-preview",
         )
         working_directory = workspace.resolve_workdir()
-        worktree_root = workspace.locations.worktree_root or workspace.root_path
+        worktree_root = workspace.scope_root
 
     runtime_prompt_sections = await RuntimePromptBuilder(
         role_registry=role_registry,
