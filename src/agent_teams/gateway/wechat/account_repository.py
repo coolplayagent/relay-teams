@@ -88,7 +88,7 @@ class WeChatAccountRepository:
         if row is None:
             raise KeyError(f"Unknown account_id: {account_id}")
         try:
-            return self._to_record(row)
+            return self._to_record(row, fallback_invalid_timestamps=True)
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_wechat_account_row(row=row, error=exc)
             raise KeyError(f"Unknown account_id: {account_id}") from exc
@@ -179,13 +179,24 @@ class WeChatAccountRepository:
             operation_name="delete_account",
         )
 
-    def _to_record(self, row: sqlite3.Row) -> WeChatAccountRecord:
+    def _to_record(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> WeChatAccountRecord:
+        account_id = require_persisted_identifier(
+            row["account_id"],
+            field_name="account_id",
+        )
+        created_at, updated_at, last_login_at = _load_wechat_account_timestamps(
+            row=row,
+            account_id=account_id,
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+        )
         return WeChatAccountRecord.model_validate(
             {
-                "account_id": require_persisted_identifier(
-                    row["account_id"],
-                    field_name="account_id",
-                ),
+                "account_id": account_id,
                 "display_name": str(row["display_name"]),
                 "base_url": str(row["base_url"]),
                 "cdn_base_url": str(row["cdn_base_url"]),
@@ -206,25 +217,9 @@ class WeChatAccountRepository:
                 ),
                 "yolo": bool(int(row["yolo"])),
                 "thinking": json.loads(str(row["thinking_json"])),
-                "last_login_at": (
-                    _optional_wechat_account_timestamp(
-                        row=row,
-                        account_id=str(row["account_id"]),
-                        field_name="last_login_at",
-                    )
-                    if normalize_persisted_text(row["last_login_at"]) is not None
-                    else None
-                ),
-                "created_at": _require_wechat_account_timestamp(
-                    row=row,
-                    account_id=str(row["account_id"]),
-                    field_name="created_at",
-                ),
-                "updated_at": _require_wechat_account_timestamp(
-                    row=row,
-                    account_id=str(row["account_id"]),
-                    field_name="updated_at",
-                ),
+                "last_login_at": last_login_at,
+                "created_at": created_at,
+                "updated_at": updated_at,
             }
         )
 
@@ -233,21 +228,67 @@ class WeChatAccountRepository:
         return datetime.now(tz=timezone.utc)
 
 
-def _require_wechat_account_timestamp(
+def _load_wechat_account_timestamps(
     *,
     row: sqlite3.Row,
     account_id: str,
-    field_name: str,
-) -> datetime:
-    parsed = parse_persisted_datetime_or_none(row[field_name])
-    if parsed is not None:
-        return parsed
-    _log_invalid_wechat_account_timestamp(
-        account_id=account_id,
-        field_name=field_name,
-        raw_preview=_persisted_value_preview(row[field_name]),
+    fallback_invalid_timestamps: bool,
+) -> tuple[datetime, datetime, datetime | None]:
+    created_at = parse_persisted_datetime_or_none(row["created_at"])
+    updated_at = parse_persisted_datetime_or_none(row["updated_at"])
+    if not fallback_invalid_timestamps:
+        if created_at is None:
+            _log_invalid_wechat_account_timestamp(
+                account_id=account_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted created_at")
+        if updated_at is None:
+            _log_invalid_wechat_account_timestamp(
+                account_id=account_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted updated_at")
+        return (
+            created_at,
+            updated_at,
+            _optional_wechat_account_timestamp(
+                row=row,
+                account_id=account_id,
+                field_name="last_login_at",
+            ),
+        )
+    fallback_now = datetime.now(tz=timezone.utc)
+    if created_at is None:
+        created_at = updated_at or fallback_now
+        _log_invalid_wechat_account_timestamp(
+            account_id=account_id,
+            field_name="created_at",
+            raw_preview=_persisted_value_preview(row["created_at"]),
+            fallback_iso=created_at.isoformat(),
+        )
+    if updated_at is None:
+        updated_at = created_at
+        _log_invalid_wechat_account_timestamp(
+            account_id=account_id,
+            field_name="updated_at",
+            raw_preview=_persisted_value_preview(row["updated_at"]),
+            fallback_iso=updated_at.isoformat(),
+        )
+    return (
+        created_at,
+        updated_at,
+        _optional_wechat_account_timestamp(
+            row=row,
+            account_id=account_id,
+            field_name="last_login_at",
+            fallback_invalid_timestamps=True,
+        ),
     )
-    raise ValueError(f"Invalid persisted {field_name}")
 
 
 def _optional_wechat_account_timestamp(
@@ -255,15 +296,23 @@ def _optional_wechat_account_timestamp(
     row: sqlite3.Row,
     account_id: str,
     field_name: str,
+    fallback_invalid_timestamps: bool = False,
 ) -> datetime | None:
-    parsed = parse_persisted_datetime_or_none(row[field_name])
+    raw_value = row[field_name]
+    normalized = normalize_persisted_text(raw_value)
+    if normalized is None:
+        return None
+    parsed = parse_persisted_datetime_or_none(raw_value)
     if parsed is not None:
         return parsed
     _log_invalid_wechat_account_timestamp(
         account_id=account_id,
         field_name=field_name,
-        raw_preview=_persisted_value_preview(row[field_name]),
+        raw_preview=_persisted_value_preview(raw_value),
+        fallback_iso=None,
     )
+    if fallback_invalid_timestamps:
+        return None
     raise ValueError(f"Invalid persisted {field_name}")
 
 
@@ -287,17 +336,23 @@ def _log_invalid_wechat_account_timestamp(
     account_id: str,
     field_name: str,
     raw_preview: str,
+    fallback_iso: str | None,
 ) -> None:
     payload: dict[str, JsonValue] = {
         "account_id": account_id,
         "field_name": field_name,
         "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
     }
     log_event(
         LOGGER,
         logging.WARNING,
         event="gateway.wechat.account_repository.timestamp_invalid",
-        message="Invalid persisted WeChat account timestamp",
+        message=(
+            "Using fallback for invalid persisted WeChat account timestamp"
+            if fallback_iso is not None
+            else "Invalid persisted WeChat account timestamp"
+        ),
         payload=payload,
     )
 

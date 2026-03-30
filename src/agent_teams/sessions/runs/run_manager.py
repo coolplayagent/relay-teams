@@ -563,7 +563,12 @@ class RunManager:
         except KeyError:
             if self._run_intent_repo is None:
                 raise
-            intent = self._run_intent_repo.get(run_id)
+            runtime_repo = self._run_runtime_repo
+            runtime = runtime_repo.get(run_id) if runtime_repo is not None else None
+            intent = self._run_intent_repo.get(
+                run_id,
+                fallback_session_id=runtime.session_id if runtime is not None else None,
+            )
             return await self._meta_agent.handle_intent(intent, trace_id=run_id)
         return await self._meta_agent.resume_run(trace_id=run_id)
 
@@ -1480,7 +1485,10 @@ class RunManager:
         if self._run_intent_repo is None:
             return
         try:
-            intent = self._run_intent_repo.get(run_id)
+            intent = self._run_intent_repo.get(
+                run_id,
+                fallback_session_id=session_id,
+            )
         except KeyError:
             return
         if intent.yolo == yolo:
@@ -1627,7 +1635,14 @@ class RunManager:
         current_intent = self._pending_runs.get(run_id)
         if current_intent is None and self._run_intent_repo is not None:
             try:
-                current_intent = self._run_intent_repo.get(run_id)
+                runtime_repo = self._run_runtime_repo
+                runtime = runtime_repo.get(run_id) if runtime_repo is not None else None
+                current_intent = self._run_intent_repo.get(
+                    run_id,
+                    fallback_session_id=(
+                        runtime.session_id if runtime is not None else None
+                    ),
+                )
             except KeyError:
                 current_intent = None
         if current_intent is None:
