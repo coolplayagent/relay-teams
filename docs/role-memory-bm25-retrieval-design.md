@@ -256,11 +256,22 @@ Memory retrieval should use retrieval scope kind `memory` and a role-workspace s
 Recommended scope key:
 
 - `scope_kind = memory`
-- `scope_id = {workspace_id}:{role_id}`
+- `scope_id = collision-safe composite derived from workspace_id and role_id`
+
+Recommended encoding rules:
+
+- do not join raw identifiers with `:` or another unescaped delimiter
+- use a structured serialization such as JSON, length-prefixed segments, or escaped components
+- keep the same encoding rule everywhere the memory scope is produced or queried
+
+Example safe forms:
+
+- JSON tuple style: `[{workspace_id}, {role_id}]` after deterministic serialization
+- length-prefixed style: `{len(workspace_id)}:{workspace_id}{len(role_id)}:{role_id}`
 
 This follows the existing durable memory boundary described in `docs/role-workspace-memory-design.md`: role memory is shared by the same `role_id + workspace_id` pair across sessions.
 
-This scope shape keeps retrieval aligned with current memory ownership and avoids accidental leakage across roles or workspaces.
+This scope shape keeps retrieval aligned with current memory ownership and avoids accidental leakage across roles or workspaces, even when identifiers themselves contain `:` or other separator characters.
 
 ## Retrieval Document Model
 
@@ -559,7 +570,7 @@ The most practical default is:
 
 - lexical retrieval only
 - `scope_kind = memory`
-- `scope_id = {workspace_id}:{role_id}`
+- `scope_id = collision-safe composite of workspace_id and role_id`
 - SQLite FTS5 BM25 ranking
 - weighted `title/body/keywords`
 - second-stage recency and importance reranking
