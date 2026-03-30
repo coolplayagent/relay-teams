@@ -48,7 +48,7 @@ def _save_overflow_output(
     """
     if len(content) <= MAX_OUTPUT_CHARS:
         return None
-    output_dir = workspace.locations.workspace_dir / "shell_output"
+    output_dir = workspace.tmp_root / "shell_output"
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     file_path = output_dir / f"{label}_{timestamp}.txt"
@@ -108,6 +108,8 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
                 cwd = ctx.deps.workspace.resolve_workdir(workdir)
             else:
                 cwd = ctx.deps.workspace.resolve_workdir()
+            if cwd == ctx.deps.workspace.tmp_root and not cwd.exists():
+                cwd.mkdir(parents=True, exist_ok=True)
 
             timeout = normalize_timeout(timeout_ms)
 
@@ -148,18 +150,22 @@ def register(Agent: Agent[ToolDeps, str]) -> None:
 
             output = stdout[:MAX_OUTPUT_CHARS]
             if stdout_overflow:
+                stdout_reference = ctx.deps.workspace.logical_tmp_path(stdout_overflow)
                 output += (
                     f"\n\n[stdout truncated: {len(stdout)} chars total. "
-                    f"Full output saved to: {stdout_overflow}. "
+                    f"Full output saved to: {stdout_reference}. "
                     "Use the read or grep tool to inspect it.]"
                 )
 
             if stderr:
                 output += "\n\n[stderr]:\n" + stderr[:MAX_OUTPUT_CHARS]
                 if stderr_overflow:
+                    stderr_reference = ctx.deps.workspace.logical_tmp_path(
+                        stderr_overflow
+                    )
                     output += (
                         f"\n\n[stderr truncated: {len(stderr)} chars total. "
-                        f"Full output saved to: {stderr_overflow}. "
+                        f"Full output saved to: {stderr_reference}. "
                         "Use the read or grep tool to inspect it.]"
                     )
 

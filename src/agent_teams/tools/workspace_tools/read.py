@@ -186,11 +186,10 @@ async def resolve_read_instruction_sections(
     deps: ToolDeps,
     file_path: Path,
 ) -> tuple[str, ...]:
-    workspace_root = deps.workspace.locations.worktree_root or deps.workspace.root_path
     resolver = PromptInstructionResolver()
     candidate_paths = resolver.resolve_dynamic_paths(
         file_path=file_path,
-        workspace_root=workspace_root,
+        workspace_root=deps.workspace.scope_root,
     )
     unresolved_paths = filter_unloaded_prompt_instruction_paths(
         shared_store=deps.shared_store,
