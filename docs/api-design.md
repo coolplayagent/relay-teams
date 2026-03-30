@@ -173,7 +173,7 @@ Fields:
 - `provider`: currently only `exa`
 - `api_key`: optional value rehydrated from the unified secret store
 
-The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint, fetch size limit, and temp file location under `~/.agent-teams/.../tmp`.
+The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
 
 ### `PUT /system/configs/web`
 
