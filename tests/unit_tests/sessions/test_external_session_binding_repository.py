@@ -80,10 +80,61 @@ def test_external_session_binding_repository_skips_invalid_rows(tmp_path: Path) 
     )
 
 
+def test_get_binding_recovers_invalid_timestamps(tmp_path: Path) -> None:
+    db_path = tmp_path / "bindings.db"
+    repo = ExternalSessionBindingRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_binding_row(
+        db_path,
+        trigger_id="trigger-bad-timestamp",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    loaded = repo.get_binding(
+        platform="feishu",
+        trigger_id="trigger-bad-timestamp",
+        tenant_key="tenant-1",
+        external_chat_id="chat-2",
+    )
+
+    assert loaded is not None
+    assert loaded.trigger_id == "trigger-bad-timestamp"
+    assert loaded.created_at.isoformat() == valid_updated_at
+    assert loaded.updated_at.isoformat() == valid_updated_at
+    assert repo.list_by_platform("feishu") == ()
+
+
+def test_upsert_binding_recovers_existing_row_with_invalid_created_at(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "bindings.db"
+    repo = ExternalSessionBindingRepository(db_path)
+    _insert_binding_row(
+        db_path,
+        trigger_id="trigger-dirty",
+        session_id="session-old",
+        created_at="None",
+    )
+
+    updated = repo.upsert_binding(
+        platform="feishu",
+        trigger_id="trigger-dirty",
+        tenant_key="tenant-1",
+        external_chat_id="chat-2",
+        session_id="session-new",
+    )
+
+    assert updated.session_id == "session-new"
+
+
 def _insert_binding_row(
     db_path: Path,
     *,
     trigger_id: str,
+    session_id: str = "session-2",
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -105,9 +156,9 @@ def _insert_binding_row(
             trigger_id,
             "tenant-1",
             "chat-2",
-            "session-2",
-            now,
-            now,
+            session_id,
+            created_at or now,
+            updated_at or now,
         ),
     )
     connection.commit()

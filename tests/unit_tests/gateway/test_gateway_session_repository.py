@@ -156,11 +156,41 @@ def test_gateway_session_repository_skips_invalid_persisted_rows(
     assert repository.get_by_internal_session_id("session_bad") is None
 
 
+def test_gateway_session_repository_get_by_external_recovers_invalid_timestamps(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "gateway.db"
+    repository = GatewaySessionRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_gateway_session_row(
+        db_path,
+        gateway_session_id="gws_bad_timestamp",
+        internal_session_id="session_bad_timestamp",
+        external_session_id="wechat:wx_1:user_bad_timestamp",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    loaded = repository.get_by_external(
+        channel_type=GatewayChannelType.WECHAT,
+        external_session_id="wechat:wx_1:user_bad_timestamp",
+    )
+
+    assert loaded is not None
+    assert loaded.gateway_session_id == "gws_bad_timestamp"
+    assert loaded.created_at.isoformat() == valid_updated_at
+    assert loaded.updated_at.isoformat() == valid_updated_at
+    assert repository.list_all() == ()
+
+
 def _insert_gateway_session_row(
     db_path: Path,
     *,
     gateway_session_id: str,
     internal_session_id: str,
+    external_session_id: str = "wechat:wx_1:user_bad",
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -187,7 +217,7 @@ def _insert_gateway_session_row(
         (
             gateway_session_id,
             GatewayChannelType.WECHAT.value,
-            "wechat:wx_1:user_bad",
+            external_session_id,
             internal_session_id,
             None,
             None,
@@ -197,8 +227,8 @@ def _insert_gateway_session_row(
             "{}",
             "[]",
             "[]",
-            now,
-            now,
+            created_at or now,
+            updated_at or now,
         ),
     )
     connection.commit()

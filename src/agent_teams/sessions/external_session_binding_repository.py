@@ -108,7 +108,7 @@ class ExternalSessionBindingRepository:
         ).fetchone()
         if row is None:
             return None
-        return self._record_or_none(row)
+        return self._record_or_none(row, fallback_invalid_timestamps=True)
 
     def upsert_binding(
         self,
@@ -223,15 +223,25 @@ class ExternalSessionBindingRepository:
         )
 
     @staticmethod
-    def _to_record(row: sqlite3.Row) -> ExternalSessionBinding:
+    def _to_record(
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> ExternalSessionBinding:
+        trigger_id = require_persisted_identifier(
+            row["trigger_id"],
+            field_name="trigger_id",
+        )
+        created_at, updated_at = _load_binding_timestamps(
+            row=row,
+            trigger_id=trigger_id,
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+        )
         return ExternalSessionBinding(
             platform=require_persisted_identifier(
                 row["platform"], field_name="platform"
             ),
-            trigger_id=require_persisted_identifier(
-                row["trigger_id"],
-                field_name="trigger_id",
-            ),
+            trigger_id=trigger_id,
             tenant_key=require_persisted_identifier(
                 row["tenant_key"],
                 field_name="tenant_key",
@@ -244,41 +254,70 @@ class ExternalSessionBindingRepository:
                 row["session_id"],
                 field_name="session_id",
             ),
-            created_at=_require_binding_timestamp(
-                row=row,
-                trigger_id=str(row["trigger_id"]),
-                field_name="created_at",
-            ),
-            updated_at=_require_binding_timestamp(
-                row=row,
-                trigger_id=str(row["trigger_id"]),
-                field_name="updated_at",
-            ),
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
-    def _record_or_none(self, row: sqlite3.Row) -> ExternalSessionBinding | None:
+    def _record_or_none(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> ExternalSessionBinding | None:
         try:
-            return self._to_record(row)
+            return self._to_record(
+                row,
+                fallback_invalid_timestamps=fallback_invalid_timestamps,
+            )
         except (ValidationError, ValueError) as exc:
             _log_invalid_binding_row(row=row, error=exc)
             return None
 
 
-def _require_binding_timestamp(
+def _load_binding_timestamps(
     *,
     row: sqlite3.Row,
     trigger_id: str,
-    field_name: str,
-) -> datetime:
-    parsed = parse_persisted_datetime_or_none(row[field_name])
-    if parsed is not None:
-        return parsed
-    _log_invalid_binding_timestamp(
-        trigger_id=trigger_id,
-        field_name=field_name,
-        raw_preview=_persisted_value_preview(row[field_name]),
-    )
-    raise ValueError(f"Invalid persisted {field_name}")
+    fallback_invalid_timestamps: bool,
+) -> tuple[datetime, datetime]:
+    created_at = parse_persisted_datetime_or_none(row["created_at"])
+    updated_at = parse_persisted_datetime_or_none(row["updated_at"])
+    if not fallback_invalid_timestamps:
+        if created_at is None:
+            _log_invalid_binding_timestamp(
+                trigger_id=trigger_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted created_at")
+        if updated_at is None:
+            _log_invalid_binding_timestamp(
+                trigger_id=trigger_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted updated_at")
+        return created_at, updated_at
+    fallback_now = datetime.now(tz=timezone.utc)
+    if created_at is None:
+        created_at = updated_at or fallback_now
+        _log_invalid_binding_timestamp(
+            trigger_id=trigger_id,
+            field_name="created_at",
+            raw_preview=_persisted_value_preview(row["created_at"]),
+            fallback_iso=created_at.isoformat(),
+        )
+    if updated_at is None:
+        updated_at = created_at
+        _log_invalid_binding_timestamp(
+            trigger_id=trigger_id,
+            field_name="updated_at",
+            raw_preview=_persisted_value_preview(row["updated_at"]),
+            fallback_iso=updated_at.isoformat(),
+        )
+    return created_at, updated_at
 
 
 def _persisted_value_preview(value: object) -> str:
@@ -292,17 +331,23 @@ def _log_invalid_binding_timestamp(
     trigger_id: str,
     field_name: str,
     raw_preview: str,
+    fallback_iso: str | None,
 ) -> None:
     payload: dict[str, JsonValue] = {
         "trigger_id": trigger_id,
         "field_name": field_name,
         "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
     }
     log_event(
         LOGGER,
         logging.WARNING,
         event="sessions.external_session_binding_repository.timestamp_invalid",
-        message="Invalid persisted external session binding timestamp",
+        message=(
+            "Using fallback for invalid persisted external session binding timestamp"
+            if fallback_iso is not None
+            else "Invalid persisted external session binding timestamp"
+        ),
         payload=payload,
     )
 
