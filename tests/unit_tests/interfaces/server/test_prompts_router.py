@@ -62,6 +62,7 @@ class _FakeWorkspaceHandle:
     def __init__(self, workdir: Path) -> None:
         self._workdir = workdir
         self.locations = SimpleNamespace(worktree_root=workdir)
+        self.scope_root = workdir.parent
         self.root_path = workdir
 
     def resolve_workdir(self) -> Path:

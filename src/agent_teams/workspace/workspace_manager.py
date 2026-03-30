@@ -67,11 +67,15 @@ class WorkspaceManager(BaseModel):
     def locations_for(self, workspace_id: str) -> WorkspaceLocations:
         record = self._resolve_record(workspace_id, None)
         config_dir = self._resolve_app_config_dir(project_root=record.root_path)
+        workspace_dir = config_dir / "workspaces" / workspace_id
+        tmp_root = workspace_dir / "tmp"
         return WorkspaceLocations(
-            workspace_dir=config_dir / "workspaces" / workspace_id,
+            workspace_dir=workspace_dir,
+            scope_root=record.root_path,
             execution_root=record.root_path,
-            readable_roots=(record.root_path,),
-            writable_roots=(record.root_path,),
+            tmp_root=tmp_root,
+            readable_roots=(record.root_path, tmp_root),
+            writable_roots=(record.root_path, tmp_root),
         )
 
     def delete_workspace(self, workspace_id: str) -> None:
@@ -97,18 +101,22 @@ class WorkspaceManager(BaseModel):
             if file_scope.backend == FileScopeBackend.GIT_WORKTREE
             else None
         )
-        filesystem_root = worktree_root or record.root_path
+        scope_root = worktree_root or record.root_path
         execution_root = self._resolve_relative_root(
-            filesystem_root,
+            scope_root,
             file_scope.working_directory,
         )
-        readable_roots = self._extend_readable_roots(
-            base_locations.workspace_dir,
-            self._resolve_roots(filesystem_root, file_scope, write=False),
+        readable_roots = self._append_unique_roots(
+            self._resolve_roots(scope_root, file_scope, write=False),
+            (base_locations.tmp_root, *self._skill_roots()),
         )
-        writable_roots = self._resolve_roots(filesystem_root, file_scope, write=True)
+        writable_roots = self._append_unique_roots(
+            self._resolve_roots(scope_root, file_scope, write=True),
+            (base_locations.tmp_root,),
+        )
         return base_locations.model_copy(
             update={
+                "scope_root": scope_root,
                 "execution_root": execution_root,
                 "readable_roots": readable_roots,
                 "writable_roots": writable_roots,
@@ -132,18 +140,14 @@ class WorkspaceManager(BaseModel):
             for raw_path in raw_paths
         )
 
-    def _extend_readable_roots(
+    def _append_unique_roots(
         self,
-        workspace_dir: Path,
-        readable_roots: tuple[Path, ...],
+        roots: tuple[Path, ...],
+        extra_roots: tuple[Path, ...],
     ) -> tuple[Path, ...]:
         deduped: list[Path] = []
         seen: set[Path] = set()
-        for candidate in (
-            *readable_roots,
-            workspace_dir / "tmp",
-            *self._skill_roots(),
-        ):
+        for candidate in (*roots, *extra_roots):
             resolved = candidate.resolve()
             if resolved in seen:
                 continue

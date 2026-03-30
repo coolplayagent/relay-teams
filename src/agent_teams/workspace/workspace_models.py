@@ -68,7 +68,9 @@ class WorkspaceLocations(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_dir: Path
+    scope_root: Path
     execution_root: Path
+    tmp_root: Path
     readable_roots: tuple[Path, ...]
     writable_roots: tuple[Path, ...]
     worktree_root: Path | None = None

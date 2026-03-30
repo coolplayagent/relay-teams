@@ -1,8 +1,9 @@
 Read a file or directory from disk.
 
 Usage:
-- `path` may be absolute or relative.
-- Relative paths are resolved from the workspace root, but may point outside the workspace.
+- `path` may be absolute or relative, but it must stay within the workspace read scope.
+- Relative paths are resolved from the workspace execution root.
+- Use `tmp/...` to read files from the managed workspace tmp directory.
 - Files are returned with line numbers in the format `<line>: <content>`.
 - Directories are returned as one entry per line, with `/` appended for subdirectories.
 - Use `offset` and `limit` to page through large files or directories.

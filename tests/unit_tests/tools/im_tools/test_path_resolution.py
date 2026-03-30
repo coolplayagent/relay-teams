@@ -103,6 +103,7 @@ def test_resolve_im_file_path_expands_percent_variables_case_insensitively(
 def _build_workspace_handle(root_path: Path) -> WorkspaceHandle:
     root_path.mkdir(parents=True, exist_ok=True)
     profile = default_workspace_profile()
+    tmp_root = root_path / ".tmp"
     return WorkspaceHandle(
         ref=WorkspaceRef(
             workspace_id="workspace",
@@ -114,8 +115,10 @@ def _build_workspace_handle(root_path: Path) -> WorkspaceHandle:
         profile=profile,
         locations=WorkspaceLocations(
             workspace_dir=root_path,
+            scope_root=root_path,
             execution_root=root_path,
-            readable_roots=(root_path,),
-            writable_roots=(root_path,),
+            tmp_root=tmp_root,
+            readable_roots=(root_path, tmp_root),
+            writable_roots=(root_path, tmp_root),
         ),
     )

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import JsonValue
 
 from pydantic_ai import Agent
@@ -13,6 +15,7 @@ from agent_teams.tools.runtime import (
     execute_tool,
 )
 from agent_teams.tools.workspace_tools import ripgrep
+from agent_teams.tools.workspace_tools.path_utils import resolve_workspace_glob_scope
 
 DESCRIPTION = load_tool_description(__file__)
 
@@ -43,11 +46,21 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """Find workspace files whose paths match a glob pattern."""
 
         async def _action() -> ToolResultProjection:
-            root = ctx.deps.workspace.resolve_path(".", write=False)
+            root, resolved_pattern, logical_prefix = resolve_workspace_glob_scope(
+                ctx.deps.workspace,
+                pattern,
+            )
+
+            if not root.exists():
+                return _project_glob_result(
+                    output="No files found",
+                    truncated=False,
+                    count=0,
+                )
 
             files, truncated = await ripgrep.enumerate_files(
                 cwd=root,
-                pattern=pattern,
+                pattern=resolved_pattern,
             )
 
             if not files:
@@ -58,6 +71,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 )
 
             rel_files = [str(f.relative_to(root)) for f in files]
+            if logical_prefix is not None:
+                rel_files = [
+                    str((Path(logical_prefix) / relative_path).as_posix())
+                    for relative_path in rel_files
+                ]
             output = "\n".join(rel_files)
 
             if truncated:
