@@ -1,18 +1,26 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
+import asyncio
+import hashlib
+import math
 from pathlib import Path
 import re
+import shutil
+import tempfile
 from urllib.parse import urljoin, urlparse
 from xml.etree.ElementTree import Element, ParseError
 
 import defusedxml.ElementTree as safe_element_tree
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.net.clients import create_async_http_client
+from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -29,12 +37,22 @@ from agent_teams.tools.web_tools.common import (
     sanitize_file_extension,
 )
 
-MAX_RESPONSE_SIZE_BYTES = 5 * 1024 * 1024
+MAX_TEXT_RESPONSE_SIZE_BYTES = 5 * 1024 * 1024
+MAX_RESPONSE_SIZE_BYTES = MAX_TEXT_RESPONSE_SIZE_BYTES
+MAX_BINARY_DOWNLOAD_SIZE_BYTES = 512 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_FORMAT = "markdown"
 DEFAULT_ITEM_LIMIT = 20
 MAX_ITEM_LIMIT = 50
+PARALLEL_DOWNLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024
+PARALLEL_DOWNLOAD_SEGMENT_COUNT = 4
+MIN_SEGMENT_SIZE_BYTES = 1 * 1024 * 1024
+DOWNLOAD_CHUNK_SIZE_BYTES = 256 * 1024
+STATE_FLUSH_INTERVAL_BYTES = 1 * 1024 * 1024
+RANGE_PROBE_HEADER_VALUE = "bytes=0-0"
+WEBFETCH_DOWNLOAD_PREFIX = "webfetch_download"
+RANGE_RESET_ERROR_TYPES = {"range_response_invalid", "range_resume_mismatch"}
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
@@ -100,6 +118,53 @@ class ParsedOpmlDocument(BaseModel):
     feeds: list[OpmlFeedEntry]
 
 
+class BinaryDownloadProbe(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested_url: str
+    final_url: str
+    content_type: str
+    total_size: int | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    range_supported: bool = False
+
+
+class BinaryDownloadSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0)
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    file_name: str = Field(min_length=1)
+    downloaded_bytes: int = Field(default=0, ge=0)
+    complete: bool = False
+
+
+class BinaryDownloadManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested_url: str
+    normalized_requested_url: str
+    final_url: str
+    mime_type: str
+    suffix: str
+    total_size: int | None = Field(default=None, ge=0)
+    etag: str | None = None
+    last_modified: str | None = None
+    range_supported: bool = False
+    segment_count: int = Field(default=0, ge=0)
+    segments: list[BinaryDownloadSegment] = Field(default_factory=list)
+    saved_path: str = Field(min_length=1)
+    completed: bool = False
+
+
+class BinaryDownloadFullResponseFallback(Exception):
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__("Full-response fallback available for binary download.")
+        self.response = response
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def webfetch(
@@ -121,26 +186,23 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 timeout_seconds=float(resolved_timeout),
                 follow_redirects=True,
             ) as client:
-                response = await fetch_url(
+                return await fetch_webfetch_projection(
                     client=client,
-                    url=url,
+                    requested_url=url,
                     response_format=format,
+                    extract=resolved_extract,
+                    item_limit=resolved_item_limit,
+                    workspace_dir=ctx.deps.workspace.locations.workspace_dir,
+                    workspace_id=ctx.deps.workspace_id,
+                    shared_store=ctx.deps.shared_store,
+                    tool_call_id=ctx.tool_call_id or "webfetch",
+                    cancel_check=lambda: (
+                        ctx.deps.run_control_manager.raise_if_cancelled(
+                            run_id=ctx.deps.run_id,
+                            instance_id=ctx.deps.instance_id,
+                        )
+                    ),
                 )
-            content_type = normalize_content_type(
-                response.headers.get("content-type", "")
-            )
-            body = await read_response_body(response)
-            return build_webfetch_projection(
-                workspace_dir=ctx.deps.workspace.locations.workspace_dir,
-                tool_call_id=ctx.tool_call_id or "webfetch",
-                requested_url=url,
-                final_url=str(response.url),
-                response_format=format,
-                content_type=content_type,
-                body=body,
-                extract=resolved_extract,
-                item_limit=resolved_item_limit,
-            )
 
         return await execute_tool(
             ctx,
@@ -154,6 +216,89 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             },
             action=_action,
         )
+
+
+async def fetch_webfetch_projection(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    extract: WebFetchExtractMode,
+    item_limit: int,
+    workspace_dir: Path,
+    workspace_id: str,
+    shared_store: SharedStateRepository,
+    tool_call_id: str,
+    cancel_check: Callable[[], None],
+) -> ToolResultProjection:
+    if extract is WebFetchExtractMode.NONE:
+        probe_response: httpx.Response | None = None
+        try:
+            probe, probe_response = await probe_binary_download_with_response(
+                client=client,
+                url=requested_url,
+                response_format=response_format,
+            )
+        except ToolExecutionError:
+            probe = None
+        else:
+            try:
+                if probe is not None and is_binary_response(probe.content_type):
+                    if probe.range_supported:
+                        return await download_binary_response(
+                            client=client,
+                            requested_url=requested_url,
+                            response_format=response_format,
+                            workspace_dir=workspace_dir,
+                            workspace_id=workspace_id,
+                            shared_store=shared_store,
+                            cancel_check=cancel_check,
+                            probe=probe,
+                        )
+                    if probe_response is not None and probe_response.status_code == 200:
+                        return await download_binary_response_from_response(
+                            response=probe_response,
+                            requested_url=requested_url,
+                            workspace_dir=workspace_dir,
+                            workspace_id=workspace_id,
+                            shared_store=shared_store,
+                            cancel_check=cancel_check,
+                        )
+            finally:
+                if probe_response is not None:
+                    await probe_response.aclose()
+
+    response = await fetch_url(
+        client=client,
+        url=requested_url,
+        response_format=response_format,
+    )
+    try:
+        content_type = normalize_content_type(response.headers.get("content-type", ""))
+        if extract is WebFetchExtractMode.NONE and is_binary_response(content_type):
+            return await download_binary_response_from_response(
+                response=response,
+                requested_url=requested_url,
+                workspace_dir=workspace_dir,
+                workspace_id=workspace_id,
+                shared_store=shared_store,
+                cancel_check=cancel_check,
+            )
+        enforce_text_content_length_limit(response)
+        body = await read_response_body(response)
+        return build_webfetch_projection(
+            workspace_dir=workspace_dir,
+            tool_call_id=tool_call_id,
+            requested_url=requested_url,
+            final_url=str(response.url),
+            response_format=response_format,
+            content_type=content_type,
+            body=body,
+            extract=extract,
+            item_limit=item_limit,
+        )
+    finally:
+        await response.aclose()
 
 
 def validate_web_url(url: str) -> None:
@@ -208,6 +353,8 @@ async def fetch_url(
     client: httpx.AsyncClient,
     url: str,
     response_format: str,
+    extra_headers: dict[str, str] | None = None,
+    allowed_error_status_codes: set[int] | None = None,
 ) -> httpx.Response:
     url_host = urlparse(url).netloc
     headers = {
@@ -215,11 +362,14 @@ async def fetch_url(
         "Accept": build_accept_header(response_format),
         "Accept-Language": "en-US,en;q=0.9",
     }
+    if extra_headers is not None:
+        headers.update(extra_headers)
     response = await _perform_request(client=client, url=url, headers=headers)
     if (
         response.status_code == 403
         and response.headers.get("cf-mitigated") == "challenge"
     ):
+        await response.aclose()
         retry_headers = dict(headers)
         retry_headers["User-Agent"] = FALLBACK_USER_AGENT
         response = await _perform_request(client=client, url=url, headers=retry_headers)
@@ -227,6 +377,7 @@ async def fetch_url(
         response.status_code == 403
         and response.headers.get("cf-mitigated") == "challenge"
     ):
+        await response.aclose()
         raise ToolExecutionError(
             error_type="anti_bot_challenge",
             message=f"Website blocked automated fetch with an anti-bot challenge: {url_host or url}",
@@ -237,7 +388,11 @@ async def fetch_url(
                 "mitigation": "cloudflare_challenge",
             },
         )
-    if response.status_code >= 400:
+    if response.status_code >= 400 and (
+        allowed_error_status_codes is None
+        or response.status_code not in allowed_error_status_codes
+    ):
+        await response.aclose()
         raise ToolExecutionError(
             error_type=_webfetch_status_error_type(response.status_code),
             message=_webfetch_status_error_message(
@@ -249,7 +404,6 @@ async def fetch_url(
                 "status_code": response.status_code,
             },
         )
-    enforce_content_length_limit(response)
     return response
 
 
@@ -261,7 +415,8 @@ async def _perform_request(
 ) -> httpx.Response:
     url_host = urlparse(url).netloc
     try:
-        return await client.get(url, headers=headers)
+        request = client.build_request("GET", url, headers=headers)
+        return await client.send(request, stream=True)
     except httpx.TimeoutException as exc:
         raise ToolExecutionError(
             error_type="network_timeout",
@@ -278,30 +433,48 @@ async def _perform_request(
         ) from exc
 
 
-def enforce_content_length_limit(response: httpx.Response) -> None:
+def _parse_content_length(response: httpx.Response) -> int | None:
     content_length = response.headers.get("content-length")
     if content_length is None:
-        return
+        return None
     try:
-        parsed_length = int(content_length)
+        return int(content_length)
     except ValueError:
-        return
-    if parsed_length > MAX_RESPONSE_SIZE_BYTES:
+        return None
+
+
+def enforce_text_content_length_limit(response: httpx.Response) -> None:
+    parsed_length = _parse_content_length(response)
+    if parsed_length is not None and parsed_length > MAX_TEXT_RESPONSE_SIZE_BYTES:
         raise ToolExecutionError(
             error_type="response_too_large",
             message="Response too large (exceeds 5MB limit)",
             retryable=False,
         )
+
+
+def _raise_binary_size_limit_error(limit_bytes: int) -> None:
+    limit_mb = limit_bytes // (1024 * 1024)
+    raise ToolExecutionError(
+        error_type="response_too_large",
+        message=f"Binary download too large (exceeds {limit_mb}MB limit)",
+        retryable=False,
+    )
 
 
 async def read_response_body(response: httpx.Response) -> bytes:
-    body = await response.aread()
-    if len(body) > MAX_RESPONSE_SIZE_BYTES:
-        raise ToolExecutionError(
-            error_type="response_too_large",
-            message="Response too large (exceeds 5MB limit)",
-            retryable=False,
-        )
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        if not chunk:
+            continue
+        body.extend(chunk)
+        if len(body) > MAX_TEXT_RESPONSE_SIZE_BYTES:
+            raise ToolExecutionError(
+                error_type="response_too_large",
+                message="Response too large (exceeds 5MB limit)",
+                retryable=False,
+            )
+    return bytes(body)
     return body
 
 
@@ -492,6 +665,1033 @@ def save_binary_result(
         visible_data=visible_data,
         internal_data=visible_data,
     )
+
+
+async def download_binary_response(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    workspace_dir: Path,
+    workspace_id: str,
+    shared_store: SharedStateRepository,
+    cancel_check: Callable[[], None],
+    probe: BinaryDownloadProbe | None = None,
+) -> ToolResultProjection:
+    normalized_url = normalize_requested_download_url(requested_url)
+    download_key = build_binary_download_key(normalized_url)
+    download_dir = resolve_binary_download_dir(workspace_dir, download_key)
+    manifest_path = resolve_binary_manifest_path(download_dir)
+    manifest = load_binary_download_manifest(manifest_path)
+    if manifest is not None:
+        manifest = reconcile_binary_download_manifest(manifest, download_dir)
+        if manifest is None:
+            _cleanup_binary_download_dir(download_dir)
+
+    active_probe = probe
+    probe_response: httpx.Response | None = None
+    if active_probe is None:
+        active_probe, probe_response = await probe_binary_download_with_response(
+            client=client,
+            url=requested_url,
+            response_format=response_format,
+        )
+    try:
+        if (
+            active_probe.total_size is not None
+            and active_probe.total_size > MAX_BINARY_DOWNLOAD_SIZE_BYTES
+        ):
+            _cleanup_binary_download_dir(download_dir)
+            _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
+
+        if manifest is not None and not binary_download_manifest_matches_probe(
+            manifest=manifest,
+            probe=active_probe,
+        ):
+            _cleanup_binary_download_dir(download_dir)
+            manifest = None
+
+        if (
+            manifest is not None
+            and manifest.completed
+            and binary_download_manifest_is_usable(
+                manifest=manifest,
+                probe=active_probe,
+            )
+        ):
+            save_binary_download_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                shared_store=shared_store,
+                workspace_id=workspace_id,
+                download_key=download_key,
+            )
+            return build_binary_download_projection(
+                saved_path=Path(manifest.saved_path),
+                content_type=manifest.mime_type,
+                size_bytes=manifest.total_size
+                or Path(manifest.saved_path).stat().st_size,
+                final_url=manifest.final_url,
+            )
+
+        if manifest is None:
+            manifest = initialize_binary_download_manifest(
+                normalized_requested_url=normalized_url,
+                probe=active_probe,
+                download_dir=download_dir,
+            )
+            save_binary_download_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                shared_store=shared_store,
+                workspace_id=workspace_id,
+                download_key=download_key,
+            )
+
+        if not active_probe.range_supported or active_probe.total_size is None:
+            _cleanup_binary_download_dir(download_dir)
+            manifest = initialize_binary_download_manifest(
+                normalized_requested_url=normalized_url,
+                probe=active_probe,
+                download_dir=download_dir,
+            )
+            if probe_response is not None and probe_response.status_code == 200:
+                manifest = await save_non_resumable_binary_response(
+                    response=probe_response,
+                    requested_url=requested_url,
+                    manifest=manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            else:
+                manifest = await download_binary_without_resume(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    manifest=manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            return build_binary_download_projection(
+                saved_path=Path(manifest.saved_path),
+                content_type=manifest.mime_type,
+                size_bytes=manifest.total_size
+                or Path(manifest.saved_path).stat().st_size,
+                final_url=manifest.final_url,
+            )
+
+        last_error: ToolExecutionError | None = None
+        for attempt in range(2):
+            active_manifest = manifest
+            if attempt == 1:
+                _cleanup_binary_download_dir(download_dir)
+                active_manifest = initialize_binary_download_manifest(
+                    normalized_requested_url=normalized_url,
+                    probe=active_probe,
+                    download_dir=download_dir,
+                )
+                save_binary_download_manifest(
+                    manifest=active_manifest,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                )
+            try:
+                manifest = await download_binary_with_ranges(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    manifest=active_manifest,
+                    probe=active_probe,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+                return build_binary_download_projection(
+                    saved_path=Path(manifest.saved_path),
+                    content_type=manifest.mime_type,
+                    size_bytes=manifest.total_size
+                    or Path(manifest.saved_path).stat().st_size,
+                    final_url=manifest.final_url,
+                )
+            except ToolExecutionError as exc:
+                last_error = exc
+                if exc.error_type not in RANGE_RESET_ERROR_TYPES or attempt == 1:
+                    raise
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Binary download did not return a result")
+    finally:
+        if probe_response is not None:
+            await probe_response.aclose()
+
+
+async def probe_binary_download(
+    *,
+    client: httpx.AsyncClient,
+    url: str,
+    response_format: str,
+) -> BinaryDownloadProbe:
+    probe, response = await probe_binary_download_with_response(
+        client=client,
+        url=url,
+        response_format=response_format,
+    )
+    await response.aclose()
+    return probe
+
+
+async def probe_binary_download_with_response(
+    *,
+    client: httpx.AsyncClient,
+    url: str,
+    response_format: str,
+) -> tuple[BinaryDownloadProbe, httpx.Response]:
+    response = await fetch_url(
+        client=client,
+        url=url,
+        response_format=response_format,
+        extra_headers={"Range": RANGE_PROBE_HEADER_VALUE},
+    )
+    return (
+        build_binary_download_probe_from_response(
+            response=response,
+            requested_url=url,
+        ),
+        response,
+    )
+
+
+def build_binary_download_probe_from_response(
+    *,
+    response: httpx.Response,
+    requested_url: str,
+) -> BinaryDownloadProbe:
+    content_range = parse_content_range(response.headers.get("content-range"))
+    total_size = _parse_content_length(response)
+    range_supported = False
+    if response.status_code == 206 and content_range is not None:
+        start, end, total = content_range
+        if start == 0 and end == 0:
+            total_size = total
+            range_supported = True
+    return BinaryDownloadProbe(
+        requested_url=requested_url,
+        final_url=str(response.url),
+        content_type=normalize_content_type(response.headers.get("content-type", "")),
+        total_size=total_size,
+        etag=_normalized_optional_header(response.headers.get("etag")),
+        last_modified=_normalized_optional_header(
+            response.headers.get("last-modified")
+        ),
+        range_supported=range_supported,
+    )
+
+
+async def download_binary_without_resume(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    manifest: BinaryDownloadManifest,
+    download_dir: Path,
+    manifest_path: Path,
+    shared_store: SharedStateRepository,
+    workspace_id: str,
+    download_key: str,
+    cancel_check: Callable[[], None],
+) -> BinaryDownloadManifest:
+    temp_path = resolve_binary_temp_path(download_dir)
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    response = await fetch_url(
+        client=client,
+        url=requested_url,
+        response_format=response_format,
+    )
+    try:
+        return await save_non_resumable_binary_response(
+            response=response,
+            requested_url=requested_url,
+            manifest=manifest,
+            download_dir=download_dir,
+            manifest_path=manifest_path,
+            shared_store=shared_store,
+            workspace_id=workspace_id,
+            download_key=download_key,
+            cancel_check=cancel_check,
+        )
+    finally:
+        await response.aclose()
+
+
+async def download_binary_response_from_response(
+    *,
+    response: httpx.Response,
+    requested_url: str,
+    workspace_dir: Path,
+    workspace_id: str,
+    shared_store: SharedStateRepository,
+    cancel_check: Callable[[], None],
+) -> ToolResultProjection:
+    normalized_url = normalize_requested_download_url(requested_url)
+    download_key = build_binary_download_key(normalized_url)
+    download_dir = resolve_binary_download_dir(workspace_dir, download_key)
+    manifest_path = resolve_binary_manifest_path(download_dir)
+    _cleanup_binary_download_dir(download_dir)
+    manifest = initialize_binary_download_manifest(
+        normalized_requested_url=normalized_url,
+        probe=build_binary_download_probe_from_response(
+            response=response,
+            requested_url=requested_url,
+        ),
+        download_dir=download_dir,
+    )
+    manifest = await save_non_resumable_binary_response(
+        response=response,
+        requested_url=requested_url,
+        manifest=manifest,
+        download_dir=download_dir,
+        manifest_path=manifest_path,
+        shared_store=shared_store,
+        workspace_id=workspace_id,
+        download_key=download_key,
+        cancel_check=cancel_check,
+    )
+    return build_binary_download_projection(
+        saved_path=Path(manifest.saved_path),
+        content_type=manifest.mime_type,
+        size_bytes=manifest.total_size or Path(manifest.saved_path).stat().st_size,
+        final_url=manifest.final_url,
+    )
+
+
+async def save_non_resumable_binary_response(
+    *,
+    response: httpx.Response,
+    requested_url: str,
+    manifest: BinaryDownloadManifest,
+    download_dir: Path,
+    manifest_path: Path,
+    shared_store: SharedStateRepository,
+    workspace_id: str,
+    download_key: str,
+    cancel_check: Callable[[], None],
+) -> BinaryDownloadManifest:
+    temp_path = resolve_binary_temp_path(download_dir)
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = 0
+    try:
+        parsed_length = _parse_content_length(response)
+        if parsed_length is not None and parsed_length > MAX_BINARY_DOWNLOAD_SIZE_BYTES:
+            _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
+        with temp_path.open("wb") as handle:
+            async for chunk in response.aiter_bytes():
+                cancel_check()
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                bytes_written += len(chunk)
+                if bytes_written > MAX_BINARY_DOWNLOAD_SIZE_BYTES:
+                    _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
+        finalized_manifest = finalize_non_resumable_manifest(
+            manifest=manifest,
+            download_dir=download_dir,
+            final_url=str(response.url),
+            mime_type=normalize_content_type(response.headers.get("content-type", "")),
+            size_bytes=bytes_written,
+        )
+        finalize_binary_temp_file(temp_path, Path(finalized_manifest.saved_path))
+        save_binary_download_manifest(
+            manifest=finalized_manifest,
+            manifest_path=manifest_path,
+            shared_store=shared_store,
+            workspace_id=workspace_id,
+            download_key=download_key,
+        )
+        return finalized_manifest
+    except httpx.TimeoutException as exc:
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"Web fetch timed out for {urlparse(requested_url).netloc or requested_url}",
+            retryable=True,
+            details={"url_host": urlparse(requested_url).netloc},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Web fetch request failed for {urlparse(requested_url).netloc or requested_url}: {exc}",
+            retryable=True,
+            details={"url_host": urlparse(requested_url).netloc},
+        ) from exc
+    except Exception:
+        _cleanup_binary_download_dir(download_dir)
+        raise
+
+
+async def download_binary_with_ranges(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    manifest: BinaryDownloadManifest,
+    probe: BinaryDownloadProbe,
+    download_dir: Path,
+    manifest_path: Path,
+    shared_store: SharedStateRepository,
+    workspace_id: str,
+    download_key: str,
+    cancel_check: Callable[[], None],
+) -> BinaryDownloadManifest:
+    state_lock = asyncio.Lock()
+
+    async def persist_progress(
+        *,
+        segment_index: int,
+        downloaded_bytes: int,
+        complete: bool,
+    ) -> None:
+        async with state_lock:
+            segment = manifest.segments[segment_index]
+            segment.downloaded_bytes = downloaded_bytes
+            segment.complete = complete
+            manifest.completed = all(current.complete for current in manifest.segments)
+            save_binary_download_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                shared_store=shared_store,
+                workspace_id=workspace_id,
+                download_key=download_key,
+            )
+
+    pending_segments = [
+        segment for segment in manifest.segments if not segment.complete
+    ]
+    if len(pending_segments) == 1:
+        try:
+            await download_binary_range_segment(
+                client=client,
+                requested_url=requested_url,
+                response_format=response_format,
+                probe=probe,
+                segment=pending_segments[0],
+                download_dir=download_dir,
+                cancel_check=cancel_check,
+                persist_progress=persist_progress,
+            )
+        except BinaryDownloadFullResponseFallback as exc:
+            try:
+                _cleanup_binary_download_dir(download_dir)
+                fallback_manifest = initialize_binary_download_manifest(
+                    normalized_requested_url=manifest.normalized_requested_url,
+                    probe=build_binary_download_probe_from_response(
+                        response=exc.response,
+                        requested_url=requested_url,
+                    ),
+                    download_dir=download_dir,
+                )
+                return await save_non_resumable_binary_response(
+                    response=exc.response,
+                    requested_url=requested_url,
+                    manifest=fallback_manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            finally:
+                await exc.response.aclose()
+    elif pending_segments:
+        await asyncio.gather(
+            *[
+                download_binary_range_segment(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    probe=probe,
+                    segment=segment,
+                    download_dir=download_dir,
+                    cancel_check=cancel_check,
+                    persist_progress=persist_progress,
+                )
+                for segment in pending_segments
+            ]
+        )
+    finalized_manifest = finalize_resumable_manifest(
+        manifest=manifest,
+        probe=probe,
+        download_dir=download_dir,
+    )
+    save_binary_download_manifest(
+        manifest=finalized_manifest,
+        manifest_path=manifest_path,
+        shared_store=shared_store,
+        workspace_id=workspace_id,
+        download_key=download_key,
+    )
+    return finalized_manifest
+
+
+async def download_binary_range_segment(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    probe: BinaryDownloadProbe,
+    segment: BinaryDownloadSegment,
+    download_dir: Path,
+    cancel_check: Callable[[], None],
+    persist_progress: Callable[..., asyncio.Future | None] | Callable[..., object],
+) -> None:
+    segment_length = binary_segment_length(segment)
+    if segment.downloaded_bytes >= segment_length:
+        segment.downloaded_bytes = segment_length
+        segment.complete = True
+        await _maybe_await(
+            persist_progress(
+                segment_index=segment.index,
+                downloaded_bytes=segment_length,
+                complete=True,
+            )
+        )
+        return
+
+    segment_path = resolve_binary_segment_path(download_dir, segment)
+    segment_path.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = min(segment.downloaded_bytes, segment_length)
+    range_start = segment.start + bytes_written
+    range_end = segment.end
+    extra_headers = {"Range": f"bytes={range_start}-{range_end}"}
+    if_range = build_if_range_header(probe)
+    if if_range is not None:
+        extra_headers["If-Range"] = if_range
+
+    response = await fetch_url(
+        client=client,
+        url=requested_url,
+        response_format=response_format,
+        extra_headers=extra_headers,
+        allowed_error_status_codes={416},
+    )
+    bytes_since_flush = 0
+    keep_response_open = False
+    try:
+        expected_total = probe.total_size
+        if response.status_code == 416:
+            raise ToolExecutionError(
+                error_type="range_resume_mismatch",
+                message="Range download could not be resumed because the upstream response rejected the requested byte range.",
+                retryable=True,
+            )
+        if (
+            response.status_code == 200
+            and expected_total is not None
+            and segment_length == expected_total
+        ):
+            keep_response_open = True
+            raise BinaryDownloadFullResponseFallback(response)
+        content_range = parse_content_range(response.headers.get("content-range"))
+        if response.status_code != 206 or content_range is None:
+            raise ToolExecutionError(
+                error_type="range_resume_mismatch",
+                message="Range download could not be resumed because the upstream response changed.",
+                retryable=True,
+            )
+        if (
+            expected_total is None
+            or content_range[0] != range_start
+            or content_range[1] != range_end
+            or content_range[2] != expected_total
+        ):
+            raise ToolExecutionError(
+                error_type="range_response_invalid",
+                message="Range download returned an invalid Content-Range header.",
+                retryable=True,
+            )
+
+        with segment_path.open("ab") as handle:
+            async for chunk in response.aiter_bytes():
+                cancel_check()
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                bytes_written += len(chunk)
+                bytes_since_flush += len(chunk)
+                if bytes_written > segment_length:
+                    raise ToolExecutionError(
+                        error_type="range_response_invalid",
+                        message="Range download returned more bytes than requested.",
+                        retryable=True,
+                    )
+                if bytes_since_flush >= STATE_FLUSH_INTERVAL_BYTES:
+                    await _maybe_await(
+                        persist_progress(
+                            segment_index=segment.index,
+                            downloaded_bytes=bytes_written,
+                            complete=False,
+                        )
+                    )
+                    bytes_since_flush = 0
+        complete = bytes_written == segment_length
+        await _maybe_await(
+            persist_progress(
+                segment_index=segment.index,
+                downloaded_bytes=bytes_written,
+                complete=complete,
+            )
+        )
+        if not complete:
+            raise ToolExecutionError(
+                error_type="network_error",
+                message=f"Range download interrupted for {urlparse(requested_url).netloc or requested_url}",
+                retryable=True,
+                details={"url_host": urlparse(requested_url).netloc},
+            )
+    except httpx.TimeoutException as exc:
+        await _maybe_await(
+            persist_progress(
+                segment_index=segment.index,
+                downloaded_bytes=bytes_written,
+                complete=False,
+            )
+        )
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"Web fetch timed out for {urlparse(requested_url).netloc or requested_url}",
+            retryable=True,
+            details={"url_host": urlparse(requested_url).netloc},
+        ) from exc
+    except httpx.RequestError as exc:
+        await _maybe_await(
+            persist_progress(
+                segment_index=segment.index,
+                downloaded_bytes=bytes_written,
+                complete=False,
+            )
+        )
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Web fetch request failed for {urlparse(requested_url).netloc or requested_url}: {exc}",
+            retryable=True,
+            details={"url_host": urlparse(requested_url).netloc},
+        ) from exc
+    finally:
+        if not keep_response_open:
+            await response.aclose()
+
+
+def initialize_binary_download_manifest(
+    *,
+    normalized_requested_url: str,
+    probe: BinaryDownloadProbe,
+    download_dir: Path,
+) -> BinaryDownloadManifest:
+    suffix = sanitize_file_extension(probe.final_url, probe.content_type)
+    final_path = resolve_binary_final_path(download_dir, suffix)
+    segments = (
+        plan_binary_download_segments(probe.total_size)
+        if probe.range_supported and probe.total_size is not None
+        else []
+    )
+    return BinaryDownloadManifest(
+        requested_url=probe.requested_url,
+        normalized_requested_url=normalized_requested_url,
+        final_url=probe.final_url,
+        mime_type=probe.content_type,
+        suffix=suffix,
+        total_size=probe.total_size,
+        etag=probe.etag,
+        last_modified=probe.last_modified,
+        range_supported=probe.range_supported,
+        segment_count=len(segments),
+        segments=segments,
+        saved_path=str(final_path),
+        completed=False,
+    )
+
+
+def plan_binary_download_segments(
+    total_size: int | None,
+) -> list[BinaryDownloadSegment]:
+    if total_size is None or total_size <= 0:
+        return []
+    segment_count = (
+        PARALLEL_DOWNLOAD_SEGMENT_COUNT
+        if total_size >= PARALLEL_DOWNLOAD_THRESHOLD_BYTES
+        else 1
+    )
+    segment_size = max(
+        MIN_SEGMENT_SIZE_BYTES,
+        math.ceil(total_size / segment_count),
+    )
+    segments: list[BinaryDownloadSegment] = []
+    start = 0
+    index = 0
+    while start < total_size:
+        end = min(total_size - 1, start + segment_size - 1)
+        segments.append(
+            BinaryDownloadSegment(
+                index=index,
+                start=start,
+                end=end,
+                file_name=f"{index:04d}.part",
+            )
+        )
+        index += 1
+        start = end + 1
+    return segments
+
+
+def reconcile_binary_download_manifest(
+    manifest: BinaryDownloadManifest,
+    download_dir: Path,
+) -> BinaryDownloadManifest | None:
+    if manifest.completed:
+        final_path = Path(manifest.saved_path)
+        if not final_path.exists():
+            return None
+        if (
+            manifest.total_size is not None
+            and final_path.stat().st_size != manifest.total_size
+        ):
+            return None
+        return manifest
+
+    updated_segments: list[BinaryDownloadSegment] = []
+    for segment in manifest.segments:
+        segment_path = resolve_binary_segment_path(download_dir, segment)
+        expected_length = binary_segment_length(segment)
+        file_size = segment_path.stat().st_size if segment_path.exists() else 0
+        if file_size > expected_length:
+            return None
+        updated_segments.append(
+            segment.model_copy(
+                update={
+                    "downloaded_bytes": file_size,
+                    "complete": file_size == expected_length,
+                }
+            )
+        )
+    return manifest.model_copy(
+        update={
+            "segments": updated_segments,
+            "completed": all(segment.complete for segment in updated_segments),
+        }
+    )
+
+
+def binary_download_manifest_matches_probe(
+    *,
+    manifest: BinaryDownloadManifest,
+    probe: BinaryDownloadProbe,
+) -> bool:
+    if manifest.normalized_requested_url != normalize_requested_download_url(
+        probe.requested_url
+    ):
+        return False
+    if manifest.final_url != probe.final_url:
+        return False
+    if manifest.mime_type != probe.content_type:
+        return False
+    if not binary_download_has_strong_validator(
+        etag=probe.etag,
+        last_modified=probe.last_modified,
+    ):
+        return False
+    manifest_strong_etag = normalize_strong_etag(manifest.etag)
+    probe_strong_etag = normalize_strong_etag(probe.etag)
+    if manifest_strong_etag is not None or probe_strong_etag is not None:
+        return (
+            manifest_strong_etag is not None
+            and manifest_strong_etag == probe_strong_etag
+        )
+    if manifest.last_modified is not None or probe.last_modified is not None:
+        return (
+            manifest.last_modified is not None
+            and manifest.last_modified == probe.last_modified
+        )
+    return False
+
+
+def binary_download_manifest_is_usable(
+    *,
+    manifest: BinaryDownloadManifest,
+    probe: BinaryDownloadProbe,
+) -> bool:
+    if not binary_download_manifest_matches_probe(manifest=manifest, probe=probe):
+        return False
+    final_path = Path(manifest.saved_path)
+    if not final_path.exists():
+        return False
+    if (
+        manifest.total_size is not None
+        and final_path.stat().st_size != manifest.total_size
+    ):
+        return False
+    return True
+
+
+def finalize_non_resumable_manifest(
+    *,
+    manifest: BinaryDownloadManifest,
+    download_dir: Path,
+    final_url: str,
+    mime_type: str,
+    size_bytes: int,
+) -> BinaryDownloadManifest:
+    suffix = sanitize_file_extension(final_url, mime_type)
+    final_path = resolve_binary_final_path(download_dir, suffix)
+    return manifest.model_copy(
+        update={
+            "final_url": final_url,
+            "mime_type": mime_type,
+            "suffix": suffix,
+            "total_size": size_bytes,
+            "saved_path": str(final_path),
+            "range_supported": False,
+            "segment_count": 0,
+            "segments": [],
+            "completed": True,
+        }
+    )
+
+
+def finalize_resumable_manifest(
+    *,
+    manifest: BinaryDownloadManifest,
+    probe: BinaryDownloadProbe,
+    download_dir: Path,
+) -> BinaryDownloadManifest:
+    if not all(segment.complete for segment in manifest.segments):
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Range download interrupted for {urlparse(probe.requested_url).netloc or probe.requested_url}",
+            retryable=True,
+            details={"url_host": urlparse(probe.requested_url).netloc},
+        )
+    final_path = resolve_binary_final_path(download_dir, manifest.suffix)
+    temp_final_path = resolve_binary_merge_path(download_dir, manifest.suffix)
+    temp_final_path.parent.mkdir(parents=True, exist_ok=True)
+    with temp_final_path.open("wb") as handle:
+        for segment in manifest.segments:
+            with resolve_binary_segment_path(download_dir, segment).open(
+                "rb"
+            ) as source:
+                shutil.copyfileobj(source, handle, length=DOWNLOAD_CHUNK_SIZE_BYTES)
+    if (
+        probe.total_size is not None
+        and temp_final_path.stat().st_size != probe.total_size
+    ):
+        temp_final_path.unlink(missing_ok=True)
+        raise ToolExecutionError(
+            error_type="range_response_invalid",
+            message="Range download assembled to an unexpected size.",
+            retryable=True,
+        )
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_final_path.replace(final_path)
+    shutil.rmtree(resolve_binary_segments_dir(download_dir), ignore_errors=True)
+    return manifest.model_copy(
+        update={
+            "saved_path": str(final_path),
+            "completed": True,
+            "total_size": probe.total_size,
+            "final_url": probe.final_url,
+            "mime_type": probe.content_type,
+            "etag": probe.etag,
+            "last_modified": probe.last_modified,
+        }
+    )
+
+
+def build_binary_download_projection(
+    *,
+    saved_path: Path,
+    content_type: str,
+    size_bytes: int,
+    final_url: str,
+) -> ToolResultProjection:
+    visible_data: dict[str, JsonValue] = {
+        "output": "Binary content saved to file",
+        "saved_path": str(saved_path),
+        "mime_type": content_type,
+        "size_bytes": size_bytes,
+        "final_url": final_url,
+    }
+    return ToolResultProjection(
+        visible_data=visible_data,
+        internal_data=visible_data,
+    )
+
+
+def normalize_requested_download_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(fragment="").geturl()
+
+
+def build_binary_download_key(normalized_url: str) -> str:
+    return hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
+
+
+def resolve_binary_download_dir(workspace_dir: Path, download_key: str) -> Path:
+    return resolve_webfetch_output_dir(workspace_dir) / "downloads" / download_key
+
+
+def resolve_binary_manifest_path(download_dir: Path) -> Path:
+    return download_dir / "manifest.json"
+
+
+def resolve_binary_segments_dir(download_dir: Path) -> Path:
+    return download_dir / "segments"
+
+
+def resolve_binary_segment_path(
+    download_dir: Path,
+    segment: BinaryDownloadSegment,
+) -> Path:
+    return resolve_binary_segments_dir(download_dir) / segment.file_name
+
+
+def resolve_binary_final_path(download_dir: Path, suffix: str) -> Path:
+    return download_dir / f"payload{suffix}"
+
+
+def resolve_binary_temp_path(download_dir: Path) -> Path:
+    return download_dir / "payload.part"
+
+
+def resolve_binary_merge_path(download_dir: Path, suffix: str) -> Path:
+    return download_dir / f"payload{suffix}.tmp"
+
+
+def load_binary_download_manifest(manifest_path: Path) -> BinaryDownloadManifest | None:
+    if not manifest_path.exists():
+        return None
+    try:
+        return BinaryDownloadManifest.model_validate_json(
+            manifest_path.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return None
+
+
+def save_binary_download_manifest(
+    *,
+    manifest: BinaryDownloadManifest,
+    manifest_path: Path,
+    shared_store: SharedStateRepository,
+    workspace_id: str,
+    download_key: str,
+) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(manifest_path, manifest.model_dump_json(indent=2))
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(scope_type=ScopeType.WORKSPACE, scope_id=workspace_id),
+            key=f"{WEBFETCH_DOWNLOAD_PREFIX}:{download_key}",
+            value_json=manifest.model_dump_json(),
+        )
+    )
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as handle:
+        handle.write(content)
+        temp_path = Path(handle.name)
+    try:
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def finalize_binary_temp_file(temp_path: Path, final_path: Path) -> None:
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path.replace(final_path)
+
+
+def _cleanup_binary_download_dir(download_dir: Path) -> None:
+    shutil.rmtree(download_dir, ignore_errors=True)
+
+
+def build_if_range_header(probe: BinaryDownloadProbe) -> str | None:
+    strong_etag = normalize_strong_etag(probe.etag)
+    if strong_etag is not None:
+        return strong_etag
+    if probe.last_modified:
+        return probe.last_modified
+    return None
+
+
+def binary_download_has_strong_validator(
+    *,
+    etag: str | None,
+    last_modified: str | None,
+) -> bool:
+    return normalize_strong_etag(etag) is not None or last_modified is not None
+
+
+def normalize_strong_etag(etag: str | None) -> str | None:
+    if etag is None:
+        return None
+    stripped = etag.strip()
+    if not stripped:
+        return None
+    if stripped[:2].lower() == "w/":
+        return None
+    return stripped
+
+
+def parse_content_range(content_range: str | None) -> tuple[int, int, int] | None:
+    if not content_range:
+        return None
+    match = re.match(r"^bytes (\d+)-(\d+)/(\d+)$", content_range.strip())
+    if match is None:
+        return None
+    start = int(match.group(1))
+    end = int(match.group(2))
+    total = int(match.group(3))
+    if start > end or end >= total:
+        return None
+    return start, end, total
+
+
+def binary_segment_length(segment: BinaryDownloadSegment) -> int:
+    return segment.end - segment.start + 1
+
+
+def _normalized_optional_header(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+async def _maybe_await(value: object) -> None:
+    if asyncio.isfuture(value) or asyncio.iscoroutine(value):
+        await value
 
 
 def build_structured_projection(
