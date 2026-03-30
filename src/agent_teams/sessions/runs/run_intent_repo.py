@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -13,6 +12,7 @@ from agent_teams.media import (
     content_parts_to_text,
     text_part,
 )
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
@@ -22,7 +22,6 @@ from agent_teams.sessions.runs.run_models import (
     RunKind,
     RunTopologySnapshot,
 )
-from agent_teams.persistence.db import open_sqlite
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.validation import normalize_persisted_text
 
@@ -30,196 +29,209 @@ type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 _MediaGenerationConfigAdapter = TypeAdapter(MediaGenerationConfig)
 
 
-class RunIntentRepository:
+class RunIntentRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS run_intents (
-                run_id         TEXT PRIMARY KEY,
-                session_id     TEXT NOT NULL,
-                intent         TEXT NOT NULL,
-                input_json     TEXT,
-                run_kind       TEXT NOT NULL DEFAULT 'conversation',
-                generation_config_json TEXT,
-                execution_mode TEXT NOT NULL,
-                yolo           TEXT NOT NULL DEFAULT 'false',
-                reuse_root_instance TEXT NOT NULL DEFAULT 'true',
-                thinking_enabled TEXT NOT NULL DEFAULT 'false',
-                thinking_effort TEXT,
-                target_role_id TEXT,
-                session_mode TEXT NOT NULL DEFAULT 'normal',
-                topology_json TEXT,
-                conversation_context_json TEXT,
-                created_at     TEXT NOT NULL,
-                updated_at     TEXT NOT NULL
-            )
-            """
-        )
-        columns = [
-            str(row["name"])
-            for row in self._conn.execute("PRAGMA table_info(run_intents)").fetchall()
-        ]
-        if "yolo" not in columns:
+        def operation() -> None:
             self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN yolo TEXT NOT NULL DEFAULT 'false'"
+                """
+                CREATE TABLE IF NOT EXISTS run_intents (
+                    run_id         TEXT PRIMARY KEY,
+                    session_id     TEXT NOT NULL,
+                    intent         TEXT NOT NULL,
+                    input_json     TEXT,
+                    run_kind       TEXT NOT NULL DEFAULT 'conversation',
+                    generation_config_json TEXT,
+                    execution_mode TEXT NOT NULL,
+                    yolo           TEXT NOT NULL DEFAULT 'false',
+                    reuse_root_instance TEXT NOT NULL DEFAULT 'true',
+                    thinking_enabled TEXT NOT NULL DEFAULT 'false',
+                    thinking_effort TEXT,
+                    target_role_id TEXT,
+                    session_mode TEXT NOT NULL DEFAULT 'normal',
+                    topology_json TEXT,
+                    conversation_context_json TEXT,
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL
+                )
+                """
             )
-            if "approval_mode" in columns:
+            columns = [
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(run_intents)"
+                ).fetchall()
+            ]
+            if "yolo" not in columns:
                 self._conn.execute(
                     """
-                    UPDATE run_intents
-                    SET yolo = CASE
-                        WHEN approval_mode = 'yolo' THEN 'true'
-                        ELSE 'false'
-                    END
+                    ALTER TABLE run_intents ADD COLUMN yolo TEXT NOT NULL DEFAULT 'false'
                     """
                 )
-        if "thinking_enabled" not in columns:
+                if "approval_mode" in columns:
+                    self._conn.execute(
+                        """
+                        UPDATE run_intents
+                        SET yolo = CASE
+                            WHEN approval_mode = 'yolo' THEN 'true'
+                            ELSE 'false'
+                        END
+                        """
+                    )
+            if "thinking_enabled" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"
+                )
+            if "reuse_root_instance" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN reuse_root_instance TEXT NOT NULL DEFAULT 'true'"
+                )
+            if "input_json" not in columns:
+                self._conn.execute("ALTER TABLE run_intents ADD COLUMN input_json TEXT")
+            if "run_kind" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'conversation'"
+                )
+            if "generation_config_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN generation_config_json TEXT"
+                )
+            if "thinking_effort" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN thinking_effort TEXT"
+                )
+            if "session_mode" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
+                )
+            if "target_role_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN target_role_id TEXT"
+                )
+            if "topology_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN topology_json TEXT"
+                )
+            if "conversation_context_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN conversation_context_json TEXT"
+                )
             self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"
+                "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
             )
-        if "reuse_root_instance" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN reuse_root_instance TEXT NOT NULL DEFAULT 'true'"
-            )
-        if "input_json" not in columns:
-            self._conn.execute("ALTER TABLE run_intents ADD COLUMN input_json TEXT")
-        if "run_kind" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'conversation'"
-            )
-        if "generation_config_json" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN generation_config_json TEXT"
-            )
-        if "thinking_effort" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN thinking_effort TEXT"
-            )
-        if "session_mode" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'normal'"
-            )
-        if "target_role_id" not in columns:
-            self._conn.execute("ALTER TABLE run_intents ADD COLUMN target_role_id TEXT")
-        if "topology_json" not in columns:
-            self._conn.execute("ALTER TABLE run_intents ADD COLUMN topology_json TEXT")
-        if "conversation_context_json" not in columns:
-            self._conn.execute(
-                "ALTER TABLE run_intents ADD COLUMN conversation_context_json TEXT"
-            )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
-        )
-        self._conn.commit()
+
+        self._run_write(operation_name="init_tables", operation=operation)
 
     def upsert(self, *, run_id: str, session_id: str, intent: IntentInput) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO run_intents(
-                run_id,
-                session_id,
-                intent,
-                input_json,
-                run_kind,
-                generation_config_json,
-                execution_mode,
-                yolo,
-                reuse_root_instance,
-                thinking_enabled,
-                thinking_effort,
-                target_role_id,
-                session_mode,
-                topology_json,
-                conversation_context_json,
-                created_at,
-                updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id)
-            DO UPDATE SET
-                session_id=excluded.session_id,
-                intent=excluded.intent,
-                input_json=excluded.input_json,
-                run_kind=excluded.run_kind,
-                generation_config_json=excluded.generation_config_json,
-                execution_mode=excluded.execution_mode,
-                yolo=excluded.yolo,
-                reuse_root_instance=excluded.reuse_root_instance,
-                thinking_enabled=excluded.thinking_enabled,
-                thinking_effort=excluded.thinking_effort,
-                target_role_id=excluded.target_role_id,
-                session_mode=excluded.session_mode,
-                topology_json=excluded.topology_json,
-                conversation_context_json=excluded.conversation_context_json,
-                updated_at=excluded.updated_at
-            """,
-            (
-                run_id,
-                session_id,
-                intent.intent,
-                ContentPartsAdapter.dump_json(intent.input).decode("utf-8"),
-                intent.run_kind.value,
+        self._run_write(
+            operation_name="upsert",
+            operation=lambda: self._conn.execute(
+                """
+                INSERT INTO run_intents(
+                    run_id,
+                    session_id,
+                    intent,
+                    input_json,
+                    run_kind,
+                    generation_config_json,
+                    execution_mode,
+                    yolo,
+                    reuse_root_instance,
+                    thinking_enabled,
+                    thinking_effort,
+                    target_role_id,
+                    session_mode,
+                    topology_json,
+                    conversation_context_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    intent=excluded.intent,
+                    input_json=excluded.input_json,
+                    run_kind=excluded.run_kind,
+                    generation_config_json=excluded.generation_config_json,
+                    execution_mode=excluded.execution_mode,
+                    yolo=excluded.yolo,
+                    reuse_root_instance=excluded.reuse_root_instance,
+                    thinking_enabled=excluded.thinking_enabled,
+                    thinking_effort=excluded.thinking_effort,
+                    target_role_id=excluded.target_role_id,
+                    session_mode=excluded.session_mode,
+                    topology_json=excluded.topology_json,
+                    conversation_context_json=excluded.conversation_context_json,
+                    updated_at=excluded.updated_at
+                """,
                 (
-                    intent.generation_config.model_dump_json()
-                    if intent.generation_config is not None
-                    else None
+                    run_id,
+                    session_id,
+                    intent.intent,
+                    ContentPartsAdapter.dump_json(intent.input).decode("utf-8"),
+                    intent.run_kind.value,
+                    (
+                        intent.generation_config.model_dump_json()
+                        if intent.generation_config is not None
+                        else None
+                    ),
+                    intent.execution_mode.value,
+                    "true" if intent.yolo else "false",
+                    "true" if intent.reuse_root_instance else "false",
+                    "true" if intent.thinking.enabled else "false",
+                    intent.thinking.effort,
+                    intent.target_role_id,
+                    intent.session_mode.value,
+                    (
+                        intent.topology.model_dump_json()
+                        if intent.topology is not None
+                        else None
+                    ),
+                    (
+                        intent.conversation_context.model_dump_json()
+                        if intent.conversation_context is not None
+                        else None
+                    ),
+                    now,
+                    now,
                 ),
-                intent.execution_mode.value,
-                "true" if intent.yolo else "false",
-                "true" if intent.reuse_root_instance else "false",
-                "true" if intent.thinking.enabled else "false",
-                intent.thinking.effort,
-                intent.target_role_id,
-                intent.session_mode.value,
-                (
-                    intent.topology.model_dump_json()
-                    if intent.topology is not None
-                    else None
-                ),
-                (
-                    intent.conversation_context.model_dump_json()
-                    if intent.conversation_context is not None
-                    else None
-                ),
-                now,
-                now,
             ),
         )
-        self._conn.commit()
 
     def append_followup(self, *, run_id: str, content: str) -> None:
-        row = self._conn.execute(
-            "SELECT intent, input_json FROM run_intents WHERE run_id=?",
-            (run_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"Unknown run_id: {run_id}")
-        current_parts = _coerce_input_parts(row["input_json"], row["intent"])
-        next_part = text_part(content)
-        next_parts = (
-            current_parts if next_part is None else current_parts + (next_part,)
-        )
-        next_intent = content_parts_to_text(next_parts)
-        self._conn.execute(
-            """
-            UPDATE run_intents
-            SET intent=?, input_json=?, updated_at=?
-            WHERE run_id=?
-            """,
-            (
-                next_intent,
-                ContentPartsAdapter.dump_json(next_parts).decode("utf-8"),
-                datetime.now(tz=timezone.utc).isoformat(),
-                run_id,
-            ),
-        )
-        self._conn.commit()
+        def operation() -> None:
+            row = self._conn.execute(
+                "SELECT intent, input_json FROM run_intents WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown run_id: {run_id}")
+            current_parts = _coerce_input_parts(row["input_json"], row["intent"])
+            next_part = text_part(content)
+            next_parts = (
+                current_parts if next_part is None else current_parts + (next_part,)
+            )
+            next_intent = content_parts_to_text(next_parts)
+            self._conn.execute(
+                """
+                UPDATE run_intents
+                SET intent=?, input_json=?, updated_at=?
+                WHERE run_id=?
+                """,
+                (
+                    next_intent,
+                    ContentPartsAdapter.dump_json(next_parts).decode("utf-8"),
+                    datetime.now(tz=timezone.utc).isoformat(),
+                    run_id,
+                ),
+            )
+
+        self._run_write(operation_name="append_followup", operation=operation)
 
     def get(
         self,
@@ -227,28 +239,30 @@ class RunIntentRepository:
         *,
         fallback_session_id: str | None = None,
     ) -> IntentInput:
-        row = self._conn.execute(
-            """
-            SELECT
-                session_id,
-                intent,
-                input_json,
-                run_kind,
-                generation_config_json,
-                execution_mode,
-                yolo,
-                reuse_root_instance,
-                thinking_enabled,
-                thinking_effort,
-                target_role_id,
-                session_mode,
-                topology_json,
-                conversation_context_json
-            FROM run_intents
-            WHERE run_id=?
-            """,
-            (run_id,),
-        ).fetchone()
+        row = self._run_read(
+            lambda: self._conn.execute(
+                """
+                SELECT
+                    session_id,
+                    intent,
+                    input_json,
+                    run_kind,
+                    generation_config_json,
+                    execution_mode,
+                    yolo,
+                    reuse_root_instance,
+                    thinking_enabled,
+                    thinking_effort,
+                    target_role_id,
+                    session_mode,
+                    topology_json,
+                    conversation_context_json
+                FROM run_intents
+                WHERE run_id=?
+                """,
+                (run_id,),
+            ).fetchone()
+        )
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
         session_id = _coerce_session_id(
