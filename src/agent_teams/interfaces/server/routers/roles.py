@@ -30,6 +30,7 @@ from agent_teams.external_agents import ExternalAgentConfigService
 from agent_teams.roles.settings_service import RoleSettingsService
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
 
@@ -106,7 +107,7 @@ def list_role_configs(
     response_model_exclude_none=True,
 )
 def get_role_config(
-    role_id: str,
+    role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
     try:
@@ -121,7 +122,7 @@ def get_role_config(
     response_model_exclude_none=True,
 )
 def save_role_config(
-    role_id: str,
+    role_id: RequiredIdentifierStr,
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
@@ -133,7 +134,7 @@ def save_role_config(
 
 @router.delete("/configs/{role_id}")
 def delete_role_config(
-    role_id: str,
+    role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, str]:
     try:

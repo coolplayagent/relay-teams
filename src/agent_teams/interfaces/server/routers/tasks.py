@@ -10,6 +10,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
     TaskUpdate,
 )
 from agent_teams.interfaces.server.deps import get_task_repo, get_task_service
+from agent_teams.validation import RequiredIdentifierStr
 
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.agents.tasks.models import TaskRecord
@@ -33,7 +34,7 @@ class UpdateTaskRequest(BaseModel):
 class DispatchTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
+    role_id: RequiredIdentifierStr
     prompt: str = ""
 
 
@@ -44,7 +45,7 @@ def list_tasks(task_repo: TaskRepository = Depends(get_task_repo)) -> list[TaskR
 
 @router.post("/runs/{run_id}")
 async def create_tasks_for_run(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     req: CreateTasksRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
@@ -61,7 +62,7 @@ async def create_tasks_for_run(
 
 @router.get("/runs/{run_id}")
 def list_tasks_for_run(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     include_root: bool = False,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
@@ -73,7 +74,7 @@ def list_tasks_for_run(
 
 @router.get("/{task_id}", response_model=TaskRecord)
 def get_task(
-    task_id: str,
+    task_id: RequiredIdentifierStr,
     task_repo: TaskRepository = Depends(get_task_repo),
 ) -> TaskRecord:
     try:
@@ -84,7 +85,7 @@ def get_task(
 
 @router.patch("/{task_id}")
 def update_task_by_id(
-    task_id: str,
+    task_id: RequiredIdentifierStr,
     req: UpdateTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
@@ -105,7 +106,7 @@ def update_task_by_id(
 
 @router.post("/{task_id}/dispatch")
 async def dispatch_task_by_id(
-    task_id: str,
+    task_id: RequiredIdentifierStr,
     req: DispatchTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:

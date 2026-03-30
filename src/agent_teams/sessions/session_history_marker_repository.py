@@ -2,17 +2,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from pydantic import JsonValue, ValidationError
+
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerRecord,
     SessionHistoryMarkerType,
 )
+from agent_teams.validation import (
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class SessionHistoryMarkerRepository:
@@ -116,7 +126,9 @@ class SessionHistoryMarkerRepository:
                 """,
                 (session_id,),
             ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def get_latest(
         self,
@@ -135,12 +147,14 @@ class SessionHistoryMarkerRepository:
         else:
             query += " AND marker_type=?"
             params = (session_id, marker_type.value)
-        query += " ORDER BY created_at DESC, marker_id DESC LIMIT 1"
+        query += " ORDER BY created_at DESC, marker_id DESC"
         with self._lock:
-            row = self._conn.execute(query, params).fetchone()
-        if row is None:
-            return None
-        return self._to_record(row)
+            rows = self._conn.execute(query, params).fetchall()
+        for row in rows:
+            record = self._record_or_none(row)
+            if record is not None:
+                return record
+        return None
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -159,12 +173,29 @@ class SessionHistoryMarkerRepository:
     def _to_record(row: sqlite3.Row) -> SessionHistoryMarkerRecord:
         metadata = _load_metadata(str(row["metadata_json"]))
         return SessionHistoryMarkerRecord(
-            marker_id=str(row["marker_id"]),
-            session_id=str(row["session_id"]),
+            marker_id=require_persisted_identifier(
+                row["marker_id"],
+                field_name="marker_id",
+            ),
+            session_id=require_persisted_identifier(
+                row["session_id"],
+                field_name="session_id",
+            ),
             marker_type=SessionHistoryMarkerType(str(row["marker_type"])),
             metadata=metadata,
-            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_at=_require_history_marker_timestamp(
+                row=row,
+                marker_id=str(row["marker_id"]),
+                field_name="created_at",
+            ),
         )
+
+    def _record_or_none(self, row: sqlite3.Row) -> SessionHistoryMarkerRecord | None:
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_history_marker_row(row=row, error=exc)
+            return None
 
 
 def _load_metadata(raw_value: str) -> dict[str, str]:
@@ -179,3 +210,63 @@ def _load_metadata(raw_value: str) -> dict[str, str]:
         for key, value in parsed.items()
         if isinstance(key, str) and isinstance(value, str)
     }
+
+
+def _require_history_marker_timestamp(
+    *,
+    row: sqlite3.Row,
+    marker_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_history_marker_timestamp(
+        marker_id=marker_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_history_marker_timestamp(
+    *,
+    marker_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "marker_id": marker_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.history_marker_repository.timestamp_invalid",
+        message="Invalid persisted session history marker timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_history_marker_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "marker_id": _persisted_value_preview(row["marker_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.history_marker_repository.row_invalid",
+        message="Skipping invalid persisted session history marker row",
+        payload=payload,
+    )

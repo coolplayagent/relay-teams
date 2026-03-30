@@ -2,19 +2,28 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from agent_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,
 )
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.validation import (
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class FeishuAccountNameConflictError(ValueError):
@@ -215,7 +224,11 @@ class FeishuAccountRepository:
         ).fetchone()
         if row is None:
             raise KeyError(f"Unknown Feishu account: {account_id}")
-        return self._row_to_record(row)
+        try:
+            return self._row_to_record(row)
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            _log_invalid_feishu_account_row(row=row, error=exc)
+            raise KeyError(f"Unknown Feishu account: {account_id}") from exc
 
     def list_accounts(self) -> tuple[FeishuGatewayAccountRecord, ...]:
         rows = self._conn.execute(
@@ -225,7 +238,13 @@ class FeishuAccountRepository:
             ORDER BY created_at DESC
             """
         ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        records: list[FeishuGatewayAccountRecord] = []
+        for row in rows:
+            try:
+                records.append(self._row_to_record(row))
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_feishu_account_row(row=row, error=exc)
+        return tuple(records)
 
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -243,28 +262,101 @@ class FeishuAccountRepository:
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> FeishuGatewayAccountRecord:
         return FeishuGatewayAccountRecord(
-            account_id=str(row["account_id"]),
-            name=str(row["name"]),
+            account_id=require_persisted_identifier(
+                row["account_id"],
+                field_name="account_id",
+            ),
+            name=require_persisted_identifier(row["name"], field_name="name"),
             display_name=str(row["display_name"]),
             status=FeishuGatewayAccountStatus(str(row["status"])),
             source_config=_load_json_object(row["source_config_json"]),
             target_config=(
                 _load_json_object(row["target_config_json"])
-                if row["target_config_json"] is not None
+                if normalize_persisted_text(row["target_config_json"]) is not None
                 else None
             ),
-            created_at=datetime.fromisoformat(str(row["created_at"])).astimezone(UTC),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])).astimezone(UTC),
+            created_at=_require_feishu_account_timestamp(
+                row=row,
+                account_id=str(row["account_id"]),
+                field_name="created_at",
+            ).astimezone(UTC),
+            updated_at=_require_feishu_account_timestamp(
+                row=row,
+                account_id=str(row["account_id"]),
+                field_name="updated_at",
+            ).astimezone(UTC),
         )
 
 
 def _load_json_object(raw_value: object) -> dict[str, JsonValue]:
-    if raw_value is None:
+    normalized = normalize_persisted_text(raw_value)
+    if normalized is None:
         return {}
-    parsed = json.loads(str(raw_value))
+    parsed = json.loads(normalized)
     if not isinstance(parsed, dict):
         return {}
     return {str(key): value for key, value in parsed.items()}
+
+
+def _require_feishu_account_timestamp(
+    *,
+    row: sqlite3.Row,
+    account_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_feishu_account_timestamp(
+        account_id=account_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_feishu_account_timestamp(
+    *,
+    account_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "account_id": account_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.feishu.account_repository.timestamp_invalid",
+        message="Invalid persisted Feishu account timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_feishu_account_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "account_id": _persisted_value_preview(row["account_id"]),
+        "name": _persisted_value_preview(row["name"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.feishu.account_repository.row_invalid",
+        message="Skipping invalid persisted Feishu account row",
+        payload=payload,
+    )
 
 
 __all__ = ["FeishuAccountNameConflictError", "FeishuAccountRepository"]

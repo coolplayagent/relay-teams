@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 WECHAT_PLATFORM = "wechat"
 DEFAULT_WECHAT_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -36,7 +37,7 @@ class WeChatUploadMediaType(int, Enum):
 class WeChatAccountRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    account_id: str = Field(min_length=1)
+    account_id: RequiredIdentifierStr
     display_name: str = Field(min_length=1)
     base_url: str = Field(min_length=1, default=DEFAULT_WECHAT_BASE_URL)
     cdn_base_url: str = Field(min_length=1, default=DEFAULT_WECHAT_CDN_BASE_URL)
@@ -44,10 +45,10 @@ class WeChatAccountRecord(BaseModel):
     status: WeChatAccountStatus = WeChatAccountStatus.ENABLED
     remote_user_id: str | None = None
     sync_cursor: str = ""
-    workspace_id: str = Field(min_length=1, default="default")
+    workspace_id: RequiredIdentifierStr = "default"
     session_mode: SessionMode = SessionMode.NORMAL
-    normal_root_role_id: str | None = None
-    orchestration_preset_id: str | None = None
+    normal_root_role_id: OptionalIdentifierStr = None
+    orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     last_login_at: datetime | None = None
@@ -68,10 +69,10 @@ class WeChatAccountUpdateInput(BaseModel):
     cdn_base_url: str | None = None
     route_tag: str | None = None
     enabled: bool | None = None
-    workspace_id: str | None = None
+    workspace_id: OptionalIdentifierStr = None
     session_mode: SessionMode | None = None
-    normal_root_role_id: str | None = None
-    orchestration_preset_id: str | None = None
+    normal_root_role_id: OptionalIdentifierStr = None
+    orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool | None = None
     thinking: RunThinkingConfig | None = None
 
@@ -87,7 +88,7 @@ class WeChatLoginStartRequest(BaseModel):
 class WeChatLoginStartResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_key: str = Field(min_length=1)
+    session_key: RequiredIdentifierStr
     qr_code_url: str | None = None
     message: str = Field(min_length=1)
 
@@ -95,7 +96,7 @@ class WeChatLoginStartResponse(BaseModel):
 class WeChatLoginWaitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_key: str = Field(min_length=1)
+    session_key: RequiredIdentifierStr
     timeout_ms: int = Field(default=480000, ge=1000, le=900000)
 
 
@@ -103,7 +104,7 @@ class WeChatLoginWaitResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     connected: bool
-    account_id: str | None = None
+    account_id: OptionalIdentifierStr = None
     message: str = Field(min_length=1)
 
 
@@ -264,7 +265,7 @@ class WeChatUploadedMedia(BaseModel):
 class WeChatGatewaySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    account_id: str = Field(min_length=1)
+    account_id: RequiredIdentifierStr
     running: bool = False
     last_error: str | None = None
     last_event_at: datetime | None = None
@@ -275,7 +276,7 @@ class WeChatGatewaySnapshot(BaseModel):
 class WeChatLoginSession(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_key: str = Field(min_length=1)
+    session_key: RequiredIdentifierStr
     qrcode: str = Field(min_length=1)
     qr_code_url: str = Field(min_length=1)
     base_url: str = Field(min_length=1)

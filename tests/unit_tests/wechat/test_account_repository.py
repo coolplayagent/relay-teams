@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
+import pytest
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.gateway.wechat import WeChatAccountRecord, WeChatAccountRepository
@@ -53,3 +56,80 @@ def test_wechat_account_repository_deletes_account(tmp_path: Path) -> None:
     repository.delete_account("wx_delete")
 
     assert repository.list_accounts() == ()
+
+
+def test_wechat_account_repository_skips_invalid_persisted_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "wechat_invalid_rows.db"
+    repository = WeChatAccountRepository(db_path)
+    _ = repository.upsert_account(
+        WeChatAccountRecord(
+            account_id="wx_valid",
+            display_name="Valid Account",
+        )
+    )
+    _insert_wechat_account_row(
+        db_path,
+        account_id="None",
+    )
+
+    records = repository.list_accounts()
+
+    assert [record.account_id for record in records] == ["wx_valid"]
+    with pytest.raises(KeyError):
+        repository.get_account("None")
+
+
+def _insert_wechat_account_row(
+    db_path: Path,
+    *,
+    account_id: str,
+) -> None:
+    now = datetime.now(tz=timezone.utc).isoformat()
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        INSERT INTO wechat_accounts(
+            account_id,
+            display_name,
+            base_url,
+            cdn_base_url,
+            route_tag,
+            status,
+            remote_user_id,
+            sync_cursor,
+            workspace_id,
+            session_mode,
+            normal_root_role_id,
+            orchestration_preset_id,
+            yolo,
+            thinking_json,
+            last_login_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            account_id,
+            "Broken Account",
+            "https://wechat.example.test",
+            "https://cdn.example.test",
+            None,
+            "enabled",
+            None,
+            "",
+            "default",
+            "normal",
+            None,
+            None,
+            1,
+            "{}",
+            None,
+            now,
+            now,
+        ),
+    )
+    connection.commit()
+    connection.close()
