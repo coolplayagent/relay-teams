@@ -125,6 +125,42 @@ def test_list_all_skips_rows_with_blank_session_id(tmp_path: Path) -> None:
     assert [record.session_id for record in records] == ["session-valid"]
 
 
+@pytest.mark.parametrize("session_id", ["None", "null"])
+def test_list_all_skips_rows_with_none_like_session_id(
+    tmp_path: Path,
+    session_id: str,
+) -> None:
+    db_path = tmp_path / "session_repository_none_like_session_id.db"
+    repository = SessionRepository(db_path)
+    _insert_session_row(
+        db_path,
+        session_id="session-valid",
+        metadata_json="{}",
+    )
+    _insert_session_row(
+        db_path,
+        session_id=session_id,
+        metadata_json="{}",
+    )
+
+    records = repository.list_all()
+
+    assert [record.session_id for record in records] == ["session-valid"]
+
+
+def test_get_raises_key_error_for_invalid_persisted_row(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_invalid_get.db"
+    repository = SessionRepository(db_path)
+    _insert_session_row(
+        db_path,
+        session_id="None",
+        metadata_json="{}",
+    )
+
+    with pytest.raises(KeyError):
+        repository.get("None")
+
+
 @pytest.mark.parametrize("started_at", ["", "None", "null"])
 def test_repository_init_normalizes_missing_or_none_like_started_at_for_mark_started(
     tmp_path: Path,

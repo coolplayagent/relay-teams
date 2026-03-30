@@ -15,6 +15,10 @@ Common status codes:
 - `409`: runtime conflict
 - `422`: request validation error
 
+Common validation rules:
+- Identifier and reference fields reject blank strings, whitespace-only strings, and the explicit string values `"None"` and `"null"` with `422`.
+- Optional identifier fields still accept real JSON `null`.
+
 ## Core Concepts
 
 - A run starts from one root task.
@@ -377,6 +381,7 @@ Notes:
 - New sessions default to `session_mode = "normal"`.
 - New sessions default to `normal_root_role_id = "MainAgent"`.
 - New sessions also store the current default orchestration preset id so they can be switched to orchestration before the first run.
+- Omitting `session_id` or sending `session_id = null` auto-generates a session id. Sending `"None"` or `"null"` as a string is rejected with `422`.
 
 ### `GET /sessions`
 
@@ -678,6 +683,7 @@ Notes:
 - `target_role_id` is optional. When set, that run starts from the specified role instead of the session-default root role, without mutating the saved session topology.
 - `target_role_id` may point to `Coordinator`, `MainAgent`, or any normal role known to the role registry.
 - The backend resolves the session mode at run creation time and snapshots the chosen root topology into the run intent for queued and recoverable resume flows.
+- `session_id`, `target_role_id`, `run_id`, and other identifier-style request fields follow the common identifier validation rules above.
 
 Response:
 
@@ -1001,6 +1007,7 @@ Rules:
 - `root_path` must already exist.
 - `root_path` must be a directory.
 - `workspace_id` must be unique.
+- `workspace_id` follows the common identifier validation rules above.
 
 ### `GET /workspaces/{workspace_id}`
 
@@ -1250,6 +1257,7 @@ Each record includes:
 ### `POST /gateway/feishu/accounts`
 
 Creates a Feishu gateway account and persists its secret config.
+The request `name` and all `account_id` path parameters follow the common identifier validation rules above.
 
 ### `PATCH /gateway/feishu/accounts/{account_id}`
 
@@ -1413,6 +1421,7 @@ Response fields:
 
 Notes:
 - On success, the backend stores the returned bot token in the unified secret store and upserts the account into `wechat_accounts`.
+- `session_key` and `account_id` follow the common identifier validation rules above.
 - Newly connected accounts default to `workspace_id = "default"` and `session_mode = "normal"` unless a previous record already exists for that account id.
 
 ### `PATCH /gateway/wechat/accounts/{account_id}`
@@ -1558,6 +1567,7 @@ Notes:
 - `delivery_binding.session_id` is required for explicit create/update requests and binds the automation project to that exact saved session.
 - When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
 - When a bound session cannot be resolved at run time, the run fails instead of falling back to a fresh automation session.
+- `workspace_id`, `automation_project_id`, and delivery-binding identifiers follow the common identifier validation rules above.
 
 ### `GET /automation/projects/{automation_project_id}`
 

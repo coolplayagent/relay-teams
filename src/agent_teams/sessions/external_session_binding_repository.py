@@ -2,14 +2,24 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from pydantic import JsonValue, ValidationError
+
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.sessions.external_session_binding_models import (
     ExternalSessionBinding,
 )
+from agent_teams.validation import (
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class ExternalSessionBindingRepository:
@@ -98,7 +108,7 @@ class ExternalSessionBindingRepository:
         ).fetchone()
         if row is None:
             return None
-        return self._to_record(row)
+        return self._record_or_none(row)
 
     def upsert_binding(
         self,
@@ -164,7 +174,9 @@ class ExternalSessionBindingRepository:
             """,
             (platform,),
         ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def exists(
         self,
@@ -213,11 +225,102 @@ class ExternalSessionBindingRepository:
     @staticmethod
     def _to_record(row: sqlite3.Row) -> ExternalSessionBinding:
         return ExternalSessionBinding(
-            platform=str(row["platform"]),
-            trigger_id=str(row["trigger_id"]),
-            tenant_key=str(row["tenant_key"]),
-            external_chat_id=str(row["external_chat_id"]),
-            session_id=str(row["session_id"]),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            platform=require_persisted_identifier(
+                row["platform"], field_name="platform"
+            ),
+            trigger_id=require_persisted_identifier(
+                row["trigger_id"],
+                field_name="trigger_id",
+            ),
+            tenant_key=require_persisted_identifier(
+                row["tenant_key"],
+                field_name="tenant_key",
+            ),
+            external_chat_id=require_persisted_identifier(
+                row["external_chat_id"],
+                field_name="external_chat_id",
+            ),
+            session_id=require_persisted_identifier(
+                row["session_id"],
+                field_name="session_id",
+            ),
+            created_at=_require_binding_timestamp(
+                row=row,
+                trigger_id=str(row["trigger_id"]),
+                field_name="created_at",
+            ),
+            updated_at=_require_binding_timestamp(
+                row=row,
+                trigger_id=str(row["trigger_id"]),
+                field_name="updated_at",
+            ),
         )
+
+    def _record_or_none(self, row: sqlite3.Row) -> ExternalSessionBinding | None:
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_binding_row(row=row, error=exc)
+            return None
+
+
+def _require_binding_timestamp(
+    *,
+    row: sqlite3.Row,
+    trigger_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_binding_timestamp(
+        trigger_id=trigger_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_binding_timestamp(
+    *,
+    trigger_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "trigger_id": trigger_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.external_session_binding_repository.timestamp_invalid",
+        message="Invalid persisted external session binding timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_binding_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "platform": _persisted_value_preview(row["platform"]),
+        "trigger_id": _persisted_value_preview(row["trigger_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.external_session_binding_repository.row_invalid",
+        message="Skipping invalid persisted external session binding row",
+        payload=payload,
+    )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
 from agent_teams.gateway.gateway_models import (
     GatewayChannelType,
@@ -128,3 +129,77 @@ def test_gateway_session_repository_gets_latest_by_internal_session_id(
     assert loaded.gateway_session_id == "gws_new"
     assert repository.get_by_internal_session_id("missing") is None
     assert first.gateway_session_id == "gws_old"
+
+
+def test_gateway_session_repository_skips_invalid_persisted_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "gateway.db"
+    repository = GatewaySessionRepository(db_path)
+    _ = repository.create(
+        GatewaySessionRecord(
+            gateway_session_id="gws_valid",
+            channel_type=GatewayChannelType.WECHAT,
+            external_session_id="wechat:wx_1:user_valid",
+            internal_session_id="session_valid",
+        )
+    )
+    _insert_gateway_session_row(
+        db_path,
+        gateway_session_id="None",
+        internal_session_id="session_bad",
+    )
+
+    records = repository.list_all()
+
+    assert [record.gateway_session_id for record in records] == ["gws_valid"]
+    assert repository.get_by_internal_session_id("session_bad") is None
+
+
+def _insert_gateway_session_row(
+    db_path: Path,
+    *,
+    gateway_session_id: str,
+    internal_session_id: str,
+) -> None:
+    now = datetime.now(tz=timezone.utc).isoformat()
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        INSERT INTO gateway_sessions(
+            gateway_session_id,
+            channel_type,
+            external_session_id,
+            internal_session_id,
+            active_run_id,
+            peer_user_id,
+            peer_chat_id,
+            cwd,
+            capabilities_json,
+            channel_state_json,
+            session_mcp_servers_json,
+            mcp_connections_json,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            gateway_session_id,
+            GatewayChannelType.WECHAT.value,
+            "wechat:wx_1:user_bad",
+            internal_session_id,
+            None,
+            None,
+            None,
+            None,
+            "{}",
+            "{}",
+            "[]",
+            "[]",
+            now,
+            now,
+        ),
+    )
+    connection.commit()
+    connection.close()

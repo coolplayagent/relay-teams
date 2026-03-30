@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import logging
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from threading import RLock
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.validation import (
+    RequiredIdentifierStr,
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class ApprovalTicketStatus(str, Enum):
@@ -23,14 +33,14 @@ class ApprovalTicketStatus(str, Enum):
 class ApprovalTicketRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tool_call_id: str = Field(min_length=1)
-    signature_key: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    task_id: str = Field(min_length=1)
-    instance_id: str = Field(min_length=1)
-    role_id: str = Field(min_length=1)
-    tool_name: str = Field(min_length=1)
+    tool_call_id: RequiredIdentifierStr
+    signature_key: RequiredIdentifierStr
+    run_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    task_id: RequiredIdentifierStr
+    instance_id: RequiredIdentifierStr
+    role_id: RequiredIdentifierStr
+    tool_name: RequiredIdentifierStr
     args_preview: str = ""
     status: ApprovalTicketStatus = ApprovalTicketStatus.REQUESTED
     feedback: str = ""
@@ -238,7 +248,7 @@ class ApprovalTicketRepository:
             ).fetchone()
         if row is None:
             return None
-        return self._to_record(row)
+        return self._record_or_none(row)
 
     def list_open_by_run(self, run_id: str) -> tuple[ApprovalTicketRecord, ...]:
         with self._lock:
@@ -246,7 +256,9 @@ class ApprovalTicketRepository:
                 "SELECT * FROM approval_tickets WHERE run_id=? AND status=? ORDER BY created_at ASC",
                 (run_id, ApprovalTicketStatus.REQUESTED.value),
             ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_open_by_session(self, session_id: str) -> tuple[ApprovalTicketRecord, ...]:
         with self._lock:
@@ -254,7 +266,9 @@ class ApprovalTicketRepository:
                 "SELECT * FROM approval_tickets WHERE session_id=? AND status=? ORDER BY created_at ASC",
                 (session_id, ApprovalTicketStatus.REQUESTED.value),
             ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def find_reusable(
         self,
@@ -291,7 +305,7 @@ class ApprovalTicketRepository:
             ).fetchone()
         if row is None:
             return None
-        return self._to_record(row)
+        return self._record_or_none(row)
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -306,24 +320,142 @@ class ApprovalTicketRepository:
         )
 
     def _to_record(self, row: sqlite3.Row) -> ApprovalTicketRecord:
-        resolved_at_raw = row["resolved_at"]
         return ApprovalTicketRecord(
-            tool_call_id=str(row["tool_call_id"]),
-            signature_key=str(row["signature_key"]),
-            run_id=str(row["run_id"]),
-            session_id=str(row["session_id"]),
-            task_id=str(row["task_id"]),
-            instance_id=str(row["instance_id"]),
-            role_id=str(row["role_id"]),
-            tool_name=str(row["tool_name"]),
+            tool_call_id=require_persisted_identifier(
+                row["tool_call_id"],
+                field_name="tool_call_id",
+            ),
+            signature_key=require_persisted_identifier(
+                row["signature_key"],
+                field_name="signature_key",
+            ),
+            run_id=require_persisted_identifier(row["run_id"], field_name="run_id"),
+            session_id=require_persisted_identifier(
+                row["session_id"],
+                field_name="session_id",
+            ),
+            task_id=require_persisted_identifier(row["task_id"], field_name="task_id"),
+            instance_id=require_persisted_identifier(
+                row["instance_id"],
+                field_name="instance_id",
+            ),
+            role_id=require_persisted_identifier(row["role_id"], field_name="role_id"),
+            tool_name=require_persisted_identifier(
+                row["tool_name"],
+                field_name="tool_name",
+            ),
             args_preview=str(row["args_preview"]),
             status=ApprovalTicketStatus(str(row["status"])),
             feedback=str(row["feedback"]),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            created_at=_require_ticket_timestamp(
+                row=row,
+                tool_call_id=normalize_persisted_text(row["tool_call_id"])
+                or "<invalid>",
+                field_name="created_at",
+            ),
+            updated_at=_require_ticket_timestamp(
+                row=row,
+                tool_call_id=normalize_persisted_text(row["tool_call_id"])
+                or "<invalid>",
+                field_name="updated_at",
+            ),
             resolved_at=(
-                datetime.fromisoformat(str(resolved_at_raw))
-                if resolved_at_raw
-                else None
+                _optional_ticket_timestamp(
+                    row=row,
+                    tool_call_id=normalize_persisted_text(row["tool_call_id"])
+                    or "<invalid>",
+                    field_name="resolved_at",
+                )
             ),
         )
+
+    def _record_or_none(self, row: sqlite3.Row) -> ApprovalTicketRecord | None:
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_ticket_row(row=row, error=exc)
+            return None
+
+
+def _require_ticket_timestamp(
+    *,
+    row: sqlite3.Row,
+    tool_call_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_ticket_timestamp(
+        tool_call_id=tool_call_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _optional_ticket_timestamp(
+    *,
+    row: sqlite3.Row,
+    tool_call_id: str,
+    field_name: str,
+) -> datetime | None:
+    raw_value = row[field_name]
+    normalized = normalize_persisted_text(raw_value)
+    if normalized is None:
+        return None
+    parsed = parse_persisted_datetime_or_none(raw_value)
+    if parsed is not None:
+        return parsed
+    _log_invalid_ticket_timestamp(
+        tool_call_id=tool_call_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(raw_value),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_ticket_timestamp(
+    *,
+    tool_call_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "tool_call_id": tool_call_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="tools.approval_ticket_repo.timestamp_invalid",
+        message="Invalid persisted approval ticket timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_ticket_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "tool_call_id": _persisted_value_preview(row["tool_call_id"]),
+        "run_id": _persisted_value_preview(row["run_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "resolved_at": _persisted_value_preview(row["resolved_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="tools.approval_ticket_repo.row_invalid",
+        message="Skipping invalid persisted approval ticket row",
+        payload=payload,
+    )

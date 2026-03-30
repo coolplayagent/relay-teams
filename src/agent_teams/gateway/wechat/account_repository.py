@@ -2,16 +2,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from pydantic import JsonValue, ValidationError
+
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountStatus,
 )
+from agent_teams.validation import (
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class WeChatAccountRepository:
@@ -61,7 +72,13 @@ class WeChatAccountRepository:
         rows = self._conn.execute(
             "SELECT * FROM wechat_accounts ORDER BY created_at DESC"
         ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        records: list[WeChatAccountRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_wechat_account_row(row=row, error=exc)
+        return tuple(records)
 
     def get_account(self, account_id: str) -> WeChatAccountRecord:
         row = self._conn.execute(
@@ -70,7 +87,11 @@ class WeChatAccountRepository:
         ).fetchone()
         if row is None:
             raise KeyError(f"Unknown account_id: {account_id}")
-        return self._to_record(row)
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            _log_invalid_wechat_account_row(row=row, error=exc)
+            raise KeyError(f"Unknown account_id: {account_id}") from exc
 
     def upsert_account(self, record: WeChatAccountRecord) -> WeChatAccountRecord:
         run_sqlite_write_with_retry(
@@ -161,44 +182,130 @@ class WeChatAccountRepository:
     def _to_record(self, row: sqlite3.Row) -> WeChatAccountRecord:
         return WeChatAccountRecord.model_validate(
             {
-                "account_id": str(row["account_id"]),
+                "account_id": require_persisted_identifier(
+                    row["account_id"],
+                    field_name="account_id",
+                ),
                 "display_name": str(row["display_name"]),
                 "base_url": str(row["base_url"]),
                 "cdn_base_url": str(row["cdn_base_url"]),
-                "route_tag": str(row["route_tag"])
-                if row["route_tag"] is not None
-                else None,
+                "route_tag": normalize_persisted_text(row["route_tag"]),
                 "status": WeChatAccountStatus(str(row["status"])),
-                "remote_user_id": (
-                    str(row["remote_user_id"])
-                    if row["remote_user_id"] is not None
-                    else None
-                ),
+                "remote_user_id": normalize_persisted_text(row["remote_user_id"]),
                 "sync_cursor": str(row["sync_cursor"]),
-                "workspace_id": str(row["workspace_id"]),
-                "session_mode": str(row["session_mode"]),
-                "normal_root_role_id": (
-                    str(row["normal_root_role_id"])
-                    if row["normal_root_role_id"] is not None
-                    else None
+                "workspace_id": require_persisted_identifier(
+                    row["workspace_id"],
+                    field_name="workspace_id",
                 ),
-                "orchestration_preset_id": (
-                    str(row["orchestration_preset_id"])
-                    if row["orchestration_preset_id"] is not None
-                    else None
+                "session_mode": str(row["session_mode"]),
+                "normal_root_role_id": normalize_persisted_text(
+                    row["normal_root_role_id"]
+                ),
+                "orchestration_preset_id": normalize_persisted_text(
+                    row["orchestration_preset_id"]
                 ),
                 "yolo": bool(int(row["yolo"])),
                 "thinking": json.loads(str(row["thinking_json"])),
                 "last_login_at": (
-                    datetime.fromisoformat(str(row["last_login_at"]))
-                    if row["last_login_at"] is not None
+                    _optional_wechat_account_timestamp(
+                        row=row,
+                        account_id=str(row["account_id"]),
+                        field_name="last_login_at",
+                    )
+                    if normalize_persisted_text(row["last_login_at"]) is not None
                     else None
                 ),
-                "created_at": datetime.fromisoformat(str(row["created_at"])),
-                "updated_at": datetime.fromisoformat(str(row["updated_at"])),
+                "created_at": _require_wechat_account_timestamp(
+                    row=row,
+                    account_id=str(row["account_id"]),
+                    field_name="created_at",
+                ),
+                "updated_at": _require_wechat_account_timestamp(
+                    row=row,
+                    account_id=str(row["account_id"]),
+                    field_name="updated_at",
+                ),
             }
         )
 
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(tz=timezone.utc)
+
+
+def _require_wechat_account_timestamp(
+    *,
+    row: sqlite3.Row,
+    account_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_wechat_account_timestamp(
+        account_id=account_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _optional_wechat_account_timestamp(
+    *,
+    row: sqlite3.Row,
+    account_id: str,
+    field_name: str,
+) -> datetime | None:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_wechat_account_timestamp(
+        account_id=account_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_wechat_account_timestamp(
+    *,
+    account_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "account_id": account_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.wechat.account_repository.timestamp_invalid",
+        message="Invalid persisted WeChat account timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_wechat_account_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "account_id": _persisted_value_preview(row["account_id"]),
+        "workspace_id": _persisted_value_preview(row["workspace_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.wechat.account_repository.row_invalid",
+        message="Skipping invalid persisted WeChat account row",
+        payload=payload,
+    )

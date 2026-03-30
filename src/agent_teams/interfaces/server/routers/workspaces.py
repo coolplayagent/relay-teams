@@ -10,6 +10,7 @@ from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_workspace_service
+from agent_teams.validation import RequiredIdentifierStr
 from agent_teams.workspace import (
     WorkspaceDiffFile,
     WorkspaceDiffListing,
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 class CreateWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: RequiredIdentifierStr
     root_path: str = Field(min_length=1)
 
 
@@ -95,7 +96,7 @@ def list_workspaces(
 
 @router.get("/{workspace_id}", response_model=WorkspaceRecord)
 def get_workspace(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
@@ -106,7 +107,7 @@ def get_workspace(
 
 @router.get("/{workspace_id}/snapshot", response_model=WorkspaceSnapshot)
 def get_workspace_snapshot(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceSnapshot:
     try:
@@ -119,7 +120,7 @@ def get_workspace_snapshot(
 
 @router.get("/{workspace_id}/tree", response_model=WorkspaceTreeListing)
 def get_workspace_tree_listing(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query()] = ".",
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceTreeListing:
@@ -136,7 +137,7 @@ def get_workspace_tree_listing(
 
 @router.get("/{workspace_id}/diffs", response_model=WorkspaceDiffListing)
 def get_workspace_diffs(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceDiffListing:
     try:
@@ -149,7 +150,7 @@ def get_workspace_diffs(
 
 @router.get("/{workspace_id}/diff", response_model=WorkspaceDiffFile)
 def get_workspace_diff_file(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query(min_length=1)],
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceDiffFile:
@@ -166,7 +167,7 @@ def get_workspace_diff_file(
 
 @router.get("/{workspace_id}/preview-file")
 def get_workspace_preview_file(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query(min_length=1)],
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> FileResponse:
@@ -191,7 +192,7 @@ def get_workspace_preview_file(
 
 @router.delete("/{workspace_id}")
 def delete_workspace(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     remove_worktree: Annotated[bool, Query()] = False,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
@@ -209,7 +210,7 @@ def delete_workspace(
 
 @router.post("/{workspace_id}:fork", response_model=WorkspaceRecord)
 def fork_workspace(
-    workspace_id: str,
+    workspace_id: RequiredIdentifierStr,
     req: ForkWorkspaceRequest,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:

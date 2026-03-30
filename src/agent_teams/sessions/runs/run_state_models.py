@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_models import RunEvent
+from agent_teams.validation import RequiredIdentifierStr
 
 
 class RunStateStatus(str, Enum):
@@ -32,7 +33,7 @@ class RunStatePhase(str, Enum):
 class PendingToolApprovalState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    tool_call_id: str = Field(min_length=1)
+    tool_call_id: RequiredIdentifierStr
     tool_name: str = ""
     args_preview: str = ""
     role_id: str = ""
@@ -59,8 +60,8 @@ class PausedSubagentState(BaseModel):
 class RunStateRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    run_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
+    run_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
     status: RunStateStatus = RunStateStatus.QUEUED
     phase: RunStatePhase = RunStatePhase.IDLE
     recoverable: bool = True
@@ -74,8 +75,8 @@ class RunStateRecord(BaseModel):
 class RunSnapshotRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    run_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
+    run_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
     checkpoint_event_id: int = Field(ge=1)
     state: RunStateRecord
     created_at: datetime

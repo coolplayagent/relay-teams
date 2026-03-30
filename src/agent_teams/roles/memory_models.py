@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
+
+from agent_teams.validation import RequiredIdentifierStr
 
 
 class MemoryProfile(BaseModel):
@@ -19,7 +21,7 @@ def default_memory_profile() -> MemoryProfile:
 class RoleMemoryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
-    workspace_id: str = Field(min_length=1)
+    role_id: RequiredIdentifierStr
+    workspace_id: RequiredIdentifierStr
     content_markdown: str = ""
     updated_at: datetime | None = None
