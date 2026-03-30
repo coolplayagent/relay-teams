@@ -159,6 +159,12 @@ class BinaryDownloadManifest(BaseModel):
     completed: bool = False
 
 
+class BinaryDownloadFullResponseFallback(Exception):
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__("Full-response fallback available for binary download.")
+        self.response = response
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def webfetch(
@@ -1066,22 +1072,61 @@ async def download_binary_with_ranges(
                 download_key=download_key,
             )
 
-    tasks = [
-        download_binary_range_segment(
-            client=client,
-            requested_url=requested_url,
-            response_format=response_format,
-            probe=probe,
-            segment=segment,
-            download_dir=download_dir,
-            cancel_check=cancel_check,
-            persist_progress=persist_progress,
-        )
-        for segment in manifest.segments
-        if not segment.complete
+    pending_segments = [
+        segment for segment in manifest.segments if not segment.complete
     ]
-    if tasks:
-        await asyncio.gather(*tasks)
+    if len(pending_segments) == 1:
+        try:
+            await download_binary_range_segment(
+                client=client,
+                requested_url=requested_url,
+                response_format=response_format,
+                probe=probe,
+                segment=pending_segments[0],
+                download_dir=download_dir,
+                cancel_check=cancel_check,
+                persist_progress=persist_progress,
+            )
+        except BinaryDownloadFullResponseFallback as exc:
+            try:
+                _cleanup_binary_download_dir(download_dir)
+                fallback_manifest = initialize_binary_download_manifest(
+                    normalized_requested_url=manifest.normalized_requested_url,
+                    probe=build_binary_download_probe_from_response(
+                        response=exc.response,
+                        requested_url=requested_url,
+                    ),
+                    download_dir=download_dir,
+                )
+                return await save_non_resumable_binary_response(
+                    response=exc.response,
+                    requested_url=requested_url,
+                    manifest=fallback_manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            finally:
+                await exc.response.aclose()
+    elif pending_segments:
+        await asyncio.gather(
+            *[
+                download_binary_range_segment(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    probe=probe,
+                    segment=segment,
+                    download_dir=download_dir,
+                    cancel_check=cancel_check,
+                    persist_progress=persist_progress,
+                )
+                for segment in pending_segments
+            ]
+        )
     finalized_manifest = finalize_resumable_manifest(
         manifest=manifest,
         probe=probe,
@@ -1138,7 +1183,16 @@ async def download_binary_range_segment(
         extra_headers=extra_headers,
     )
     bytes_since_flush = 0
+    keep_response_open = False
     try:
+        expected_total = probe.total_size
+        if (
+            response.status_code == 200
+            and expected_total is not None
+            and segment_length == expected_total
+        ):
+            keep_response_open = True
+            raise BinaryDownloadFullResponseFallback(response)
         content_range = parse_content_range(response.headers.get("content-range"))
         if response.status_code != 206 or content_range is None:
             raise ToolExecutionError(
@@ -1146,7 +1200,6 @@ async def download_binary_range_segment(
                 message="Range download could not be resumed because the upstream response changed.",
                 retryable=True,
             )
-        expected_total = probe.total_size
         if (
             expected_total is None
             or content_range[0] != range_start
@@ -1226,7 +1279,8 @@ async def download_binary_range_segment(
             details={"url_host": urlparse(requested_url).netloc},
         ) from exc
     finally:
-        await response.aclose()
+        if not keep_response_open:
+            await response.aclose()
 
 
 def initialize_binary_download_manifest(

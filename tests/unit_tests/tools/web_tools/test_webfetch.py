@@ -131,6 +131,7 @@ def _build_binary_transport(
     last_modified: str | None = LAST_MODIFIED,
     ignore_range_probe: bool = False,
     reject_range_probe_status: int | None = None,
+    full_range_returns_200: bool = False,
     fail_once_ranges: dict[str, int] | None = None,
     request_log: list[str] | None = None,
     if_range_log: list[str] | None = None,
@@ -162,6 +163,13 @@ def _build_binary_transport(
                 headers=base_headers,
             )
         if ignore_range_probe and range_header == webfetch.RANGE_PROBE_HEADER_VALUE:
+            return httpx.Response(
+                200,
+                request=request,
+                headers=base_headers,
+                content=data,
+            )
+        if full_range_returns_200 and range_header == f"bytes=0-{len(data) - 1}":
             return httpx.Response(
                 200,
                 request=request,
@@ -762,6 +770,42 @@ async def test_download_binary_response_falls_back_when_range_probe_is_ignored(
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
     assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE]
+
+
+@pytest.mark.asyncio
+async def test_download_binary_response_falls_back_when_full_range_request_returns_200(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(1024 * 1024)
+    request_log: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            request_log=request_log,
+            full_range_returns_200=True,
+        )
+    )
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.download_binary_response(
+            client=client,
+            requested_url="https://example.com/full-range-200.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    data = cast(dict[str, object], projection.visible_data)
+    saved_path = Path(str(data["saved_path"]))
+    assert saved_path.read_bytes() == payload
+    assert request_log == [
+        webfetch.RANGE_PROBE_HEADER_VALUE,
+        f"bytes=0-{len(payload) - 1}",
+    ]
 
 
 @pytest.mark.asyncio
