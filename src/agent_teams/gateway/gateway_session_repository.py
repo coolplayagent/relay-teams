@@ -145,24 +145,25 @@ class GatewaySessionRepository:
         ).fetchone()
         if row is None:
             return None
-        return self._record_or_none(row)
+        return self._record_or_none(row, fallback_invalid_timestamps=True)
 
     def get_by_internal_session_id(
         self,
         internal_session_id: str,
     ) -> GatewaySessionRecord | None:
-        row = self._conn.execute(
+        rows = self._conn.execute(
             """
             SELECT * FROM gateway_sessions
             WHERE internal_session_id=?
             ORDER BY updated_at DESC
-            LIMIT 1
             """,
             (internal_session_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._record_or_none(row)
+        ).fetchall()
+        for row in rows:
+            record = self._record_or_none(row, fallback_invalid_timestamps=True)
+            if record is not None:
+                return record
+        return None
 
     def update(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
         cursor = self._conn.execute(
@@ -218,7 +219,12 @@ class GatewaySessionRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
-    def _to_record(self, row: sqlite3.Row) -> GatewaySessionRecord:
+    def _to_record(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> GatewaySessionRecord:
         capabilities_raw = json.loads(
             normalize_persisted_text(row["capabilities_json"]) or "{}"
         )
@@ -241,11 +247,17 @@ class GatewaySessionRepository:
             for item in connections_raw
             if isinstance(item, dict)
         )
+        gateway_session_id = require_persisted_identifier(
+            row["gateway_session_id"],
+            field_name="gateway_session_id",
+        )
+        created_at, updated_at = _load_gateway_session_timestamps(
+            row=row,
+            gateway_session_id=gateway_session_id,
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+        )
         return GatewaySessionRecord(
-            gateway_session_id=require_persisted_identifier(
-                row["gateway_session_id"],
-                field_name="gateway_session_id",
-            ),
+            gateway_session_id=gateway_session_id,
             channel_type=GatewayChannelType(str(row["channel_type"])),
             external_session_id=require_persisted_identifier(
                 row["external_session_id"],
@@ -265,45 +277,74 @@ class GatewaySessionRepository:
             ),
             session_mcp_servers=mcp_servers,
             mcp_connections=mcp_connections,
-            created_at=_require_gateway_session_timestamp(
-                row=row,
-                gateway_session_id=str(row["gateway_session_id"]),
-                field_name="created_at",
-            ),
-            updated_at=_require_gateway_session_timestamp(
-                row=row,
-                gateway_session_id=str(row["gateway_session_id"]),
-                field_name="updated_at",
-            ),
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(tz=timezone.utc)
 
-    def _record_or_none(self, row: sqlite3.Row) -> GatewaySessionRecord | None:
+    def _record_or_none(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> GatewaySessionRecord | None:
         try:
-            return self._to_record(row)
+            return self._to_record(
+                row,
+                fallback_invalid_timestamps=fallback_invalid_timestamps,
+            )
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_gateway_session_row(row=row, error=exc)
             return None
 
 
-def _require_gateway_session_timestamp(
+def _load_gateway_session_timestamps(
     *,
     row: sqlite3.Row,
     gateway_session_id: str,
-    field_name: str,
-) -> datetime:
-    parsed = parse_persisted_datetime_or_none(row[field_name])
-    if parsed is not None:
-        return parsed
-    _log_invalid_gateway_session_timestamp(
-        gateway_session_id=gateway_session_id,
-        field_name=field_name,
-        raw_preview=_persisted_value_preview(row[field_name]),
-    )
-    raise ValueError(f"Invalid persisted {field_name}")
+    fallback_invalid_timestamps: bool,
+) -> tuple[datetime, datetime]:
+    created_at = parse_persisted_datetime_or_none(row["created_at"])
+    updated_at = parse_persisted_datetime_or_none(row["updated_at"])
+    if not fallback_invalid_timestamps:
+        if created_at is None:
+            _log_invalid_gateway_session_timestamp(
+                gateway_session_id=gateway_session_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted created_at")
+        if updated_at is None:
+            _log_invalid_gateway_session_timestamp(
+                gateway_session_id=gateway_session_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted updated_at")
+        return created_at, updated_at
+    fallback_now = datetime.now(tz=timezone.utc)
+    if created_at is None:
+        created_at = updated_at or fallback_now
+        _log_invalid_gateway_session_timestamp(
+            gateway_session_id=gateway_session_id,
+            field_name="created_at",
+            raw_preview=_persisted_value_preview(row["created_at"]),
+            fallback_iso=created_at.isoformat(),
+        )
+    if updated_at is None:
+        updated_at = created_at
+        _log_invalid_gateway_session_timestamp(
+            gateway_session_id=gateway_session_id,
+            field_name="updated_at",
+            raw_preview=_persisted_value_preview(row["updated_at"]),
+            fallback_iso=updated_at.isoformat(),
+        )
+    return created_at, updated_at
 
 
 def _persisted_value_preview(value: object) -> str:
@@ -317,17 +358,23 @@ def _log_invalid_gateway_session_timestamp(
     gateway_session_id: str,
     field_name: str,
     raw_preview: str,
+    fallback_iso: str | None,
 ) -> None:
     payload: dict[str, JsonValue] = {
         "gateway_session_id": gateway_session_id,
         "field_name": field_name,
         "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
     }
     log_event(
         LOGGER,
         logging.WARNING,
         event="gateway.session_repository.timestamp_invalid",
-        message="Invalid persisted gateway session timestamp",
+        message=(
+            "Using fallback for invalid persisted gateway session timestamp"
+            if fallback_iso is not None
+            else "Invalid persisted gateway session timestamp"
+        ),
         payload=payload,
     )
 
