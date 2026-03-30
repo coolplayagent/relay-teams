@@ -2,15 +2,16 @@ name: Publish To PyPI
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
 
 concurrency:
-  group: publish-to-pypi-main
+  group: publish-to-pypi-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   publish:
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,12 +34,30 @@ jobs:
       - name: Install build dependencies
         run: uv sync --extra dev --no-default-groups
 
-      - name: Generate timestamp release version
+      - name: Derive release version from tag
         id: version
         shell: bash
         run: |
-          VERSION="$(python src/agent_teams/release/versioning.py --output src/agent_teams/_version.py)"
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ -z "$VERSION" || "$VERSION" == "$GITHUB_REF_NAME" ]]; then
+            echo "Expected tag format v<version>, got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Write release version file
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          printf '%s\n' \
+            '# -*- coding: utf-8 -*-' \
+            'from __future__ import annotations' \
+            '' \
+            '__all__ = ["__version__"]' \
+            '' \
+            "__version__ = \"${RELEASE_VERSION}\"" \
+            '' > src/agent_teams/_version.py
 
       - name: Build distribution
         run: uv build
