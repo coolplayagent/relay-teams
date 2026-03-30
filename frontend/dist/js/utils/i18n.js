@@ -2036,6 +2036,21 @@ Object.assign(TRANSLATIONS['en-US'], {
     'workspace_view.feishu_chat': 'Feishu chat',
     'workspace_view.chat_type': 'Chat type',
     'workspace_view.delivery_help_feishu': 'Automation updates will be pushed to the selected Feishu chat.',
+    'tool.summary.shell': 'Ran command',
+    'tool.summary.read': 'Read file',
+    'tool.summary.write': 'Wrote file',
+    'tool.summary.edit': 'Edited file',
+    'tool.summary.grep': 'Searched content',
+    'tool.summary.glob': 'Searched files',
+    'tool.summary.websearch': 'Web search',
+    'tool.summary.webfetch': 'Fetched page',
+    'tool.summary.generic': 'Ran {tool}',
+    'tool.lang.shell': 'Shell',
+    'tool.status.success': 'Success',
+    'tool.status.error': 'Failed',
+    'tool.status.running': 'Running...',
+    'tool.action.copy': 'Copy',
+    'tool.action.copied': 'Copied',
 });
 
 Object.assign(TRANSLATIONS['zh-CN'], {
@@ -2085,6 +2100,21 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'workspace_view.feishu_chat': '飞书会话',
     'workspace_view.chat_type': '会话类型',
     'workspace_view.delivery_help_feishu': '自动化更新会推送到所选的飞书会话。',
+    'tool.summary.shell': '已运行命令',
+    'tool.summary.read': '已读取文件',
+    'tool.summary.write': '已写入文件',
+    'tool.summary.edit': '已编辑文件',
+    'tool.summary.grep': '已搜索内容',
+    'tool.summary.glob': '已搜索文件',
+    'tool.summary.websearch': '已搜索网络',
+    'tool.summary.webfetch': '已获取网页',
+    'tool.summary.generic': '已运行 {tool}',
+    'tool.lang.shell': 'Shell',
+    'tool.status.success': '成功',
+    'tool.status.error': '失败',
+    'tool.status.running': '运行中...',
+    'tool.action.copy': '复制',
+    'tool.action.copied': '已复制',
 });
 
 export function getCurrentLanguage() {

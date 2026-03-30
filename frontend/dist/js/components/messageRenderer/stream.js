@@ -7,10 +7,14 @@ import {
     applyToolReturn,
     appendStructuredContentPart,
     appendThinkingText,
+    buildPendingToolBlock,
     findToolBlock,
     findToolBlockInContainer,
+    indexPendingToolBlock,
     renderMessageBlock,
+    resolvePendingToolBlock,
     scrollBottom,
+    setToolStatus,
     setToolValidationFailureState,
     syncStreamingCursor,
     updateThinkingText,
@@ -44,6 +48,7 @@ export function getOrCreateStreamBlock(
     } else {
         if (!st.thinkingParts) st.thinkingParts = new Map();
         if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (!st.pendingToolBlocks) st.pendingToolBlocks = {};
         if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
@@ -230,41 +235,16 @@ export function appendToolCallBlock(
     } else {
         if (!st.thinkingParts) st.thinkingParts = new Map();
         if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (!st.pendingToolBlocks) st.pendingToolBlocks = {};
         if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
 
     endActiveText(st);
 
-    let argsStr = '';
-    try {
-        argsStr = typeof args === 'object' ? JSON.stringify(args, null, 2) : String(args || '');
-    } catch (e) {
-        argsStr = String(args);
-    }
-
-    const toolBlock = document.createElement('div');
-    toolBlock.className = 'tool-block';
-    toolBlock.dataset.toolName = toolName;
-    if (toolCallId) {
-        toolBlock.dataset.toolCallId = toolCallId;
-    }
-    toolBlock.style.display = 'block';
-    toolBlock.style.visibility = 'visible';
-    toolBlock.innerHTML = `
-        <div class="tool-header" onclick="this.nextElementSibling.classList.toggle('open')">
-            <div class="tool-title">
-                <svg viewBox="0 0 24 24" fill="none" class="icon" style="width:14px;height:14px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2"/></svg>
-                <span class="name">${toolName}</span>
-            </div>
-            <div class="tool-status"><div class="spinner"></div></div>
-        </div>
-        <div class="tool-body">
-            <pre class="tool-args" style="white-space:pre-wrap;">${argsStr}</pre>
-            <div class="tool-result">Processing...</div>
-        </div>
-    `;
+    const toolBlock = buildPendingToolBlock(toolName, args, toolCallId);
     st.contentEl.appendChild(toolBlock);
+    indexPendingToolBlock(st.pendingToolBlocks, toolBlock, toolName, toolCallId);
     updateOverlayToolCall(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label, {
         tool_call_id: toolCallId || '',
         tool_name: toolName,
@@ -341,6 +321,7 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
     } else if (st) {
         if (!st.thinkingParts) st.thinkingParts = new Map();
         if (!st.thinkingActiveByPart) st.thinkingActiveByPart = new Map();
+        if (!st.pendingToolBlocks) st.pendingToolBlocks = {};
         if (typeof st.thinkingSequence !== 'number') st.thinkingSequence = 0;
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
@@ -412,8 +393,7 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
 
     const approvalEl = ensureApprovalState(toolBlock);
 
-    const body = toolBlock.querySelector('.tool-body');
-    if (body) body.classList.add('open');
+    toolBlock.open = true;
 
     const stateEl = approvalEl.querySelector('.tool-approval-state');
     if (stateEl) stateEl.textContent = t('stream.approval_required');
@@ -450,14 +430,18 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
     if (stateEl) {
         stateEl.textContent = formatMessage('stream.approval_action', { action });
     }
-    const resultEl = toolBlock.querySelector('.tool-result');
-    if (resultEl) {
-        resultEl.classList.remove('error-text');
-        resultEl.classList.add('warning-text');
+    setToolStatus(
+        toolBlock,
+        String(payload.action || '').toLowerCase() === 'deny' ? 'warning' : 'running',
+    );
+    const outputEl = toolBlock.querySelector('.tool-output');
+    if (outputEl) {
+        outputEl.classList.remove('error-text');
+        outputEl.classList.add('warning-text');
         if (String(payload.action || '').toLowerCase() === 'deny') {
-            resultEl.innerHTML = t('stream.approval_denied');
+            outputEl.innerHTML = t('stream.approval_denied');
         } else {
-            resultEl.innerHTML = t('stream.approval_waiting');
+            outputEl.innerHTML = t('stream.approval_waiting');
         }
     }
     scrollBottom((st && st.container) || container);
@@ -564,13 +548,17 @@ function ensureApprovalState(toolBlock) {
 
     approvalEl = document.createElement('div');
     approvalEl.className = 'tool-approval-inline';
-    approvalEl.innerHTML = `<div class="tool-approval-state">${escapeHtml(t('approval.state.required'))}</div>`;
-    const body = toolBlock.querySelector('.tool-body');
-    const resultEl = toolBlock.querySelector('.tool-result');
-    if (body && resultEl) {
-        body.insertBefore(approvalEl, resultEl);
-    } else if (body) {
-        body.appendChild(approvalEl);
+    const _label = t('approval.state.required');
+    const _labelEl = document.createElement('div');
+    _labelEl.className = 'tool-approval-state';
+    _labelEl.textContent = _label;
+    approvalEl.replaceChildren(_labelEl);
+    const card = toolBlock.querySelector('.tool-detail-card');
+    const outputEl = toolBlock.querySelector('.tool-output');
+    if (card && outputEl) {
+        card.insertBefore(approvalEl, outputEl);
+    } else if (card) {
+        card.appendChild(approvalEl);
     }
     return approvalEl;
 }
@@ -591,6 +579,7 @@ function createStreamState({
     label,
     runId,
 }) {
+    const streamKey = resolveStreamKey(instanceId, roleId);
     const reused = findReusableStreamState({
         container,
         instanceId,
@@ -601,11 +590,17 @@ function createStreamState({
     if (reused) {
         return reused;
     }
-    const { wrapper, contentEl } = renderMessageBlock(container, 'model', label, []);
+    const { wrapper, contentEl } = renderMessageBlock(container, 'model', label, [], {
+        runId,
+        instanceId: String(instanceId || '').trim(),
+        roleId: String(roleId || '').trim(),
+        streamKey,
+    });
     return {
         container,
         wrapper,
         contentEl,
+        pendingToolBlocks: {},
         activeTextEl: null,
         raw: '',
         activeRaw: '',
@@ -616,6 +611,7 @@ function createStreamState({
         label,
         runId: String(runId || ''),
         instanceId: String(instanceId || ''),
+        streamKey,
     };
 }
 
@@ -640,10 +636,12 @@ function findReusableStreamState({
     const activeTextEl = findLastReusableTextElement(contentEl);
     const activeRaw = resolveReusableRawText(overlayEntry);
     const thinkingBinding = bindReusableThinkingState(contentEl, overlayEntry);
+    const pendingToolBlocks = bindReusableToolBlocks(contentEl, overlayEntry);
     return {
         container,
         wrapper,
         contentEl,
+        pendingToolBlocks,
         activeTextEl,
         raw: activeRaw,
         activeRaw,
@@ -654,6 +652,7 @@ function findReusableStreamState({
         label,
         runId: String(runId || ''),
         instanceId: String(instanceId || ''),
+        streamKey: resolveStreamKey(instanceId, roleId),
     };
 }
 
@@ -700,8 +699,9 @@ function findReusableMessageWrapper({
 
 function wrapperMatchesStreamKey(wrapper, streamKey, roleId) {
     const safeStreamKey = String(streamKey || '').trim();
-    if (safeStreamKey === PRIMARY_KEY) {
-        return true;
+    const wrapperStreamKey = String(wrapper.dataset.streamKey || '').trim();
+    if (wrapperStreamKey) {
+        return wrapperStreamKey === safeStreamKey;
     }
     const wrapperInstanceId = String(wrapper.dataset.instanceId || '').trim();
     const wrapperRoleId = String(wrapper.dataset.roleId || '').trim();
@@ -713,6 +713,10 @@ function wrapperMatchesStreamKey(wrapper, streamKey, roleId) {
 }
 
 function wrapperBelongsToRun(wrapper, runId) {
+    const wrapperRunId = String(wrapper.dataset.runId || '').trim();
+    if (wrapperRunId) {
+        return wrapperRunId === runId;
+    }
     const section = wrapper.closest('.session-round-section');
     if (!section) return true;
     return String(section.dataset.runId || '').trim() === runId;
@@ -778,6 +782,29 @@ function bindReusableThinkingState(contentEl, overlayEntry) {
     return { parts, activeByPart, nextSequence };
 }
 
+function bindReusableToolBlocks(contentEl, overlayEntry) {
+    const pendingToolBlocks = {};
+    if (!contentEl || !overlayEntry || !Array.isArray(overlayEntry.parts)) {
+        return pendingToolBlocks;
+    }
+    overlayEntry.parts.forEach(part => {
+        if (!part || part.kind !== 'tool') {
+            return;
+        }
+        const toolBlock = findToolBlock(contentEl, part.tool_name, part.tool_call_id || null);
+        if (!toolBlock) {
+            return;
+        }
+        indexPendingToolBlock(
+            pendingToolBlocks,
+            toolBlock,
+            part.tool_name,
+            part.tool_call_id || null,
+        );
+    });
+    return pendingToolBlocks;
+}
+
 function findReusableThinkingTextElement(contentEl, key, partIndex) {
     if (!contentEl) {
         return null;
@@ -821,6 +848,12 @@ function endActiveText(st) {
 
 function resolveToolBlockTarget(st, container, toolName, toolCallId) {
     if (st) {
+        const indexed = resolvePendingToolBlock(
+            st.pendingToolBlocks || {},
+            toolName,
+            toolCallId,
+        );
+        if (indexed) return indexed;
         const byStreamState = findToolBlock(st.contentEl, toolName, toolCallId);
         if (byStreamState) return byStreamState;
     }

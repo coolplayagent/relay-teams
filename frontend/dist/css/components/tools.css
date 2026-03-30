@@ -1,58 +1,206 @@
-/* Tool Call Blocks */
+/* Tool Call Blocks - Claude Code style collapsible design */
+
 .tool-block {
-    margin: 0.5rem 0 1rem 0;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background-color: var(--bg-tool-block);
-    overflow: hidden;
+    margin: 0.35rem 0;
+    border: none;
+    background: transparent;
+    overflow: visible;
 }
 
-.tool-header {
+/* --- Summary / collapsed state --- */
+
+.tool-summary {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    background-color: var(--bg-tool-header);
+    gap: 0.35rem;
+    padding: 0.25rem 0;
     cursor: pointer;
-    user-select: none;
-    transition: background-color 0.2s;
-}
-
-.tool-header:hover {
-    background-color: var(--bg-tool-header-hover);
-}
-
-.tool-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-family: var(--font-mono);
+    list-style: none;
     color: var(--text-secondary);
+    font-size: 0.8125rem;
+    font-family: var(--font-ui);
+    user-select: none;
+    transition: color 0.15s;
 }
 
-.tool-title .name {
-    color: var(--text-tool-name);
+.tool-summary:hover {
+    color: var(--text-primary);
+}
+
+.tool-summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool-summary::before {
+    content: '>';
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+    flex: 0 0 auto;
+}
+
+.tool-block[open] > .tool-summary::before {
+    transform: rotate(90deg);
+}
+
+.tool-summary-label {
     font-weight: 500;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+.tool-summary-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 55ch;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted, var(--text-secondary));
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .tool-status {
     display: flex;
     align-items: center;
+    flex: 0 0 auto;
+    margin-left: auto;
 }
+
+/* --- Detail / expanded state --- */
+
+.tool-detail {
+    padding: 0.25rem 0 0.5rem 0;
+}
+
+.tool-detail-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-tool-body, var(--bg-surface-muted));
+    overflow: hidden;
+}
+
+.tool-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.55rem 0.85rem 0;
+}
+
+.tool-lang-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+}
+
+.tool-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 0.2rem 0.3rem;
+    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+
+.tool-copy-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border-color);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+/* Command display (for shell tools) */
+
+.tool-command {
+    padding: 0.55rem 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    color: var(--text-primary);
+}
+
+.tool-input-value {
+    padding: 0.55rem 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    color: var(--text-primary);
+}
+
+.tool-prompt {
+    color: var(--text-secondary);
+    user-select: none;
+    margin-right: 0.25rem;
+}
+
+/* Args display (for non-shell tools) */
+
+.tool-args {
+    padding: 0.55rem 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    color: var(--text-tool-args, var(--text-secondary));
+    margin: 0;
+}
+
+/* Output display */
+
+.tool-output {
+    padding: 0.55rem 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    max-height: 400px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border-color);
+}
+
+.tool-output:empty {
+    display: none;
+}
+
+.tool-output.error-text {
+    color: var(--danger);
+}
+
+.tool-output.warning-text {
+    color: var(--warning);
+}
+
+/* Spinner */
 
 .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid var(--bg-hover-strong);
+    border: 2px solid var(--bg-hover-strong, rgba(255, 255, 255, 0.1));
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
 
+/* Status icons */
+
 .status-icon {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
 }
 
 .status-success {
@@ -67,41 +215,11 @@
     color: var(--warning);
 }
 
-.tool-body {
-    padding: 1rem;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-tool-body);
-    font-size: 0.8125rem;
-    font-family: var(--font-mono);
-    display: none;
-    /* hidden by default, toggled via JS */
-}
-
-.tool-body.open {
-    display: block;
-    animation: fadeIn 0.3s;
-}
-
-.tool-args {
-    color: var(--text-tool-args);
-    margin-bottom: 0.5rem;
-}
-
-.tool-result {
-    color: var(--text-secondary);
-    white-space: pre-wrap;
-}
-
-.tool-result.error-text {
-    color: var(--danger);
-}
-
-.tool-result.warning-text {
-    color: var(--warning);
-}
+/* Approval inline */
 
 .tool-approval-inline {
-    margin-bottom: 0.65rem;
+    padding: 0.4rem 0.85rem;
+    border-top: 1px solid var(--border-color);
 }
 
 .tool-approval-state {
@@ -116,6 +234,17 @@
     font-size: 0.72rem;
     font-weight: 600;
 }
+
+/* Computer use meta */
+
+.tool-computer-meta {
+    padding: 0.35rem 0.85rem;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* ---- Non-tool-block styles kept for backward compat ---- */
 
 #prompt-input {
     width: 100%;
@@ -298,4 +427,3 @@
 .typing-dot:nth-child(2) {
     animation-delay: -0.16s;
 }
-

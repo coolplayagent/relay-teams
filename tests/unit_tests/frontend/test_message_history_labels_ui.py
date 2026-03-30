@@ -129,6 +129,10 @@ export function resolvePendingToolBlock() {
     return null;
 }
 
+export function setToolStatus() {
+    return undefined;
+}
+
 export function setToolValidationFailureState() {
     return undefined;
 }
@@ -137,8 +141,8 @@ export function setToolValidationFailureState() {
     )
     (tmp_path / "mockState.mjs").write_text(
         """
-export function getPrimaryRoleLabel() {
-    return 'Coordinator';
+export function isRunPrimaryRoleId() {
+    return false;
 }
 """.strip(),
         encoding="utf-8",

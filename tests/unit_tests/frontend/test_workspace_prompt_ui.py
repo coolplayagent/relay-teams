@@ -259,8 +259,8 @@ def test_light_theme_workspace_uses_shared_surface_hierarchy() -> None:
     )
     assert "body.light-theme .round-state-pill," in components_css
     assert "background: transparent;" in components_css
-    assert "body.light-theme .tool-block," in components_css
-    assert "background: var(--bg-tool-block);" in components_css
+    assert "body.light-theme .tool-detail-card" in components_css
+    assert "background: var(--bg-surface-muted);" in components_css
     assert "background: var(--bg-surface-glass);" in layout_css
     assert "--bg-surface-glass: #f3f4f4;" in (
         repo_root / "frontend" / "dist" / "css" / "base.css"
