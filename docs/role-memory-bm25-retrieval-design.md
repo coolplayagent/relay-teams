@@ -66,6 +66,135 @@ Relevant ideas:
 
 This document only standardizes BM25-first retrieval. The other algorithms remain optional follow-up layers.
 
+## Mathematical Retrieval Algorithms Relevant to This Design
+
+### BM25
+
+Primary first-stage ranker for memory retrieval.
+
+For query term `q_i`, document `D`, and average document length `avgdl`:
+
+```text
+BM25(D, Q) = Σ IDF(q_i) * (f(q_i, D) * (k1 + 1)) /
+             (f(q_i, D) + k1 * (1 - b + b * |D| / avgdl))
+```
+
+Practical role here:
+
+- rank memory episodes by lexical relevance
+- reward exact anchor overlap
+- remain interpretable through term frequency, document length, and field weights
+
+Paper:
+
+- Stephen Robertson, Hugo Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" — https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf
+
+### TF-IDF / SMART weighting
+
+Useful as the conceptual predecessor to BM25 and still valuable for debugging lexical salience.
+
+```text
+tf-idf(t, D) = tf(t, D) * log(N / df(t))
+```
+
+Practical role here:
+
+- explain why rare identifiers and error codes should dominate common words
+- support future fallback rankers or diagnostics
+
+Paper:
+
+- Gerard Salton, Christopher Buckley, "Term-weighting approaches in automatic text retrieval" — https://www.sciencedirect.com/science/article/abs/pii/0306457388900210/
+
+### Rocchio relevance feedback
+
+Useful for future query expansion from accepted memory hits.
+
+```text
+q_m = α q_0 + β / |D_r| * Σ d in D_r d - γ / |D_nr| * Σ d in D_nr d
+```
+
+Practical role here:
+
+- expand sparse user queries with terms from confirmed relevant memories
+- keep future memory retrieval adaptive without vectors
+
+Paper:
+
+- J. J. Rocchio, "Relevance Feedback in Information Retrieval" — https://sigir.org/files/museum/pub-08/XXIII-1.pdf
+
+### Query likelihood language modeling
+
+A future alternative lexical ranker.
+
+```text
+score(D, Q) = P(Q | D) = Π P(q_i | D)
+```
+
+Practical role here:
+
+- support an alternative to BM25 when memory corpora become highly uneven in style and length
+
+Paper:
+
+- Jay M. Ponte, W. Bruce Croft, "A Language Modeling Approach to Information Retrieval" — https://ciir.cs.umass.edu/pubfiles/ir-120.pdf
+
+### MMR
+
+Useful after BM25 retrieval for novelty and de-duplication.
+
+```text
+MMR = argmax_{D_i in R \ S} [ λ * Sim_1(D_i, Q) - (1 - λ) * max_{D_j in S} Sim_2(D_i, D_j) ]
+```
+
+Practical role here:
+
+- reduce repeated memory shards in prompt injection
+- keep one summary and one detail instead of many near-duplicates
+
+Paper:
+
+- Jaime Carbonell, Jade Goldstein, "The Use of MMR, Diversity-Based Reranking for Reordering Documents and Producing Summaries" — https://www.cs.cmu.edu/~jgc/publication/The_Use_MMR_Diversity_Based_LTMIR_1998.pdf
+
+### Rate-distortion theory
+
+The right mathematical lens for compaction and memory-budget trade-offs.
+
+```text
+R(D) = min I(X; X_hat)
+```
+
+subject to expected distortion `E[d(X, X_hat)] <= D`.
+
+Practical role here:
+
+- define memory compaction as keeping the minimum bits needed under a task-loss budget
+- justify why reflection summaries and episodic memories should be separate layers
+
+Papers:
+
+- Claude E. Shannon, "A Mathematical Theory of Communication" — https://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf
+- Claude E. Shannon, "Coding Theorems for a Discrete Source With a Fidelity Criterion" — https://gwern.net/doc/cs/algorithm/information/1959-shannon.pdf
+
+### Information bottleneck
+
+A useful abstraction for deciding what information should survive memory compression.
+
+```text
+min I(X; T) - β I(T; Y)
+```
+
+Practical role here:
+
+- compress history into a smaller memory state `T`
+- retain information that predicts future task utility `Y`
+- drop irrelevant transcript detail even when it is lexically rich
+
+Papers:
+
+- Naftali Tishby, Fernando C. Pereira, William Bialek, "The Information Bottleneck Method" — https://www.princeton.edu/~wbialek/our_papers/tishby+al_99.pdf
+- Naftali Tishby, Noga Zaslavsky, "Deep Learning and the Information Bottleneck Principle" — https://arxiv.org/abs/1503.02406
+
 ## Existing Foundation in This Repository
 
 The repository already contains a general retrieval layer:
