@@ -75,6 +75,51 @@ def test_wechat_account_repository_preserves_literal_route_tag_values(
     assert loaded.route_tag == "none"
 
 
+def test_wechat_account_repository_get_recovers_invalid_timestamps(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "wechat_dirty_timestamps.db"
+    repository = WeChatAccountRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_wechat_account_row(
+        db_path,
+        account_id="wx_dirty",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    loaded = repository.get_account("wx_dirty")
+
+    assert loaded.account_id == "wx_dirty"
+    assert loaded.created_at.isoformat() == valid_updated_at
+    assert loaded.updated_at.isoformat() == valid_updated_at
+    assert repository.list_accounts() == ()
+
+
+def test_wechat_account_repository_upsert_recovers_existing_dirty_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "wechat_dirty_upsert.db"
+    repository = WeChatAccountRepository(db_path)
+    _insert_wechat_account_row(
+        db_path,
+        account_id="wx_dirty",
+        created_at="None",
+    )
+
+    updated = repository.upsert_account(
+        WeChatAccountRecord(
+            account_id="wx_dirty",
+            display_name="Recovered Account",
+            route_tag="none",
+        )
+    )
+
+    assert updated.account_id == "wx_dirty"
+    assert updated.display_name == "Recovered Account"
+    assert updated.route_tag == "none"
+
+
 def test_wechat_account_repository_skips_invalid_persisted_rows(
     tmp_path: Path,
 ) -> None:
@@ -102,6 +147,9 @@ def _insert_wechat_account_row(
     db_path: Path,
     *,
     account_id: str,
+    route_tag: str | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -133,7 +181,7 @@ def _insert_wechat_account_row(
             "Broken Account",
             "https://wechat.example.test",
             "https://cdn.example.test",
-            None,
+            route_tag,
             "enabled",
             None,
             "",
@@ -144,8 +192,8 @@ def _insert_wechat_account_row(
             1,
             "{}",
             None,
-            now,
-            now,
+            created_at or now,
+            updated_at or now,
         ),
     )
     connection.commit()
