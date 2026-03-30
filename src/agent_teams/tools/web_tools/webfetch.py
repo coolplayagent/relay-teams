@@ -226,25 +226,41 @@ async def fetch_webfetch_projection(
     cancel_check: Callable[[], None],
 ) -> ToolResultProjection:
     if extract is WebFetchExtractMode.NONE:
+        probe_response: httpx.Response | None = None
         try:
-            probe = await probe_binary_download(
+            probe, probe_response = await probe_binary_download_with_response(
                 client=client,
                 url=requested_url,
                 response_format=response_format,
             )
         except ToolExecutionError:
             probe = None
-        if probe is not None and is_binary_response(probe.content_type):
-            return await download_binary_response(
-                client=client,
-                requested_url=requested_url,
-                response_format=response_format,
-                workspace_dir=workspace_dir,
-                workspace_id=workspace_id,
-                shared_store=shared_store,
-                cancel_check=cancel_check,
-                probe=probe,
-            )
+        else:
+            try:
+                if probe is not None and is_binary_response(probe.content_type):
+                    if probe.range_supported:
+                        return await download_binary_response(
+                            client=client,
+                            requested_url=requested_url,
+                            response_format=response_format,
+                            workspace_dir=workspace_dir,
+                            workspace_id=workspace_id,
+                            shared_store=shared_store,
+                            cancel_check=cancel_check,
+                            probe=probe,
+                        )
+                    if probe_response is not None and probe_response.status_code == 200:
+                        return await download_binary_response_from_response(
+                            response=probe_response,
+                            requested_url=requested_url,
+                            workspace_dir=workspace_dir,
+                            workspace_id=workspace_id,
+                            shared_store=shared_store,
+                            cancel_check=cancel_check,
+                        )
+            finally:
+                if probe_response is not None:
+                    await probe_response.aclose()
 
     response = await fetch_url(
         client=client,
@@ -663,118 +679,42 @@ async def download_binary_response(
             _cleanup_binary_download_dir(download_dir)
 
     active_probe = probe
+    probe_response: httpx.Response | None = None
     if active_probe is None:
-        active_probe = await probe_binary_download(
+        active_probe, probe_response = await probe_binary_download_with_response(
             client=client,
             url=requested_url,
             response_format=response_format,
         )
-    if (
-        active_probe.total_size is not None
-        and active_probe.total_size > MAX_BINARY_DOWNLOAD_SIZE_BYTES
-    ):
-        _cleanup_binary_download_dir(download_dir)
-        _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
-
-    if manifest is not None and not binary_download_manifest_matches_probe(
-        manifest=manifest,
-        probe=active_probe,
-    ):
-        _cleanup_binary_download_dir(download_dir)
-        manifest = None
-
-    if (
-        manifest is not None
-        and manifest.completed
-        and binary_download_manifest_is_usable(
-            manifest=manifest,
-            probe=active_probe,
-        )
-    ):
-        save_binary_download_manifest(
-            manifest=manifest,
-            manifest_path=manifest_path,
-            shared_store=shared_store,
-            workspace_id=workspace_id,
-            download_key=download_key,
-        )
-        return build_binary_download_projection(
-            saved_path=Path(manifest.saved_path),
-            content_type=manifest.mime_type,
-            size_bytes=manifest.total_size or Path(manifest.saved_path).stat().st_size,
-            final_url=manifest.final_url,
-        )
-
-    if manifest is None:
-        manifest = initialize_binary_download_manifest(
-            normalized_requested_url=normalized_url,
-            probe=active_probe,
-            download_dir=download_dir,
-        )
-        save_binary_download_manifest(
-            manifest=manifest,
-            manifest_path=manifest_path,
-            shared_store=shared_store,
-            workspace_id=workspace_id,
-            download_key=download_key,
-        )
-
-    if not active_probe.range_supported or active_probe.total_size is None:
-        _cleanup_binary_download_dir(download_dir)
-        manifest = initialize_binary_download_manifest(
-            normalized_requested_url=normalized_url,
-            probe=active_probe,
-            download_dir=download_dir,
-        )
-        manifest = await download_binary_without_resume(
-            client=client,
-            requested_url=requested_url,
-            response_format=response_format,
-            manifest=manifest,
-            download_dir=download_dir,
-            manifest_path=manifest_path,
-            shared_store=shared_store,
-            workspace_id=workspace_id,
-            download_key=download_key,
-            cancel_check=cancel_check,
-        )
-        return build_binary_download_projection(
-            saved_path=Path(manifest.saved_path),
-            content_type=manifest.mime_type,
-            size_bytes=manifest.total_size or Path(manifest.saved_path).stat().st_size,
-            final_url=manifest.final_url,
-        )
-
-    last_error: ToolExecutionError | None = None
-    for attempt in range(2):
-        active_manifest = manifest
-        if attempt == 1:
+    try:
+        if (
+            active_probe.total_size is not None
+            and active_probe.total_size > MAX_BINARY_DOWNLOAD_SIZE_BYTES
+        ):
             _cleanup_binary_download_dir(download_dir)
-            active_manifest = initialize_binary_download_manifest(
-                normalized_requested_url=normalized_url,
+            _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
+
+        if manifest is not None and not binary_download_manifest_matches_probe(
+            manifest=manifest,
+            probe=active_probe,
+        ):
+            _cleanup_binary_download_dir(download_dir)
+            manifest = None
+
+        if (
+            manifest is not None
+            and manifest.completed
+            and binary_download_manifest_is_usable(
+                manifest=manifest,
                 probe=active_probe,
-                download_dir=download_dir,
             )
+        ):
             save_binary_download_manifest(
-                manifest=active_manifest,
+                manifest=manifest,
                 manifest_path=manifest_path,
                 shared_store=shared_store,
                 workspace_id=workspace_id,
                 download_key=download_key,
-            )
-        try:
-            manifest = await download_binary_with_ranges(
-                client=client,
-                requested_url=requested_url,
-                response_format=response_format,
-                manifest=active_manifest,
-                probe=active_probe,
-                download_dir=download_dir,
-                manifest_path=manifest_path,
-                shared_store=shared_store,
-                workspace_id=workspace_id,
-                download_key=download_key,
-                cancel_check=cancel_check,
             )
             return build_binary_download_projection(
                 saved_path=Path(manifest.saved_path),
@@ -783,14 +723,110 @@ async def download_binary_response(
                 or Path(manifest.saved_path).stat().st_size,
                 final_url=manifest.final_url,
             )
-        except ToolExecutionError as exc:
-            last_error = exc
-            if exc.error_type not in RANGE_RESET_ERROR_TYPES or attempt == 1:
-                raise
 
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("Binary download did not return a result")
+        if manifest is None:
+            manifest = initialize_binary_download_manifest(
+                normalized_requested_url=normalized_url,
+                probe=active_probe,
+                download_dir=download_dir,
+            )
+            save_binary_download_manifest(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                shared_store=shared_store,
+                workspace_id=workspace_id,
+                download_key=download_key,
+            )
+
+        if not active_probe.range_supported or active_probe.total_size is None:
+            _cleanup_binary_download_dir(download_dir)
+            manifest = initialize_binary_download_manifest(
+                normalized_requested_url=normalized_url,
+                probe=active_probe,
+                download_dir=download_dir,
+            )
+            if probe_response is not None and probe_response.status_code == 200:
+                manifest = await save_non_resumable_binary_response(
+                    response=probe_response,
+                    requested_url=requested_url,
+                    manifest=manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            else:
+                manifest = await download_binary_without_resume(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    manifest=manifest,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+            return build_binary_download_projection(
+                saved_path=Path(manifest.saved_path),
+                content_type=manifest.mime_type,
+                size_bytes=manifest.total_size
+                or Path(manifest.saved_path).stat().st_size,
+                final_url=manifest.final_url,
+            )
+
+        last_error: ToolExecutionError | None = None
+        for attempt in range(2):
+            active_manifest = manifest
+            if attempt == 1:
+                _cleanup_binary_download_dir(download_dir)
+                active_manifest = initialize_binary_download_manifest(
+                    normalized_requested_url=normalized_url,
+                    probe=active_probe,
+                    download_dir=download_dir,
+                )
+                save_binary_download_manifest(
+                    manifest=active_manifest,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                )
+            try:
+                manifest = await download_binary_with_ranges(
+                    client=client,
+                    requested_url=requested_url,
+                    response_format=response_format,
+                    manifest=active_manifest,
+                    probe=active_probe,
+                    download_dir=download_dir,
+                    manifest_path=manifest_path,
+                    shared_store=shared_store,
+                    workspace_id=workspace_id,
+                    download_key=download_key,
+                    cancel_check=cancel_check,
+                )
+                return build_binary_download_projection(
+                    saved_path=Path(manifest.saved_path),
+                    content_type=manifest.mime_type,
+                    size_bytes=manifest.total_size
+                    or Path(manifest.saved_path).stat().st_size,
+                    final_url=manifest.final_url,
+                )
+            except ToolExecutionError as exc:
+                last_error = exc
+                if exc.error_type not in RANGE_RESET_ERROR_TYPES or attempt == 1:
+                    raise
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Binary download did not return a result")
+    finally:
+        if probe_response is not None:
+            await probe_response.aclose()
 
 
 async def probe_binary_download(
@@ -799,35 +835,34 @@ async def probe_binary_download(
     url: str,
     response_format: str,
 ) -> BinaryDownloadProbe:
+    probe, response = await probe_binary_download_with_response(
+        client=client,
+        url=url,
+        response_format=response_format,
+    )
+    await response.aclose()
+    return probe
+
+
+async def probe_binary_download_with_response(
+    *,
+    client: httpx.AsyncClient,
+    url: str,
+    response_format: str,
+) -> tuple[BinaryDownloadProbe, httpx.Response]:
     response = await fetch_url(
         client=client,
         url=url,
         response_format=response_format,
         extra_headers={"Range": RANGE_PROBE_HEADER_VALUE},
     )
-    try:
-        content_type = normalize_content_type(response.headers.get("content-type", ""))
-        content_range = parse_content_range(response.headers.get("content-range"))
-        total_size = _parse_content_length(response)
-        range_supported = False
-        if response.status_code == 206 and content_range is not None:
-            start, end, total = content_range
-            if start == 0 and end == 0:
-                total_size = total
-                range_supported = True
-        return BinaryDownloadProbe(
+    return (
+        build_binary_download_probe_from_response(
+            response=response,
             requested_url=url,
-            final_url=str(response.url),
-            content_type=content_type,
-            total_size=total_size,
-            etag=_normalized_optional_header(response.headers.get("etag")),
-            last_modified=_normalized_optional_header(
-                response.headers.get("last-modified")
-            ),
-            range_supported=range_supported,
-        )
-    finally:
-        await response.aclose()
+        ),
+        response,
+    )
 
 
 def build_binary_download_probe_from_response(
@@ -835,16 +870,24 @@ def build_binary_download_probe_from_response(
     response: httpx.Response,
     requested_url: str,
 ) -> BinaryDownloadProbe:
+    content_range = parse_content_range(response.headers.get("content-range"))
+    total_size = _parse_content_length(response)
+    range_supported = False
+    if response.status_code == 206 and content_range is not None:
+        start, end, total = content_range
+        if start == 0 and end == 0:
+            total_size = total
+            range_supported = True
     return BinaryDownloadProbe(
         requested_url=requested_url,
         final_url=str(response.url),
         content_type=normalize_content_type(response.headers.get("content-type", "")),
-        total_size=_parse_content_length(response),
+        total_size=total_size,
         etag=_normalized_optional_header(response.headers.get("etag")),
         last_modified=_normalized_optional_header(
             response.headers.get("last-modified")
         ),
-        range_supported=False,
+        range_supported=range_supported,
     )
 
 

@@ -761,7 +761,7 @@ async def test_download_binary_response_falls_back_when_range_probe_is_ignored(
     data = cast(dict[str, object], projection.visible_data)
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
-    assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE, ""]
+    assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE]
 
 
 @pytest.mark.asyncio
