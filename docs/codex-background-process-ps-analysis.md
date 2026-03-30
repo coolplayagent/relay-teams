@@ -407,6 +407,174 @@ CLI 则在：
 - secret 不写回配置文件，只在 secret store 中保存，见 `tests/unit_tests/external_agents/test_config_service.py:62`
 - runtime 解析时重新回填 secret，见 `tests/unit_tests/external_agents/test_config_service.py:108`
 
+## 11. 已安装 Rust 原生二进制的静态逆向补充
+
+上面的大部分结论来自上游源码与公开文档。为了确认这些能力确实存在于本机已安装的 shipped binary，而不是只存在于仓库源码中，我额外对本机安装的 Codex 原生二进制做了静态取证。
+
+### 11.1 取证对象
+
+本机 `codex` 命令实际是 Node wrapper：
+
+- wrapper 路径：`/home/steven/.nvm/versions/node/v24.14.0/bin/codex`
+- realpath：`/home/steven/.nvm/versions/node/v24.14.0/lib/node_modules/@openai/codex/bin/codex.js`
+
+而真正被启动的 Rust/native binary 位于：
+
+- `/home/steven/.nvm/versions/node/v24.14.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex`
+
+`file` 结果表明它是：
+
+- `ELF 64-bit LSB pie executable, x86-64`
+- `static-pie linked`
+- `stripped`
+
+这意味着：
+
+- 这是一个 Linux x64 原生可执行文件
+- 静态链接，依赖较少
+- 已 strip，不能指望常规符号名丰富可读
+- 但 `.rodata` 和协议/文案字符串仍然可以用 `strings` 做高价值静态取证
+
+### 11.2 二进制中直接可见的 background terminal 证据
+
+对该原生二进制做 `strings -a` 后，可以直接命中以下关键文案：
+
+- `background terminal`
+- `/ps to view`
+- `/stop to close`
+- `Background terminals`
+- `No background terminals running.`
+- `Interacted with background terminal`
+- `Waited for background terminal`
+- `Stopping all background terminals.`
+- `The maximum number of unified exec processes you can keep open is`
+- `background_terminal_max_timeout`
+- `write_stdin`
+- `Writes characters to an existing unified exec session and returns recent output.`
+- `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
+
+这些字符串说明 shipped binary 本身就包含如下能力，而不是只在源码里“看起来存在”：
+
+1. background terminal 的用户文案
+2. `/ps` / `/stop` 的交互提示
+3. unified exec session 的持续交互模型
+4. `write_stdin` 这种针对已有后台 session 写 stdin / 轮询输出的工具语义
+5. 对后台 terminal 超时与数量限制的配置项
+
+因此，关于 background process 的核心结论可以进一步收紧为：
+
+- 这不是纯源码推断
+- 这些能力实际已经编进当前本机安装的 Codex 原生二进制
+
+### 11.3 二进制中可见的真实“处理链路”线索
+
+虽然二进制已 strip，无法像未裁剪调试版那样直接看到完整函数符号，但通过字符串仍可拼出一条相当清晰的处理链：
+
+#### A. 前台命令执行与后台会话延续
+
+二进制里同时出现：
+
+- `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
+- `Session identifier to pass to write_stdin when the process is still running.`
+- `write_stdin`
+- `Writes characters to an existing unified exec session and returns recent output.`
+- `Identifier of the running unified exec session.`
+- `Bytes to write to stdin (may be empty to poll).`
+
+这组字符串非常关键，基本可以证明 shipped binary 的真实模型是：
+
+1. 先执行命令
+2. 如果命令在本轮结束后仍活着，就返回 session/process 标识
+3. 后续通过 `write_stdin` 继续交互
+4. 空输入时可用于 poll 输出
+
+这与源码里 `exec_command()` + `write_stdin()` 的链路完全一致。
+
+#### B. `/ps` 不是系统 `ps`，而是 Codex 内部会话视图
+
+二进制里能同时看到：
+
+- `Background terminals`
+- `No background terminals running.`
+- `Interacted with background terminal`
+- `Waited for background terminal`
+- `/ps to view`
+
+这说明 `/ps` 对应的是 Codex 内部维护的 background terminal/session 列表，而不是宿主机进程表。
+
+#### C. `/stop` 是“全局清理后台 terminal”
+
+二进制里能看到：
+
+- `Stopping all background terminals.`
+- `CleanBackgroundTerminals`
+- `thread/backgroundTerminals/clean failed in app-server TUI`
+- `struct variant ClientRequest::ThreadBackgroundTerminalsClean`
+
+这一组字符串把 `/stop` 的真实行为进一步钉实了：
+
+- 它不是一个纯本地 UI 文案
+- 底层确实存在“清理后台 terminal”的请求类型
+- 在 app-server/TUI 协议层里还有专门的 `ThreadBackgroundTerminalsClean` 请求
+
+这比只看 slash command 源码更进一步，因为它说明 shipped binary 里连协议名都在。
+
+#### D. app-server / JSON-RPC / MCP 能力也在二进制里
+
+二进制还包含大量协议字符串：
+
+- `initialize`
+- `initialized`
+- `MCP client not initialized`
+- `JSONRPCRequest`
+- `JSONRPCResponse`
+- `thread/start`
+- `turn/start`
+- `command/exec`
+- `command/exec/write`
+- `command/exec/terminate`
+- `command/exec/resize`
+- `externalAgentConfig/detect`
+- `externalAgentConfig/import`
+- `thread/shellCommand`
+
+以及一整套事件名：
+
+- `ExecCommandBegin`
+- `ExecCommandOutputDelta`
+- `TerminalInteraction`
+- `ExecCommandEnd`
+- `BackgroundEvent`
+
+这些字符串说明 shipped binary 里确实内置了：
+
+- app-server 风格协议面
+- 命令执行/交互/结束事件
+- background terminal 清理请求
+- JSON-RPC 与 MCP 相关能力
+
+也就是说，从原生二进制静态视角看，Codex 的 background process 能力并不是零散拼凑，而是完整挂在一套 protocol/app-server/tool/event 体系里的。
+
+### 11.4 对 `codex --serve` 的边界结论
+
+静态逆向二进制后，我仍然没有直接命中 `--serve` 字面量；但命中了大量 app-server、JSON-RPC、initialize、command/exec、background terminal clean 等协议字符串。
+
+因此可以把边界更新为：
+
+- 不能仅凭目前公开源码或当前这份字符串取证，断言 `--serve` 这个 flag 名字在当前发行版里一定公开稳定存在
+- 但可以确认当前 shipped binary 本身确实内置了 app-server / JSON-RPC / command execution / background terminal 管理等相关处理能力
+- 所以本分支用 `codex --serve` 作为接入契约，在“能力方向”上是有强证据支撑的；不确定的是公开入口 flag 的最终命名与兼容承诺
+
+### 11.5 更新后的最强结论
+
+综合源码、文档、以及已安装原生二进制静态逆向，可以把结论升级为：
+
+- Codex 的 background process 能力真实存在于当前 shipped Rust 原生二进制中
+- 它的真实模型是 unified exec session / background terminal，而不是简单的一次性 shell 执行
+- `/ps` 查看的是 Codex 内部维护的后台 terminal 列表
+- `/stop` 走的是专门的 background terminal 清理路径
+- 后续交互依赖 `write_stdin` 一类的持续会话机制，而不是重新启动命令
+
 ## 11. 一句话总结
 
 如果只记一条：
