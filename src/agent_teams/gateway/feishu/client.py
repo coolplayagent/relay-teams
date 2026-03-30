@@ -115,11 +115,11 @@ class FeishuClient:
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         normalized_message_id = str(message_id).strip()
         if not normalized_message_id:
             raise RuntimeError("Feishu reply requires a message_id.")
-        self._request_json(
+        response_json = self._request_json(
             method="POST",
             path=f"/open-apis/im/v1/messages/{normalized_message_id}/reply",
             json_body={
@@ -129,6 +129,14 @@ class FeishuClient:
             environment=self.require_environment(environment),
             error_context="reply message",
         )
+        response_data = _require_json_object(
+            response_json.get("data"),
+            error_context="reply message",
+        )
+        reply_message_id = str(response_data.get("message_id", "")).strip()
+        if not reply_message_id:
+            raise RuntimeError("Feishu API failed to reply message: missing message_id")
+        return reply_message_id
 
     def create_message_reaction(
         self,

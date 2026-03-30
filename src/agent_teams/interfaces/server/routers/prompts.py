@@ -37,6 +37,7 @@ from agent_teams.sessions.runs.run_models import RuntimePromptConversationContex
 from agent_teams.sessions.runs.run_models import RunTopologySnapshot
 from agent_teams.sessions.session_models import SessionMode
 from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 from agent_teams.workspace import WorkspaceManager, WorkspaceService
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
@@ -45,8 +46,8 @@ router = APIRouter(prefix="/prompts", tags=["Prompts"])
 class PromptPreviewRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
-    workspace_id: str | None = Field(default=None, min_length=1)
+    role_id: RequiredIdentifierStr
+    workspace_id: OptionalIdentifierStr = None
     objective: str | None = None
     shared_state: dict[str, JsonValue] = Field(default_factory=dict)
     tools: tuple[str, ...] | None = None
@@ -58,7 +59,7 @@ class PromptPreviewRequest(BaseModel):
 class PromptPreviewResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    role_id: str
+    role_id: RequiredIdentifierStr
     objective: str
     tools: tuple[str, ...]
     skills: tuple[str, ...]

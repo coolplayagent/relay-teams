@@ -138,6 +138,17 @@ def test_wait_wechat_login_route_maps_missing_session_to_404() -> None:
     assert "Unknown WeChat login session" in response.json()["detail"]
 
 
+def test_wait_wechat_login_route_rejects_none_like_session_key() -> None:
+    client = _client(_FakeWeChatGatewayService())
+
+    response = client.post(
+        "/api/gateway/wechat/login/wait",
+        json={"session_key": "None", "timeout_ms": 1000},
+    )
+
+    assert response.status_code == 422
+
+
 def test_update_wechat_account_route_maps_validation_error_to_422() -> None:
     fake_service = _FakeWeChatGatewayService()
     client = _client(fake_service)
@@ -164,3 +175,16 @@ def test_reload_wechat_gateway_route_calls_service() -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert fake_service.reload_calls == 1
+
+
+def test_update_wechat_account_route_rejects_none_like_path_identifier() -> None:
+    fake_service = _FakeWeChatGatewayService()
+    client = _client(fake_service)
+
+    response = client.patch(
+        "/api/gateway/wechat/accounts/None",
+        json={"display_name": "Ops WeChat"},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.updated_payloads == []

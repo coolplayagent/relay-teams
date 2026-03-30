@@ -216,6 +216,19 @@ def test_create_session_route_returns_created_session() -> None:
     assert fake_service.created_calls == [("session-1", "default", None)]
 
 
+def test_create_session_route_rejects_none_like_session_id() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={"session_id": "None", "workspace_id": "default"},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_calls == []
+
+
 def test_create_session_route_returns_503_when_system_roles_are_missing() -> None:
     fake_service = _FakeSessionService()
     fake_service.create_session_error = SystemRolesUnavailableError(
@@ -241,6 +254,19 @@ def test_update_session_route_returns_not_found_for_missing_session() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Session not found"}
+
+
+def test_update_session_route_rejects_none_like_path_identifier() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/None",
+        json={"metadata": {"title": "Renamed Session"}},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.updated_calls == []
 
 
 def test_update_session_topology_route_returns_updated_session() -> None:

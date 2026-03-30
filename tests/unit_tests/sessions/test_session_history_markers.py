@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
@@ -144,3 +146,53 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
     coordinator_messages = round_new["coordinator_messages"]
     assert isinstance(coordinator_messages, list)
     assert len(coordinator_messages) == 1
+
+
+def test_session_history_marker_repository_skips_invalid_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_history_markers_invalid.db"
+    repository = SessionHistoryMarkerRepository(db_path)
+    _ = repository.create_clear_marker("session-1")
+    _insert_history_marker_row(
+        db_path,
+        marker_id="None",
+        session_id="session-1",
+    )
+
+    markers = repository.list_by_session("session-1")
+
+    assert len(markers) == 1
+    assert markers[0].session_id == "session-1"
+    assert repository.get_latest("session-1") is not None
+
+
+def _insert_history_marker_row(
+    db_path: Path,
+    *,
+    marker_id: str,
+    session_id: str,
+) -> None:
+    now = datetime.now(tz=timezone.utc).isoformat()
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        INSERT INTO session_history_markers(
+            marker_id,
+            session_id,
+            marker_type,
+            metadata_json,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            marker_id,
+            session_id,
+            "clear",
+            "{}",
+            now,
+        ),
+    )
+    connection.commit()
+    connection.close()

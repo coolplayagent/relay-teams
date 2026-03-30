@@ -25,6 +25,7 @@ from agent_teams.sessions.runs.run_models import (
     RunThinkingConfig,
 )
 from agent_teams.trace import bind_trace_context
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/runs", tags=["Runs"])
@@ -33,14 +34,14 @@ router = APIRouter(prefix="/runs", tags=["Runs"])
 class CreateRunRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    session_id: str = Field(min_length=1)
+    session_id: RequiredIdentifierStr
     input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
-    target_role_id: str | None = None
+    target_role_id: OptionalIdentifierStr = None
 
     @model_validator(mode="before")
     @classmethod
@@ -59,9 +60,9 @@ class CreateRunRequest(BaseModel):
 class CreateRunResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    run_id: str
-    session_id: str
-    target_role_id: str | None = None
+    run_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    target_role_id: OptionalIdentifierStr = None
 
 
 class InjectMessageRequest(BaseModel):
@@ -82,7 +83,7 @@ class StopRunRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     scope: Literal["main", "subagent"] = "main"
-    instance_id: str | None = None
+    instance_id: OptionalIdentifierStr = None
 
 
 class InjectSubagentRequest(BaseModel):
@@ -168,7 +169,7 @@ async def create_run(
 
 @router.get("/{run_id}/events")
 async def stream_run_events(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
     after_event_id: int = 0,
 ) -> StreamingResponse:
@@ -223,7 +224,7 @@ async def stream_run_events(
 
 @router.post("/{run_id}/inject")
 def inject_message(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     req: InjectMessageRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
@@ -246,7 +247,7 @@ def inject_message(
 
 @router.get("/{run_id}/tool-approvals")
 def list_tool_approvals(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> list[dict[str, str]]:
     with bind_trace_context(trace_id=run_id, run_id=run_id):
@@ -263,8 +264,8 @@ def list_tool_approvals(
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")
 def resolve_tool_approval(
-    run_id: str,
-    tool_call_id: str,
+    run_id: RequiredIdentifierStr,
+    tool_call_id: RequiredIdentifierStr,
     req: ResolveToolApprovalRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
@@ -294,7 +295,7 @@ def resolve_tool_approval(
 
 @router.post("/{run_id}/stop")
 def stop_run(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     req: StopRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
@@ -337,7 +338,7 @@ def stop_run(
 
 @router.post("/{run_id}:resume")
 async def resume_run(
-    run_id: str,
+    run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
@@ -359,8 +360,8 @@ async def resume_run(
 
 @router.post("/{run_id}/subagents/{instance_id}/inject")
 def inject_subagent(
-    run_id: str,
-    instance_id: str,
+    run_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     req: InjectSubagentRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:

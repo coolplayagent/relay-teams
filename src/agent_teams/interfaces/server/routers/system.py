@@ -72,6 +72,7 @@ from agent_teams.providers.model_connectivity import (
     ModelConnectivityProbeResult,
 )
 from agent_teams.skills.config_reload_service import SkillsConfigReloadService
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
 
@@ -340,7 +341,7 @@ def list_external_agents(
 
 @router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
 def get_external_agent(
-    agent_id: str,
+    agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
     try:
@@ -351,7 +352,7 @@ def get_external_agent(
 
 @router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
 def save_external_agent(
-    agent_id: str,
+    agent_id: RequiredIdentifierStr,
     req: ExternalAgentConfig,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
@@ -363,7 +364,7 @@ def save_external_agent(
 
 @router.delete("/configs/agents/{agent_id}")
 def delete_external_agent(
-    agent_id: str,
+    agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
     try:
@@ -375,7 +376,7 @@ def delete_external_agent(
 
 @router.post("/configs/agents/{agent_id}:test", response_model=ExternalAgentTestResult)
 async def test_external_agent(
-    agent_id: str,
+    agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentTestResult:
     try:

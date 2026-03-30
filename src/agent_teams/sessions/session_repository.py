@@ -11,6 +11,11 @@ from pydantic import JsonValue, ValidationError
 from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
+from agent_teams.validation import (
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -237,13 +242,22 @@ class SessionRepository:
             """
         ).fetchall()
         for row in rows:
-            started_at = str(row["started_at"] or "").strip()
-            if started_at:
+            try:
+                started_at = normalize_persisted_text(row["started_at"])
+                if started_at is not None:
+                    continue
+                session_id = require_persisted_identifier(
+                    row["session_id"],
+                    field_name="session_id",
+                )
+                session_mode = SessionMode(str(row["session_mode"] or "normal"))
+                normal_root_role_id = normalize_persisted_text(
+                    row["normal_root_role_id"]
+                )
+                preset_id = normalize_persisted_text(row["orchestration_preset_id"])
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
                 continue
-            session_id = str(row["session_id"])
-            session_mode = SessionMode(str(row["session_mode"] or "normal"))
-            normal_root_role_id = str(row["normal_root_role_id"] or "").strip() or None
-            preset_id = str(row["orchestration_preset_id"] or "").strip() or None
             next_mode = session_mode
             next_normal_root_role_id = normal_root_role_id
             next_preset_id = preset_id
@@ -269,7 +283,11 @@ class SessionRepository:
         ).fetchone()
         if row is None:
             raise KeyError(f"Unknown session_id: {session_id}")
-        return self._to_record(row)
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_session_row(row=row, error=exc)
+            raise KeyError(f"Unknown session_id: {session_id}") from exc
 
     def list_all(self) -> tuple[SessionRecord, ...]:
         rows = self._conn.execute(
@@ -288,25 +306,26 @@ class SessionRepository:
         self._conn.commit()
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
-        session_id = _require_session_text(row["session_id"], field_name="session_id")
-        workspace_id = _require_session_text(
+        session_id = require_persisted_identifier(
+            row["session_id"],
+            field_name="session_id",
+        )
+        workspace_id = require_persisted_identifier(
             row["workspace_id"],
             field_name="workspace_id",
         )
-        project_id = str(row["project_id"] or "").strip() or workspace_id
-        started_at_raw = _normalize_persisted_text(row["started_at"])
-        started_at = _parse_isoformat_or_none(started_at_raw)
+        project_id = normalize_persisted_text(row["project_id"]) or workspace_id
+        started_at_raw = normalize_persisted_text(row["started_at"])
+        started_at = parse_persisted_datetime_or_none(started_at_raw)
         if started_at_raw is not None and started_at is None:
             _log_invalid_session_timestamp(
                 session_id=session_id,
                 field_name="started_at",
-                raw_preview=started_at_raw,
+                raw_preview=_persisted_value_preview(row["started_at"]),
                 fallback_iso=None,
             )
-        created_at_raw = _normalize_persisted_text(row["created_at"])
-        updated_at_raw = _normalize_persisted_text(row["updated_at"])
-        created_at = _parse_isoformat_or_none(created_at_raw)
-        updated_at = _parse_isoformat_or_none(updated_at_raw)
+        created_at = parse_persisted_datetime_or_none(row["created_at"])
+        updated_at = parse_persisted_datetime_or_none(row["updated_at"])
         fallback_now = datetime.now(tz=timezone.utc)
         if created_at is None:
             created_at = updated_at or fallback_now
@@ -331,9 +350,10 @@ class SessionRepository:
             project_id=project_id,
             metadata=_metadata_from_json(row["metadata"], session_id=session_id),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
-            normal_root_role_id=str(row["normal_root_role_id"] or "").strip() or None,
-            orchestration_preset_id=str(row["orchestration_preset_id"] or "").strip()
-            or None,
+            normal_root_role_id=normalize_persisted_text(row["normal_root_role_id"]),
+            orchestration_preset_id=normalize_persisted_text(
+                row["orchestration_preset_id"]
+            ),
             started_at=started_at,
             can_switch_mode=started_at is None,
             created_at=created_at,
@@ -393,35 +413,6 @@ def _metadata_from_json(value: object, *, session_id: str) -> dict[str, str]:
             message="Ignored non-string session metadata values from persisted row",
             payload=payload,
         )
-    return normalized
-
-
-def _normalize_persisted_text(value: object) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    if not normalized:
-        return None
-    if normalized.lower() in {"none", "null"}:
-        return None
-    return normalized
-
-
-def _parse_isoformat_or_none(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def _require_session_text(value: object, *, field_name: str) -> str:
-    if value is None:
-        raise ValueError(f"Missing session {field_name} in persisted row")
-    normalized = str(value).strip()
-    if not normalized:
-        raise ValueError(f"Blank session {field_name} in persisted row")
     return normalized
 
 

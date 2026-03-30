@@ -27,6 +27,10 @@ from agent_teams.gateway.feishu.models import (
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
 )
+from agent_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
 from agent_teams.logger import get_logger, log_event
 from agent_teams.media import content_parts_from_text
 from agent_teams.providers.token_usage_repo import SessionTokenUsage
@@ -65,6 +69,8 @@ class SessionServiceLike(Protocol):
 class RunServiceLike(Protocol):
     def create_run(self, intent: IntentInput) -> tuple[str, str]: ...
 
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]: ...
+
     def ensure_run_started(self, run_id: str) -> None: ...
 
     def stop_run(self, run_id: str) -> None: ...
@@ -95,11 +101,13 @@ class FeishuInboundRuntime:
         run_service: RunServiceLike,
         external_session_binding_repo: ExternalSessionBindingRepository,
         feishu_client: FeishuClientLike | None = None,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._session_service = session_service
         self._run_service = run_service
         self._external_session_binding_repo = external_session_binding_repo
         self._feishu_client = feishu_client
+        self._session_ingress_service = session_ingress_service
 
     def start_run(
         self,
@@ -111,18 +119,22 @@ class FeishuInboundRuntime:
             runtime_config=runtime_config,
             message=message,
         )
-        run_id, _session_id = self._run_service.create_run(
-            IntentInput(
-                session_id=session_id,
-                input=content_parts_from_text(
-                    self._build_run_intent_text(message=message)
-                ),
-                execution_mode=ExecutionMode.AI,
-                yolo=runtime_config.target.yolo,
-                thinking=runtime_config.target.thinking,
-                conversation_context=self._build_conversation_context(message=message),
-            )
+        intent = IntentInput(
+            session_id=session_id,
+            input=content_parts_from_text(self._build_run_intent_text(message=message)),
+            execution_mode=ExecutionMode.AI,
+            yolo=runtime_config.target.yolo,
+            thinking=runtime_config.target.thinking,
+            conversation_context=self._build_conversation_context(message=message),
         )
+        if self._session_ingress_service is not None:
+            result = self._session_ingress_service.require_started(
+                GatewaySessionIngressRequest(intent=intent)
+            )
+            if result.run_id is None:
+                raise RuntimeError("session_busy")
+            return session_id, result.run_id
+        run_id, _session_id = self._run_service.create_detached_run(intent)
         self._run_service.ensure_run_started(run_id)
         return session_id, run_id
 

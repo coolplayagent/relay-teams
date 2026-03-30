@@ -15,6 +15,10 @@ Common status codes:
 - `409`: runtime conflict
 - `422`: request validation error
 
+Common validation rules:
+- Identifier and reference fields reject blank strings, whitespace-only strings, and the explicit string values `"None"` and `"null"` with `422`.
+- Optional identifier fields still accept real JSON `null`.
+
 ## Core Concepts
 
 - A run starts from one root task.
@@ -377,6 +381,7 @@ Notes:
 - New sessions default to `session_mode = "normal"`.
 - New sessions default to `normal_root_role_id = "MainAgent"`.
 - New sessions also store the current default orchestration preset id so they can be switched to orchestration before the first run.
+- Omitting `session_id` or sending `session_id = null` auto-generates a session id. Sending `"None"` or `"null"` as a string is rejected with `422`.
 
 ### `GET /sessions`
 
@@ -678,6 +683,7 @@ Notes:
 - `target_role_id` is optional. When set, that run starts from the specified role instead of the session-default root role, without mutating the saved session topology.
 - `target_role_id` may point to `Coordinator`, `MainAgent`, or any normal role known to the role registry.
 - The backend resolves the session mode at run creation time and snapshots the chosen root topology into the run intent for queued and recoverable resume flows.
+- `session_id`, `target_role_id`, `run_id`, and other identifier-style request fields follow the common identifier validation rules above.
 
 Response:
 
@@ -1003,6 +1009,7 @@ Rules:
 - `root_path` must already exist.
 - `root_path` must be a directory.
 - `workspace_id` must be unique.
+- `workspace_id` follows the common identifier validation rules above.
 
 ### `GET /workspaces/{workspace_id}`
 
@@ -1252,6 +1259,7 @@ Each record includes:
 ### `POST /gateway/feishu/accounts`
 
 Creates a Feishu gateway account and persists its secret config.
+The request `name` and all `account_id` path parameters follow the common identifier validation rules above.
 
 ### `PATCH /gateway/feishu/accounts/{account_id}`
 
@@ -1287,6 +1295,9 @@ Behavior:
   `收到来自 {sender_name} 的飞书消息：{message}` with `sender_open_id` fallback.
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
+- Inbound Feishu messages enter the shared gateway session ingress path and start
+  detached runs only when the bound internal session is idle.
+- A Feishu message never implicitly attaches to an already running session run.
 - Accepted group messages use a Feishu reaction acknowledgement with emoji `eyes`.
 - Only queued messages send a separate text reply: `已进入队列，前面还有 N 条消息。`
 - Group command responses and group final run replies use Feishu reply-to-message on the triggering message.
@@ -1385,6 +1396,9 @@ Each record includes:
 Notes:
 - WeChat is managed as a long-lived conversational gateway, not as a trigger.
 - Current implementation handles direct chat only. Group chat routing is reserved for later expansion.
+- Accepted WeChat direct messages are persisted into a local inbound queue before run start.
+- WeChat inbound messages also use the shared gateway session ingress path, so busy
+  sessions queue later messages instead of auto-attaching them to the active run.
 
 ### `POST /gateway/wechat/login/start`
 
@@ -1415,6 +1429,7 @@ Response fields:
 
 Notes:
 - On success, the backend stores the returned bot token in the unified secret store and upserts the account into `wechat_accounts`.
+- `session_key` and `account_id` follow the common identifier validation rules above.
 - Newly connected accounts default to `workspace_id = "default"` and `session_mode = "normal"` unless a previous record already exists for that account id.
 
 ### `PATCH /gateway/wechat/accounts/{account_id}`
@@ -1560,6 +1575,7 @@ Notes:
 - `delivery_binding.session_id` is required for explicit create/update requests and binds the automation project to that exact saved session.
 - When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
 - When a bound session cannot be resolved at run time, the run fails instead of falling back to a fresh automation session.
+- `workspace_id`, `automation_project_id`, and delivery-binding identifiers follow the common identifier validation rules above.
 
 ### `GET /automation/projects/{automation_project_id}`
 
@@ -1580,6 +1596,12 @@ session; projects with a Feishu delivery binding reuse the exact saved bound ses
 Response fields:
 - `automation_project_id`
 - `session_id`
+
+Behavior notes:
+- Bound-session automation execution also goes through the shared gateway session
+  ingress path and always starts detached runs.
+- If the bound session is busy, the automation job queues behind the current
+  session backlog instead of inserting prompt text into the active run.
 
 ### `POST /automation/projects/{automation_project_id}:enable`
 

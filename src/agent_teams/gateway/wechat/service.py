@@ -8,7 +8,7 @@ from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -21,13 +21,25 @@ import qrcode.image.svg
 
 from agent_teams.gateway.gateway_models import GatewayChannelType
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressBusyPolicy,
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
+from agent_teams.gateway.wechat.inbound_queue_repository import (
+    WeChatInboundQueueRepository,
+)
 from agent_teams.logger import get_logger, log_event
 from agent_teams.media import content_parts_from_text
 from agent_teams.roles import RoleRegistry
 from agent_teams.sessions.runs import RunEventHub
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from agent_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunThinkingConfig,
+    RuntimePromptConversationContext,
+)
 from agent_teams.sessions.runs.terminal_payload import (
     extract_terminal_error,
     extract_terminal_output,
@@ -47,11 +59,14 @@ from agent_teams.gateway.wechat.models import (
     WeChatAccountUpdateInput,
     WeChatGatewaySnapshot,
     WeChatInboundMessage,
+    WeChatInboundQueueRecord,
+    WeChatInboundQueueStatus,
     WeChatLoginSession,
     WeChatLoginStartRequest,
     WeChatLoginStartResponse,
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
+    WECHAT_PLATFORM,
 )
 from agent_teams.gateway.wechat.secret_store import (
     WeChatSecretStore,
@@ -67,6 +82,7 @@ _TERMINAL_EVENT_TYPES = {
     RunEventType.RUN_STOPPED,
 }
 _DEFAULT_POLL_TIMEOUT_MS = 35000
+_INBOUND_QUEUE_CLAIM_STALE_AFTER_SECONDS = 60
 
 LOGGER = get_logger(__name__)
 
@@ -88,6 +104,8 @@ class WeChatGatewayService:
         session_service: SessionService,
         im_tool_service: ImToolService,
         im_session_command_service: ImSessionCommandService,
+        inbound_queue_repo: WeChatInboundQueueRepository,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -104,12 +122,15 @@ class WeChatGatewayService:
         self._session_service = session_service
         self._im_tool_service = im_tool_service
         self._im_session_command_service = im_session_command_service
+        self._inbound_queue_repo = inbound_queue_repo
+        self._session_ingress_service = session_ingress_service
         self._status_lock = Lock()
         self._status_by_account: dict[str, WeChatGatewaySnapshot] = {}
         self._monitor_stop_events: dict[str, Event] = {}
         self._monitor_threads: dict[str, Thread] = {}
         self._login_sessions: dict[str, WeChatLoginSession] = {}
         self._watched_runs: set[str] = set()
+        self._drain_watched_runs: set[str] = set()
 
     def replace_role_registry(self, role_registry: RoleRegistry) -> None:
         self._role_registry = role_registry
@@ -534,14 +555,25 @@ class WeChatGatewayService:
                     context_token=message.context_token,
                 )
             return
-        recovery_snapshot = self._session_service.get_recovery_snapshot(
-            gateway_session.internal_session_id
+        queue_record, created = self._inbound_queue_repo.create_or_get(
+            WeChatInboundQueueRecord(
+                inbound_queue_id=f"wq_{uuid4().hex[:16]}",
+                account_id=account.account_id,
+                message_key=self._message_key(message),
+                gateway_session_id=gateway_session.gateway_session_id,
+                session_id=gateway_session.internal_session_id,
+                peer_user_id=peer_user_id,
+                context_token=message.context_token,
+                text=text,
+            )
         )
-        has_active_run = isinstance(recovery_snapshot.get("active_run"), Mapping)
-        if has_active_run:
-            receipt_text = "\u6536\u5230\uff0c\u5df2\u52a0\u5165\u5f53\u524d\u4f1a\u8bdd\u5904\u7406\u3002"
-        else:
-            receipt_text = "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
+        if not created:
+            return
+        self._drain_inbound_queue()
+        latest = self._inbound_queue_repo.get(queue_record.inbound_queue_id)
+        if latest is None:
+            return
+        receipt_text = self._build_receipt_text(latest)
         self._send_intermediate_text(
             account_id=account.account_id,
             gateway_session_id=gateway_session.gateway_session_id,
@@ -550,26 +582,6 @@ class WeChatGatewayService:
             text=receipt_text,
             event_name="wechat.receipt",
             failure_message="Failed to send WeChat receipt",
-        )
-        run_id, _ = self._run_service.create_run(
-            IntentInput(
-                session_id=gateway_session.internal_session_id,
-                input=content_parts_from_text(text),
-                yolo=account.yolo,
-                thinking=account.thinking,
-            )
-        )
-        self._gateway_session_service.bind_active_run(
-            gateway_session.gateway_session_id, run_id
-        )
-        self._run_service.ensure_run_started(run_id)
-        self._send_typing(account, token, peer_user_id, message.context_token, 1)
-        self._start_run_watcher(
-            account_id=account.account_id,
-            gateway_session_id=gateway_session.gateway_session_id,
-            run_id=run_id,
-            peer_user_id=peer_user_id,
-            context_token=message.context_token,
         )
 
     def _start_run_watcher(
@@ -605,6 +617,31 @@ class WeChatGatewayService:
             )
 
         future.add_done_callback(on_reply_done)
+
+    def _start_queue_drain_watcher(self, *, session_id: str, run_id: str) -> None:
+        if run_id in self._watched_runs or run_id in self._drain_watched_runs:
+            return
+        try:
+            loop = self._require_loop()
+        except RuntimeError:
+            return
+        self._drain_watched_runs.add(run_id)
+        future = asyncio.run_coroutine_threadsafe(
+            self._await_run_completion_for_queue_drain(
+                session_id=session_id,
+                run_id=run_id,
+            ),
+            loop,
+        )
+
+        def on_drain_done(done: ConcurrentFuture[None]) -> None:
+            self._handle_queue_drain_future(
+                session_id=session_id,
+                run_id=run_id,
+                future=done,
+            )
+
+        future.add_done_callback(on_drain_done)
 
     async def _await_terminal_and_reply(
         self,
@@ -692,6 +729,25 @@ class WeChatGatewayService:
         finally:
             self._watched_runs.discard(run_id)
 
+    async def _await_run_completion_for_queue_drain(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+    ) -> None:
+        async for event in self._run_service.stream_run_events(run_id):
+            if event.event_type in _TERMINAL_EVENT_TYPES:
+                return
+            if (
+                event.event_type == RunEventType.RUN_PAUSED
+                and self._active_run_id(session_id) != run_id
+            ):
+                return
+        if self._active_run_id(session_id) == run_id:
+            raise RuntimeError(
+                f"WeChat queue drain watcher ended before a terminal event for {run_id}."
+            )
+
     def _handle_reply_future(
         self,
         *,
@@ -741,6 +797,42 @@ class WeChatGatewayService:
                 exc_info=exc,
             )
 
+    def _handle_queue_drain_future(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        future: ConcurrentFuture[None],
+    ) -> None:
+        try:
+            future.result()
+        except FutureCancelledError as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.queue_drain.cancelled",
+                message="WeChat queue drain watcher was cancelled",
+                payload={"session_id": session_id, "run_id": run_id},
+                exc_info=exc,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.queue_drain.failed",
+                message="WeChat queue drain watcher failed",
+                payload={
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+        finally:
+            self._drain_watched_runs.discard(run_id)
+            if self._active_run_id(session_id) != run_id:
+                self._drain_inbound_queue()
+
     def _record_reply_success(
         self,
         *,
@@ -777,12 +869,14 @@ class WeChatGatewayService:
                 exc_info=exc,
             )
         self._clear_active_run(gateway_session_id)
+        self._mark_queue_record_completed(run_id=run_id, failed=False)
         self._set_status(
             account_id,
             last_error=None,
             last_outbound_at=occurred_at,
             last_event_at=occurred_at,
         )
+        self._drain_inbound_queue()
         log_event(
             LOGGER,
             logging.INFO,
@@ -806,11 +900,17 @@ class WeChatGatewayService:
         error_message: str,
     ) -> None:
         self._clear_active_run(gateway_session_id)
+        self._mark_queue_record_completed(
+            run_id=run_id,
+            failed=True,
+            error_message=error_message,
+        )
         self._set_status(
             account_id,
             last_error=error_message,
             last_event_at=datetime.now(tz=timezone.utc),
         )
+        self._drain_inbound_queue()
 
     def _record_pause_notice(
         self,
@@ -955,9 +1055,222 @@ class WeChatGatewayService:
             raise RuntimeError("RunManager event loop is not bound")
         return loop
 
+    def _drain_inbound_queue(self) -> None:
+        stale_before = datetime.now(tz=timezone.utc) - timedelta(
+            seconds=_INBOUND_QUEUE_CLAIM_STALE_AFTER_SECONDS
+        )
+        for record in self._inbound_queue_repo.list_ready_to_start(
+            stale_before=stale_before
+        ):
+            claimed = self._inbound_queue_repo.claim_starting(
+                inbound_queue_id=record.inbound_queue_id,
+                stale_before=stale_before,
+            )
+            if claimed is None:
+                continue
+            blocking_run_id = self._active_run_id(claimed.session_id)
+            if blocking_run_id is not None:
+                self._start_queue_drain_watcher(
+                    session_id=claimed.session_id,
+                    run_id=blocking_run_id,
+                )
+            if self._inbound_queue_repo.count_non_terminal_ahead(
+                claimed.inbound_queue_id
+            ):
+                _ = self._inbound_queue_repo.requeue_if_starting(
+                    inbound_queue_id=claimed.inbound_queue_id
+                )
+                continue
+            if blocking_run_id is not None:
+                _ = self._inbound_queue_repo.requeue_if_starting(
+                    inbound_queue_id=claimed.inbound_queue_id
+                )
+                continue
+            if not self._start_queued_record(claimed):
+                continue
+
+    def _start_queued_record(self, record: WeChatInboundQueueRecord) -> bool:
+        try:
+            account = self._repository.get_account(record.account_id)
+        except KeyError:
+            self._fail_starting_record(
+                inbound_queue_id=record.inbound_queue_id,
+                error_message=f"WeChat account not found: {record.account_id}",
+            )
+            return False
+        intent = IntentInput(
+            session_id=record.session_id,
+            input=content_parts_from_text(record.text),
+            yolo=account.yolo,
+            thinking=account.thinking,
+            conversation_context=RuntimePromptConversationContext(
+                source_provider=WECHAT_PLATFORM,
+                source_kind="im",
+            ),
+        )
+        try:
+            run_id = self._start_session_ingress_run(intent)
+        except RuntimeError as exc:
+            if str(exc).strip() != "session_busy":
+                _ = self._inbound_queue_repo.requeue_if_starting(
+                    inbound_queue_id=record.inbound_queue_id,
+                    last_error=str(exc),
+                )
+                return False
+            _ = self._inbound_queue_repo.requeue_if_starting(
+                inbound_queue_id=record.inbound_queue_id
+            )
+            return False
+        now = datetime.now(tz=timezone.utc)
+        current = self._inbound_queue_repo.get(record.inbound_queue_id)
+        if current is None or current.status != WeChatInboundQueueStatus.STARTING:
+            return False
+        updated = self._inbound_queue_repo.update(
+            current.model_copy(
+                update={
+                    "status": WeChatInboundQueueStatus.WAITING_RESULT,
+                    "run_id": run_id,
+                    "last_error": None,
+                    "updated_at": now,
+                }
+            )
+        )
+        self._gateway_session_service.bind_active_run(
+            updated.gateway_session_id,
+            run_id,
+        )
+        token = self._secret_store.get_bot_token(self._config_dir, record.account_id)
+        if token is not None:
+            self._send_typing(
+                account,
+                token,
+                record.peer_user_id,
+                record.context_token,
+                1,
+            )
+        self._start_run_watcher(
+            account_id=updated.account_id,
+            gateway_session_id=updated.gateway_session_id,
+            run_id=run_id,
+            peer_user_id=updated.peer_user_id,
+            context_token=updated.context_token,
+        )
+        return True
+
+    def _fail_starting_record(
+        self,
+        *,
+        inbound_queue_id: str,
+        error_message: str,
+    ) -> None:
+        current = self._inbound_queue_repo.get(inbound_queue_id)
+        if current is None or current.status != WeChatInboundQueueStatus.STARTING:
+            return
+        now = datetime.now(tz=timezone.utc)
+        _ = self._inbound_queue_repo.update(
+            current.model_copy(
+                update={
+                    "status": WeChatInboundQueueStatus.FAILED,
+                    "run_id": None,
+                    "last_error": error_message,
+                    "updated_at": now,
+                    "completed_at": now,
+                }
+            )
+        )
+
+    def _start_session_ingress_run(self, intent: IntentInput) -> str:
+        if self._session_ingress_service is not None:
+            result = self._session_ingress_service.submit(
+                GatewaySessionIngressRequest(
+                    intent=intent,
+                    busy_policy=GatewaySessionIngressBusyPolicy.QUEUE_IF_BUSY,
+                )
+            )
+            if result.run_id is None:
+                raise RuntimeError("session_busy")
+            return result.run_id
+        run_id, _ = self._run_service.create_run(intent)
+        self._run_service.ensure_run_started(run_id)
+        return run_id
+
+    def _active_run_id(self, session_id: str) -> str | None:
+        if self._session_ingress_service is not None:
+            return self._session_ingress_service.active_run_id(session_id)
+        recovery_snapshot = self._session_service.get_recovery_snapshot(session_id)
+        active_run = recovery_snapshot.get("active_run")
+        if not isinstance(active_run, Mapping):
+            return None
+        run_id = active_run.get("run_id")
+        if isinstance(run_id, str) and run_id.strip():
+            return run_id.strip()
+        return None
+
+    def _build_receipt_text(self, record: WeChatInboundQueueRecord) -> str:
+        if record.status == WeChatInboundQueueStatus.FAILED:
+            error_message = str(record.last_error or "").strip()
+            if error_message:
+                return f"\u6536\u5230\uff0c\u4f46\u5904\u7406\u5931\u8d25\uff1a{error_message}"
+            return "\u6536\u5230\uff0c\u4f46\u5904\u7406\u5931\u8d25\u3002"
+        if record.status == WeChatInboundQueueStatus.WAITING_RESULT:
+            return "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
+        queue_depth = self._queue_depth(record)
+        if queue_depth <= 0:
+            return "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
+        return f"\u6536\u5230\uff0c\u5df2\u8fdb\u5165\u6392\u961f\u3002\u5f53\u524d\u4f1a\u8bdd\u524d\u9762\u8fd8\u6709 {queue_depth} \u6761\u6d88\u606f\u3002"
+
+    def _queue_depth(self, record: WeChatInboundQueueRecord) -> int:
+        ahead_count = self._inbound_queue_repo.count_non_terminal_ahead(
+            record.inbound_queue_id
+        )
+        blocking_run_id = self._active_run_id(record.session_id)
+        if blocking_run_id is None:
+            return ahead_count
+        if self._inbound_queue_repo.has_non_terminal_item_for_run(blocking_run_id):
+            return ahead_count
+        return ahead_count + 1
+
+    def _mark_queue_record_completed(
+        self,
+        *,
+        run_id: str,
+        failed: bool,
+        error_message: str | None = None,
+    ) -> None:
+        record = self._inbound_queue_repo.get_latest_by_run_id(run_id)
+        if record is None:
+            return
+        now = datetime.now(tz=timezone.utc)
+        _ = self._inbound_queue_repo.update(
+            record.model_copy(
+                update={
+                    "status": (
+                        WeChatInboundQueueStatus.FAILED
+                        if failed
+                        else WeChatInboundQueueStatus.COMPLETED
+                    ),
+                    "last_error": error_message if failed else None,
+                    "updated_at": now,
+                    "completed_at": now,
+                }
+            )
+        )
+
     @staticmethod
     def _external_session_id(account_id: str, peer_user_id: str) -> str:
         return f"wechat:{account_id}:{peer_user_id}"
+
+    @staticmethod
+    def _message_key(message: WeChatInboundMessage) -> str:
+        if message.message_id is not None:
+            return f"mid:{message.message_id}"
+        if message.seq is not None:
+            return f"seq:{message.seq}"
+        if message.context_token is not None and message.context_token.strip():
+            return f"ctx:{message.context_token.strip()}"
+        if message.create_time_ms is not None:
+            return f"ts:{message.create_time_ms}"
+        return f"anon:{uuid4().hex[:12]}"
 
     @staticmethod
     def _extract_text(message: WeChatInboundMessage) -> str:

@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from threading import RLock
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.validation import (
+    OptionalIdentifierStr,
+    RequiredIdentifierStr,
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
+
+LOGGER = get_logger(__name__)
 
 
 class RunRuntimeStatus(str, Enum):
@@ -35,15 +46,15 @@ class RunRuntimePhase(str, Enum):
 class RunRuntimeRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    root_task_id: str | None = None
+    run_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    root_task_id: OptionalIdentifierStr = None
     status: RunRuntimeStatus = RunRuntimeStatus.QUEUED
     phase: RunRuntimePhase = RunRuntimePhase.IDLE
-    active_instance_id: str | None = None
-    active_task_id: str | None = None
-    active_role_id: str | None = None
-    active_subagent_instance_id: str | None = None
+    active_instance_id: OptionalIdentifierStr = None
+    active_task_id: OptionalIdentifierStr = None
+    active_role_id: OptionalIdentifierStr = None
+    active_subagent_instance_id: OptionalIdentifierStr = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -203,7 +214,7 @@ class RunRuntimeRepository:
             ).fetchone()
             if row is None:
                 return None
-            return self._to_record(row)
+            return self._record_or_none(row, fallback_invalid_timestamps=True)
 
     def list_by_session(self, session_id: str) -> tuple[RunRuntimeRecord, ...]:
         with self._lock:
@@ -211,7 +222,11 @@ class RunRuntimeRepository:
                 "SELECT * FROM run_runtime WHERE session_id=? ORDER BY updated_at DESC",
                 (session_id,),
             ).fetchall()
-            return tuple(self._to_record(row) for row in rows)
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
 
     def list_recoverable(self) -> tuple[RunRuntimeRecord, ...]:
         with self._lock:
@@ -228,7 +243,11 @@ class RunRuntimeRepository:
                     RunRuntimeStatus.STOPPED.value,
                 ),
             ).fetchall()
-            return tuple(self._to_record(row) for row in rows)
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
 
     def mark_transient_runs_interrupted(self) -> int:
         affected = 0
@@ -283,28 +302,145 @@ class RunRuntimeRepository:
             operation_name="delete_by_session",
         )
 
-    def _to_record(self, row: sqlite3.Row) -> RunRuntimeRecord:
+    def _to_record(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> RunRuntimeRecord:
+        run_id = require_persisted_identifier(row["run_id"], field_name="run_id")
+        created_at, updated_at = _load_runtime_timestamps(
+            row=row,
+            run_id=run_id,
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+        )
         return RunRuntimeRecord(
-            run_id=str(row["run_id"]),
-            session_id=str(row["session_id"]),
-            root_task_id=str(row["root_task_id"]) if row["root_task_id"] else None,
+            run_id=run_id,
+            session_id=require_persisted_identifier(
+                row["session_id"],
+                field_name="session_id",
+            ),
+            root_task_id=normalize_persisted_text(row["root_task_id"]),
             status=RunRuntimeStatus(str(row["status"])),
             phase=RunRuntimePhase(str(row["phase"])),
-            active_instance_id=(
-                str(row["active_instance_id"]) if row["active_instance_id"] else None
-            ),
-            active_task_id=str(row["active_task_id"])
-            if row["active_task_id"]
-            else None,
-            active_role_id=str(row["active_role_id"])
-            if row["active_role_id"]
-            else None,
-            active_subagent_instance_id=(
-                str(row["active_subagent_instance_id"])
-                if row["active_subagent_instance_id"]
-                else None
+            active_instance_id=normalize_persisted_text(row["active_instance_id"]),
+            active_task_id=normalize_persisted_text(row["active_task_id"]),
+            active_role_id=normalize_persisted_text(row["active_role_id"]),
+            active_subagent_instance_id=normalize_persisted_text(
+                row["active_subagent_instance_id"]
             ),
             last_error=str(row["last_error"]) if row["last_error"] else None,
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            created_at=created_at,
+            updated_at=updated_at,
         )
+
+    def _record_or_none(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> RunRuntimeRecord | None:
+        try:
+            return self._to_record(
+                row,
+                fallback_invalid_timestamps=fallback_invalid_timestamps,
+            )
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_runtime_row(row=row, error=exc)
+            return None
+
+
+def _load_runtime_timestamps(
+    *,
+    row: sqlite3.Row,
+    run_id: str,
+    fallback_invalid_timestamps: bool,
+) -> tuple[datetime, datetime]:
+    created_at = parse_persisted_datetime_or_none(row["created_at"])
+    updated_at = parse_persisted_datetime_or_none(row["updated_at"])
+    if not fallback_invalid_timestamps:
+        if created_at is None:
+            _log_invalid_runtime_timestamp(
+                run_id=run_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted created_at")
+        if updated_at is None:
+            _log_invalid_runtime_timestamp(
+                run_id=run_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted updated_at")
+        return created_at, updated_at
+    fallback_now = datetime.now(tz=timezone.utc)
+    if created_at is None:
+        created_at = updated_at or fallback_now
+        _log_invalid_runtime_timestamp(
+            run_id=run_id,
+            field_name="created_at",
+            raw_preview=_persisted_value_preview(row["created_at"]),
+            fallback_iso=created_at.isoformat(),
+        )
+    if updated_at is None:
+        updated_at = created_at
+        _log_invalid_runtime_timestamp(
+            run_id=run_id,
+            field_name="updated_at",
+            raw_preview=_persisted_value_preview(row["updated_at"]),
+            fallback_iso=updated_at.isoformat(),
+        )
+    return created_at, updated_at
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_runtime_timestamp(
+    *,
+    run_id: str,
+    field_name: str,
+    raw_preview: str,
+    fallback_iso: str | None,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "run_id": run_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.run_runtime_repo.timestamp_invalid",
+        message=(
+            "Using fallback for invalid persisted run runtime timestamp"
+            if fallback_iso is not None
+            else "Invalid persisted run runtime timestamp"
+        ),
+        payload=payload,
+    )
+
+
+def _log_invalid_runtime_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "run_id": _persisted_value_preview(row["run_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.run_runtime_repo.row_invalid",
+        message="Skipping invalid persisted run runtime row",
+        payload=payload,
+    )

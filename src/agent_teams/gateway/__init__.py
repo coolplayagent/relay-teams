@@ -15,6 +15,14 @@ if TYPE_CHECKING:
     )
     from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
     from agent_teams.gateway.gateway_session_service import GatewaySessionService
+    from agent_teams.gateway.session_ingress_service import (
+        GatewaySessionBusyError,
+        GatewaySessionIngressBusyPolicy,
+        GatewaySessionIngressRequest,
+        GatewaySessionIngressResult,
+        GatewaySessionIngressService,
+        GatewaySessionIngressStatus,
+    )
 
 __all__ = [
     "AcpGatewayServer",
@@ -26,6 +34,12 @@ __all__ = [
     "GatewaySessionRecord",
     "GatewaySessionRepository",
     "GatewaySessionService",
+    "GatewaySessionBusyError",
+    "GatewaySessionIngressBusyPolicy",
+    "GatewaySessionIngressRequest",
+    "GatewaySessionIngressResult",
+    "GatewaySessionIngressService",
+    "GatewaySessionIngressStatus",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -58,6 +72,30 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "GatewaySessionService": (
         "agent_teams.gateway.gateway_session_service",
         "GatewaySessionService",
+    ),
+    "GatewaySessionBusyError": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionBusyError",
+    ),
+    "GatewaySessionIngressBusyPolicy": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionIngressBusyPolicy",
+    ),
+    "GatewaySessionIngressRequest": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionIngressRequest",
+    ),
+    "GatewaySessionIngressResult": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionIngressResult",
+    ),
+    "GatewaySessionIngressService": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionIngressService",
+    ),
+    "GatewaySessionIngressStatus": (
+        "agent_teams.gateway.session_ingress_service",
+        "GatewaySessionIngressStatus",
     ),
 }
 

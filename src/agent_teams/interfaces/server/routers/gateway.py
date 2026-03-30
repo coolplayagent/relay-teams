@@ -14,6 +14,7 @@ from agent_teams.gateway.wechat import (
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
 )
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/gateway", tags=["Gateway"])
 
@@ -51,7 +52,7 @@ def wait_wechat_login(
 
 @router.patch("/wechat/accounts/{account_id}", response_model=WeChatAccountRecord)
 def update_wechat_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     req: WeChatAccountUpdateInput,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
@@ -65,7 +66,7 @@ def update_wechat_account(
 
 @router.post("/wechat/accounts/{account_id}:enable", response_model=WeChatAccountRecord)
 def enable_wechat_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
@@ -80,7 +81,7 @@ def enable_wechat_account(
     "/wechat/accounts/{account_id}:disable", response_model=WeChatAccountRecord
 )
 def disable_wechat_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
@@ -93,7 +94,7 @@ def disable_wechat_account(
 
 @router.delete("/wechat/accounts/{account_id}")
 def delete_wechat_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> dict[str, str]:
     try:

@@ -17,6 +17,7 @@ from agent_teams.gateway.acp_stdio import (
     AcpGatewayServer,
     AcpStdioRuntime,
 )
+from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
@@ -29,6 +30,12 @@ from agent_teams.sessions.session_models import SessionRecord
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
+from agent_teams.sessions.runs.run_runtime_repo import (
+    RunRuntimePhase,
+    RunRuntimeRecord,
+    RunRuntimeRepository,
+    RunRuntimeStatus,
+)
 from agent_teams.workspace import WorkspaceService
 from agent_teams.workspace.workspace_models import WorkspaceRecord
 
@@ -143,6 +150,9 @@ class FakeRunManager:
         run_id = f"run-{self._counter}"
         self.create_calls.append(intent.model_copy(deep=True))
         return run_id, run_id
+
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_run(intent)
 
     async def stream_run_events(
         self,
@@ -525,6 +535,79 @@ async def test_session_prompt_rejects_recoverable_paused_run(
         "error": {
             "code": -32000,
             "message": RECOVERABLE_PAUSED_RUN_MESSAGE,
+        },
+    }
+    assert run_manager.create_calls == []
+    assert notifications == []
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_rejects_busy_active_run(
+    tmp_path: Path,
+) -> None:
+    session_service = FakeSessionService()
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    gateway_session_service = GatewaySessionService(
+        repository=repository,
+        session_service=cast(SessionService, session_service),
+    )
+    run_manager = FakeRunManager()
+    run_runtime_repo = RunRuntimeRepository(tmp_path / "gateway.db")
+    ingress_service = GatewaySessionIngressService(
+        run_service=cast(RunManager, run_manager),
+        run_runtime_repo=run_runtime_repo,
+    )
+    notifications: list[dict[str, JsonValue]] = []
+
+    async def notify(message: dict[str, JsonValue]) -> None:
+        notifications.append(message)
+
+    server = AcpGatewayServer(
+        gateway_session_service=gateway_session_service,
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, run_manager),
+        media_asset_service=cast(MediaAssetService, object()),
+        notify=notify,
+        session_ingress_service=ingress_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    record = repository.get(session_id)
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-busy",
+            session_id=record.internal_session_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+        )
+    )
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "keep going"}],
+            },
+        }
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32000,
+            "message": "Session already has an active run: run-busy",
         },
     }
     assert run_manager.create_calls == []

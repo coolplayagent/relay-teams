@@ -7,6 +7,13 @@
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
 - Runtime logs are file-based and stored under `~/.agent-teams/log/backend.log`, `~/.agent-teams/log/debug.log`, and `~/.agent-teams/log/frontend.log`
 
+## 1.1 Application-Layer Constraints
+
+- SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
+- Optional identifier fields still allow real `NULL` at the API and model layer.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
+
 ---
 
 ## 2. Tables
@@ -551,6 +558,51 @@ Notes:
 - `workspace_id`, `session_mode`, `normal_root_role_id`, and `orchestration_preset_id` define the runtime preset applied to new or resolved gateway sessions for that account
 - runtime status fields such as `running` and `last_error` are computed in memory and returned by the API, not persisted in this table
 
+### 2.10.3 `wechat_inbound_queue`
+
+```sql
+CREATE TABLE IF NOT EXISTS wechat_inbound_queue (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    inbound_queue_id   TEXT NOT NULL UNIQUE,
+    account_id         TEXT NOT NULL,
+    message_key        TEXT NOT NULL,
+    gateway_session_id TEXT NOT NULL,
+    session_id         TEXT NOT NULL,
+    peer_user_id       TEXT NOT NULL,
+    context_token      TEXT,
+    text               TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    run_id             TEXT,
+    last_error         TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    completed_at       TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_wechat_inbound_queue_message
+    ON wechat_inbound_queue(account_id, peer_user_id, message_key);
+
+CREATE INDEX IF NOT EXISTS idx_wechat_inbound_queue_session
+    ON wechat_inbound_queue(session_id, id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_wechat_inbound_queue_status
+    ON wechat_inbound_queue(status, id ASC);
+```
+
+Purpose: persists inbound WeChat direct messages before they enter the shared gateway
+session ingress path so same-session traffic queues deterministically and survives
+process restarts.
+
+Notes:
+- `message_key` is the durable deduplication key derived from upstream message ids,
+  sequence numbers, or fallback metadata
+- `gateway_session_id` points back to the transport-facing WeChat gateway session row
+- `status` flows through `queued`, `waiting_result`, then a terminal state
+- `run_id` is populated only after the shared gateway ingress path successfully starts
+  the detached run for that message
+- queued WeChat messages never auto-attach to an already active session run
+- `last_error` captures terminal start/reply failures for that inbound item
+
 ---
 
 ## 3. Relationship Keys
@@ -566,7 +618,8 @@ Primary query keys used by repositories:
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
 - `account_id`: Feishu gateway account retrieval across `feishu_gateway_accounts`.
-- `account_id`: WeChat gateway account retrieval across `wechat_accounts`.
+- `account_id`: WeChat gateway account retrieval across `wechat_accounts`,
+  `wechat_inbound_queue`.
 
 ---
 
@@ -585,7 +638,7 @@ Primary query keys used by repositories:
 - `agent_teams.gateway.feishu`: `feishu_gateway_accounts`, `feishu_message_pool`.
 - `agent_teams.automation`: `automation_execution_events`.
 - `agent_teams.gateway`: `gateway_sessions`.
-- `agent_teams.wechat`: `wechat_accounts`.
+- `agent_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
 - `agent_teams.roles`: `role_memories`.
 
 ---
@@ -863,6 +916,7 @@ CREATE TABLE IF NOT EXISTS automation_deliveries (
     terminal_attempts INTEGER NOT NULL,
     started_message TEXT,
     terminal_message TEXT,
+    reply_to_message_id TEXT,
     started_message_id TEXT,
     terminal_message_id TEXT,
     started_sent_at TEXT,
@@ -886,8 +940,9 @@ CREATE INDEX IF NOT EXISTS idx_automation_deliveries_terminal
 Purpose: persists Feishu delivery state for automation runs so started/completed/failed messages can be retried and resumed after process restart.
 
 Notes:
+- `reply_to_message_id` stores the persisted receipt that later automation output should reply to when the run did not create its own started receipt.
 - `started_message_id` and `terminal_message_id` store the provider `message_id` returned by Feishu for sent automation messages.
-- `started_cleanup_status`, `started_cleanup_attempts`, and `started_cleaned_at` track best-effort cleanup for superseded non-terminal started messages after a terminal delivery succeeds.
+- `started_cleanup_status`, `started_cleanup_attempts`, and `started_cleaned_at` remain for compatibility with older rows, but new receipts are not automatically deleted by the current cleanup policy.
 - terminal messages are persisted but are not automatically deleted by the current cleanup policy.
 
 ### 2.1.4 `automation_bound_session_queue`
@@ -943,7 +998,7 @@ Notes:
 - `status` flows through `queued`, `starting`, `waiting_result`, then a terminal state
 - `resume_attempts` and `resume_next_attempt_at` persist the auto-resume retry state for recoverable `awaiting_recovery` runs bound to that session
 - `queue_message_id` stores the Feishu provider `message_id` for the queue receipt
-- `queue_cleanup_status`, `queue_cleanup_attempts`, and `queue_cleaned_at` track best-effort deletion of queue receipts once the queued run starts or a final failure message replaces them
+- `queue_cleanup_status`, `queue_cleanup_attempts`, and `queue_cleaned_at` remain for compatibility with older rows, but current queue receipts are retained in chat instead of being auto-deleted
 
 ### 2.1.5 `sessions` additions
 

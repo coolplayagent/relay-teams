@@ -34,6 +34,11 @@ from agent_teams.automation.automation_repository import (
 from agent_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
+from agent_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressBusyPolicy,
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions import ProjectKind
 from agent_teams.sessions.runs.run_manager import RunManager
@@ -54,6 +59,7 @@ class AutomationService:
         delivery_service: AutomationDeliveryService | None = None,
         bound_session_queue_service: AutomationBoundSessionQueueService | None = None,
         workspace_service: WorkspaceService | None = None,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
@@ -63,6 +69,7 @@ class AutomationService:
         self._delivery_service = delivery_service
         self._bound_session_queue_service = bound_session_queue_service
         self._workspace_service = workspace_service
+        self._session_ingress_service = session_ingress_service
 
     def create_project(
         self,
@@ -352,22 +359,20 @@ class AutomationService:
                 session_mode=project.run_config.session_mode,
                 orchestration_preset_id=project.run_config.orchestration_preset_id,
             )
-            run_id, _ = self._run_service.create_run(
-                IntentInput(
-                    session_id=session.session_id,
-                    input=content_parts_from_text(
-                        build_automation_prompt(
-                            project_name=project.display_name,
-                            prompt=project.prompt,
-                        )
-                    ),
-                    execution_mode=project.run_config.execution_mode,
-                    yolo=project.run_config.yolo,
-                    thinking=project.run_config.thinking,
-                    session_mode=project.run_config.session_mode,
-                )
+            intent = IntentInput(
+                session_id=session.session_id,
+                input=content_parts_from_text(
+                    build_automation_prompt(
+                        project_name=project.display_name,
+                        prompt=project.prompt,
+                    )
+                ),
+                execution_mode=project.run_config.execution_mode,
+                yolo=project.run_config.yolo,
+                thinking=project.run_config.thinking,
+                session_mode=project.run_config.session_mode,
             )
-            self._run_service.ensure_run_started(run_id)
+            run_id = self._start_unbound_run(intent)
             if self._delivery_service is not None:
                 _ = self._delivery_service.register_run(
                     project=project,
@@ -415,6 +420,21 @@ class AutomationService:
                 )
             )
             raise
+
+    def _start_unbound_run(self, intent: IntentInput) -> str:
+        if self._session_ingress_service is not None:
+            result = self._session_ingress_service.require_started(
+                GatewaySessionIngressRequest(
+                    intent=intent,
+                    busy_policy=GatewaySessionIngressBusyPolicy.START_IF_IDLE,
+                )
+            )
+            if result.run_id is None:
+                raise RuntimeError("automation_run_not_started")
+            return result.run_id
+        run_id, _ = self._run_service.create_run(intent)
+        self._run_service.ensure_run_started(run_id)
+        return run_id
 
     def _resolve_delivery_binding(
         self,

@@ -157,9 +157,10 @@ class _FakeFeishuClient:
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         _ = environment
         self.reply_messages.append((message_id, text))
+        return f"om_reply_{len(self.reply_messages)}"
 
 
 class _FakeImToolService:

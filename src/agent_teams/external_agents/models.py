@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from agent_teams.validation import RequiredIdentifierStr
+
 
 class ExternalAgentTransportType(str, Enum):
     STDIO = "stdio"
@@ -51,7 +53,7 @@ class CustomTransportConfig(BaseModel):
     transport: Literal[ExternalAgentTransportType.CUSTOM] = (
         ExternalAgentTransportType.CUSTOM
     )
-    adapter_id: str = Field(min_length=1)
+    adapter_id: RequiredIdentifierStr
     config: dict[str, JsonValue] = Field(default_factory=dict)
 
 
@@ -63,7 +65,7 @@ ExternalAgentTransportConfig = (
 class ExternalAgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
     transport: ExternalAgentTransportConfig = Field(discriminator="transport")
@@ -78,7 +80,7 @@ class ExternalAgentCollection(BaseModel):
 class ExternalAgentSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
     transport: ExternalAgentTransportType
@@ -87,7 +89,7 @@ class ExternalAgentSummary(BaseModel):
 class ExternalAgentOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     transport: ExternalAgentTransportType
 
@@ -110,11 +112,11 @@ class ExternalAgentSessionStatus(str, Enum):
 class ExternalAgentSessionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str = Field(min_length=1)
-    role_id: str = Field(min_length=1)
-    agent_id: str = Field(min_length=1)
+    session_id: RequiredIdentifierStr
+    role_id: RequiredIdentifierStr
+    agent_id: RequiredIdentifierStr
     transport: ExternalAgentTransportType
-    external_session_id: str = Field(min_length=1)
+    external_session_id: RequiredIdentifierStr
     status: ExternalAgentSessionStatus = ExternalAgentSessionStatus.READY
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
