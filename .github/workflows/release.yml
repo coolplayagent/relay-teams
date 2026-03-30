@@ -47,8 +47,16 @@ jobs:
       - name: Write release version file
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
         run: |
-          PYTHONPATH=src python -c "from pathlib import Path; import os; from agent_teams.release.versioning import write_version_file; write_version_file(os.environ['RELEASE_VERSION'], Path('src/agent_teams/_version.py'))"
+          printf '%s\n' \
+            '# -*- coding: utf-8 -*-' \
+            'from __future__ import annotations' \
+            '' \
+            '__all__ = ["__version__"]' \
+            '' \
+            "__version__ = \"${RELEASE_VERSION}\"" \
+            '' > src/agent_teams/_version.py
 
       - name: Build distribution
         run: uv build
