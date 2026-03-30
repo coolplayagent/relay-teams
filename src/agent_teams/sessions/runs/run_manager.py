@@ -590,7 +590,7 @@ class RunManager:
                 if attempt is None:
                     raise
                 self._record_auto_recovery_attempt(run_id=run_id, attempt=attempt)
-                self._queue_auto_recovery_prompt(run_id=run_id)
+                self._queue_auto_recovery_prompt(payload=exc.payload)
                 resume_payload = self._transition_run_to_resumed(
                     run_id=run_id,
                     session_id=session_id,
@@ -1459,6 +1459,68 @@ class RunManager:
                 return record
         raise KeyError(f"No root task found for run_id={run_id}")
 
+    def _append_followup_to_instance(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        task_id: str,
+        content: str,
+        enqueue: bool,
+        source: InjectionSource,
+    ) -> bool:
+        try:
+            record = self._require_agent_repo().get_instance(instance_id)
+            if record.run_id != run_id:
+                raise KeyError(
+                    f"Instance {instance_id} does not belong to run {run_id}"
+                )
+            appended = self._require_message_repo().append_user_prompt_if_missing(
+                session_id=record.session_id,
+                workspace_id=record.workspace_id,
+                conversation_id=record.conversation_id,
+                agent_role_id=record.role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=run_id,
+                content=content,
+            )
+            if enqueue and self._injection_manager.is_active(run_id):
+                created = self._injection_manager.enqueue(
+                    run_id=run_id,
+                    recipient_instance_id=instance_id,
+                    source=source,
+                    content=content,
+                )
+                self._publish_injection_event(
+                    run_id=run_id,
+                    record=record,
+                    payload=created.model_dump_json(),
+                )
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=record.session_id,
+                instance_id=instance_id,
+                role_id=record.role_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="run.followup.attached",
+                    message="Follow-up appended to agent conversation",
+                    payload={
+                        "enqueue": enqueue,
+                        "source": source.value,
+                        "length": len(content),
+                        "task_id": task_id,
+                        "appended": appended,
+                    },
+                )
+            return True
+        except KeyError:
+            return False
+
     def _append_followup_to_coordinator(
         self,
         run_id: str,
@@ -1724,20 +1786,23 @@ class RunManager:
         current = self._auto_recovery_attempts.get(run_id, 0)
         self._auto_recovery_attempts[run_id] = max(current, attempt)
 
-    def _queue_auto_recovery_prompt(self, *, run_id: str) -> None:
-        try:
-            _ = self.inject_message(
-                run_id,
-                InjectionSource.SYSTEM,
-                AUTO_RECOVERY_PROMPT,
-            )
+    def _queue_auto_recovery_prompt(
+        self, *, payload: "RecoverableRunPausePayload"
+    ) -> None:
+        if self._append_followup_to_instance(
+            run_id=payload.run_id,
+            instance_id=payload.instance_id,
+            task_id=payload.task_id,
+            content=AUTO_RECOVERY_PROMPT,
+            enqueue=False,
+            source=InjectionSource.SYSTEM,
+        ):
             return
-        except KeyError:
-            self._append_followup_to_coordinator(
-                run_id,
-                AUTO_RECOVERY_PROMPT,
-                enqueue=False,
-            )
+        self._append_followup_to_coordinator(
+            payload.run_id,
+            AUTO_RECOVERY_PROMPT,
+            enqueue=False,
+        )
 
     def _build_run_resumed_payload(
         self,

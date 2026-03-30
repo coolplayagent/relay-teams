@@ -35,6 +35,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.session_models import SessionRecord
 from agent_teams.sessions.session_repository import SessionRepository
+from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalManager
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
@@ -878,6 +879,107 @@ async def test_worker_pauses_after_invalid_tool_args_auto_recovery_budget_exhaus
     assert paused_payload["auto_recovery_exhausted"] is True
     assert paused_payload["attempt"] == 1
     assert paused_payload["max_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_targets_paused_subagent_with_auto_recovery_prompt(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_invalid_json_subagent_prompt.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    _upsert_coordinator(agent_repo)
+    _create_root_task(task_repo)
+    agent_repo.upsert_instance(
+        run_id="run-existing",
+        trace_id="run-existing",
+        session_id="session-1",
+        instance_id="inst-2",
+        role_id="time",
+        workspace_id="default",
+        conversation_id="session-1:time:inst-2",
+        status=InstanceStatus.IDLE,
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-child-1",
+            session_id="session-1",
+            parent_task_id="task-root-1",
+            trace_id="run-existing",
+            role_id="time",
+            objective="child work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        "task-child-1",
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-2",
+    )
+
+    class _RecoveringMetaAgent:
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            raise AssertionError("not expected")
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:
+            assert trace_id == "run-existing"
+            return RunResult(
+                trace_id=trace_id,
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text("subagent recovered"),
+            )
+
+    manager._meta_agent = cast(MetaAgent, cast(object, _RecoveringMetaAgent()))
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-child-1",
+        session_id="session-1",
+        instance_id="inst-2",
+        role_id="time",
+        error_code="model_tool_args_invalid_json",
+        error_message="Expecting property name enclosed in double quotes",
+        retries_used=0,
+        total_attempts=6,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    subagent_messages = message_repo.get_messages_for_instance("session-1", "inst-2")
+    coordinator_messages = message_repo.get_messages_for_instance("session-1", "inst-1")
+    assert any(
+        "The previous tool call arguments were not valid JSON."
+        in json.dumps(message["message"], ensure_ascii=False)
+        for message in subagent_messages
+    )
+    assert not any(
+        "The previous tool call arguments were not valid JSON."
+        in json.dumps(message["message"], ensure_ascii=False)
+        for message in coordinator_messages
+    )
 
 
 @pytest.mark.asyncio
