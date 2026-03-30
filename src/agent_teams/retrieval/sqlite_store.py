@@ -5,12 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
-from threading import RLock
 
 from agent_teams.logger import get_logger
 from agent_teams.persistence import (
-    open_sqlite,
-    run_sqlite_write_with_retry,
+    SharedSqliteRepository,
     sqlite_supports_fts5,
 )
 from agent_teams.retrieval.retrieval_models import (
@@ -30,12 +28,9 @@ _UNICODE61_SPLIT_PATTERN = re.compile(r"[^\w]+", re.UNICODE)
 _MATCH_SANITIZE_PATTERN = re.compile(r'["\'`(){}\[\]:^*]+')
 
 
-class SqliteFts5RetrievalStore:
+class SqliteFts5RetrievalStore(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = db_path
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path, repository_name="retrieval.sqlite")
         self._require_fts5()
         self._init_tables()
 
@@ -61,11 +56,7 @@ class SqliteFts5RetrievalStore:
                 "tokenizer": config.tokenizer.value,
             },
         ):
-            run_sqlite_write_with_retry(
-                conn=self._conn,
-                db_path=self._db_path,
-                lock=self._lock,
-                repository_name="retrieval.sqlite",
+            self._run_write(
                 operation_name="replace_scope",
                 operation=lambda: self._replace_scope_locked(
                     config=config,
@@ -92,11 +83,7 @@ class SqliteFts5RetrievalStore:
                 "tokenizer": config.tokenizer.value,
             },
         ):
-            run_sqlite_write_with_retry(
-                conn=self._conn,
-                db_path=self._db_path,
-                lock=self._lock,
-                repository_name="retrieval.sqlite",
+            self._run_write(
                 operation_name="upsert_documents",
                 operation=lambda: self._upsert_documents_locked(
                     config=config,
@@ -123,11 +110,7 @@ class SqliteFts5RetrievalStore:
                 "document_count": len(normalized_ids),
             },
         ):
-            run_sqlite_write_with_retry(
-                conn=self._conn,
-                db_path=self._db_path,
-                lock=self._lock,
-                repository_name="retrieval.sqlite",
+            self._run_write(
                 operation_name="delete_documents",
                 operation=lambda: self._delete_documents_locked(
                     scope_kind=scope_kind,
@@ -152,9 +135,11 @@ class SqliteFts5RetrievalStore:
                 "limit": query.limit,
             },
         ):
-            config = self._get_scope_config(
-                scope_kind=query.scope_kind,
-                scope_id=query.scope_id,
+            config = self._run_read(
+                lambda: self._get_scope_config(
+                    scope_kind=query.scope_kind,
+                    scope_id=query.scope_id,
+                )
             )
             if config is None:
                 return ()
@@ -165,34 +150,36 @@ class SqliteFts5RetrievalStore:
             if not match_expression:
                 return ()
             table_name = _fts_table_name(config.tokenizer)
-            rows = self._conn.execute(
-                f"""
-                SELECT
-                    document_id,
-                    title,
-                    COALESCE(
-                        NULLIF(snippet({table_name}, 4, '[', ']', '...', 12), ''),
-                        NULLIF(snippet({table_name}, 3, '[', ']', '...', 12), ''),
-                        body,
+            rows = self._run_read(
+                lambda: self._conn.execute(
+                    f"""
+                    SELECT
+                        document_id,
                         title,
-                        ''
-                    ) AS snippet,
-                    bm25({table_name}, 0.0, 0.0, 0.0, ?, ?, ?) AS rank_score
-                FROM {table_name}
-                WHERE scope_kind = ? AND scope_id = ? AND {table_name} MATCH ?
-                ORDER BY rank_score ASC, document_id ASC
-                LIMIT ?
-                """,
-                (
-                    config.title_weight,
-                    config.body_weight,
-                    config.keyword_weight,
-                    query.scope_kind.value,
-                    query.scope_id,
-                    match_expression,
-                    query.limit,
-                ),
-            ).fetchall()
+                        COALESCE(
+                            NULLIF(snippet({table_name}, 4, '[', ']', '...', 12), ''),
+                            NULLIF(snippet({table_name}, 3, '[', ']', '...', 12), ''),
+                            body,
+                            title,
+                            ''
+                        ) AS snippet,
+                        bm25({table_name}, 0.0, 0.0, 0.0, ?, ?, ?) AS rank_score
+                    FROM {table_name}
+                    WHERE scope_kind = ? AND scope_id = ? AND {table_name} MATCH ?
+                    ORDER BY rank_score ASC, document_id ASC
+                    LIMIT ?
+                    """,
+                    (
+                        config.title_weight,
+                        config.body_weight,
+                        config.keyword_weight,
+                        query.scope_kind.value,
+                        query.scope_id,
+                        match_expression,
+                        query.limit,
+                    ),
+                ).fetchall()
+            )
             return tuple(
                 RetrievalHit(
                     document_id=str(row["document_id"]),
@@ -219,11 +206,7 @@ class SqliteFts5RetrievalStore:
                 "scope_id": scope_id,
             },
         ):
-            run_sqlite_write_with_retry(
-                conn=self._conn,
-                db_path=self._db_path,
-                lock=self._lock,
-                repository_name="retrieval.sqlite",
+            self._run_write(
                 operation_name="rebuild_scope",
                 operation=lambda: self._rebuild_scope_locked(
                     scope_kind=scope_kind,
@@ -247,22 +230,26 @@ class SqliteFts5RetrievalStore:
                 "scope_id": scope_id,
             },
         ):
-            row = self._conn.execute(
-                """
-                SELECT backend, tokenizer, updated_at
-                FROM retrieval_scopes
-                WHERE scope_kind = ? AND scope_id = ?
-                """,
-                (scope_kind.value, scope_id),
-            ).fetchone()
-            count_row = self._conn.execute(
-                """
-                SELECT COUNT(*) AS document_count
-                FROM retrieval_documents
-                WHERE scope_kind = ? AND scope_id = ?
-                """,
-                (scope_kind.value, scope_id),
-            ).fetchone()
+            row = self._run_read(
+                lambda: self._conn.execute(
+                    """
+                    SELECT backend, tokenizer, updated_at
+                    FROM retrieval_scopes
+                    WHERE scope_kind = ? AND scope_id = ?
+                    """,
+                    (scope_kind.value, scope_id),
+                ).fetchone()
+            )
+            count_row = self._run_read(
+                lambda: self._conn.execute(
+                    """
+                    SELECT COUNT(*) AS document_count
+                    FROM retrieval_documents
+                    WHERE scope_kind = ? AND scope_id = ?
+                    """,
+                    (scope_kind.value, scope_id),
+                ).fetchone()
+            )
             tokenizer = None
             updated_at = None
             if row is not None:
@@ -281,7 +268,7 @@ class SqliteFts5RetrievalStore:
             )
 
     def _require_fts5(self) -> None:
-        if sqlite_supports_fts5(self._conn):
+        if self._run_read(lambda: sqlite_supports_fts5(self._conn)):
             return
         raise RuntimeError("SQLite FTS5 is required for retrieval indexing")
 
@@ -292,81 +279,82 @@ class SqliteFts5RetrievalStore:
             operation="init_schema",
             attributes={"backend": self.backend_kind.value},
         ):
-            with self._lock:
-                self._conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS retrieval_scopes (
-                        scope_kind    TEXT NOT NULL,
-                        scope_id      TEXT NOT NULL,
-                        backend       TEXT NOT NULL,
-                        tokenizer     TEXT NOT NULL,
-                        title_weight  REAL NOT NULL,
-                        body_weight   REAL NOT NULL,
-                        keyword_weight REAL NOT NULL,
-                        updated_at    TEXT NOT NULL,
-                        PRIMARY KEY (scope_kind, scope_id)
-                    )
-                    """
-                )
-                self._conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS retrieval_documents (
-                        rowid         INTEGER PRIMARY KEY AUTOINCREMENT,
-                        scope_kind    TEXT NOT NULL,
-                        scope_id      TEXT NOT NULL,
-                        document_id   TEXT NOT NULL,
-                        title         TEXT NOT NULL,
-                        body          TEXT NOT NULL,
-                        keywords      TEXT NOT NULL,
-                        updated_at    TEXT NOT NULL,
-                        UNIQUE (scope_kind, scope_id, document_id),
-                        FOREIGN KEY (scope_kind, scope_id)
-                            REFERENCES retrieval_scopes(scope_kind, scope_id)
-                            ON DELETE CASCADE
-                    )
-                    """
-                )
-                self._conn.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_retrieval_documents_scope
-                    ON retrieval_documents(scope_kind, scope_id, updated_at)
-                    """
-                )
-                self._conn.execute(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_unicode61
-                    USING fts5(
-                        scope_kind UNINDEXED,
-                        scope_id UNINDEXED,
-                        document_id UNINDEXED,
-                        title,
-                        body,
-                        keywords,
-                        content='retrieval_documents',
-                        content_rowid='rowid',
-                        tokenize='unicode61',
-                        detail='column'
-                    )
-                    """
-                )
-                self._conn.execute(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_trigram
-                    USING fts5(
-                        scope_kind UNINDEXED,
-                        scope_id UNINDEXED,
-                        document_id UNINDEXED,
-                        title,
-                        body,
-                        keywords,
-                        content='retrieval_documents',
-                        content_rowid='rowid',
-                        tokenize='trigram',
-                        detail='column'
-                    )
-                    """
-                )
-                self._conn.commit()
+            self._run_write(operation_name="init_schema", operation=self._create_tables)
+
+    def _create_tables(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retrieval_scopes (
+                scope_kind    TEXT NOT NULL,
+                scope_id      TEXT NOT NULL,
+                backend       TEXT NOT NULL,
+                tokenizer     TEXT NOT NULL,
+                title_weight  REAL NOT NULL,
+                body_weight   REAL NOT NULL,
+                keyword_weight REAL NOT NULL,
+                updated_at    TEXT NOT NULL,
+                PRIMARY KEY (scope_kind, scope_id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retrieval_documents (
+                rowid         INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_kind    TEXT NOT NULL,
+                scope_id      TEXT NOT NULL,
+                document_id   TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                body          TEXT NOT NULL,
+                keywords      TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                UNIQUE (scope_kind, scope_id, document_id),
+                FOREIGN KEY (scope_kind, scope_id)
+                    REFERENCES retrieval_scopes(scope_kind, scope_id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_retrieval_documents_scope
+            ON retrieval_documents(scope_kind, scope_id, updated_at)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_unicode61
+            USING fts5(
+                scope_kind UNINDEXED,
+                scope_id UNINDEXED,
+                document_id UNINDEXED,
+                title,
+                body,
+                keywords,
+                content='retrieval_documents',
+                content_rowid='rowid',
+                tokenize='unicode61',
+                detail='column'
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts_trigram
+            USING fts5(
+                scope_kind UNINDEXED,
+                scope_id UNINDEXED,
+                document_id UNINDEXED,
+                title,
+                body,
+                keywords,
+                content='retrieval_documents',
+                content_rowid='rowid',
+                tokenize='trigram',
+                detail='column'
+            )
+            """
+        )
 
     def _replace_scope_locked(
         self,

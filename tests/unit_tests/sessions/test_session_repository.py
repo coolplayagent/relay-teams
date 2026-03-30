@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -224,6 +226,40 @@ def test_repository_init_normalizes_missing_or_none_like_started_at_for_mark_sta
 
     record = repository.mark_started("session-preexisting-blank-started-at")
 
+    assert record.started_at is not None
+    assert record.can_switch_mode is False
+
+
+def test_mark_started_retries_transient_write_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_retry.db"
+    repository = SessionRepository(db_path)
+    repository.create(session_id="session-retry", workspace_id="default")
+    repository._conn.execute("PRAGMA busy_timeout = 0")
+
+    blocker = sqlite3.connect(db_path, check_same_thread=False)
+    blocker.execute("PRAGMA busy_timeout = 0")
+    blocker.execute("BEGIN IMMEDIATE")
+    blocker.execute(
+        "UPDATE sessions SET updated_at=updated_at WHERE session_id=?",
+        ("session-retry",),
+    )
+
+    released = threading.Event()
+
+    def release_lock() -> None:
+        time.sleep(0.05)
+        blocker.commit()
+        blocker.close()
+        released.set()
+
+    thread = threading.Thread(target=release_lock)
+    thread.start()
+
+    record = repository.mark_started("session-retry")
+
+    thread.join(timeout=1)
+
+    assert released.is_set()
     assert record.started_at is not None
     assert record.can_switch_mode is False
 

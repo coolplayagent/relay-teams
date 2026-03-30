@@ -37,8 +37,43 @@ console.log(JSON.stringify(globalThis.__capturedBatches));
     assert browser_session_id.startswith("browser_")
 
 
+def test_frontend_logger_uses_null_trace_id_without_active_run(tmp_path: Path) -> None:
+    payload = _run_frontend_logger_script(
+        tmp_path=tmp_path,
+        state_source="""
+export const state = {
+    currentSessionId: "session-ui",
+    activeRunId: null,
+};
+""".strip(),
+        runner_source="""
+import { flushFrontendLogs, logInfo } from "./logger.mjs";
+
+logInfo("frontend.test.info", "frontend ok");
+await flushFrontendLogs();
+
+console.log(JSON.stringify(globalThis.__capturedBatches));
+""".strip(),
+    )
+
+    events = cast(list[dict[str, JsonValue]], payload[0]["events"])
+    event = cast(dict[str, JsonValue], events[0])
+
+    assert event["trace_id"] is None
+    assert event["run_id"] is None
+    assert event["session_id"] == "session-ui"
+
+
 def _run_frontend_logger_script(
-    tmp_path: Path, runner_source: str
+    tmp_path: Path,
+    runner_source: str,
+    *,
+    state_source: str = """
+export const state = {
+    currentSessionId: "session-ui",
+    activeRunId: "run-ui",
+};
+""".strip(),
 ) -> list[dict[str, JsonValue]]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "utils" / "logger.js"
@@ -56,15 +91,7 @@ export const els = {
 """.strip(),
         encoding="utf-8",
     )
-    mock_state_path.write_text(
-        """
-export const state = {
-    currentSessionId: "session-ui",
-    activeRunId: "run-ui",
-};
-""".strip(),
-        encoding="utf-8",
-    )
+    mock_state_path.write_text(state_source, encoding="utf-8")
 
     source_text = (
         source_path.read_text(encoding="utf-8")

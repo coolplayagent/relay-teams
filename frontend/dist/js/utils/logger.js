@@ -34,13 +34,14 @@ function getPagePath() {
 }
 
 function buildBaseEvent(level, event, message, payload = {}) {
+    const traceId = state.activeRunId ? String(state.activeRunId) : null;
     return {
         level,
         event,
         message: truncateMessage(message),
-        trace_id: String(state.activeRunId || ''),
+        trace_id: traceId,
         request_id: null,
-        run_id: String(state.activeRunId || '') || null,
+        run_id: traceId,
         session_id: String(state.currentSessionId || '') || null,
         task_id: null,
         instance_id: null,
