@@ -52,6 +52,7 @@ class RuntimePromptConversationContext(BaseModel):
     source_kind: str | None = None
     feishu_chat_type: str | None = None
     im_force_direct_send: bool = False
+    im_reply_to_message_id: str | None = None
 
 
 class ImageGenerationConfig(BaseModel):

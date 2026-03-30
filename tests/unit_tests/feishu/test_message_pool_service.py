@@ -30,6 +30,9 @@ from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from agent_teams.automation.automation_bound_session_queue_repository import (
+    AutomationBoundSessionQueueRepository,
+)
 
 
 class _FakeSessionService:
@@ -101,6 +104,9 @@ class _FakeRunService:
         self.fail_start_error: RuntimeError | None = None
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         self.created.append(intent)
         return f"run-{len(self.created)}", intent.session_id
 
@@ -150,9 +156,10 @@ class _FakeFeishuClient:
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None:
+    ) -> str:
         _ = environment
         self.reply_messages.append((message_id, text))
+        return f"om_reply_{len(self.reply_messages)}"
 
     def create_message_reaction(
         self,
@@ -230,12 +237,13 @@ def _build_service(
     repo = FeishuMessagePoolRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
     event_log = EventLog(db_path)
+    bindings = ExternalSessionBindingRepository(db_path)
     feishu_client = _FakeFeishuClient()
     run_service = _FakeRunService()
     inbound_runtime = FeishuInboundRuntime(
         session_service=_FakeSessionService(),
         run_service=run_service,
-        external_session_binding_repo=ExternalSessionBindingRepository(db_path),
+        external_session_binding_repo=bindings,
         feishu_client=None,
     )
     service = FeishuMessagePoolService(
@@ -245,6 +253,8 @@ def _build_service(
         message_pool_repo=repo,
         run_runtime_repo=run_runtime_repo,
         event_log=event_log,
+        external_session_binding_repo=bindings,
+        automation_queue_repo=AutomationBoundSessionQueueRepository(db_path),
     )
     return service, repo, feishu_client, run_runtime_repo, event_log, run_service
 

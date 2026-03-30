@@ -57,6 +57,9 @@ from agent_teams.gateway.feishu import (
     FeishuSubscriptionService,
     FeishuTriggerHandler,
 )
+from agent_teams.gateway.feishu.notification_delivery import (
+    CompositeTerminalNotificationSuppressor,
+)
 from agent_teams.gateway.im import (
     ImSessionCommandService,
     ImToolContextResolver,
@@ -64,6 +67,7 @@ from agent_teams.gateway.im import (
 )
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
@@ -150,6 +154,7 @@ from agent_teams.gateway.wechat import (
     WeChatAccountRepository,
     WeChatClient,
     WeChatGatewayService,
+    WeChatInboundQueueRepository,
     get_wechat_secret_store,
 )
 from agent_teams.workspace import (
@@ -368,6 +373,9 @@ class ServerContainer:
         )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
+        self.wechat_inbound_queue_repo = WeChatInboundQueueRepository(
+            runtime.paths.db_path
+        )
         self.wechat_client = WeChatClient()
         self.feishu_gateway_service = FeishuGatewayService(
             config_dir=config_dir,
@@ -383,6 +391,7 @@ class ServerContainer:
             session_repo=self.session_repo,
             runtime_config_lookup=self.feishu_gateway_service,
             automation_project_repo=self.automation_repo,
+            automation_delivery_lookup=self.automation_delivery_repo,
             gateway_session_lookup=self.gateway_session_repository,
             feishu_client=self.feishu_client,
             wechat_account_repo=self.wechat_account_repository,
@@ -532,6 +541,10 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             get_runtime=lambda: self.runtime,
         )
+        self.session_ingress_service = GatewaySessionIngressService(
+            run_service=self.run_service,
+            run_runtime_repo=self.run_runtime_repo,
+        )
         self.gateway_session_service = GatewaySessionService(
             repository=self.gateway_session_repository,
             session_service=self.session_service,
@@ -542,6 +555,7 @@ class ServerContainer:
             run_service=self.run_service,
             external_session_binding_repo=self.external_session_binding_repo,
             feishu_client=self.feishu_client,
+            session_ingress_service=self.session_ingress_service,
         )
         self.feishu_message_pool_service = FeishuMessagePoolService(
             runtime_config_lookup=self.feishu_gateway_service,
@@ -550,6 +564,8 @@ class ServerContainer:
             message_pool_repo=self.feishu_message_pool_repo,
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
+            external_session_binding_repo=self.external_session_binding_repo,
+            automation_queue_repo=self.automation_bound_session_queue_repo,
         )
         self.im_session_command_service = ImSessionCommandService(
             session_service=self.session_service,
@@ -572,20 +588,9 @@ class ServerContainer:
             session_service=self.session_service,
             im_tool_service=self.im_tool_service,
             im_session_command_service=self.im_session_command_service,
+            inbound_queue_repo=self.wechat_inbound_queue_repo,
+            session_ingress_service=self.session_ingress_service,
         )
-        self.notification_service = NotificationService(
-            run_event_hub=self.run_event_hub,
-            get_config=self.notification_config_manager.get_notification_config,
-            dispatchers=(
-                FeishuNotificationDispatcher(
-                    session_repo=self.session_repo,
-                    runtime_config_lookup=self.feishu_gateway_service,
-                    feishu_client=self.feishu_client,
-                    terminal_notification_suppressor=self.feishu_message_pool_service,
-                ),
-            ),
-        )
-        self.run_service._notification_service = self.notification_service
         self.automation_feishu_binding_service = AutomationFeishuBindingService(
             external_session_binding_repo=self.external_session_binding_repo,
             session_repo=self.session_repo,
@@ -598,10 +603,27 @@ class ServerContainer:
             feishu_client=self.feishu_client,
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
+            notification_service=self.notification_service,
         )
         self.automation_delivery_worker = AutomationDeliveryWorker(
             delivery_service=self.automation_delivery_service
         )
+        self.notification_service = NotificationService(
+            run_event_hub=self.run_event_hub,
+            get_config=self.notification_config_manager.get_notification_config,
+            dispatchers=(
+                FeishuNotificationDispatcher(
+                    session_repo=self.session_repo,
+                    runtime_config_lookup=self.feishu_gateway_service,
+                    feishu_client=self.feishu_client,
+                    terminal_notification_suppressor=CompositeTerminalNotificationSuppressor(
+                        self.feishu_message_pool_service,
+                        self.automation_delivery_service,
+                    ),
+                ),
+            ),
+        )
+        self.run_service._notification_service = self.notification_service
         self.automation_bound_session_queue_service = (
             AutomationBoundSessionQueueService(
                 repository=self.automation_bound_session_queue_repo,
@@ -612,6 +634,7 @@ class ServerContainer:
                 runtime_config_lookup=self.feishu_gateway_service,
                 feishu_client=self.feishu_client,
                 project_repository=self.automation_repo,
+                session_ingress_service=self.session_ingress_service,
             )
         )
         self.automation_bound_session_queue_worker = AutomationBoundSessionQueueWorker(
@@ -636,6 +659,7 @@ class ServerContainer:
             delivery_service=self.automation_delivery_service,
             bound_session_queue_service=self.automation_bound_session_queue_service,
             workspace_service=self.workspace_service,
+            session_ingress_service=self.session_ingress_service,
         )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)

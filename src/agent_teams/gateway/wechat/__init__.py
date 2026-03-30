@@ -18,8 +18,13 @@ if TYPE_CHECKING:
         WeChatGatewaySnapshot,
         WeChatLoginStartRequest,
         WeChatLoginStartResponse,
+        WeChatInboundQueueRecord,
+        WeChatInboundQueueStatus,
         WeChatLoginWaitRequest,
         WeChatLoginWaitResponse,
+    )
+    from agent_teams.gateway.wechat.inbound_queue_repository import (
+        WeChatInboundQueueRepository,
     )
     from agent_teams.gateway.wechat.secret_store import (
         WeChatSecretStore,
@@ -39,6 +44,9 @@ __all__ = [
     "WeChatClient",
     "WeChatGatewayService",
     "WeChatGatewaySnapshot",
+    "WeChatInboundQueueRecord",
+    "WeChatInboundQueueRepository",
+    "WeChatInboundQueueStatus",
     "WeChatLoginStartRequest",
     "WeChatLoginStartResponse",
     "WeChatLoginWaitRequest",
@@ -85,6 +93,18 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "WeChatGatewaySnapshot": (
         "agent_teams.gateway.wechat.models",
         "WeChatGatewaySnapshot",
+    ),
+    "WeChatInboundQueueRecord": (
+        "agent_teams.gateway.wechat.models",
+        "WeChatInboundQueueRecord",
+    ),
+    "WeChatInboundQueueRepository": (
+        "agent_teams.gateway.wechat.inbound_queue_repository",
+        "WeChatInboundQueueRepository",
+    ),
+    "WeChatInboundQueueStatus": (
+        "agent_teams.gateway.wechat.models",
+        "WeChatInboundQueueStatus",
     ),
     "WeChatLoginStartRequest": (
         "agent_teams.gateway.wechat.models",

@@ -145,6 +145,11 @@ Behavior:
 - deduplication still uses the Feishu `message_id`, falling back to `event_id`
 - duplicate deliveries do not send a second acknowledgement
 - same-chat messages are processed in order
+- inbound Feishu messages enter the shared gateway session ingress path before run start
+- inbound Feishu messages never auto-attach to an already running session run
+- if the bound session is already occupied by a queued/running automation-bound task, the
+  Feishu message stays queued behind that same session backlog instead of being inserted
+  into the active run
 - accepted group and p2p messages use a Feishu message reaction acknowledgement
   - default reaction emoji: `OK`
 - only queued messages emit a separate text reply
@@ -165,19 +170,15 @@ rule from inbound chat messages:
   work and the bound chat receives `定时任务 {display_name} 准备执行，当前任务前面有 n 个消息`
 - if that saved session later disappears or becomes unusable, the automation run
   fails and does not fall back to a new `MainAgent` automation session
-- for these automation-bound runs, receipts, terminal result messages, and `im_send`
-  tool output all use direct send to the chat, not reply-to-message, even in group chats
+- for these automation-bound runs, queue/start receipts remain visible in the chat
+- terminal result messages and `im_send` tool output reply to the persisted receipt
+  message when one exists; otherwise they fall back to a direct send
 - when a bound run enters recoverable `awaiting_recovery`, the bound-session queue
   persists auto-resume retry state and retries `resume` with exponential backoff
   (`10s`, `20s`, `40s`, `80s`, `160s`) before sending a final failure
 - Feishu provider `message_id` values are persisted for automation queue receipts and
-  started/terminal messages so superseded non-terminal messages can be deleted later
-- queue receipts are best-effort deleted after the queued run actually starts or after
-  a final queue-owned failure replaces them
-- started automation messages are best-effort deleted after a terminal completed/failed
-  message is successfully sent
-- cleanup failures are logged and retried, but they do not roll back the primary send
-  or change the run's terminal state
+  started/terminal messages so later automation output can target the same receipt
+- queue and started receipts are not automatically deleted by the current policy
 
 This separates three concerns:
 

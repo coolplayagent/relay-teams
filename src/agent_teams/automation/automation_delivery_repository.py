@@ -45,6 +45,7 @@ class AutomationDeliveryRepository:
                     terminal_attempts INTEGER NOT NULL,
                     started_message TEXT,
                     terminal_message TEXT,
+                    reply_to_message_id TEXT,
                     started_message_id TEXT,
                     terminal_message_id TEXT,
                     started_sent_at TEXT,
@@ -75,6 +76,11 @@ class AutomationDeliveryRepository:
                 CREATE INDEX IF NOT EXISTS idx_automation_deliveries_terminal
                 ON automation_deliveries(terminal_status, updated_at ASC)
                 """
+            )
+            self._ensure_column(
+                "automation_deliveries",
+                "reply_to_message_id",
+                "TEXT",
             )
             self._ensure_column(
                 "automation_deliveries",
@@ -141,6 +147,7 @@ class AutomationDeliveryRepository:
                     terminal_attempts,
                     started_message,
                     terminal_message,
+                    reply_to_message_id,
                     started_message_id,
                     terminal_message_id,
                     started_sent_at,
@@ -152,7 +159,7 @@ class AutomationDeliveryRepository:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(record),
             ),
@@ -184,6 +191,7 @@ class AutomationDeliveryRepository:
                     terminal_attempts=?,
                     started_message=?,
                     terminal_message=?,
+                    reply_to_message_id=?,
                     started_message_id=?,
                     terminal_message_id=?,
                     started_sent_at=?,
@@ -211,6 +219,7 @@ class AutomationDeliveryRepository:
                     record.terminal_attempts,
                     record.started_message,
                     record.terminal_message,
+                    record.reply_to_message_id,
                     record.started_message_id,
                     record.terminal_message_id,
                     _to_iso(record.started_sent_at),
@@ -517,6 +526,7 @@ class AutomationDeliveryRepository:
             record.terminal_attempts,
             record.started_message,
             record.terminal_message,
+            record.reply_to_message_id,
             record.started_message_id,
             record.terminal_message_id,
             _to_iso(record.started_sent_at),
@@ -557,6 +567,11 @@ class AutomationDeliveryRepository:
             terminal_message=(
                 str(row["terminal_message"])
                 if row["terminal_message"] is not None
+                else None
+            ),
+            reply_to_message_id=(
+                str(row["reply_to_message_id"])
+                if row["reply_to_message_id"] is not None
                 else None
             ),
             started_message_id=(

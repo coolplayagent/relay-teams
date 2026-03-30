@@ -24,7 +24,9 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
 )
+from agent_teams.gateway.session_ingress_service import GatewaySessionBusyError
 from agent_teams.logger import get_logger, log_event
+from agent_teams.sessions import ExternalSessionBindingRepository
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -36,6 +38,9 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 from agent_teams.sessions.runs.terminal_payload import (
     extract_terminal_error,
     extract_terminal_output,
+)
+from agent_teams.automation.automation_bound_session_queue_repository import (
+    AutomationBoundSessionQueueRepository,
 )
 
 logger = get_logger(__name__)
@@ -70,7 +75,7 @@ class FeishuClientLike(Protocol):
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
     def create_message_reaction(
         self,
@@ -107,6 +112,8 @@ class FeishuMessagePoolService:
         message_pool_repo: FeishuMessagePoolRepository,
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
+        external_session_binding_repo: ExternalSessionBindingRepository,
+        automation_queue_repo: AutomationBoundSessionQueueRepository,
     ) -> None:
         self._runtime_config_lookup = runtime_config_lookup
         self._inbound_runtime = inbound_runtime
@@ -114,6 +121,8 @@ class FeishuMessagePoolService:
         self._message_pool_repo = message_pool_repo
         self._run_runtime_repo = run_runtime_repo
         self._event_log = event_log
+        self._external_session_binding_repo = external_session_binding_repo
+        self._automation_queue_repo = automation_queue_repo
         self._stop_event = Event()
         self._wake_event = Event()
         self._thread: Thread | None = None
@@ -210,7 +219,7 @@ class FeishuMessagePoolService:
             )
         queue_depth = self._message_pool_repo.count_active_chat_messages_ahead(
             record.message_pool_id
-        )
+        ) + self._count_external_session_queue_ahead(record)
         queue_reply_text = _build_queue_reply_text(queue_depth)
         updated = self._message_pool_repo.update(
             record.message_pool_id,
@@ -429,6 +438,9 @@ class FeishuMessagePoolService:
                     runtime_config=runtime_config,
                     message=_record_to_normalized_message(claimed),
                 )
+            except GatewaySessionBusyError:
+                self._requeue_busy_record(claimed)
+                continue
             except Exception as exc:
                 self._mark_retryable_failure(claimed, error=str(exc))
                 continue
@@ -773,6 +785,31 @@ class FeishuMessagePoolService:
             completed_at=datetime.now(tz=timezone.utc)
             if processing_status == FeishuMessageProcessingStatus.DEAD_LETTER
             else None,
+        )
+
+    def _requeue_busy_record(self, record: FeishuMessagePoolRecord) -> None:
+        now = datetime.now(tz=timezone.utc)
+        _ = self._message_pool_repo.update(
+            record.message_pool_id,
+            processing_status=FeishuMessageProcessingStatus.QUEUED,
+            next_attempt_at=now + timedelta(seconds=1),
+            last_error=None,
+        )
+
+    def _count_external_session_queue_ahead(
+        self,
+        record: FeishuMessagePoolRecord,
+    ) -> int:
+        binding = self._external_session_binding_repo.get_binding(
+            platform="feishu",
+            trigger_id=record.trigger_id,
+            tenant_key=record.tenant_key,
+            external_chat_id=record.chat_id,
+        )
+        if binding is None:
+            return 0
+        return self._automation_queue_repo.count_non_terminal_by_session(
+            binding.session_id
         )
 
     def _enrich_sender_name(

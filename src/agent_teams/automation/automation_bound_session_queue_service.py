@@ -21,6 +21,11 @@ from agent_teams.automation.automation_models import (
     AutomationProjectRecord,
     AutomationRunConfig,
 )
+from agent_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressBusyPolicy,
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
 from agent_teams.gateway.feishu.models import FEISHU_PLATFORM, FeishuEnvironment
 from agent_teams.logger import get_logger, log_event
 from agent_teams.automation.prompt_building import build_automation_prompt
@@ -41,7 +46,6 @@ logger = get_logger(__name__)
 
 _START_MAX_ATTEMPTS = 5
 _RESUME_MAX_ATTEMPTS = 5
-_QUEUE_CLEANUP_MAX_ATTEMPTS = 5
 _CLAIM_STALE_AFTER_SECONDS = 60
 
 
@@ -84,12 +88,13 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def delete_message(
+    def reply_text_message(
         self,
         *,
         message_id: str,
+        text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
 
 class AutomationProjectLookup(Protocol):
@@ -110,6 +115,7 @@ class AutomationBoundSessionQueueService:
         runtime_config_lookup: FeishuRuntimeConfigLookup,
         feishu_client: FeishuClientLike,
         project_repository: AutomationProjectLookup,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._repository = repository
         self._session_lookup = session_lookup
@@ -119,6 +125,7 @@ class AutomationBoundSessionQueueService:
         self._runtime_config_lookup = runtime_config_lookup
         self._feishu_client = feishu_client
         self._project_repository = project_repository
+        self._session_ingress_service = session_ingress_service
 
     def materialize_execution(
         self,
@@ -300,10 +307,9 @@ class AutomationBoundSessionQueueService:
                     project_name=record.automation_project_name,
                     error=str(runtime.last_error or "").strip(),
                 )
-                _ = self._send_direct_text(
-                    record.binding.trigger_id,
-                    record.binding.chat_id,
-                    failure_message,
+                _ = self._send_record_text(
+                    record=record,
+                    text=failure_message,
                 )
                 _ = self._schedule_queue_cleanup(
                     final_record,
@@ -349,6 +355,7 @@ class AutomationBoundSessionQueueService:
                     binding=claimed.binding,
                     delivery_events=claimed.delivery_events,
                     send_started=False,
+                    reply_to_message_id=claimed.queue_message_id,
                 )
             except RuntimeError as exc:
                 self._handle_start_failure(claimed, error=str(exc))
@@ -391,28 +398,39 @@ class AutomationBoundSessionQueueService:
         binding: AutomationFeishuBinding,
         delivery_events: tuple[AutomationDeliveryEvent, ...],
         send_started: bool,
+        reply_to_message_id: str | None = None,
     ) -> str:
         _ = self._ensure_session_workspace(
             session_id=session_id,
             workspace_id=workspace_id,
         )
-        run_id, _ = self._run_service.create_detached_run(
-            IntentInput(
-                session_id=session_id,
-                input=content_parts_from_text(prompt),
-                execution_mode=run_config.execution_mode,
-                yolo=run_config.yolo,
-                reuse_root_instance=False,
-                thinking=run_config.thinking,
-                conversation_context=RuntimePromptConversationContext(
-                    source_provider=FEISHU_PLATFORM,
-                    source_kind="im",
-                    feishu_chat_type=binding.chat_type,
-                    im_force_direct_send=True,
-                ),
-            )
+        intent = IntentInput(
+            session_id=session_id,
+            input=content_parts_from_text(prompt),
+            execution_mode=run_config.execution_mode,
+            yolo=run_config.yolo,
+            reuse_root_instance=False,
+            thinking=run_config.thinking,
+            conversation_context=RuntimePromptConversationContext(
+                source_provider=FEISHU_PLATFORM,
+                source_kind="im",
+                feishu_chat_type=binding.chat_type,
+                im_reply_to_message_id=reply_to_message_id,
+            ),
         )
-        self._run_service.ensure_run_started(run_id)
+        if self._session_ingress_service is not None:
+            result = self._session_ingress_service.require_started(
+                GatewaySessionIngressRequest(
+                    intent=intent,
+                    busy_policy=GatewaySessionIngressBusyPolicy.START_IF_IDLE,
+                )
+            )
+            if result.run_id is None:
+                raise RuntimeError("automation_bound_run_not_started")
+            run_id = result.run_id
+        else:
+            run_id, _ = self._run_service.create_detached_run(intent)
+            self._run_service.ensure_run_started(run_id)
         _ = self._delivery_service.register_run(
             project=None,
             session_id=session_id,
@@ -423,6 +441,7 @@ class AutomationBoundSessionQueueService:
             binding=binding,
             delivery_events=delivery_events,
             send_started=send_started,
+            reply_to_message_id=reply_to_message_id,
         )
         return run_id
 
@@ -446,10 +465,9 @@ class AutomationBoundSessionQueueService:
                     }
                 )
             )
-            _ = self._send_direct_text(
-                record.binding.trigger_id,
-                record.binding.chat_id,
-                _build_start_failure_message(
+            _ = self._send_record_text(
+                record=record,
+                text=_build_start_failure_message(
                     project_name=record.automation_project_name,
                     error=error,
                 ),
@@ -523,10 +541,9 @@ class AutomationBoundSessionQueueService:
                 project_name=record.automation_project_name,
                 error=str(runtime.last_error or record.last_error or "").strip(),
             )
-            _ = self._send_direct_text(
-                record.binding.trigger_id,
-                record.binding.chat_id,
-                failure_message,
+            _ = self._send_record_text(
+                record=record,
+                text=failure_message,
             )
             _ = self._schedule_queue_cleanup(
                 failed_record,
@@ -557,10 +574,9 @@ class AutomationBoundSessionQueueService:
                     project_name=record.automation_project_name,
                     error=str(exc),
                 )
-                _ = self._send_direct_text(
-                    record.binding.trigger_id,
-                    record.binding.chat_id,
-                    failure_message,
+                _ = self._send_record_text(
+                    record=record,
+                    text=failure_message,
                 )
                 _ = self._schedule_queue_cleanup(
                     failed_record,
@@ -638,16 +654,12 @@ class AutomationBoundSessionQueueService:
     ) -> AutomationBoundSessionQueueRecord:
         if not str(record.queue_message_id or "").strip():
             return record
-        if record.queue_cleanup_status in {
-            AutomationCleanupStatus.CLEANING,
-            AutomationCleanupStatus.CLEANED,
-            AutomationCleanupStatus.PENDING,
-        }:
+        if record.queue_cleanup_status == AutomationCleanupStatus.SKIPPED:
             return record
         return self._repository.update(
             record.model_copy(
                 update={
-                    "queue_cleanup_status": AutomationCleanupStatus.PENDING,
+                    "queue_cleanup_status": AutomationCleanupStatus.SKIPPED,
                     "updated_at": updated_at,
                 }
             )
@@ -660,68 +672,11 @@ class AutomationBoundSessionQueueService:
             limit=limit,
             stale_before=stale_before,
         ):
-            message_id = str(record.queue_message_id or "").strip()
-            if not message_id:
-                now = _utc_now()
-                _ = self._repository.update(
-                    record.model_copy(
-                        update={
-                            "queue_cleanup_status": AutomationCleanupStatus.SKIPPED,
-                            "updated_at": now,
-                        }
-                    )
-                )
-                progress = True
-                continue
-            claimed = self._repository.claim_queue_cleanup(
-                automation_queue_id=record.automation_queue_id,
-                stale_before=stale_before,
-            )
-            if claimed is None:
-                continue
-            attempts = claimed.queue_cleanup_attempts + 1
-            try:
-                self._delete_message(
-                    claimed.binding.trigger_id,
-                    message_id,
-                )
-            except RuntimeError as exc:
-                next_status = (
-                    AutomationCleanupStatus.FAILED
-                    if attempts >= _QUEUE_CLEANUP_MAX_ATTEMPTS
-                    else AutomationCleanupStatus.PENDING
-                )
-                now = _utc_now()
-                _ = self._repository.update(
-                    claimed.model_copy(
-                        update={
-                            "queue_cleanup_status": next_status,
-                            "queue_cleanup_attempts": attempts,
-                            "updated_at": now,
-                        }
-                    )
-                )
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    event="automation.bound_session_queue.cleanup_failed",
-                    message="Automation queue receipt cleanup failed",
-                    payload={
-                        "automation_queue_id": claimed.automation_queue_id,
-                        "message_id": message_id,
-                        "attempt": attempts,
-                        "error": str(exc),
-                    },
-                )
-                progress = True
-                continue
             now = _utc_now()
             _ = self._repository.update(
-                claimed.model_copy(
+                record.model_copy(
                     update={
-                        "queue_cleanup_status": AutomationCleanupStatus.CLEANED,
-                        "queue_cleanup_attempts": attempts,
-                        "queue_cleaned_at": now,
+                        "queue_cleanup_status": AutomationCleanupStatus.SKIPPED,
                         "updated_at": now,
                     }
                 )
@@ -763,6 +718,30 @@ class AutomationBoundSessionQueueService:
             environment=runtime_config.environment,
         )
 
+    def _send_record_text(
+        self,
+        *,
+        record: AutomationBoundSessionQueueRecord,
+        text: str,
+    ) -> str:
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            record.binding.trigger_id
+        )
+        if runtime_config is None:
+            raise RuntimeError("missing_runtime_config")
+        reply_to_message_id = str(record.queue_message_id or "").strip()
+        if reply_to_message_id:
+            return self._feishu_client.reply_text_message(
+                message_id=reply_to_message_id,
+                text=text,
+                environment=runtime_config.environment,
+            )
+        return self._feishu_client.send_text_message(
+            chat_id=record.binding.chat_id,
+            text=text,
+            environment=runtime_config.environment,
+        )
+
     def _ensure_session_workspace(
         self,
         *,
@@ -790,17 +769,6 @@ class AutomationBoundSessionQueueService:
             raise RuntimeError(
                 f"missing_automation_project:{automation_project_id}"
             ) from None
-
-    def _delete_message(self, trigger_id: str, message_id: str) -> None:
-        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
-            trigger_id
-        )
-        if runtime_config is None:
-            raise RuntimeError("missing_runtime_config")
-        self._feishu_client.delete_message(
-            message_id=message_id,
-            environment=runtime_config.environment,
-        )
 
 
 class AutomationBoundSessionQueueWorker:

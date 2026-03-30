@@ -16,6 +16,7 @@ from agent_teams.gateway.im.context import (
 )
 from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.gateway.wechat.models import WeChatAccountRecord
+from agent_teams.automation import AutomationRunDeliveryRecord
 
 
 class _FeishuSender(Protocol):
@@ -25,7 +26,7 @@ class _FeishuSender(Protocol):
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
 
     def send_text_message(
         self,
@@ -78,6 +79,10 @@ class _RunIntentLookup(Protocol):
     def get(self, run_id: str) -> IntentInput: ...
 
 
+class _AutomationDeliveryLookup(Protocol):
+    def get_by_run_id(self, run_id: str) -> AutomationRunDeliveryRecord: ...
+
+
 class ImToolService:
     def __init__(
         self,
@@ -87,6 +92,7 @@ class ImToolService:
         runtime_config_lookup: _RuntimeConfigLookup,
         run_intent_lookup: _RunIntentLookup | None = None,
         automation_project_repo: _AutomationProjectLookup | None = None,
+        automation_delivery_lookup: _AutomationDeliveryLookup | None = None,
         gateway_session_lookup: _GatewaySessionLookup | None = None,
         feishu_client: _FeishuSender,
         wechat_account_repo: _WeChatAccountLookup,
@@ -98,6 +104,7 @@ class ImToolService:
         self._runtime_config_lookup = runtime_config_lookup
         self._run_intent_lookup = run_intent_lookup
         self._automation_project_repo = automation_project_repo
+        self._automation_delivery_lookup = automation_delivery_lookup
         self._gateway_session_lookup = gateway_session_lookup
         self._feishu_client = feishu_client
         self._wechat_account_repo = wechat_account_repo
@@ -206,13 +213,32 @@ class ImToolService:
         run_id: str | None = None,
     ) -> FeishuChatContext | WeChatChatContext | None:
         prefer_direct_send = self._should_force_direct_send(run_id)
-        return resolve_im_chat_context(
+        ctx = resolve_im_chat_context(
             session_repo=self._session_repo,
             runtime_config_lookup=self._runtime_config_lookup,
             automation_project_repo=self._automation_project_repo,
             gateway_session_lookup=self._gateway_session_lookup,
             session_id=session_id,
             prefer_direct_send=prefer_direct_send,
+        )
+        if not isinstance(ctx, FeishuChatContext):
+            return ctx
+        reply_to_message_id = self._resolve_reply_to_message_id(run_id)
+        if reply_to_message_id is None:
+            if self._has_delivery_without_receipt(run_id):
+                return FeishuChatContext(
+                    chat_id=ctx.chat_id,
+                    environment=ctx.environment,
+                    chat_type=ctx.chat_type,
+                    prefer_reply=False,
+                )
+            return ctx
+        return FeishuChatContext(
+            chat_id=ctx.chat_id,
+            environment=ctx.environment,
+            chat_type=ctx.chat_type,
+            reply_to_message_id=reply_to_message_id,
+            prefer_reply=True,
         )
 
     def _should_force_direct_send(self, run_id: str | None) -> bool:
@@ -227,6 +253,48 @@ class ImToolService:
         if context is None:
             return False
         return context.im_force_direct_send
+
+    def _resolve_reply_to_message_id(self, run_id: str | None) -> str | None:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            return None
+        intent_reply_to_message_id = self._intent_reply_to_message_id(normalized_run_id)
+        if intent_reply_to_message_id is not None:
+            return intent_reply_to_message_id
+        if self._automation_delivery_lookup is None:
+            return None
+        try:
+            delivery = self._automation_delivery_lookup.get_by_run_id(normalized_run_id)
+        except KeyError:
+            return None
+        reply_to_message_id = (
+            str(delivery.started_message_id or "").strip()
+            or str(delivery.reply_to_message_id or "").strip()
+        )
+        return reply_to_message_id or None
+
+    def _has_delivery_without_receipt(self, run_id: str | None) -> bool:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id or self._automation_delivery_lookup is None:
+            return False
+        try:
+            _ = self._automation_delivery_lookup.get_by_run_id(normalized_run_id)
+        except KeyError:
+            return False
+        return True
+
+    def _intent_reply_to_message_id(self, run_id: str) -> str | None:
+        if self._run_intent_lookup is None:
+            return None
+        try:
+            intent = self._run_intent_lookup.get(run_id)
+        except KeyError:
+            return None
+        context = intent.conversation_context
+        if context is None:
+            return None
+        reply_to_message_id = str(context.im_reply_to_message_id or "").strip()
+        return reply_to_message_id or None
 
     def _send_wechat_text(
         self,

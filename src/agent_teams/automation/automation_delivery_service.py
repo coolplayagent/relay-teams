@@ -20,6 +20,7 @@ from agent_teams.automation.automation_models import (
 )
 from agent_teams.gateway.feishu.models import FeishuEnvironment
 from agent_teams.logger import get_logger, log_event
+from agent_teams.notifications import NotificationContext, NotificationType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -36,7 +37,6 @@ logger = get_logger(__name__)
 
 _STARTED_MAX_ATTEMPTS = 3
 _TERMINAL_MAX_ATTEMPTS = 5
-_CLEANUP_MAX_ATTEMPTS = 5
 _CLAIM_STALE_AFTER_SECONDS = 60
 
 
@@ -60,12 +60,25 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def delete_message(
+    def reply_text_message(
         self,
         *,
         message_id: str,
+        text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> str: ...
+
+
+class NotificationServiceLike(Protocol):
+    def emit(
+        self,
+        *,
+        notification_type: NotificationType,
+        title: str,
+        body: str,
+        context: NotificationContext,
+        dedupe_key: str | None = None,
+    ) -> bool: ...
 
 
 class AutomationDeliveryService:
@@ -77,12 +90,14 @@ class AutomationDeliveryService:
         feishu_client: FeishuClientLike,
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
+        notification_service: NotificationServiceLike | None = None,
     ) -> None:
         self._repository = repository
         self._runtime_config_lookup = runtime_config_lookup
         self._feishu_client = feishu_client
         self._run_runtime_repo = run_runtime_repo
         self._event_log = event_log
+        self._notification_service = notification_service
 
     def register_run(
         self,
@@ -96,6 +111,7 @@ class AutomationDeliveryService:
         binding: AutomationFeishuBinding | None = None,
         delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None,
         send_started: bool = True,
+        reply_to_message_id: str | None = None,
     ) -> AutomationRunDeliveryRecord | None:
         resolved_binding = (
             binding
@@ -125,6 +141,7 @@ class AutomationDeliveryService:
                 reason=reason,
                 binding=resolved_binding,
                 delivery_events=resolved_events,
+                reply_to_message_id=reply_to_message_id,
                 started_status=(
                     AutomationDeliveryStatus.PENDING
                     if send_started
@@ -174,6 +191,24 @@ class AutomationDeliveryService:
 
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
+
+    def should_suppress_terminal_notification(self, run_id: str | None) -> bool:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            return False
+        try:
+            record = self._repository.get_by_run_id(normalized_run_id)
+        except KeyError:
+            return False
+        if record.terminal_status in {
+            AutomationDeliveryStatus.PENDING,
+            AutomationDeliveryStatus.SENDING,
+            AutomationDeliveryStatus.SENT,
+        }:
+            return True
+        if record.terminal_status == AutomationDeliveryStatus.FAILED:
+            return False
+        return bool(str(record.terminal_message or "").strip())
 
     def mark_terminal_delivery_skipped(
         self,
@@ -306,11 +341,16 @@ class AutomationDeliveryService:
             )
             return True
         attempts = claimed.terminal_attempts + 1
+        reply_to_message_id = (
+            str(claimed.started_message_id or "").strip()
+            or str(claimed.reply_to_message_id or "").strip()
+        )
         try:
             message_id = self._send_text(
                 trigger_id=claimed.binding.trigger_id,
                 chat_id=claimed.binding.chat_id,
                 text=terminal_message,
+                reply_to_message_id=reply_to_message_id or None,
             )
         except RuntimeError as exc:
             now = _utc_now()
@@ -319,7 +359,7 @@ class AutomationDeliveryService:
                 if attempts >= _TERMINAL_MAX_ATTEMPTS
                 else AutomationDeliveryStatus.PENDING
             )
-            _ = self._repository.update(
+            persisted = self._repository.update(
                 claimed.model_copy(
                     update={
                         "terminal_event": terminal_event,
@@ -331,6 +371,11 @@ class AutomationDeliveryService:
                     }
                 )
             )
+            if next_status == AutomationDeliveryStatus.FAILED:
+                self._emit_fallback_terminal_notification(
+                    record=persisted,
+                    runtime_status=runtime.status,
+                )
             return True
         now = _utc_now()
         _ = self._repository.update(
@@ -342,11 +387,7 @@ class AutomationDeliveryService:
                     "terminal_attempts": attempts,
                     "terminal_status": AutomationDeliveryStatus.SENT,
                     "terminal_sent_at": now,
-                    "started_cleanup_status": (
-                        AutomationCleanupStatus.PENDING
-                        if str(claimed.started_message_id or "").strip()
-                        else claimed.started_cleanup_status
-                    ),
+                    "started_cleanup_status": AutomationCleanupStatus.SKIPPED,
                     "last_error": None,
                     "updated_at": now,
                 }
@@ -360,94 +401,74 @@ class AutomationDeliveryService:
             AutomationCleanupStatus.CLEANING,
         }:
             return False
-        message_id = str(record.started_message_id or "").strip()
-        if not message_id:
-            now = _utc_now()
-            _ = self._repository.update(
-                record.model_copy(
-                    update={
-                        "started_cleanup_status": AutomationCleanupStatus.SKIPPED,
-                        "updated_at": now,
-                    }
-                )
-            )
-            return True
-        claim_cutoff = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
-        claimed = self._repository.claim_started_cleanup(
-            automation_delivery_id=record.automation_delivery_id,
-            stale_before=claim_cutoff,
-        )
-        if claimed is None:
-            return False
-        attempts = claimed.started_cleanup_attempts + 1
-        try:
-            self._delete_message(
-                trigger_id=claimed.binding.trigger_id,
-                message_id=message_id,
-            )
-        except RuntimeError as exc:
-            next_status = (
-                AutomationCleanupStatus.FAILED
-                if attempts >= _CLEANUP_MAX_ATTEMPTS
-                else AutomationCleanupStatus.PENDING
-            )
-            now = _utc_now()
-            _ = self._repository.update(
-                claimed.model_copy(
-                    update={
-                        "started_cleanup_status": next_status,
-                        "started_cleanup_attempts": attempts,
-                        "updated_at": now,
-                    }
-                )
-            )
-            log_event(
-                logger,
-                logging.WARNING,
-                event="automation.delivery.cleanup_failed",
-                message="Automation started-message cleanup failed",
-                payload={
-                    "run_id": claimed.run_id,
-                    "message_id": message_id,
-                    "attempt": attempts,
-                    "error": str(exc),
-                },
-            )
-            return True
         now = _utc_now()
         _ = self._repository.update(
-            claimed.model_copy(
+            record.model_copy(
                 update={
-                    "started_cleanup_status": AutomationCleanupStatus.CLEANED,
-                    "started_cleanup_attempts": attempts,
-                    "started_cleaned_at": now,
+                    "started_cleanup_status": AutomationCleanupStatus.SKIPPED,
                     "updated_at": now,
                 }
             )
         )
         return True
 
-    def _send_text(self, *, trigger_id: str, chat_id: str, text: str) -> str:
+    def _send_text(
+        self,
+        *,
+        trigger_id: str,
+        chat_id: str,
+        text: str,
+        reply_to_message_id: str | None = None,
+    ) -> str:
         runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
             trigger_id
         )
         if runtime_config is None:
             raise RuntimeError("missing_runtime_config")
+        normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+        if normalized_reply_to_message_id:
+            return self._feishu_client.reply_text_message(
+                message_id=normalized_reply_to_message_id,
+                text=text,
+                environment=runtime_config.environment,
+            )
         return self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
             environment=runtime_config.environment,
         )
 
-    def _delete_message(self, *, trigger_id: str, message_id: str) -> None:
-        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
-            trigger_id
+    def _emit_fallback_terminal_notification(
+        self,
+        *,
+        record: AutomationRunDeliveryRecord,
+        runtime_status: RunRuntimeStatus,
+    ) -> None:
+        if self._notification_service is None:
+            return
+        notification_type = (
+            NotificationType.RUN_COMPLETED
+            if runtime_status == RunRuntimeStatus.COMPLETED
+            else NotificationType.RUN_FAILED
         )
-        if runtime_config is None:
-            raise RuntimeError("missing_runtime_config")
-        self._feishu_client.delete_message(
-            message_id=message_id,
-            environment=runtime_config.environment,
+        title = (
+            "Run Completed"
+            if notification_type == NotificationType.RUN_COMPLETED
+            else "Run Failed"
+        )
+        body = str(record.terminal_message or "").strip()
+        if not body:
+            return
+        _ = self._notification_service.emit(
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            context=NotificationContext(
+                session_id=record.session_id,
+                run_id=record.run_id,
+                trace_id=record.run_id,
+            ),
+            dedupe_key=f"automation-terminal-fallback:{record.run_id}",
         )
 
 
