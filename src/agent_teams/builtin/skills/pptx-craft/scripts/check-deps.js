@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const {
   exporterBundle,
   exporterNodeBundle,
@@ -16,6 +17,26 @@ function versionOk() {
 
 function exists(targetPath) {
   return fs.existsSync(targetPath);
+}
+
+function findExecutable(command) {
+  const probe =
+    process.platform === "win32"
+      ? spawnSync("where", [command], { encoding: "utf8", shell: false })
+      : spawnSync("sh", ["-lc", `command -v ${command}`], {
+          encoding: "utf8",
+          shell: false,
+        });
+
+  if (probe.status !== 0) {
+    return null;
+  }
+
+  const candidate = String(probe.stdout || "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+  return candidate || null;
 }
 
 const issues = [];
@@ -78,4 +99,15 @@ if (issues.length > 0) {
   process.exit(1);
 }
 
+const soffice = findExecutable("soffice") || findExecutable("libreoffice");
+const pdftoppm = findExecutable("pdftoppm");
+const exportQaMode = soffice && pdftoppm ? "visual+structural" : "structural_only";
+
 console.log("Dependencies look ready.");
+console.log(`Export QA mode: ${exportQaMode}`);
+if (!soffice) {
+  console.log("- Optional render dependency missing: soffice/libreoffice");
+}
+if (!pdftoppm) {
+  console.log("- Optional render dependency missing: pdftoppm");
+}

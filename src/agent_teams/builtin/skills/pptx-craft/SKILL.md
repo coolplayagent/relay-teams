@@ -386,13 +386,20 @@ Pipeline 完成需求收集后，自动生成时间戳目录：
    - 验证生成的文件确实在 `{output_dir}/pages/` 下
    - 检查方法：统计 `{pages_dir}` 下 `page-*.pptx.html` 文件数量，禁止依赖硬编码 `output/pages/`
    - 如果发现文件未写入 `{pages_dir}`，应视为路径错误并立即修复；不得把 `output/pages/` 作为兜底默认路径
-6. **失败处理**：如部分页面缺失，告知用户并询问是否重试
+6. **交付约束**：
+   - Charlie 必须通过 `node scripts/convert_pages.js {pages_dir}` 生成 `pages.pptx`
+   - 该脚本会自动执行导出 QA，禁止只转换不验
+   - 交付成功的标志不仅是有 `pages.pptx`，还必须有通过的 `export_qa_result.json`
+7. **失败处理**：如部分页面缺失或导出 QA 失败，告知用户并询问是否重试
 
 ### Stage 6: 质量验收与交付
 
-1. **验证 PPTX 输出**：
+1. **验证 PPTX 与导出 QA**：
    - 检查 `{pages_dir}/pages.pptx` 是否存在
    - 验证文件大小 > 0
+   - 检查 `{session_dir}/export_qa_result.json` 是否存在
+   - 验证 `export_qa_result.json` 中 `passed: true`
+   - 若 `mode: structural_only`，应在最终说明中明确这是“缺少渲染依赖下的降级 QA”
 2. 向用户报告完成状态（PPTX 路径、页数）
 
 ---
@@ -515,6 +522,8 @@ output/
 - 可使用 Tailwind 类名、普通 class、内联样式、外链 CSS，但必须确保样式在浏览器中实际生效
 - 复杂 CSS 可用于视觉增强，但正文、关键数字、关键标签必须仍可通过稳定文本与基础布局表达
 - 对 `skew` / 3D / `perspective` / `mix-blend-mode` / `mask` / 复杂 `clip-path` / 复杂滤镜 / 高级渐变 等高风险效果，先验证转换结果；不稳定时改为简单布局或预渲染为图片
+- 短标签、徽标条、数字卡片标题优先使用“单元素文本容器 + 背景填充”，不要拆成独立底色和独立文字再手工对齐
+- 图表柱体、数值、年份标签必须共用统一中心线与坐标基准，避免导出后错位
 
 每页保存到 {pages_dir}/page-N.pptx.html（N 从 1 开始）。
 ```
