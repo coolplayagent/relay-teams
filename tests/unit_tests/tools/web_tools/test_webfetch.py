@@ -130,8 +130,10 @@ def _build_binary_transport(
     etag: str | None = '"etag-1"',
     last_modified: str | None = LAST_MODIFIED,
     ignore_range_probe: bool = False,
+    reject_range_probe_status: int | None = None,
     fail_once_ranges: dict[str, int] | None = None,
     request_log: list[str] | None = None,
+    if_range_log: list[str] | None = None,
 ) -> httpx.MockTransport:
     remaining_failures = {} if fail_once_ranges is None else dict(fail_once_ranges)
 
@@ -139,6 +141,8 @@ def _build_binary_transport(
         range_header = request.headers.get("Range")
         if request_log is not None:
             request_log.append(range_header or "")
+        if if_range_log is not None:
+            if_range_log.append(request.headers.get("If-Range") or "")
         base_headers = {
             "content-type": "application/pdf",
             "content-length": str(len(data)),
@@ -148,6 +152,15 @@ def _build_binary_transport(
             base_headers["etag"] = etag
         if last_modified is not None:
             base_headers["last-modified"] = last_modified
+        if (
+            reject_range_probe_status is not None
+            and range_header == webfetch.RANGE_PROBE_HEADER_VALUE
+        ):
+            return httpx.Response(
+                reject_range_probe_status,
+                request=request,
+                headers=base_headers,
+            )
         if ignore_range_probe and range_header == webfetch.RANGE_PROBE_HEADER_VALUE:
             return httpx.Response(
                 200,
@@ -412,6 +425,43 @@ async def test_fetch_webfetch_projection_avoids_preflight_binary_get(
 
 
 @pytest.mark.asyncio
+async def test_fetch_webfetch_projection_falls_back_when_probe_is_rejected(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(1024 * 1024)
+    request_log: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            request_log=request_log,
+            reject_range_probe_status=416,
+        )
+    )
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.fetch_webfetch_projection(
+            client=client,
+            requested_url="https://example.com/probe-rejected.pdf",
+            response_format="markdown",
+            extract=webfetch.WebFetchExtractMode.NONE,
+            item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            tool_call_id="webfetch",
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    assert projection.visible_data is not None
+    data = cast(dict[str, object], projection.visible_data)
+    saved_path = Path(str(data["saved_path"]))
+    assert saved_path.read_bytes() == payload
+    assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE, ""]
+
+
+@pytest.mark.asyncio
 async def test_download_binary_response_resumes_across_calls(tmp_path: Path) -> None:
     payload = _make_binary_bytes(2 * 1024 * 1024)
     request_log: list[str] = []
@@ -502,6 +552,39 @@ async def test_download_binary_response_does_not_resume_without_strong_validator
     assert saved_path.read_bytes() == payload
     assert request_log.count(full_range) == 2
     assert f"bytes=786432-{len(payload) - 1}" not in request_log
+
+
+@pytest.mark.asyncio
+async def test_download_binary_response_uses_last_modified_for_weak_etag_if_range(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(2 * 1024 * 1024)
+    if_range_log: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            etag='W/"weak-etag"',
+            last_modified=LAST_MODIFIED,
+            if_range_log=if_range_log,
+        )
+    )
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.download_binary_response(
+            client=client,
+            requested_url="https://example.com/weak-etag.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    assert projection.visible_data is not None
+    assert LAST_MODIFIED in if_range_log
+    assert 'W/"weak-etag"' not in if_range_log
 
 
 @pytest.mark.asyncio
