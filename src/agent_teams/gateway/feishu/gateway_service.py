@@ -29,12 +29,15 @@ from agent_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )
+from agent_teams.logger import get_logger, log_event
 from agent_teams.roles import RoleRegistry
 from agent_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
 from agent_teams.workspace import WorkspaceService
+
+LOGGER = get_logger(__name__)
 
 
 class FeishuGatewayService:
@@ -143,6 +146,8 @@ class FeishuGatewayService:
         enabled: bool,
     ) -> FeishuGatewayAccountRecord:
         existing = self._repository.get_account(account_id)
+        if enabled:
+            self._validate_runtime_account(existing, require_app_secret=True)
         updated = existing.model_copy(
             update={
                 "status": (
@@ -170,6 +175,7 @@ class FeishuGatewayService:
             self._config_dir,
             account.account_id,
         )
+        last_error = self._account_runtime_error(account, secret_config=secret_config)
         return account.model_copy(
             update={
                 "secret_config": secret_config.model_dump(
@@ -180,6 +186,7 @@ class FeishuGatewayService:
                 "secret_status": self.get_secret_status(account.account_id).model_dump(
                     mode="json"
                 ),
+                "last_error": last_error,
             }
         )
 
@@ -262,13 +269,20 @@ class FeishuGatewayService:
         self,
         account: FeishuGatewayAccountRecord,
     ) -> FeishuTriggerRuntimeConfig | None:
-        source = FeishuTriggerSourceConfig.model_validate(account.source_config)
-        target = FeishuTriggerTargetConfig.model_validate(account.target_config or {})
         secret_config = self._secret_store.get_secret_config(
             self._config_dir,
             account.account_id,
         )
-        if secret_config.app_secret is None:
+        validation_error = self._account_runtime_error(
+            account,
+            secret_config=secret_config,
+        )
+        if validation_error is not None:
+            return None
+        source = FeishuTriggerSourceConfig.model_validate(account.source_config)
+        target = FeishuTriggerTargetConfig.model_validate(account.target_config or {})
+        app_secret = secret_config.app_secret
+        if app_secret is None:
             return None
         return FeishuTriggerRuntimeConfig(
             trigger_id=account.account_id,
@@ -277,7 +291,7 @@ class FeishuGatewayService:
             target=target,
             environment=FeishuEnvironment(
                 app_id=source.app_id,
-                app_secret=secret_config.app_secret,
+                app_secret=app_secret,
                 app_name=source.app_name,
                 verification_token=secret_config.verification_token,
                 encrypt_key=secret_config.encrypt_key,
@@ -304,6 +318,20 @@ class FeishuGatewayService:
         resolved: list[FeishuTriggerRuntimeConfig] = []
         for account in self._repository.list_accounts():
             if account.status != FeishuGatewayAccountStatus.ENABLED:
+                continue
+            attached = self.attach_secret_status(account)
+            if attached.last_error is not None:
+                log_event(
+                    LOGGER,
+                    30,
+                    event="gateway.feishu.runtime_config_skipped",
+                    message="Skipped invalid persisted Feishu gateway account",
+                    payload={
+                        "account_id": attached.account_id,
+                        "account_name": attached.name,
+                        "last_error": attached.last_error,
+                    },
+                )
                 continue
             runtime = self.resolve_runtime_config(account)
             if runtime is None:
@@ -360,7 +388,7 @@ class FeishuGatewayService:
         target = FeishuTriggerTargetConfig.model_validate(
             {} if target_config is None else dict(target_config.items())
         )
-        self._workspace_service.require_workspace(target.workspace_id)
+        self._require_workspace(target.workspace_id)
         normalized_root_role_id = self._resolve_normal_root_role_id(
             target.normal_root_role_id
         )
@@ -377,6 +405,48 @@ class FeishuGatewayService:
             )
             _ = self._orchestration_settings_service.resolve_run_topology(probe)
         _ = source
+
+    def _validate_runtime_account(
+        self,
+        account: FeishuGatewayAccountRecord,
+        *,
+        require_app_secret: bool,
+    ) -> None:
+        secret_config = self._secret_store.get_secret_config(
+            self._config_dir,
+            account.account_id,
+        )
+        error = self._account_runtime_error(
+            account,
+            secret_config=secret_config,
+            require_app_secret=require_app_secret,
+        )
+        if error is not None:
+            raise ValueError(error)
+
+    def _account_runtime_error(
+        self,
+        account: FeishuGatewayAccountRecord,
+        *,
+        secret_config: FeishuTriggerSecretConfig,
+        require_app_secret: bool = True,
+    ) -> str | None:
+        try:
+            self._validate_source_and_target(
+                source_config=account.source_config,
+                target_config=account.target_config,
+            )
+        except (KeyError, ValueError) as exc:
+            return str(exc)
+        if require_app_secret and secret_config.app_secret is None:
+            return "Feishu app_secret is required"
+        return None
+
+    def _require_workspace(self, workspace_id: str) -> None:
+        try:
+            _ = self._workspace_service.require_workspace(workspace_id)
+        except KeyError as exc:
+            raise ValueError(f"Unknown workspace: {workspace_id}") from exc
 
     def _normalized_target(
         self,

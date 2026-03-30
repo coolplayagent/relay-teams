@@ -48,6 +48,13 @@ _CLAIM_STALE_AFTER_SECONDS = 60
 class SessionLookup(Protocol):
     def get_session(self, session_id: str) -> SessionRecord: ...
 
+    def rebind_session_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> SessionRecord: ...
+
 
 class RunServiceLike(Protocol):
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]: ...
@@ -183,6 +190,7 @@ class AutomationBoundSessionQueueService:
             project_name=project.display_name,
             project_id=project.automation_project_id,
             session_id=session_id,
+            workspace_id=project.workspace_id,
             reason=reason,
             prompt=build_automation_prompt(
                 project_name=project.display_name,
@@ -192,6 +200,30 @@ class AutomationBoundSessionQueueService:
             binding=binding,
             delivery_events=project.delivery_events,
             send_started=True,
+        )
+        started_at = _utc_now()
+        _ = self._repository.create(
+            AutomationBoundSessionQueueRecord(
+                automation_queue_id=f"autq_{uuid4().hex[:12]}",
+                automation_project_id=project.automation_project_id,
+                automation_project_name=project.display_name,
+                session_id=session_id,
+                reason=reason,
+                binding=binding,
+                delivery_events=project.delivery_events,
+                run_config=project.run_config,
+                prompt=build_automation_prompt(
+                    project_name=project.display_name,
+                    prompt=project.prompt,
+                ),
+                queue_message=_build_direct_start_message(
+                    project_name=project.display_name
+                ),
+                run_id=run_id,
+                status=AutomationBoundSessionQueueStatus.WAITING_RESULT,
+                next_attempt_at=started_at,
+                resume_next_attempt_at=started_at,
+            )
         )
         return AutomationExecutionHandle(
             session_id=session_id,
@@ -308,6 +340,9 @@ class AutomationBoundSessionQueueService:
                     project_name=claimed.automation_project_name,
                     project_id=claimed.automation_project_id,
                     session_id=claimed.session_id,
+                    workspace_id=self._project_workspace_id(
+                        claimed.automation_project_id
+                    ),
                     reason=claimed.reason,
                     prompt=claimed.prompt,
                     run_config=claimed.run_config,
@@ -349,6 +384,7 @@ class AutomationBoundSessionQueueService:
         project_name: str,
         project_id: str,
         session_id: str,
+        workspace_id: str,
         reason: str,
         prompt: str,
         run_config: AutomationRunConfig,
@@ -356,12 +392,17 @@ class AutomationBoundSessionQueueService:
         delivery_events: tuple[AutomationDeliveryEvent, ...],
         send_started: bool,
     ) -> str:
+        _ = self._ensure_session_workspace(
+            session_id=session_id,
+            workspace_id=workspace_id,
+        )
         run_id, _ = self._run_service.create_detached_run(
             IntentInput(
                 session_id=session_id,
                 input=content_parts_from_text(prompt),
                 execution_mode=run_config.execution_mode,
                 yolo=run_config.yolo,
+                reuse_root_instance=False,
                 thinking=run_config.thinking,
                 conversation_context=RuntimePromptConversationContext(
                     source_provider=FEISHU_PLATFORM,
@@ -722,6 +763,34 @@ class AutomationBoundSessionQueueService:
             environment=runtime_config.environment,
         )
 
+    def _ensure_session_workspace(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+    ) -> SessionRecord:
+        try:
+            session = self._session_lookup.get_session(session_id)
+        except KeyError:
+            raise RuntimeError(f"missing_bound_session:{session_id}") from None
+        if session.workspace_id == workspace_id:
+            return session
+        try:
+            return self._session_lookup.rebind_session_workspace(
+                session_id,
+                workspace_id=workspace_id,
+            )
+        except KeyError:
+            raise RuntimeError(f"missing_bound_session:{session_id}") from None
+
+    def _project_workspace_id(self, automation_project_id: str) -> str:
+        try:
+            return self._project_repository.get(automation_project_id).workspace_id
+        except KeyError:
+            raise RuntimeError(
+                f"missing_automation_project:{automation_project_id}"
+            ) from None
+
     def _delete_message(self, trigger_id: str, message_id: str) -> None:
         runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
             trigger_id
@@ -792,6 +861,10 @@ class AutomationBoundSessionQueueWorker:
 
 def _build_queue_message(*, project_name: str, ahead_count: int) -> str:
     return f"定时任务 {project_name} 准备执行，当前任务前面有 {ahead_count} 个消息"
+
+
+def _build_direct_start_message(*, project_name: str) -> str:
+    return f"定时任务 {project_name} 已直接启动"
 
 
 def _build_start_failure_message(*, project_name: str, error: str) -> str:

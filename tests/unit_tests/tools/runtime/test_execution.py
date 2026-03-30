@@ -29,6 +29,7 @@ from agent_teams.sessions.runs.run_runtime_repo import (
 from agent_teams.tools.runtime import (
     ToolApprovalPolicy,
     ToolContext,
+    ToolExecutionError,
     ToolResultProjection,
     execute_tool,
 )
@@ -317,6 +318,47 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
     assert runtime_meta["approval_status"] == "timeout"
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.TIMED_OUT
+
+
+def test_execute_tool_preserves_custom_tool_error_details() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-webfetch-error"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com"},
+            action=lambda: _raise_tool_execution_error(),
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is False
+    assert error["type"] == "source_access_denied"
+    assert error["retryable"] is False
+    assert cast(dict[str, JsonValue], error["details"]) == {
+        "url_host": "example.com",
+        "status_code": 403,
+    }
+    assert cast(dict[str, JsonValue], meta["error_details"]) == {
+        "url_host": "example.com",
+        "status_code": 403,
+    }
+
+
+def _raise_tool_execution_error() -> object:
+    raise ToolExecutionError(
+        error_type="source_access_denied",
+        message="Web fetch failed for example.com with HTTP 403",
+        retryable=False,
+        details={"url_host": "example.com", "status_code": 403},
+    )
 
 
 def test_execute_tool_approval_uses_model_tool_call_id_when_present() -> None:

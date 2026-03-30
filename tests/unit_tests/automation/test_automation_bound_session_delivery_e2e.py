@@ -39,6 +39,17 @@ class _FakeSessionLookup:
             raise KeyError(session_id)
         return self._sessions[session_id]
 
+    def rebind_session_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> SessionRecord:
+        session = self.get_session(session_id)
+        rebound = session.model_copy(update={"workspace_id": workspace_id})
+        self._sessions[session_id] = rebound
+        return rebound
+
 
 class _FakeRunService:
     def __init__(self) -> None:

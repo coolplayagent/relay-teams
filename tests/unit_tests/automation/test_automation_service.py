@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -16,6 +18,7 @@ from agent_teams.automation import (
     AutomationProjectCreateInput,
     AutomationProjectRepository,
     AutomationProjectStatus,
+    AutomationProjectUpdateInput,
     AutomationScheduleMode,
     AutomationService,
 )
@@ -25,6 +28,7 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.sessions.session_service import SessionService
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.workspace import WorkspaceRepository, WorkspaceService
 
 
 class _FakeRunManager:
@@ -87,6 +91,11 @@ def _build_service(
     db_path = tmp_path / "automation.db"
     run_manager = _FakeRunManager()
     session_service = _build_session_service(db_path)
+    workspace_service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = workspace_service.create_workspace(
+        workspace_id="default",
+        root_path=tmp_path,
+    )
     service = AutomationService(
         repository=AutomationProjectRepository(db_path),
         event_repository=AutomationEventRepository(db_path),
@@ -100,6 +109,7 @@ def _build_service(
             AutomationBoundSessionQueueService | None,
             bound_session_queue_service,
         ),
+        workspace_service=workspace_service,
     )
     return service, run_manager, session_service
 
@@ -324,3 +334,66 @@ def test_run_now_fails_when_bound_session_execution_errors(tmp_path: Path) -> No
     updated = service.get_project(created.automation_project_id)
     assert updated.last_error == "missing_bound_session:session-im-1"
     assert run_manager.create_calls == []
+
+
+def test_create_project_rejects_unknown_workspace(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown workspace: missing"):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="daily-briefing",
+                workspace_id="missing",
+                prompt="Summarize the day.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 9 * * 1-5",
+                timezone="UTC",
+            )
+        )
+
+
+def test_update_project_rejects_unknown_workspace(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+        )
+    )
+
+    with pytest.raises(ValueError, match="Unknown workspace: missing"):
+        service.update_project(
+            created.automation_project_id,
+            AutomationProjectUpdateInput(workspace_id="missing"),
+        )
+
+
+def test_enable_project_rejects_unknown_workspace_on_persisted_record(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+            enabled=False,
+        )
+    )
+    persisted = service.get_project(created.automation_project_id)
+    _ = service._repository.update(
+        persisted.model_copy(update={"workspace_id": "missing"})
+    )
+
+    with pytest.raises(ValueError, match="Unknown workspace: missing"):
+        service.set_project_status(
+            created.automation_project_id,
+            status=AutomationProjectStatus.ENABLED,
+        )

@@ -13,6 +13,7 @@ from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
+    ToolExecutionError,
     ToolResultProjection,
     execute_tool,
 )
@@ -148,6 +149,7 @@ async def fetch_exa_search_response(
     endpoint: str,
     payload: dict[str, JsonValue],
 ) -> str:
+    endpoint_host = httpx.URL(endpoint).host or ""
     try:
         response = await client.post(
             endpoint,
@@ -158,15 +160,58 @@ async def fetch_exa_search_response(
             json=payload,
         )
     except httpx.TimeoutException as exc:
-        raise RuntimeError("Search request timed out") from exc
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message="Exa web search timed out",
+            retryable=True,
+            details={
+                "provider": WebProvider.EXA.value,
+                "endpoint_host": endpoint_host,
+            },
+        ) from exc
     except httpx.RequestError as exc:
-        raise RuntimeError(f"Search request failed: {exc}") from exc
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Exa web search request failed: {exc}",
+            retryable=True,
+            details={
+                "provider": WebProvider.EXA.value,
+                "endpoint_host": endpoint_host,
+            },
+        ) from exc
 
     if response.status_code >= 400:
-        raise RuntimeError(
-            f"Search error ({response.status_code}): {response.text.strip()}"
+        raise ToolExecutionError(
+            error_type=_search_status_error_type(response.status_code),
+            message=_search_status_error_message(response),
+            retryable=response.status_code in {429} or response.status_code >= 500,
+            details={
+                "provider": WebProvider.EXA.value,
+                "endpoint_host": endpoint_host,
+                "status_code": response.status_code,
+            },
         )
     return response.text
+
+
+def _search_status_error_type(status_code: int) -> str:
+    if status_code == 401:
+        return "auth_error"
+    if status_code == 403:
+        return "source_access_denied"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "upstream_unavailable"
+    return "upstream_error"
+
+
+def _search_status_error_message(response: httpx.Response) -> str:
+    detail = response.text.strip()
+    base = f"Exa web search returned HTTP {response.status_code}"
+    if detail:
+        return f"{base}: {detail}"
+    return base
 
 
 def extract_search_output(response_text: str) -> str | None:

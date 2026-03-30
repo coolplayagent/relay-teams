@@ -7,6 +7,7 @@ from typing import cast
 import httpx
 import pytest
 
+from agent_teams.tools.runtime import ToolExecutionError
 from agent_teams.tools.web_tools import common, webfetch
 
 
@@ -143,6 +144,59 @@ async def test_fetch_url_retries_cloudflare_challenge() -> None:
 
     assert response.status_code == 200
     assert calls == [webfetch.BROWSER_USER_AGENT, webfetch.FALLBACK_USER_AGENT]
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            request=request,
+            headers={"cf-mitigated": "challenge"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "anti_bot_challenge"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "status_code": 403,
+        "mitigation": "cloudflare_challenge",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_upstream_status_errors() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, request=request, text="unavailable")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "upstream_unavailable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "status_code": 503,
+    }
 
 
 def test_build_webfetch_projection_saves_binary_file(tmp_path: Path) -> None:

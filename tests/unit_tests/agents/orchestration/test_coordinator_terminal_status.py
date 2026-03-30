@@ -35,6 +35,10 @@ from agent_teams.agents.tasks.models import (
     VerificationPlan,
     VerificationResult,
 )
+from agent_teams.workspace import (
+    build_conversation_id,
+    build_instance_conversation_id,
+)
 
 
 class _RecordingTaskExecutionService:
@@ -412,3 +416,51 @@ async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
     assert root_task.envelope.role_id == "Coordinator"
     assert coordinator_instance is not None
     assert coordinator_instance.role_id == "Coordinator"
+
+
+@pytest.mark.asyncio
+async def test_run_with_fresh_root_instance_skips_stale_session_role_instance(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path,
+        coordinator_role_id="Coordinator",
+    )
+    stale_instance = create_subagent_instance(
+        "Coordinator",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "Coordinator"),
+    )
+    agent_repo.upsert_instance(
+        run_id="run-stale",
+        trace_id="run-stale",
+        session_id="session-1",
+        instance_id=stale_instance.instance_id,
+        role_id="Coordinator",
+        workspace_id=stale_instance.workspace_id,
+        conversation_id=stale_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    trace_id, root_task_id, status, _result = await coordinator.run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+            reuse_root_instance=False,
+        ),
+        trace_id="run-fresh",
+    )
+
+    root_task = task_repo.get(root_task_id)
+    assigned_instance_id = root_task.assigned_instance_id
+    assert trace_id == "run-fresh"
+    assert status == "completed"
+    assert assigned_instance_id is not None
+    assert assigned_instance_id != stale_instance.instance_id
+    runtime_record = agent_repo.get_instance(assigned_instance_id)
+    assert runtime_record.conversation_id != stale_instance.conversation_id
+    assert runtime_record.conversation_id == build_instance_conversation_id(
+        "session-1",
+        "Coordinator",
+        assigned_instance_id,
+    )

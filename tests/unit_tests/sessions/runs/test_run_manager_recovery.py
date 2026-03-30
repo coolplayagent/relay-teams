@@ -329,6 +329,23 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         )
 
 
+def test_create_detached_run_disables_root_instance_reuse(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_detached.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = manager.create_detached_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("fresh automation run"),
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get(run_id)
+    assert session_id == "session-1"
+    assert manager._pending_runs[run_id].reuse_root_instance is False
+    assert persisted.reuse_root_instance is False
+
+
 def test_manager_hydrates_recoverable_run_from_runtime_repo(tmp_path: Path) -> None:
     db_path = tmp_path / "run_hydration.db"
     runtime_repo = RunRuntimeRepository(db_path)

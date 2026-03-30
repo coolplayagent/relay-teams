@@ -17,6 +17,7 @@ from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
+    ToolExecutionError,
     ToolResultProjection,
     execute_tool,
 )
@@ -208,6 +209,7 @@ async def fetch_url(
     url: str,
     response_format: str,
 ) -> httpx.Response:
+    url_host = urlparse(url).netloc
     headers = {
         "User-Agent": BROWSER_USER_AGENT,
         "Accept": build_accept_header(response_format),
@@ -221,8 +223,32 @@ async def fetch_url(
         retry_headers = dict(headers)
         retry_headers["User-Agent"] = FALLBACK_USER_AGENT
         response = await _perform_request(client=client, url=url, headers=retry_headers)
+    if (
+        response.status_code == 403
+        and response.headers.get("cf-mitigated") == "challenge"
+    ):
+        raise ToolExecutionError(
+            error_type="anti_bot_challenge",
+            message=f"Website blocked automated fetch with an anti-bot challenge: {url_host or url}",
+            retryable=False,
+            details={
+                "url_host": url_host,
+                "status_code": response.status_code,
+                "mitigation": "cloudflare_challenge",
+            },
+        )
     if response.status_code >= 400:
-        raise RuntimeError(f"Request failed with status code: {response.status_code}")
+        raise ToolExecutionError(
+            error_type=_webfetch_status_error_type(response.status_code),
+            message=_webfetch_status_error_message(
+                url_host=url_host, response=response
+            ),
+            retryable=response.status_code in {429} or response.status_code >= 500,
+            details={
+                "url_host": url_host,
+                "status_code": response.status_code,
+            },
+        )
     enforce_content_length_limit(response)
     return response
 
@@ -233,12 +259,23 @@ async def _perform_request(
     url: str,
     headers: dict[str, str],
 ) -> httpx.Response:
+    url_host = urlparse(url).netloc
     try:
         return await client.get(url, headers=headers)
     except httpx.TimeoutException as exc:
-        raise RuntimeError("Request timed out") from exc
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"Web fetch timed out for {url_host or url}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
     except httpx.RequestError as exc:
-        raise RuntimeError(f"Request failed: {exc}") from exc
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Web fetch request failed for {url_host or url}: {exc}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
 
 
 def enforce_content_length_limit(response: httpx.Response) -> None:
@@ -250,14 +287,45 @@ def enforce_content_length_limit(response: httpx.Response) -> None:
     except ValueError:
         return
     if parsed_length > MAX_RESPONSE_SIZE_BYTES:
-        raise RuntimeError("Response too large (exceeds 5MB limit)")
+        raise ToolExecutionError(
+            error_type="response_too_large",
+            message="Response too large (exceeds 5MB limit)",
+            retryable=False,
+        )
 
 
 async def read_response_body(response: httpx.Response) -> bytes:
     body = await response.aread()
     if len(body) > MAX_RESPONSE_SIZE_BYTES:
-        raise RuntimeError("Response too large (exceeds 5MB limit)")
+        raise ToolExecutionError(
+            error_type="response_too_large",
+            message="Response too large (exceeds 5MB limit)",
+            retryable=False,
+        )
     return body
+
+
+def _webfetch_status_error_type(status_code: int) -> str:
+    if status_code == 401:
+        return "auth_error"
+    if status_code == 403:
+        return "source_access_denied"
+    if status_code == 404:
+        return "not_found"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "upstream_unavailable"
+    return "upstream_error"
+
+
+def _webfetch_status_error_message(
+    *,
+    url_host: str,
+    response: httpx.Response,
+) -> str:
+    target = url_host or str(response.request.url)
+    return f"Web fetch failed for {target} with HTTP {response.status_code}"
 
 
 def normalize_content_type(content_type_header: str) -> str:

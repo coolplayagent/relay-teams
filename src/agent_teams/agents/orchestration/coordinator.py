@@ -123,6 +123,8 @@ class CoordinatorGraph(BaseModel):
                 session_id=session_id,
                 trace_id=trace_id,
                 root_task=root_task,
+                assigned_instance_id=None,
+                reuse_existing_instance=intent.reuse_root_instance,
             )
             if intent.session_mode == SessionMode.NORMAL:
                 result = await self._task_executor(
@@ -172,6 +174,7 @@ class CoordinatorGraph(BaseModel):
             session_id=root_task.session_id,
             trace_id=trace_id,
             root_task=root_task,
+            assigned_instance_id=root_task_record.assigned_instance_id,
         )
         self._prepare_recovery(
             trace_id=trace_id,
@@ -493,10 +496,21 @@ class CoordinatorGraph(BaseModel):
         session_id: str,
         trace_id: str,
         root_task: TaskEnvelope,
+        assigned_instance_id: str | None = None,
+        reuse_existing_instance: bool = True,
     ) -> str:
         root_role_id = _require_task_role_id(root_task)
         _ = self.role_registry.get(root_role_id)
-        existing = self.agent_repo.get_session_role_instance(session_id, root_role_id)
+        existing = None
+        if assigned_instance_id is not None:
+            try:
+                existing = self.agent_repo.get_instance(assigned_instance_id)
+            except KeyError:
+                existing = None
+        if existing is None and reuse_existing_instance:
+            existing = self.agent_repo.get_session_role_instance(
+                session_id, root_role_id
+            )
         if existing is not None:
             coordinator_instance_id = existing.instance_id
             _ = self.agent_repo.mark_status(
@@ -535,11 +549,15 @@ class CoordinatorGraph(BaseModel):
                 "CoordinatorGraph requires session_repo to resolve workspace"
             )
         workspace_id = session.workspace_id
-        conversation_id = build_conversation_id(session_id, root_role_id)
         instance = create_subagent_instance(
             root_role_id,
             workspace_id=workspace_id,
-            conversation_id=conversation_id,
+            session_id=(None if reuse_existing_instance else session_id),
+            conversation_id=(
+                build_conversation_id(session_id, root_role_id)
+                if reuse_existing_instance
+                else None
+            ),
         )
         _ = self.task_repo.update_status(
             task_id=root_task.task_id,
