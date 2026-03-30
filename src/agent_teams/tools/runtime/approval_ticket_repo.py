@@ -248,7 +248,7 @@ class ApprovalTicketRepository:
             ).fetchone()
         if row is None:
             return None
-        return self._record_or_none(row)
+        return self._record_or_none(row, fallback_invalid_timestamps=True)
 
     def list_open_by_run(self, run_id: str) -> tuple[ApprovalTicketRecord, ...]:
         with self._lock:
@@ -289,23 +289,24 @@ class ApprovalTicketRepository:
             args_preview=args_preview,
         )
         with self._lock:
-            row = self._conn.execute(
+            rows = self._conn.execute(
                 """
                 SELECT * FROM approval_tickets
                 WHERE signature_key=?
                   AND status IN (?, ?)
                 ORDER BY updated_at DESC
-                LIMIT 1
                 """,
                 (
                     signature_key,
                     ApprovalTicketStatus.REQUESTED.value,
                     ApprovalTicketStatus.APPROVED.value,
                 ),
-            ).fetchone()
-        if row is None:
-            return None
-        return self._record_or_none(row)
+            ).fetchall()
+        for row in rows:
+            record = self._record_or_none(row, fallback_invalid_timestamps=True)
+            if record is not None:
+                return record
+        return None
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -319,12 +320,33 @@ class ApprovalTicketRepository:
             operation_name="delete_by_session",
         )
 
-    def _to_record(self, row: sqlite3.Row) -> ApprovalTicketRecord:
-        return ApprovalTicketRecord(
-            tool_call_id=require_persisted_identifier(
-                row["tool_call_id"],
-                field_name="tool_call_id",
+    def _to_record(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> ApprovalTicketRecord:
+        tool_call_id = require_persisted_identifier(
+            row["tool_call_id"],
+            field_name="tool_call_id",
+        )
+        status = ApprovalTicketStatus(str(row["status"]))
+        created_at, updated_at = _load_ticket_timestamps(
+            row=row,
+            tool_call_id=tool_call_id,
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+        )
+        resolved_at = _optional_ticket_timestamp(
+            row=row,
+            tool_call_id=tool_call_id,
+            field_name="resolved_at",
+            fallback_invalid_timestamps=fallback_invalid_timestamps,
+            fallback_value=(
+                updated_at if status != ApprovalTicketStatus.REQUESTED else None
             ),
+        )
+        return ApprovalTicketRecord(
+            tool_call_id=tool_call_id,
             signature_key=require_persisted_identifier(
                 row["signature_key"],
                 field_name="signature_key",
@@ -345,53 +367,79 @@ class ApprovalTicketRepository:
                 field_name="tool_name",
             ),
             args_preview=str(row["args_preview"]),
-            status=ApprovalTicketStatus(str(row["status"])),
+            status=status,
             feedback=str(row["feedback"]),
-            created_at=_require_ticket_timestamp(
-                row=row,
-                tool_call_id=normalize_persisted_text(row["tool_call_id"])
-                or "<invalid>",
-                field_name="created_at",
-            ),
-            updated_at=_require_ticket_timestamp(
-                row=row,
-                tool_call_id=normalize_persisted_text(row["tool_call_id"])
-                or "<invalid>",
-                field_name="updated_at",
-            ),
-            resolved_at=(
-                _optional_ticket_timestamp(
-                    row=row,
-                    tool_call_id=normalize_persisted_text(row["tool_call_id"])
-                    or "<invalid>",
-                    field_name="resolved_at",
-                )
-            ),
+            created_at=created_at,
+            updated_at=updated_at,
+            resolved_at=resolved_at,
         )
 
-    def _record_or_none(self, row: sqlite3.Row) -> ApprovalTicketRecord | None:
+    def _record_or_none(
+        self,
+        row: sqlite3.Row,
+        *,
+        fallback_invalid_timestamps: bool = False,
+    ) -> ApprovalTicketRecord | None:
         try:
-            return self._to_record(row)
+            return self._to_record(
+                row,
+                fallback_invalid_timestamps=fallback_invalid_timestamps,
+            )
         except (ValidationError, ValueError) as exc:
             _log_invalid_ticket_row(row=row, error=exc)
             return None
 
 
-def _require_ticket_timestamp(
+def _load_ticket_timestamps(
     *,
     row: sqlite3.Row,
     tool_call_id: str,
-    field_name: str,
-) -> datetime:
-    parsed = parse_persisted_datetime_or_none(row[field_name])
-    if parsed is not None:
-        return parsed
-    _log_invalid_ticket_timestamp(
-        tool_call_id=tool_call_id,
-        field_name=field_name,
-        raw_preview=_persisted_value_preview(row[field_name]),
+    fallback_invalid_timestamps: bool,
+) -> tuple[datetime, datetime]:
+    created_at = parse_persisted_datetime_or_none(row["created_at"])
+    updated_at = parse_persisted_datetime_or_none(row["updated_at"])
+    if not fallback_invalid_timestamps:
+        if created_at is None:
+            _log_invalid_ticket_timestamp(
+                tool_call_id=tool_call_id,
+                field_name="created_at",
+                raw_preview=_persisted_value_preview(row["created_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted created_at")
+        if updated_at is None:
+            _log_invalid_ticket_timestamp(
+                tool_call_id=tool_call_id,
+                field_name="updated_at",
+                raw_preview=_persisted_value_preview(row["updated_at"]),
+                fallback_iso=None,
+            )
+            raise ValueError("Invalid persisted updated_at")
+        return (
+            created_at,
+            updated_at,
+        )
+    fallback_now = datetime.now(tz=timezone.utc)
+    if created_at is None:
+        created_at = updated_at or fallback_now
+        _log_invalid_ticket_timestamp(
+            tool_call_id=tool_call_id,
+            field_name="created_at",
+            raw_preview=_persisted_value_preview(row["created_at"]),
+            fallback_iso=created_at.isoformat(),
+        )
+    if updated_at is None:
+        updated_at = created_at
+        _log_invalid_ticket_timestamp(
+            tool_call_id=tool_call_id,
+            field_name="updated_at",
+            raw_preview=_persisted_value_preview(row["updated_at"]),
+            fallback_iso=updated_at.isoformat(),
+        )
+    return (
+        created_at,
+        updated_at,
     )
-    raise ValueError(f"Invalid persisted {field_name}")
 
 
 def _optional_ticket_timestamp(
@@ -399,6 +447,8 @@ def _optional_ticket_timestamp(
     row: sqlite3.Row,
     tool_call_id: str,
     field_name: str,
+    fallback_invalid_timestamps: bool = False,
+    fallback_value: datetime | None = None,
 ) -> datetime | None:
     raw_value = row[field_name]
     normalized = normalize_persisted_text(raw_value)
@@ -411,7 +461,10 @@ def _optional_ticket_timestamp(
         tool_call_id=tool_call_id,
         field_name=field_name,
         raw_preview=_persisted_value_preview(raw_value),
+        fallback_iso=fallback_value.isoformat() if fallback_value is not None else None,
     )
+    if fallback_invalid_timestamps:
+        return fallback_value
     raise ValueError(f"Invalid persisted {field_name}")
 
 
@@ -426,17 +479,23 @@ def _log_invalid_ticket_timestamp(
     tool_call_id: str,
     field_name: str,
     raw_preview: str,
+    fallback_iso: str | None,
 ) -> None:
     payload: dict[str, JsonValue] = {
         "tool_call_id": tool_call_id,
         "field_name": field_name,
         "raw_preview": raw_preview,
+        "fallback_iso": fallback_iso,
     }
     log_event(
         LOGGER,
         logging.WARNING,
         event="tools.approval_ticket_repo.timestamp_invalid",
-        message="Invalid persisted approval ticket timestamp",
+        message=(
+            "Using fallback for invalid persisted approval ticket timestamp"
+            if fallback_iso is not None
+            else "Invalid persisted approval ticket timestamp"
+        ),
         payload=payload,
     )
 

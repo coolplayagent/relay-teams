@@ -127,15 +127,60 @@ def test_run_runtime_repo_skips_invalid_persisted_rows(tmp_path: Path) -> None:
     )
     _insert_run_runtime_row(
         db_path,
-        run_id="run-invalid",
+        run_id="None",
         session_id="session-1",
-        updated_at="None",
     )
 
     records = repo.list_by_session("session-1")
 
     assert [record.run_id for record in records] == ["run-valid"]
-    assert repo.get("run-invalid") is None
+    assert repo.get("None") is None
+
+
+def test_run_runtime_repo_get_recovers_invalid_timestamps(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_dirty_timestamps.db"
+    repo = RunRuntimeRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_run_runtime_row(
+        db_path,
+        run_id="run-dirty",
+        session_id="session-1",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    loaded = repo.get("run-dirty")
+
+    assert loaded is not None
+    assert loaded.run_id == "run-dirty"
+    assert loaded.created_at.isoformat() == valid_updated_at
+    assert loaded.updated_at.isoformat() == valid_updated_at
+    assert repo.list_by_session("session-1") == ()
+
+
+def test_run_runtime_repo_upsert_recovers_existing_dirty_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_dirty_upsert.db"
+    repo = RunRuntimeRepository(db_path)
+    _insert_run_runtime_row(
+        db_path,
+        run_id="run-dirty",
+        session_id="session-1",
+        created_at="None",
+    )
+
+    existing = repo.get("run-dirty")
+    assert existing is not None
+    updated = repo.upsert(
+        existing.model_copy(
+            update={
+                "status": RunRuntimeStatus.PAUSED,
+                "phase": RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+            }
+        )
+    )
+
+    assert updated.status == RunRuntimeStatus.PAUSED
+    assert updated.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL
 
 
 def _insert_run_runtime_row(
@@ -143,7 +188,8 @@ def _insert_run_runtime_row(
     *,
     run_id: str,
     session_id: str,
-    updated_at: str,
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -176,8 +222,8 @@ def _insert_run_runtime_row(
             None,
             None,
             None,
-            now,
-            updated_at,
+            created_at or now,
+            updated_at or now,
         ),
     )
     connection.commit()

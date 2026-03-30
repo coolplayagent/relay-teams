@@ -7,6 +7,7 @@ import sqlite3
 from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
+    approval_signature_key,
 )
 
 
@@ -25,16 +26,80 @@ def test_approval_ticket_repo_skips_invalid_persisted_rows(tmp_path: Path) -> No
     )
     _insert_approval_ticket_row(
         db_path,
-        tool_call_id="call-invalid",
+        tool_call_id="None",
         run_id="run-1",
         session_id="session-1",
-        updated_at="None",
     )
 
     records = repository.list_open_by_session("session-1")
 
     assert [record.tool_call_id for record in records] == ["call-valid"]
-    assert repository.get("call-invalid") is None
+    assert repository.get("None") is None
+
+
+def test_approval_ticket_repo_get_recovers_invalid_timestamps(tmp_path: Path) -> None:
+    db_path = tmp_path / "approval_ticket_dirty_timestamps.db"
+    repository = ApprovalTicketRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_approval_ticket_row(
+        db_path,
+        tool_call_id="call-dirty",
+        run_id="run-1",
+        session_id="session-1",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    record = repository.get("call-dirty")
+
+    assert record is not None
+    assert record.tool_call_id == "call-dirty"
+    assert record.created_at.isoformat() == valid_updated_at
+    assert record.updated_at.isoformat() == valid_updated_at
+    assert repository.list_open_by_session("session-1") == ()
+
+
+def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> None:
+    db_path = tmp_path / "approval_ticket_reusable_dirty_latest.db"
+    repository = ApprovalTicketRepository(db_path)
+    signature_key = approval_signature_key(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="dispatch_task",
+        args_preview="{}",
+    )
+    _insert_approval_ticket_row(
+        db_path,
+        tool_call_id="call-valid",
+        run_id="run-1",
+        session_id="session-1",
+        signature_key=signature_key,
+        created_at="2025-01-01T00:00:00+00:00",
+        updated_at="2025-01-02T00:00:00+00:00",
+    )
+    _insert_approval_ticket_row(
+        db_path,
+        tool_call_id="None",
+        run_id="run-1",
+        session_id="session-1",
+        signature_key=signature_key,
+        created_at="2025-01-03T00:00:00+00:00",
+        updated_at="2025-01-04T00:00:00+00:00",
+    )
+
+    record = repository.find_reusable(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="dispatch_task",
+        args_preview="{}",
+    )
+
+    assert record is not None
+    assert record.tool_call_id == "call-valid"
 
 
 def _insert_approval_ticket_row(
@@ -43,7 +108,9 @@ def _insert_approval_ticket_row(
     tool_call_id: str,
     run_id: str,
     session_id: str,
-    updated_at: str,
+    signature_key: str = "sig-invalid",
+    created_at: str | None = None,
+    updated_at: str | None = None,
 ) -> None:
     now = datetime.now(tz=timezone.utc).isoformat()
     connection = sqlite3.connect(db_path)
@@ -69,7 +136,7 @@ def _insert_approval_ticket_row(
         """,
         (
             tool_call_id,
-            "sig-invalid",
+            signature_key,
             run_id,
             session_id,
             "task-2",
@@ -79,8 +146,8 @@ def _insert_approval_ticket_row(
             "{}",
             ApprovalTicketStatus.REQUESTED.value,
             "",
-            now,
-            updated_at,
+            created_at or now,
+            updated_at or now,
             None,
         ),
     )
