@@ -1740,9 +1740,9 @@
 
 .round-detail-intent-summary {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 0.65rem;
-    row-gap: 0.18rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.75rem;
+    align-items: end;
     padding-top: 0.15rem;
     cursor: pointer;
     list-style: none;
@@ -1752,34 +1752,10 @@
     display: none;
 }
 
-.round-detail-intent-summary::before {
-    content: '>';
-    font-family: var(--font-mono);
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    transform: rotate(0deg);
-    transition: transform 0.16s ease;
-    grid-row: 1 / span 2;
-    margin-top: 0.08rem;
-}
-
-.round-detail-intent[open] > .round-detail-intent-summary::before {
-    transform: rotate(90deg);
-}
-
-.round-detail-intent-title {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .round-detail-intent-preview {
-    font-size: 0.82rem;
-    line-height: 1.5;
-    color: var(--text-secondary);
+    font-size: 0.875rem;
+    line-height: 1.58;
+    color: var(--text-primary);
     white-space: pre-wrap;
     overflow: hidden;
     display: -webkit-box;
@@ -1787,15 +1763,43 @@
     -webkit-box-orient: vertical;
 }
 
+.round-detail-intent-toggle {
+    color: var(--primary);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
 .round-detail-intent-body {
-    padding: 0.5rem 0 0 1.55rem;
+    padding: 0.5rem 0 0;
+}
+
+.round-detail-intent[open] > .round-detail-intent-summary .round-detail-intent-preview {
+    display: none;
+}
+
+.round-detail-intent[open] > .round-detail-intent-summary {
+    display: none;
+}
+
+.round-detail-intent-content {
     white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.6;
 }
 
-.round-detail-intent[open] > .round-detail-intent-summary .round-detail-intent-preview {
-    display: none;
+.round-detail-intent-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.35rem;
+}
+
+.round-detail-intent-collapse {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 0.78rem;
+    cursor: pointer;
 }
 
 .session-round-section {

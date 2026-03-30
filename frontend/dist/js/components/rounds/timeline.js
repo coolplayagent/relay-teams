@@ -472,32 +472,47 @@ function renderRoundSection(round, index) {
 
 function buildRoundIntentBlock(intentText) {
     const normalized = normalizeRoundIntentText(intentText);
-    const lines = normalized.split('\n');
-    const title = lines[0] || t('rounds.no_intent');
-    const preview = lines.length > 1 ? lines.slice(1).join('\n') : normalized;
 
     const block = document.createElement('details');
     block.className = 'round-detail-intent';
     block.innerHTML = `
         <summary class="round-detail-intent-summary">
-            <span class="round-detail-intent-title"></span>
             <span class="round-detail-intent-preview"></span>
+            <span class="round-detail-intent-toggle"></span>
         </summary>
-        <div class="round-detail-intent-body"></div>
+        <div class="round-detail-intent-body">
+            <div class="round-detail-intent-content"></div>
+            <div class="round-detail-intent-actions">
+                <button type="button" class="round-detail-intent-collapse"></button>
+            </div>
+        </div>
     `;
 
-    const titleEl = block.querySelector('.round-detail-intent-title');
     const previewEl = block.querySelector('.round-detail-intent-preview');
-    const bodyEl = block.querySelector('.round-detail-intent-body');
-    if (titleEl) {
-        titleEl.textContent = title;
-    }
+    const toggleEl = block.querySelector('.round-detail-intent-toggle');
+    const bodyEl = block.querySelector('.round-detail-intent-content');
+    const collapseBtn = block.querySelector('.round-detail-intent-collapse');
     if (previewEl) {
-        previewEl.textContent = preview;
+        previewEl.textContent = normalized;
+    }
+    if (toggleEl) {
+        toggleEl.textContent = t('rounds.expand');
     }
     if (bodyEl) {
         bodyEl.textContent = normalized;
     }
+    if (collapseBtn) {
+        collapseBtn.textContent = t('rounds.collapse');
+        collapseBtn.addEventListener('click', event => {
+            event.preventDefault();
+            block.open = false;
+        });
+    }
+    block.addEventListener('toggle', () => {
+        if (toggleEl) {
+            toggleEl.textContent = t('rounds.expand');
+        }
+    });
     return block;
 }
 

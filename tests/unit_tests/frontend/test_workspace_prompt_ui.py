@@ -131,6 +131,8 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "emphasizeRoundSection" in timeline_script
     assert "round-nav-toggle" in navigator_script
     assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
+    assert "let scheduledOffsetFrame = 0;" in navigator_script
+    assert "function scheduleOffsetApply(nav) {" in navigator_script
     assert "round.intent || t('rounds.no_intent')" in navigator_script
     assert "alert(" not in model_profiles_script
     assert "confirm(" not in model_profiles_script
@@ -139,6 +141,11 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "showToast" in feedback_script
     assert "showConfirmDialog" in feedback_script
     assert "requestAnimationFrame" in navbar_script
+    assert "persistSidebarWidth(currentWidth);" in navbar_script
+    assert "persistRightRailWidth(currentWidth);" in navbar_script
+    assert "function persistSidebarWidth(width) {" in navbar_script
+    assert "function persistRightRailWidth(width) {" in navbar_script
+    assert navbar_script.count("flushWidth();") >= 2
     assert "initBackendStatusMonitor" in bootstrap_script
     assert "initializeSessionTokenUsage" in bootstrap_script
     assert "initializeSessionTopologyControls" in bootstrap_script

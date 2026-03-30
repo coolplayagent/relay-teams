@@ -14,6 +14,7 @@ const ROUND_NAV_POSITION_KEY = 'agent_teams_round_nav_position';
 /** Persistent offset relative to chat container: { fromRight, fromTop }. */
 let currentOffset = null;
 let resizeObserver = null;
+let scheduledOffsetFrame = 0;
 
 export function renderRoundNavigator(rounds, onSelectRound) {
     navRounds = Array.isArray(rounds) ? rounds : [];
@@ -37,7 +38,7 @@ export function renderRoundNavigator(rounds, onSelectRound) {
     }
 
     renderNavigatorDom(nav);
-    applyOffset(nav);
+    scheduleOffsetApply(nav);
 }
 
 export function hideRoundNavigator() {
@@ -104,7 +105,7 @@ function renderNavigatorDom(nav) {
             const widthDelta = newWidth - oldWidth;
             currentOffset = { fromRight, fromTop: currentOffset ? currentOffset.fromTop : (navRect.top - chatRect.top) };
             // fromRight stays same, so left shifts by widthDelta automatically
-            applyOffset(nav);
+            scheduleOffsetApply(nav);
             persistOffset();
         };
     }
@@ -167,6 +168,16 @@ function applyOffset(nav) {
     nav.style.left = left + 'px';
     nav.style.top = top + 'px';
     nav.style.right = 'auto';
+}
+
+function scheduleOffsetApply(nav) {
+    if (scheduledOffsetFrame) {
+        window.cancelAnimationFrame(scheduledOffsetFrame);
+    }
+    scheduledOffsetFrame = window.requestAnimationFrame(() => {
+        scheduledOffsetFrame = 0;
+        applyOffset(nav);
+    });
 }
 
 /** Derive offset from current viewport position. */
@@ -252,7 +263,7 @@ function installResizeWatch(nav) {
     if (!chat) return;
     resizeObserver = new ResizeObserver(() => {
         if (nav.style.display === 'none') return;
-        applyOffset(nav);
+        scheduleOffsetApply(nav);
     });
     resizeObserver.observe(chat);
 }

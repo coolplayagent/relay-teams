@@ -9,6 +9,9 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     timeline_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "rounds" / "timeline.js"
     ).read_text(encoding="utf-8")
+    i18n_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
     history_script = (
         repo_root
         / "frontend"
@@ -51,9 +54,17 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
         "header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));"
         in timeline_script
     )
+    assert "t('rounds.expand')" in timeline_script
+    assert "t('rounds.collapse')" in timeline_script
+    assert "'rounds.expand': 'Expand'," in i18n_script
+    assert "'rounds.collapse': 'Collapse'," in i18n_script
+    assert "'rounds.expand': '展开'," in i18n_script
+    assert "'rounds.collapse': '收起'," in i18n_script
     assert ".round-detail-intent-summary {" in components_css
     assert ".round-detail-intent-preview {" in components_css
     assert ".round-detail-intent-body {" in components_css
+    assert ".round-detail-intent-actions {" in components_css
+    assert ".round-detail-intent-collapse {" in components_css
 
 
 def test_thinking_blocks_use_compact_summary_spacing() -> None:

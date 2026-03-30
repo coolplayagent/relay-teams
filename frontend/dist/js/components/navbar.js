@@ -83,6 +83,7 @@ function _initSidebarResize() {
     if (!els.sidebarResizer) return;
     let dragging = false;
     let dragRightRailWidth = 280;
+    let currentWidth = initialWidth;
     let pendingClientX = null;
     let frameHandle = 0;
 
@@ -93,6 +94,7 @@ function _initSidebarResize() {
         }
         const maxWidth = window.innerWidth - dragRightRailWidth - 100;
         const next = Math.max(180, Math.min(maxWidth, pendingClientX));
+        currentWidth = next;
         applySidebarWidth(next);
     };
 
@@ -106,12 +108,14 @@ function _initSidebarResize() {
 
     const onUp = () => {
         if (!dragging) return;
-        dragging = false;
-        pendingClientX = null;
         if (frameHandle) {
             window.cancelAnimationFrame(frameHandle);
             frameHandle = 0;
+            flushWidth();
         }
+        dragging = false;
+        pendingClientX = null;
+        persistSidebarWidth(currentWidth);
         els.sidebarResizer.classList.remove('dragging');
         setRailResizeDragging(false);
         window.removeEventListener('mousemove', onMove);
@@ -149,6 +153,7 @@ function _initRightRailResize() {
 
     let dragging = false;
     let dragSidebarWidth = 280;
+    let currentWidth = initialWidth;
     let pendingClientX = null;
     let frameHandle = 0;
 
@@ -161,6 +166,7 @@ function _initRightRailResize() {
         const minWidth = 180;
         const maxWidth = windowWidth - dragSidebarWidth - 100;
         const next = Math.max(minWidth, Math.min(maxWidth, windowWidth - pendingClientX));
+        currentWidth = next;
         applyRightRailWidth(rightRail, next);
     };
 
@@ -174,12 +180,14 @@ function _initRightRailResize() {
 
     const onUp = () => {
         if (!dragging) return;
-        dragging = false;
-        pendingClientX = null;
         if (frameHandle) {
             window.cancelAnimationFrame(frameHandle);
             frameHandle = 0;
+            flushWidth();
         }
+        dragging = false;
+        pendingClientX = null;
+        persistRightRailWidth(currentWidth);
         rightRailResizer.classList.remove('dragging');
         setRailResizeDragging(false);
         window.removeEventListener('mousemove', onMove);
@@ -203,6 +211,9 @@ function applySidebarWidth(width) {
     els.sidebar.style.width = px;
     els.sidebar.style.setProperty('--sidebar-width', px);
     document.documentElement.style.setProperty('--sidebar-width', px);
+}
+
+function persistSidebarWidth(width) {
     localStorage.setItem('agent_teams_sidebar_width', String(width));
 }
 
@@ -211,6 +222,9 @@ function applyRightRailWidth(rightRail, width) {
     rightRail.style.width = px;
     rightRail.style.setProperty('--right-rail-width', px);
     document.documentElement.style.setProperty('--right-rail-width', px);
+}
+
+function persistRightRailWidth(width) {
     localStorage.setItem('agent_teams_right_rail_width', String(width));
 }
 
