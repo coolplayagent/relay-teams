@@ -48,11 +48,14 @@ def _build_workspace_handle(
     workspace_dir: Path,
     scope_root: Path,
     execution_root: Path | None = None,
+    readable_roots: tuple[Path, ...] | None = None,
+    writable_roots: tuple[Path, ...] | None = None,
 ) -> WorkspaceHandle:
     workspace_dir.mkdir(parents=True, exist_ok=True)
     scope_root.mkdir(parents=True, exist_ok=True)
     resolved_execution_root = execution_root or scope_root
     resolved_execution_root.mkdir(parents=True, exist_ok=True)
+    tmp_root = workspace_dir / "tmp"
     profile = default_workspace_profile()
     return WorkspaceHandle(
         ref=WorkspaceRef(
@@ -67,9 +70,9 @@ def _build_workspace_handle(
             workspace_dir=workspace_dir,
             scope_root=scope_root,
             execution_root=resolved_execution_root,
-            tmp_root=workspace_dir / "tmp",
-            readable_roots=(scope_root, workspace_dir / "tmp"),
-            writable_roots=(scope_root, workspace_dir / "tmp"),
+            tmp_root=tmp_root,
+            readable_roots=readable_roots or (scope_root, tmp_root),
+            writable_roots=writable_roots or (scope_root, tmp_root),
         ),
     )
 
@@ -170,3 +173,23 @@ def test_resolve_workspace_glob_scope_keeps_execution_root_for_normal_patterns(
     assert root == execution_root.resolve()
     assert pattern == "**/*.py"
     assert logical_prefix is None
+
+
+def test_resolve_workspace_glob_scope_rejects_execution_root_outside_read_scope(
+    tmp_path: Path,
+) -> None:
+    scope_root = tmp_path / "project"
+    execution_root = scope_root / "src"
+    readable_root = scope_root / "docs"
+    workspace = _build_workspace_handle(
+        workspace_dir=tmp_path / ".agent-teams" / "workspaces" / "workspace",
+        scope_root=scope_root,
+        execution_root=execution_root,
+        readable_roots=(
+            readable_root,
+            (tmp_path / ".agent-teams" / "workspaces" / "workspace" / "tmp"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="outside workspace read scope"):
+        resolve_workspace_glob_scope(workspace, "**/*.md")

@@ -29,5 +29,9 @@ def resolve_workspace_glob_scope(
 ) -> tuple[Path, str, str | None]:
     if pattern == "tmp" or pattern.startswith(_TMP_PATTERN_PREFIXES):
         relative_pattern = pattern.removeprefix("tmp").lstrip("/\\")
-        return workspace.tmp_root, relative_pattern or "**", "tmp"
-    return workspace.execution_root, pattern, None
+        return (
+            workspace.resolve_path("tmp", write=False),
+            relative_pattern or "**",
+            "tmp",
+        )
+    return workspace.resolve_path(".", write=False), pattern, None
