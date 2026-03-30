@@ -5,12 +5,11 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.metrics.models import MetricEvent, MetricScope
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 
 class MetricPointRecord(BaseModel):
@@ -25,15 +24,13 @@ class MetricPointRecord(BaseModel):
     recorded_at: datetime
 
 
-class SqliteMetricAggregateStore:
+class SqliteMetricAggregateStore(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
-        with self._lock:
+        def operation() -> None:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS metric_points (
@@ -60,7 +57,8 @@ class SqliteMetricAggregateStore:
                 ON metric_points(metric_name, bucket_start)
                 """
             )
-            self._conn.commit()
+
+        self._run_write(operation_name="init_tables", operation=operation)
 
     def record(self, event: MetricEvent) -> None:
         bucket_start = event.occurred_at.astimezone(timezone.utc).replace(
@@ -74,7 +72,8 @@ class SqliteMetricAggregateStore:
             (MetricScope.SESSION, event.tags.session_id),
             (MetricScope.RUN, event.tags.run_id),
         )
-        with self._lock:
+
+        def operation() -> None:
             for scope, scope_id in scopes:
                 if not scope_id:
                     continue
@@ -96,7 +95,8 @@ class SqliteMetricAggregateStore:
                         recorded_at,
                     ),
                 )
-            self._conn.commit()
+
+        self._run_write(operation_name="record", operation=operation)
 
     def query_points(
         self,
@@ -108,8 +108,8 @@ class SqliteMetricAggregateStore:
         threshold = datetime.now(tz=timezone.utc) - timedelta(
             minutes=time_window_minutes
         )
-        with self._lock:
-            rows = self._conn.execute(
+        rows = self._run_read(
+            lambda: self._conn.execute(
                 """
                 SELECT scope, scope_id, metric_name, bucket_start,
                        tags_json, value, recorded_at
@@ -123,6 +123,7 @@ class SqliteMetricAggregateStore:
                     threshold.replace(second=0, microsecond=0).isoformat(),
                 ),
             ).fetchall()
+        )
         return tuple(self._row_to_record(row) for row in rows)
 
     def latest_recorded_at(
@@ -131,8 +132,8 @@ class SqliteMetricAggregateStore:
         scope: MetricScope,
         scope_id: str,
     ) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
+        row = self._run_read(
+            lambda: self._conn.execute(
                 """
                 SELECT MAX(recorded_at) AS recorded_at
                 FROM metric_points
@@ -140,6 +141,7 @@ class SqliteMetricAggregateStore:
                 """,
                 (scope.value, scope_id),
             ).fetchone()
+        )
         if row is None:
             return None
         value = row["recorded_at"]
@@ -148,7 +150,7 @@ class SqliteMetricAggregateStore:
         return str(value)
 
     def delete_by_session(self, session_id: str) -> None:
-        with self._lock:
+        def operation() -> None:
             self._conn.execute(
                 "DELETE FROM metric_points WHERE scope=? AND scope_id=?",
                 (MetricScope.SESSION.value, session_id),
@@ -167,7 +169,8 @@ class SqliteMetricAggregateStore:
                 """,
                 (MetricScope.RUN.value, f'%"session_id": "{session_id}"%'),
             )
-            self._conn.commit()
+
+        self._run_write(operation_name="delete_by_session", operation=operation)
 
     def _row_to_record(self, row: sqlite3.Row) -> MetricPointRecord:
         return MetricPointRecord(

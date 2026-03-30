@@ -5,26 +5,29 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 from agent_teams.roles.memory_models import RoleMemoryRecord
 
 
-class RoleMemoryRepository:
+class RoleMemoryRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._ensure_role_memories_schema()
-        self._drop_legacy_daily_table()
-        self._conn.commit()
+        def operation() -> None:
+            self._ensure_role_memories_schema()
+            self._drop_legacy_daily_table()
+
+        self._run_write(operation_name="init_tables", operation=operation)
 
     def read_role_memory(self, *, role_id: str, workspace_id: str) -> RoleMemoryRecord:
-        row = self._conn.execute(
-            "SELECT * FROM role_memories WHERE role_id=? AND workspace_id=?",
-            (role_id, workspace_id),
-        ).fetchone()
+        row = self._run_read(
+            lambda: self._conn.execute(
+                "SELECT * FROM role_memories WHERE role_id=? AND workspace_id=?",
+                (role_id, workspace_id),
+            ).fetchone()
+        )
         if row is None:
             return RoleMemoryRecord(
                 role_id=role_id,
@@ -47,24 +50,28 @@ class RoleMemoryRepository:
         content_markdown: str,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        self._conn.execute(
-            """
-            INSERT INTO role_memories(role_id, workspace_id, content_markdown, updated_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(role_id, workspace_id)
-            DO UPDATE SET content_markdown=excluded.content_markdown,
-                          updated_at=excluded.updated_at
-            """,
-            (role_id, workspace_id, content_markdown, now),
+        self._run_write(
+            operation_name="write_role_memory",
+            operation=lambda: self._conn.execute(
+                """
+                INSERT INTO role_memories(role_id, workspace_id, content_markdown, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(role_id, workspace_id)
+                DO UPDATE SET content_markdown=excluded.content_markdown,
+                              updated_at=excluded.updated_at
+                """,
+                (role_id, workspace_id, content_markdown, now),
+            ),
         )
-        self._conn.commit()
 
     def delete_role_memory(self, *, role_id: str, workspace_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM role_memories WHERE role_id=? AND workspace_id=?",
-            (role_id, workspace_id),
+        self._run_write(
+            operation_name="delete_role_memory",
+            operation=lambda: self._conn.execute(
+                "DELETE FROM role_memories WHERE role_id=? AND workspace_id=?",
+                (role_id, workspace_id),
+            ),
         )
-        self._conn.commit()
 
     def _ensure_role_memories_schema(self) -> None:
         columns = self._table_info("role_memories")

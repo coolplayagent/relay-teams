@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -239,3 +241,86 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
     assert record.topology is not None
     assert record.topology.orchestration_preset_id == "default"
     assert record.topology.allowed_role_ids == ("writer", "reviewer")
+
+
+def test_run_intent_repo_upsert_retries_transient_write_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_intent_retry_upsert.db"
+    repo = RunIntentRepository(db_path)
+    repo._conn.execute("PRAGMA busy_timeout = 0")
+
+    blocker = sqlite3.connect(db_path, check_same_thread=False)
+    blocker.execute("PRAGMA busy_timeout = 0")
+    blocker.execute("BEGIN IMMEDIATE")
+    blocker.execute("SELECT 1")
+
+    released = threading.Event()
+
+    def release_lock() -> None:
+        time.sleep(0.05)
+        blocker.commit()
+        blocker.close()
+        released.set()
+
+    thread = threading.Thread(target=release_lock)
+    thread.start()
+
+    repo.upsert(
+        run_id="run-retry",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("ship it"),
+            execution_mode=ExecutionMode.AI,
+            yolo=False,
+        ),
+    )
+
+    thread.join(timeout=1)
+
+    assert released.is_set()
+    assert repo.get("run-retry").intent == "ship it"
+
+
+def test_run_intent_repo_append_followup_retries_transient_write_lock(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_retry_followup.db"
+    repo = RunIntentRepository(db_path)
+    repo.upsert(
+        run_id="run-followup",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("ship it"),
+            execution_mode=ExecutionMode.AI,
+            yolo=False,
+        ),
+    )
+    repo._conn.execute("PRAGMA busy_timeout = 0")
+
+    blocker = sqlite3.connect(db_path, check_same_thread=False)
+    blocker.execute("PRAGMA busy_timeout = 0")
+    blocker.execute("BEGIN IMMEDIATE")
+    blocker.execute(
+        "UPDATE run_intents SET updated_at=updated_at WHERE run_id=?",
+        ("run-followup",),
+    )
+
+    released = threading.Event()
+
+    def release_lock() -> None:
+        time.sleep(0.05)
+        blocker.commit()
+        blocker.close()
+        released.set()
+
+    thread = threading.Thread(target=release_lock)
+    thread.start()
+
+    repo.append_followup(run_id="run-followup", content="and validate it")
+
+    thread.join(timeout=1)
+
+    record = repo.get("run-followup")
+    assert released.is_set()
+    assert record.intent == "ship it\n\nand validate it"

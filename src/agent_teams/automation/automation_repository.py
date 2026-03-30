@@ -18,7 +18,7 @@ from agent_teams.automation.automation_models import (
     AutomationScheduleMode,
 )
 from agent_teams.logger import get_logger, log_event
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 from agent_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -32,61 +32,62 @@ class AutomationProjectNameConflictError(ValueError):
     pass
 
 
-class AutomationProjectRepository:
+class AutomationProjectRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS automation_projects (
-                automation_project_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                workspace_id TEXT NOT NULL DEFAULT 'automation-system',
-                prompt TEXT NOT NULL,
-                schedule_mode TEXT NOT NULL,
-                cron_expression TEXT,
-                run_at TEXT,
-                timezone TEXT NOT NULL,
-                run_config_json TEXT NOT NULL,
-                delivery_binding_json TEXT,
-                delivery_events_json TEXT NOT NULL DEFAULT '[]',
-                trigger_id TEXT NOT NULL UNIQUE,
-                last_session_id TEXT,
-                last_run_started_at TEXT,
-                last_error TEXT,
-                next_run_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+        def operation() -> None:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS automation_projects (
+                    automation_project_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL DEFAULT 'automation-system',
+                    prompt TEXT NOT NULL,
+                    schedule_mode TEXT NOT NULL,
+                    cron_expression TEXT,
+                    run_at TEXT,
+                    timezone TEXT NOT NULL,
+                    run_config_json TEXT NOT NULL,
+                    delivery_binding_json TEXT,
+                    delivery_events_json TEXT NOT NULL DEFAULT '[]',
+                    trigger_id TEXT NOT NULL UNIQUE,
+                    last_session_id TEXT,
+                    last_run_started_at TEXT,
+                    last_error TEXT,
+                    next_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_automation_projects_schedule
-            ON automation_projects(status, next_run_at)
-            """
-        )
-        self._ensure_column(
-            "automation_projects",
-            "workspace_id",
-            "TEXT NOT NULL DEFAULT 'automation-system'",
-        )
-        self._ensure_column(
-            "automation_projects",
-            "delivery_binding_json",
-            "TEXT",
-        )
-        self._ensure_column(
-            "automation_projects",
-            "delivery_events_json",
-            "TEXT NOT NULL DEFAULT '[]'",
-        )
-        self._conn.commit()
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_automation_projects_schedule
+                ON automation_projects(status, next_run_at)
+                """
+            )
+            self._ensure_column(
+                "automation_projects",
+                "workspace_id",
+                "TEXT NOT NULL DEFAULT 'automation-system'",
+            )
+            self._ensure_column(
+                "automation_projects",
+                "delivery_binding_json",
+                "TEXT",
+            )
+            self._ensure_column(
+                "automation_projects",
+                "delivery_events_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+
+        self._run_write(operation_name="init_tables", operation=operation)
 
     def _ensure_column(self, table: str, column: str, ddl: str) -> None:
         columns = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -96,20 +97,22 @@ class AutomationProjectRepository:
 
     def create(self, record: AutomationProjectRecord) -> AutomationProjectRecord:
         try:
-            self._conn.execute(
-                """
-                INSERT INTO automation_projects(
-                    automation_project_id, name, display_name, status, workspace_id, prompt,
-                    schedule_mode, cron_expression, run_at, timezone,
-                    run_config_json, delivery_binding_json, delivery_events_json,
-                    trigger_id, last_session_id, last_run_started_at,
-                    last_error, next_run_at, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                self._to_row(record),
+            self._run_write(
+                operation_name="create",
+                operation=lambda: self._conn.execute(
+                    """
+                    INSERT INTO automation_projects(
+                        automation_project_id, name, display_name, status, workspace_id, prompt,
+                        schedule_mode, cron_expression, run_at, timezone,
+                        run_config_json, delivery_binding_json, delivery_events_json,
+                        trigger_id, last_session_id, last_run_started_at,
+                        last_error, next_run_at, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._to_row(record),
+                ),
             )
-            self._conn.commit()
         except sqlite3.IntegrityError as exc:
             if "automation_projects.name" in str(exc).lower():
                 raise AutomationProjectNameConflictError(
@@ -120,52 +123,54 @@ class AutomationProjectRepository:
 
     def update(self, record: AutomationProjectRecord) -> AutomationProjectRecord:
         try:
-            self._conn.execute(
-                """
-                UPDATE automation_projects
-                SET name=?,
-                    display_name=?,
-                    status=?,
-                    workspace_id=?,
-                    prompt=?,
-                    schedule_mode=?,
-                    cron_expression=?,
-                    run_at=?,
-                    timezone=?,
-                    run_config_json=?,
-                    delivery_binding_json=?,
-                    delivery_events_json=?,
-                    trigger_id=?,
-                    last_session_id=?,
-                    last_run_started_at=?,
-                    last_error=?,
-                    next_run_at=?,
-                    updated_at=?
-                WHERE automation_project_id=?
-                """,
-                (
-                    record.name,
-                    record.display_name,
-                    record.status.value,
-                    record.workspace_id,
-                    record.prompt,
-                    record.schedule_mode.value,
-                    record.cron_expression,
-                    _to_iso(record.run_at),
-                    record.timezone,
-                    json.dumps(record.run_config.model_dump(mode="json")),
-                    _binding_to_json(record.delivery_binding),
-                    _events_to_json(record.delivery_events),
-                    record.trigger_id,
-                    record.last_session_id,
-                    _to_iso(record.last_run_started_at),
-                    record.last_error,
-                    _to_iso(record.next_run_at),
-                    record.updated_at.isoformat(),
-                    record.automation_project_id,
+            self._run_write(
+                operation_name="update",
+                operation=lambda: self._conn.execute(
+                    """
+                    UPDATE automation_projects
+                    SET name=?,
+                        display_name=?,
+                        status=?,
+                        workspace_id=?,
+                        prompt=?,
+                        schedule_mode=?,
+                        cron_expression=?,
+                        run_at=?,
+                        timezone=?,
+                        run_config_json=?,
+                        delivery_binding_json=?,
+                        delivery_events_json=?,
+                        trigger_id=?,
+                        last_session_id=?,
+                        last_run_started_at=?,
+                        last_error=?,
+                        next_run_at=?,
+                        updated_at=?
+                    WHERE automation_project_id=?
+                    """,
+                    (
+                        record.name,
+                        record.display_name,
+                        record.status.value,
+                        record.workspace_id,
+                        record.prompt,
+                        record.schedule_mode.value,
+                        record.cron_expression,
+                        _to_iso(record.run_at),
+                        record.timezone,
+                        json.dumps(record.run_config.model_dump(mode="json")),
+                        _binding_to_json(record.delivery_binding),
+                        _events_to_json(record.delivery_events),
+                        record.trigger_id,
+                        record.last_session_id,
+                        _to_iso(record.last_run_started_at),
+                        record.last_error,
+                        _to_iso(record.next_run_at),
+                        record.updated_at.isoformat(),
+                        record.automation_project_id,
+                    ),
                 ),
             )
-            self._conn.commit()
         except sqlite3.IntegrityError as exc:
             if "automation_projects.name" in str(exc).lower():
                 raise AutomationProjectNameConflictError(
@@ -175,13 +180,15 @@ class AutomationProjectRepository:
         return record
 
     def get(self, automation_project_id: str) -> AutomationProjectRecord:
-        row = self._conn.execute(
-            """
-            SELECT * FROM automation_projects
-            WHERE automation_project_id=?
-            """,
-            (automation_project_id,),
-        ).fetchone()
+        row = self._run_read(
+            lambda: self._conn.execute(
+                """
+                SELECT * FROM automation_projects
+                WHERE automation_project_id=?
+                """,
+                (automation_project_id,),
+            ).fetchone()
+        )
         if row is None:
             raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
         try:
@@ -193,41 +200,47 @@ class AutomationProjectRepository:
             ) from exc
 
     def list_all(self) -> tuple[AutomationProjectRecord, ...]:
-        rows = self._conn.execute(
-            """
-            SELECT * FROM automation_projects
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                """
+                SELECT * FROM automation_projects
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+        )
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
     def list_due(self, now: datetime) -> tuple[AutomationProjectRecord, ...]:
-        rows = self._conn.execute(
-            """
-            SELECT * FROM automation_projects
-            WHERE status=? AND next_run_at IS NOT NULL AND next_run_at <= ?
-            ORDER BY next_run_at ASC
-            """,
-            (
-                AutomationProjectStatus.ENABLED.value,
-                now.isoformat(),
-            ),
-        ).fetchall()
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                """
+                SELECT * FROM automation_projects
+                WHERE status=? AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at ASC
+                """,
+                (
+                    AutomationProjectStatus.ENABLED.value,
+                    now.isoformat(),
+                ),
+            ).fetchall()
+        )
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
     def delete(self, automation_project_id: str) -> None:
-        self._conn.execute(
-            """
-            DELETE FROM automation_projects
-            WHERE automation_project_id=?
-            """,
-            (automation_project_id,),
+        self._run_write(
+            operation_name="delete",
+            operation=lambda: self._conn.execute(
+                """
+                DELETE FROM automation_projects
+                WHERE automation_project_id=?
+                """,
+                (automation_project_id,),
+            ),
         )
-        self._conn.commit()
 
     def _to_row(self, record: AutomationProjectRecord) -> tuple[object, ...]:
         return (
