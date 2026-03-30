@@ -8,6 +8,7 @@ const {
   ensureDesignerReady,
   exporterRoot,
 } = require("./setup_designer");
+const exportQaScript = path.join(__dirname, "export_qa.js");
 
 function usage() {
   console.log(
@@ -51,4 +52,13 @@ const result = spawnSync(process.execPath, [convertScript, pagesDir, outputPath]
 
 if (result.status !== 0) {
   process.exit(result.status || 1);
+}
+
+const qaResult = spawnSync(process.execPath, [exportQaScript, pagesDir, outputPath], {
+  stdio: "inherit",
+  shell: false,
+});
+
+if (qaResult.status !== 0) {
+  process.exit(qaResult.status || 1);
 }

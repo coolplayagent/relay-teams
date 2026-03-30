@@ -22,7 +22,7 @@ function captureLogs(fn) {
 function main() {
   const slide = {
     index: 0,
-    filePath: "page-1.pptx.html",
+    filePath: "page-2.pptx.html",
     type: "content",
     blankRatio: 61.4,
     pixelAnalysis: { geometryCoverage: 35 },
