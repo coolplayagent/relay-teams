@@ -189,7 +189,7 @@ class WeChatAccountRepository:
                 "display_name": str(row["display_name"]),
                 "base_url": str(row["base_url"]),
                 "cdn_base_url": str(row["cdn_base_url"]),
-                "route_tag": normalize_persisted_text(row["route_tag"]),
+                "route_tag": _normalize_optional_persisted_text(row["route_tag"]),
                 "status": WeChatAccountStatus(str(row["status"])),
                 "remote_user_id": normalize_persisted_text(row["remote_user_id"]),
                 "sync_cursor": str(row["sync_cursor"]),
@@ -271,6 +271,15 @@ def _persisted_value_preview(value: object) -> str:
     if value is None:
         return "<null>"
     return str(value)[:200]
+
+
+def _normalize_optional_persisted_text(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
 
 
 def _log_invalid_wechat_account_timestamp(

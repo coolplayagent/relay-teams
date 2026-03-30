@@ -58,6 +58,23 @@ def test_wechat_account_repository_deletes_account(tmp_path: Path) -> None:
     assert repository.list_accounts() == ()
 
 
+def test_wechat_account_repository_preserves_literal_route_tag_values(
+    tmp_path: Path,
+) -> None:
+    repository = WeChatAccountRepository(tmp_path / "wechat_route_tag.db")
+    created = repository.upsert_account(
+        WeChatAccountRecord(
+            account_id="wx_none_tag",
+            display_name="Literal None Tag",
+            route_tag="none",
+        )
+    )
+
+    loaded = repository.get_account(created.account_id)
+
+    assert loaded.route_tag == "none"
+
+
 def test_wechat_account_repository_skips_invalid_persisted_rows(
     tmp_path: Path,
 ) -> None:
