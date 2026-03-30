@@ -133,10 +133,14 @@ def _build_binary_transport(
     reject_range_probe_status: int | None = None,
     full_range_returns_200: bool = False,
     fail_once_ranges: dict[str, int] | None = None,
+    fail_once_range_statuses: dict[str, int] | None = None,
     request_log: list[str] | None = None,
     if_range_log: list[str] | None = None,
 ) -> httpx.MockTransport:
     remaining_failures = {} if fail_once_ranges is None else dict(fail_once_ranges)
+    remaining_status_failures = (
+        {} if fail_once_range_statuses is None else dict(fail_once_range_statuses)
+    )
 
     async def _handler(request: httpx.Request) -> httpx.Response:
         range_header = request.headers.get("Range")
@@ -177,6 +181,16 @@ def _build_binary_transport(
                 content=data,
             )
         if range_header:
+            if (
+                range_header in remaining_status_failures
+                and remaining_status_failures[range_header] > 0
+            ):
+                status_code = remaining_status_failures.pop(range_header)
+                return httpx.Response(
+                    status_code,
+                    request=request,
+                    headers=base_headers,
+                )
             start, end = _parse_range_header(range_header, len(data))
             chunk = data[start : end + 1]
             headers = dict(base_headers)
@@ -805,6 +819,44 @@ async def test_download_binary_response_falls_back_when_full_range_request_retur
     assert request_log == [
         webfetch.RANGE_PROBE_HEADER_VALUE,
         f"bytes=0-{len(payload) - 1}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_download_binary_response_retries_when_range_request_returns_416(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(1024 * 1024)
+    full_range = f"bytes=0-{len(payload) - 1}"
+    request_log: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            request_log=request_log,
+            fail_once_range_statuses={full_range: 416},
+        )
+    )
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.download_binary_response(
+            client=client,
+            requested_url="https://example.com/range-416.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    data = cast(dict[str, object], projection.visible_data)
+    saved_path = Path(str(data["saved_path"]))
+    assert saved_path.read_bytes() == payload
+    assert request_log == [
+        webfetch.RANGE_PROBE_HEADER_VALUE,
+        full_range,
+        full_range,
     ]
 
 

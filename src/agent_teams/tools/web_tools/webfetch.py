@@ -354,6 +354,7 @@ async def fetch_url(
     url: str,
     response_format: str,
     extra_headers: dict[str, str] | None = None,
+    allowed_error_status_codes: set[int] | None = None,
 ) -> httpx.Response:
     url_host = urlparse(url).netloc
     headers = {
@@ -387,7 +388,10 @@ async def fetch_url(
                 "mitigation": "cloudflare_challenge",
             },
         )
-    if response.status_code >= 400:
+    if response.status_code >= 400 and (
+        allowed_error_status_codes is None
+        or response.status_code not in allowed_error_status_codes
+    ):
         await response.aclose()
         raise ToolExecutionError(
             error_type=_webfetch_status_error_type(response.status_code),
@@ -1181,11 +1185,18 @@ async def download_binary_range_segment(
         url=requested_url,
         response_format=response_format,
         extra_headers=extra_headers,
+        allowed_error_status_codes={416},
     )
     bytes_since_flush = 0
     keep_response_open = False
     try:
         expected_total = probe.total_size
+        if response.status_code == 416:
+            raise ToolExecutionError(
+                error_type="range_resume_mismatch",
+                message="Range download could not be resumed because the upstream response rejected the requested byte range.",
+                retryable=True,
+            )
         if (
             response.status_code == 200
             and expected_total is not None
