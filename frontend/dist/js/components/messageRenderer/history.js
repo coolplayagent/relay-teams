@@ -76,7 +76,9 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             roleId: String(msgItem.role_id || '').trim(),
             streamKey,
         });
-        renderParts(contentEl, parts, pendingToolBlocks);
+        renderParts(contentEl, parts, pendingToolBlocks, {
+            collapseUserPrompt: role === 'user' && options.collapsibleUserPrompts === true,
+        });
         lastRenderedMessage = {
             role,
             label,

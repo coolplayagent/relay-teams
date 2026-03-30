@@ -398,13 +398,13 @@ function renderRoundSection(round, index) {
             <div class="round-detail-mainline">
                 <div class="round-detail-label">Round ${index + 1}${round.run_status === 'running' ? ' <span class="live-badge">LIVE</span>' : ''}</div>
                 <div class="round-detail-meta">
-                    <div class="round-detail-time">${time}</div>
+                <div class="round-detail-time">${time}</div>
                     <div class="round-detail-token-host"></div>
                 </div>
             </div>
             <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
-        </div>
-        <div class="round-detail-intent">${esc(round.intent || t('rounds.no_intent'))}</div>`;
+        </div>`;
+    header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
     if (round.compaction_marker_before) {
@@ -420,6 +420,7 @@ function renderRoundSection(round, index) {
 
     if (round.coordinator_messages?.length > 0) {
         renderHistoricalMessageList(section, round.coordinator_messages, {
+            collapsibleUserPrompts: true,
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
@@ -427,6 +428,7 @@ function renderRoundSection(round, index) {
         });
     } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
         renderHistoricalMessageList(section, [], {
+            collapsibleUserPrompts: true,
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
@@ -466,6 +468,42 @@ function renderRoundSection(round, index) {
     }
 
     return section;
+}
+
+function buildRoundIntentBlock(intentText) {
+    const normalized = normalizeRoundIntentText(intentText);
+    const lines = normalized.split('\n');
+    const title = lines[0] || t('rounds.no_intent');
+    const preview = lines.length > 1 ? lines.slice(1).join('\n') : normalized;
+
+    const block = document.createElement('details');
+    block.className = 'round-detail-intent';
+    block.innerHTML = `
+        <summary class="round-detail-intent-summary">
+            <span class="round-detail-intent-title"></span>
+            <span class="round-detail-intent-preview"></span>
+        </summary>
+        <div class="round-detail-intent-body"></div>
+    `;
+
+    const titleEl = block.querySelector('.round-detail-intent-title');
+    const previewEl = block.querySelector('.round-detail-intent-preview');
+    const bodyEl = block.querySelector('.round-detail-intent-body');
+    if (titleEl) {
+        titleEl.textContent = title;
+    }
+    if (previewEl) {
+        previewEl.textContent = preview;
+    }
+    if (bodyEl) {
+        bodyEl.textContent = normalized;
+    }
+    return block;
+}
+
+function normalizeRoundIntentText(intentText) {
+    const normalized = String(intentText || '').replace(/\r\n?/g, '\n').trim();
+    return normalized || t('rounds.no_intent');
 }
 
 function splitRoundsByHistoryMarkers(rounds) {

@@ -13,7 +13,7 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.25rem 0;
+    padding: 0.25rem 0.5rem;
     cursor: pointer;
     list-style: none;
     color: var(--text-secondary);
@@ -61,6 +61,14 @@
     color: var(--text-muted, var(--text-secondary));
     flex: 1 1 auto;
     min-width: 0;
+    transition: opacity 0.2s ease, max-width 0.25s ease;
+    opacity: 1;
+}
+
+.tool-block[open] .tool-summary-preview {
+    opacity: 0;
+    max-width: 0;
+    overflow: hidden;
 }
 
 .tool-status {
@@ -74,12 +82,14 @@
 
 .tool-detail {
     padding: 0.25rem 0 0.5rem 0;
+    animation: tool-detail-in 0.2s ease;
 }
 
 .tool-detail-card {
-    border: 1px solid var(--border-color);
+    position: relative;
+    border: none;
     border-radius: var(--radius-md);
-    background: var(--bg-tool-body, var(--bg-surface-muted));
+    background: var(--bg-tool-card, rgba(255, 255, 255, 0.03));
     overflow: hidden;
 }
 
@@ -88,6 +98,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.55rem 0.85rem 0;
+}
+
+.tool-detail-header--minimal {
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 0.35rem 0.5rem;
+    z-index: 1;
 }
 
 .tool-lang-label {
@@ -126,6 +144,7 @@
     word-break: break-all;
     line-height: 1.55;
     color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .tool-input-value {
@@ -136,12 +155,105 @@
     word-break: break-all;
     line-height: 1.55;
     color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .tool-prompt {
     color: var(--text-secondary);
     user-select: none;
     margin-right: 0.25rem;
+}
+
+/* Line range badge (for read tool) */
+
+.tool-line-range {
+    margin-left: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+/* Lined code content (with line numbers) */
+
+.tool-lined-code {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    padding: 0.35rem 0;
+}
+
+.tool-lined-code--scroll {
+    max-height: 400px;
+    overflow: auto;
+}
+
+.tool-line {
+    display: flex;
+    padding-right: 0.85rem;
+    min-height: 1.55em;
+}
+
+.tool-line:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.tool-line-no {
+    flex: 0 0 auto;
+    min-width: 2.5rem;
+    padding: 0 0.65rem 0 0.55rem;
+    text-align: right;
+    color: var(--text-secondary);
+    opacity: 0.45;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.tool-line-text {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Side-by-side diff (for edit tool) */
+
+.tool-diff-side {
+    max-height: 400px;
+    overflow: auto;
+    padding: 0.35rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+}
+
+.tool-diff-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    min-height: 1.55em;
+}
+
+.tool-diff-row:hover {
+    filter: brightness(1.15);
+}
+
+.tool-diff-cell {
+    padding: 0 0.5rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    min-width: 0;
+}
+
+.tool-diff-cell--old {
+    border-right: none;
+}
+
+.tool-diff-row--changed .tool-diff-cell--old {
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--danger, #ef6b6b);
+}
+
+.tool-diff-row--changed .tool-diff-cell--new {
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--success, #22c55e);
 }
 
 /* Args display (for non-shell tools) */
@@ -169,7 +281,11 @@
     color: var(--text-secondary);
     max-height: 400px;
     overflow-y: auto;
-    border-top: 1px solid var(--border-color);
+}
+
+.tool-output:has(.tool-lined-code) {
+    padding: 0;
+    white-space: normal;
 }
 
 .tool-output:empty {
@@ -219,7 +335,7 @@
 
 .tool-approval-inline {
     padding: 0.4rem 0.85rem;
-    border-top: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.015);
 }
 
 .tool-approval-state {
@@ -241,7 +357,14 @@
     padding: 0.35rem 0.85rem;
     font-size: 0.72rem;
     color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.015);
+}
+
+/* --- Animations --- */
+
+@keyframes tool-detail-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ---- Non-tool-block styles kept for backward compat ---- */
