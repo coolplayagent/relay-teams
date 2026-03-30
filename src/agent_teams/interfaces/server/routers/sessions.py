@@ -7,6 +7,7 @@ from agent_teams.interfaces.server.deps import get_session_service
 from agent_teams.roles import SystemRolesUnavailableError
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
@@ -14,8 +15,8 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str | None = None
-    workspace_id: str
+    session_id: OptionalIdentifierStr = None
+    workspace_id: RequiredIdentifierStr
     metadata: dict[str, str] | None = None
 
 
@@ -29,8 +30,8 @@ class UpdateSessionTopologyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_mode: SessionMode
-    normal_root_role_id: str | None = None
-    orchestration_preset_id: str | None = None
+    normal_root_role_id: OptionalIdentifierStr = None
+    orchestration_preset_id: OptionalIdentifierStr = None
 
 
 class UpdateAgentReflectionRequest(BaseModel):
@@ -63,7 +64,7 @@ def list_sessions(
 
 @router.get("/{session_id}", response_model=SessionRecord)
 def get_session(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
@@ -74,7 +75,7 @@ def get_session(
 
 @router.patch("/{session_id}")
 def update_session(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     req: UpdateSessionRequest,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
@@ -87,7 +88,7 @@ def update_session(
 
 @router.patch("/{session_id}/topology", response_model=SessionRecord)
 def update_session_topology(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     req: UpdateSessionTopologyRequest,
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
@@ -110,7 +111,7 @@ def update_session_topology(
 
 @router.delete("/{session_id}")
 def delete_session(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
@@ -122,9 +123,9 @@ def delete_session(
 
 @router.get("/{session_id}/rounds")
 def get_session_rounds(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     limit: int = 8,
-    cursor_run_id: str | None = None,
+    cursor_run_id: OptionalIdentifierStr = None,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     return service.get_session_rounds(
@@ -136,7 +137,7 @@ def get_session_rounds(
 
 @router.get("/{session_id}/recovery")
 def get_session_recovery(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
@@ -147,8 +148,8 @@ def get_session_recovery(
 
 @router.get("/{session_id}/rounds/{run_id}")
 def get_round(
-    session_id: str,
-    run_id: str,
+    session_id: RequiredIdentifierStr,
+    run_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
@@ -159,7 +160,7 @@ def get_round(
 
 @router.get("/{session_id}/agents")
 def list_session_agents(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     return list(service.list_agents_in_session(session_id))
@@ -167,8 +168,8 @@ def list_session_agents(
 
 @router.get("/{session_id}/agents/{instance_id}/reflection")
 def get_agent_reflection(
-    session_id: str,
-    instance_id: str,
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
@@ -179,8 +180,8 @@ def get_agent_reflection(
 
 @router.post("/{session_id}/agents/{instance_id}/reflection:refresh")
 async def refresh_agent_reflection(
-    session_id: str,
-    instance_id: str,
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
@@ -193,8 +194,8 @@ async def refresh_agent_reflection(
 
 @router.patch("/{session_id}/agents/{instance_id}/reflection")
 def update_agent_reflection(
-    session_id: str,
-    instance_id: str,
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     req: UpdateAgentReflectionRequest,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
@@ -212,8 +213,8 @@ def update_agent_reflection(
 
 @router.delete("/{session_id}/agents/{instance_id}/reflection")
 def delete_agent_reflection(
-    session_id: str,
-    instance_id: str,
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
@@ -226,7 +227,7 @@ def delete_agent_reflection(
 
 @router.get("/{session_id}/events")
 def get_session_events(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     return service.get_global_events(session_id)
@@ -234,7 +235,7 @@ def get_session_events(
 
 @router.get("/{session_id}/messages")
 def get_session_messages(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     return service.get_session_messages(session_id)
@@ -242,8 +243,8 @@ def get_session_messages(
 
 @router.get("/{session_id}/agents/{instance_id}/messages")
 def get_agent_messages(
-    session_id: str,
-    instance_id: str,
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     return service.get_agent_messages(session_id, instance_id)
@@ -251,7 +252,7 @@ def get_agent_messages(
 
 @router.get("/{session_id}/tasks")
 def get_session_tasks(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     return service.get_session_tasks(session_id)
@@ -259,7 +260,7 @@ def get_session_tasks(
 
 @router.get("/{session_id}/token-usage")
 def get_session_token_usage(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     summary = service.get_token_usage_by_session(session_id)
@@ -290,8 +291,8 @@ def get_session_token_usage(
 
 @router.get("/{session_id}/runs/{run_id}/token-usage")
 def get_run_token_usage(
-    session_id: str,
-    run_id: str,
+    session_id: RequiredIdentifierStr,
+    run_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     usage = service.get_token_usage_by_run(run_id)

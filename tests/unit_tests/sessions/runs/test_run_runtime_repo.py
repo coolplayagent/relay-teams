@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from threading import Barrier
 
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -113,3 +115,116 @@ def test_run_runtime_repo_marks_transient_runs_interrupted(tmp_path: Path) -> No
     assert queued.last_error == "interrupted_by_process_restart"
     assert paused.status == RunRuntimeStatus.PAUSED
     assert paused.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL
+
+
+def test_run_runtime_repo_skips_invalid_persisted_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_invalid_rows.db"
+    repo = RunRuntimeRepository(db_path)
+    _ = repo.ensure(
+        run_id="run-valid",
+        session_id="session-1",
+        root_task_id="task-1",
+    )
+    _insert_run_runtime_row(
+        db_path,
+        run_id="None",
+        session_id="session-1",
+    )
+
+    records = repo.list_by_session("session-1")
+
+    assert [record.run_id for record in records] == ["run-valid"]
+    assert repo.get("None") is None
+
+
+def test_run_runtime_repo_get_recovers_invalid_timestamps(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_dirty_timestamps.db"
+    repo = RunRuntimeRepository(db_path)
+    valid_updated_at = datetime(2025, 1, 3, tzinfo=timezone.utc).isoformat()
+    _insert_run_runtime_row(
+        db_path,
+        run_id="run-dirty",
+        session_id="session-1",
+        created_at="None",
+        updated_at=valid_updated_at,
+    )
+
+    loaded = repo.get("run-dirty")
+
+    assert loaded is not None
+    assert loaded.run_id == "run-dirty"
+    assert loaded.created_at.isoformat() == valid_updated_at
+    assert loaded.updated_at.isoformat() == valid_updated_at
+    assert repo.list_by_session("session-1") == ()
+
+
+def test_run_runtime_repo_upsert_recovers_existing_dirty_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_runtime_dirty_upsert.db"
+    repo = RunRuntimeRepository(db_path)
+    _insert_run_runtime_row(
+        db_path,
+        run_id="run-dirty",
+        session_id="session-1",
+        created_at="None",
+    )
+
+    existing = repo.get("run-dirty")
+    assert existing is not None
+    updated = repo.upsert(
+        existing.model_copy(
+            update={
+                "status": RunRuntimeStatus.PAUSED,
+                "phase": RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+            }
+        )
+    )
+
+    assert updated.status == RunRuntimeStatus.PAUSED
+    assert updated.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL
+
+
+def _insert_run_runtime_row(
+    db_path: Path,
+    *,
+    run_id: str,
+    session_id: str,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> None:
+    now = datetime.now(tz=timezone.utc).isoformat()
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        INSERT INTO run_runtime(
+            run_id,
+            session_id,
+            root_task_id,
+            status,
+            phase,
+            active_instance_id,
+            active_task_id,
+            active_role_id,
+            active_subagent_instance_id,
+            last_error,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            session_id,
+            "task-x",
+            RunRuntimeStatus.RUNNING.value,
+            RunRuntimePhase.COORDINATOR_RUNNING.value,
+            None,
+            None,
+            None,
+            None,
+            None,
+            created_at or now,
+            updated_at or now,
+        ),
+    )
+    connection.commit()
+    connection.close()

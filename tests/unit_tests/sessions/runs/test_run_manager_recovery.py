@@ -369,6 +369,96 @@ def test_manager_hydrates_recoverable_run_from_runtime_repo(tmp_path: Path) -> N
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
 
+@pytest.mark.asyncio
+async def test_resume_existing_run_uses_runtime_session_for_legacy_intent_rows(
+    tmp_path: Path,
+) -> None:
+    class _CapturingMetaAgent:
+        def __init__(self) -> None:
+            self.intent: IntentInput | None = None
+
+        async def handle_intent(
+            self,
+            intent: IntentInput,
+            trace_id: str | None = None,
+        ) -> RunResult:
+            _ = trace_id
+            self.intent = intent
+            return RunResult(
+                trace_id="run-existing",
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text(intent.intent),
+            )
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:  # pragma: no cover
+            raise AssertionError(f"not expected: {trace_id}")
+
+    db_path = tmp_path / "run_resume_legacy_intent.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    intent_repo = RunIntentRepository(db_path)
+    intent_repo._conn.execute(
+        """
+        INSERT INTO run_intents(
+            run_id,
+            session_id,
+            intent,
+            input_json,
+            run_kind,
+            generation_config_json,
+            execution_mode,
+            yolo,
+            reuse_root_instance,
+            thinking_enabled,
+            thinking_effort,
+            target_role_id,
+            session_mode,
+            topology_json,
+            conversation_context_json,
+            created_at,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "run-existing",
+            "None",
+            "resume me",
+            None,
+            "conversation",
+            None,
+            "ai",
+            "false",
+            "true",
+            "false",
+            None,
+            None,
+            "normal",
+            None,
+            None,
+            "2026-03-20T00:00:00Z",
+            "2026-03-20T00:00:00Z",
+        ),
+    )
+    intent_repo._conn.commit()
+    fake_meta_agent = _CapturingMetaAgent()
+    manager._meta_agent = cast(MetaAgent, cast(object, fake_meta_agent))
+
+    result = await manager._resume_existing_run("run-existing")
+
+    assert result.status == "completed"
+    assert fake_meta_agent.intent is not None
+    assert fake_meta_agent.intent.session_id == "session-1"
+    assert fake_meta_agent.intent.intent == "resume me"
+
+
 def test_resolve_tool_approval_requires_resume_for_stopped_run(
     tmp_path: Path,
 ) -> None:

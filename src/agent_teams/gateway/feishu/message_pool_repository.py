@@ -2,17 +2,26 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+
+from pydantic import JsonValue, ValidationError
 
 from agent_teams.gateway.feishu.models import (
     FeishuMessageDeliveryStatus,
     FeishuMessagePoolRecord,
     FeishuMessageProcessingStatus,
 )
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.validation import (
+    normalize_persisted_text,
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
 
 _ACTIVE_PROCESSING_STATUSES = (
     FeishuMessageProcessingStatus.QUEUED.value,
@@ -28,6 +37,8 @@ _VISIBLE_QUEUE_STATUSES = (
     FeishuMessageProcessingStatus.CANCELLED.value,
     FeishuMessageProcessingStatus.DEAD_LETTER.value,
 )
+
+LOGGER = get_logger(__name__)
 
 
 class FeishuMessageDuplicateError(ValueError):
@@ -263,7 +274,7 @@ class FeishuMessagePoolRepository:
             ).fetchone()
         if row is None:
             return None
-        return self._row_to_record(row)
+        return self._record_or_none(row)
 
     def get_by_message_key(
         self,
@@ -273,38 +284,43 @@ class FeishuMessagePoolRepository:
         message_key: str,
     ) -> FeishuMessagePoolRecord:
         with self._lock:
-            row = self._conn.execute(
+            rows = self._conn.execute(
                 """
                 SELECT *
                 FROM feishu_message_pool
                 WHERE trigger_id=? AND tenant_key=? AND message_key=?
                 ORDER BY id DESC
-                LIMIT 1
                 """,
                 (trigger_id, tenant_key, message_key),
-            ).fetchone()
-        if row is None:
+            ).fetchall()
+        for row in rows:
+            if (record := self._record_or_none(row)) is not None:
+                return record
+        if not rows:
             raise KeyError(
                 "Unknown Feishu message pool record for "
                 f"trigger_id={trigger_id}, tenant_key={tenant_key}, message_key={message_key}"
             )
-        return self._row_to_record(row)
+        raise KeyError(
+            "Unknown Feishu message pool record for "
+            f"trigger_id={trigger_id}, tenant_key={tenant_key}, message_key={message_key}"
+        )
 
     def get_latest_by_run_id(self, run_id: str) -> FeishuMessagePoolRecord | None:
         with self._lock:
-            row = self._conn.execute(
+            rows = self._conn.execute(
                 """
                 SELECT *
                 FROM feishu_message_pool
                 WHERE run_id=?
                 ORDER BY id DESC
-                LIMIT 1
                 """,
                 (run_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_record(row)
+            ).fetchall()
+        for row in rows:
+            if (record := self._record_or_none(row)) is not None:
+                return record
+        return None
 
     def update(
         self,
@@ -468,7 +484,9 @@ class FeishuMessagePoolRepository:
                     safe_limit,
                 ),
             ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_waiting_for_result(
         self,
@@ -490,7 +508,9 @@ class FeishuMessagePoolRepository:
                     safe_limit,
                 ),
             ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_pending_acknowledgements(
         self,
@@ -512,7 +532,9 @@ class FeishuMessagePoolRepository:
                     safe_limit,
                 ),
             ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_pending_reactions(
         self,
@@ -534,7 +556,9 @@ class FeishuMessagePoolRepository:
                     safe_limit,
                 ),
             ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_active_chat_messages(
         self,
@@ -556,7 +580,9 @@ class FeishuMessagePoolRepository:
                 """,
                 (trigger_id, tenant_key, chat_id, *_ACTIVE_PROCESSING_STATUSES),
             ).fetchall()
-        return tuple(self._row_to_record(row) for row in rows)
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def get_chat_status_counts(
         self,
@@ -686,19 +712,36 @@ class FeishuMessagePoolRepository:
         return affected
 
     def _row_to_record(self, row: sqlite3.Row) -> FeishuMessagePoolRecord:
+        message_pool_id = require_persisted_identifier(
+            row["message_pool_id"],
+            field_name="message_pool_id",
+        )
         return FeishuMessagePoolRecord(
             sequence_id=int(row["id"]),
-            message_pool_id=str(row["message_pool_id"]),
-            trigger_id=str(row["trigger_id"]),
+            message_pool_id=message_pool_id,
+            trigger_id=require_persisted_identifier(
+                row["trigger_id"],
+                field_name="trigger_id",
+            ),
             trigger_name=str(row["trigger_name"]),
-            tenant_key=str(row["tenant_key"]),
-            chat_id=str(row["chat_id"]),
+            tenant_key=require_persisted_identifier(
+                row["tenant_key"],
+                field_name="tenant_key",
+            ),
+            chat_id=require_persisted_identifier(
+                row["chat_id"],
+                field_name="chat_id",
+            ),
             chat_type=str(row["chat_type"]),
-            event_id=str(row["event_id"]),
-            message_key=str(row["message_key"]),
-            message_id=str(row["message_id"])
-            if row["message_id"] is not None
-            else None,
+            event_id=require_persisted_identifier(
+                row["event_id"],
+                field_name="event_id",
+            ),
+            message_key=require_persisted_identifier(
+                row["message_key"],
+                field_name="message_key",
+            ),
+            message_id=normalize_persisted_text(row["message_id"]),
             command_name=str(row["command_name"])
             if row["command_name"] is not None
             else None,
@@ -706,8 +749,11 @@ class FeishuMessagePoolRepository:
             if row["sender_name"] is not None
             else None,
             intent_text=str(row["intent_text"]),
-            payload=json.loads(str(row["payload_json"])),
-            metadata=json.loads(str(row["metadata_json"])),
+            payload=_load_json_object(row["payload_json"], field_name="payload_json"),
+            metadata=_load_string_dict(
+                row["metadata_json"],
+                field_name="metadata_json",
+            ),
             processing_status=FeishuMessageProcessingStatus(
                 str(row["processing_status"])
             ),
@@ -728,20 +774,142 @@ class FeishuMessagePoolRepository:
             process_attempts=int(row["process_attempts"]),
             ack_attempts=int(row["ack_attempts"]),
             final_reply_attempts=int(row["final_reply_attempts"]),
-            session_id=str(row["session_id"])
-            if row["session_id"] is not None
-            else None,
-            run_id=str(row["run_id"]) if row["run_id"] is not None else None,
-            next_attempt_at=datetime.fromisoformat(str(row["next_attempt_at"])),
-            last_claimed_at=datetime.fromisoformat(str(row["last_claimed_at"]))
-            if row["last_claimed_at"] is not None
-            else None,
+            session_id=normalize_persisted_text(row["session_id"]),
+            run_id=normalize_persisted_text(row["run_id"]),
+            next_attempt_at=_require_feishu_message_pool_timestamp(
+                row=row,
+                field_name="next_attempt_at",
+                message_pool_id=message_pool_id,
+            ),
+            last_claimed_at=_optional_feishu_message_pool_timestamp(
+                row=row,
+                field_name="last_claimed_at",
+                message_pool_id=message_pool_id,
+            ),
             last_error=str(row["last_error"])
             if row["last_error"] is not None
             else None,
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
-            completed_at=datetime.fromisoformat(str(row["completed_at"]))
-            if row["completed_at"] is not None
-            else None,
+            created_at=_require_feishu_message_pool_timestamp(
+                row=row,
+                field_name="created_at",
+                message_pool_id=message_pool_id,
+            ),
+            updated_at=_require_feishu_message_pool_timestamp(
+                row=row,
+                field_name="updated_at",
+                message_pool_id=message_pool_id,
+            ),
+            completed_at=_optional_feishu_message_pool_timestamp(
+                row=row,
+                field_name="completed_at",
+                message_pool_id=message_pool_id,
+            ),
         )
+
+    def _record_or_none(self, row: sqlite3.Row) -> FeishuMessagePoolRecord | None:
+        try:
+            return self._row_to_record(row)
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            _log_invalid_feishu_message_pool_row(row=row, error=exc)
+            return None
+
+
+def _load_json_object(value: object, *, field_name: str) -> dict[str, JsonValue]:
+    payload = json.loads(str(value))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid persisted {field_name}")
+    return payload
+
+
+def _load_string_dict(value: object, *, field_name: str) -> dict[str, str]:
+    payload = _load_json_object(value, field_name=field_name)
+    return {str(key): str(item) for key, item in payload.items()}
+
+
+def _require_feishu_message_pool_timestamp(
+    *,
+    row: sqlite3.Row,
+    field_name: str,
+    message_pool_id: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_feishu_message_pool_timestamp(
+        message_pool_id=message_pool_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _optional_feishu_message_pool_timestamp(
+    *,
+    row: sqlite3.Row,
+    field_name: str,
+    message_pool_id: str,
+) -> datetime | None:
+    raw_value = row[field_name]
+    if normalize_persisted_text(raw_value) is None:
+        return None
+    parsed = parse_persisted_datetime_or_none(raw_value)
+    if parsed is not None:
+        return parsed
+    _log_invalid_feishu_message_pool_timestamp(
+        message_pool_id=message_pool_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(raw_value),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_feishu_message_pool_timestamp(
+    *,
+    message_pool_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "message_pool_id": message_pool_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.feishu.message_pool_repository.timestamp_invalid",
+        message="Invalid persisted Feishu message pool timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_feishu_message_pool_row(
+    *,
+    row: sqlite3.Row,
+    error: Exception,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "message_pool_id": _persisted_value_preview(row["message_pool_id"]),
+        "trigger_id": _persisted_value_preview(row["trigger_id"]),
+        "tenant_key": _persisted_value_preview(row["tenant_key"]),
+        "chat_id": _persisted_value_preview(row["chat_id"]),
+        "event_id": _persisted_value_preview(row["event_id"]),
+        "message_key": _persisted_value_preview(row["message_key"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "run_id": _persisted_value_preview(row["run_id"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="gateway.feishu.message_pool_repository.row_invalid",
+        message="Skipping invalid persisted Feishu message pool row",
+        payload=payload,
+    )

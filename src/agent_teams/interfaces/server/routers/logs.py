@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from agent_teams.logger import get_logger, log_event
 from agent_teams.trace import bind_trace_context, generate_trace_id
+from agent_teams.validation import OptionalIdentifierStr
 
 router = APIRouter(prefix="/logs", tags=["Logs"])
 logger = get_logger(__name__, source="frontend")
@@ -20,16 +21,16 @@ class FrontendLogEvent(BaseModel):
     level: str = Field(pattern="^(debug|info|warn|error)$")
     event: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=2000)
-    trace_id: str | None = None
-    request_id: str | None = None
-    run_id: str | None = None
-    session_id: str | None = None
-    task_id: str | None = None
-    instance_id: str | None = None
-    role_id: str | None = None
+    trace_id: OptionalIdentifierStr = None
+    request_id: OptionalIdentifierStr = None
+    run_id: OptionalIdentifierStr = None
+    session_id: OptionalIdentifierStr = None
+    task_id: OptionalIdentifierStr = None
+    instance_id: OptionalIdentifierStr = None
+    role_id: OptionalIdentifierStr = None
     page: str | None = None
     route: str | None = None
-    browser_session_id: str | None = None
+    browser_session_id: OptionalIdentifierStr = None
     user_agent: str | None = None
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     ts: datetime = Field(default_factory=lambda: datetime.now(UTC))

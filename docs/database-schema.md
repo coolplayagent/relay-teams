@@ -7,6 +7,13 @@
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
 - Runtime logs are file-based and stored under `~/.agent-teams/log/backend.log`, `~/.agent-teams/log/debug.log`, and `~/.agent-teams/log/frontend.log`
 
+## 1.1 Application-Layer Constraints
+
+- SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
+- Optional identifier fields still allow real `NULL` at the API and model layer.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
+
 ---
 
 ## 2. Tables

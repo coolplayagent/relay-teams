@@ -7,6 +7,7 @@ from agent_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.roles.memory_models import MemoryProfile, default_memory_profile
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 
 class RoleConfigSource(str, Enum):
@@ -17,7 +18,7 @@ class RoleConfigSource(str, Enum):
 class RoleDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
+    role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     version: str = Field(min_length=1)
@@ -25,7 +26,7 @@ class RoleDefinition(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default")
-    bound_agent_id: str | None = None
+    bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
@@ -34,12 +35,12 @@ class RoleDefinition(BaseModel):
 class RoleDocumentSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
+    role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     version: str = Field(min_length=1)
     model_profile: str = Field(min_length=1)
-    bound_agent_id: str | None = None
+    bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
     source: RoleConfigSource = RoleConfigSource.APP
     deletable: bool = False
@@ -48,8 +49,8 @@ class RoleDocumentSummary(BaseModel):
 class RoleDocumentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_role_id: str | None = None
-    role_id: str = Field(min_length=1)
+    source_role_id: OptionalIdentifierStr = None
+    role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     version: str = Field(min_length=1)
@@ -57,7 +58,7 @@ class RoleDocumentDraft(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     model_profile: str = Field(default="default", min_length=1)
-    bound_agent_id: str | None = None
+    bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
@@ -79,7 +80,7 @@ class RoleValidationResult(BaseModel):
 class NormalModeRoleOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: str = Field(min_length=1)
+    role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
 
@@ -87,7 +88,7 @@ class NormalModeRoleOption(BaseModel):
 class RoleAgentOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: str = Field(min_length=1)
+    agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     transport: str = Field(min_length=1)
 
@@ -104,8 +105,8 @@ class RoleSkillOption(BaseModel):
 class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    coordinator_role_id: str = Field(min_length=1)
-    main_agent_role_id: str = Field(min_length=1)
+    coordinator_role_id: RequiredIdentifierStr
+    main_agent_role_id: RequiredIdentifierStr
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()

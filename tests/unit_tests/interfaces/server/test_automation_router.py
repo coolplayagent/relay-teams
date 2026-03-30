@@ -221,6 +221,26 @@ def test_create_project_route_maps_name_conflict_to_409() -> None:
     assert "already exists" in response.json()["detail"]
 
 
+def test_create_project_route_rejects_none_like_workspace_id() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.post(
+        "/api/automation/projects",
+        json={
+            "name": "daily-briefing",
+            "workspace_id": "None",
+            "prompt": "Summarize the day.",
+            "schedule_mode": "cron",
+            "cron_expression": "0 9 * * *",
+            "timezone": "UTC",
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_payloads == []
+
+
 def test_list_projects_route_returns_records() -> None:
     client = _client(_FakeAutomationService())
 
@@ -255,6 +275,14 @@ def test_get_project_route_returns_record() -> None:
 
     assert response.status_code == 200
     assert response.json()["automation_project_id"] == "aut_1"
+
+
+def test_get_project_route_rejects_none_like_path_identifier() -> None:
+    client = _client(_FakeAutomationService())
+
+    response = client.get("/api/automation/projects/None")
+
+    assert response.status_code == 422
 
 
 def test_run_project_route_returns_session_id() -> None:

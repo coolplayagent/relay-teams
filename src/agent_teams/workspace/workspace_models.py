@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
+
 
 class WorkspaceBackend(str, Enum):
     FILESYSTEM = "filesystem"
@@ -34,7 +36,7 @@ class WorkspaceFileScope(BaseModel):
     branch_binding: BranchBinding = BranchBinding.SHARED
     branch_name: str | None = None
     source_root_path: str | None = None
-    forked_from_workspace_id: str | None = None
+    forked_from_workspace_id: OptionalIdentifierStr = None
 
 
 def default_workspace_profile() -> WorkspaceProfile:
@@ -54,11 +56,11 @@ class WorkspaceProfile(BaseModel):
 class WorkspaceRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    role_id: str = Field(min_length=1)
-    conversation_id: str = Field(min_length=1)
-    instance_id: str | None = None
+    workspace_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    role_id: RequiredIdentifierStr
+    conversation_id: RequiredIdentifierStr
+    instance_id: OptionalIdentifierStr = None
     profile: WorkspaceProfile = Field(default_factory=default_workspace_profile)
 
 
@@ -76,7 +78,7 @@ class WorkspaceLocations(BaseModel):
 class WorkspaceRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: RequiredIdentifierStr
     root_path: Path
     profile: WorkspaceProfile = Field(default_factory=default_workspace_profile)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -112,7 +114,7 @@ class WorkspaceTreeNode(BaseModel):
 class WorkspaceTreeListing(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: RequiredIdentifierStr
     directory_path: str
     children: tuple[WorkspaceTreeNode, ...] = ()
 
@@ -138,7 +140,7 @@ class WorkspaceDiffFile(BaseModel):
 class WorkspaceDiffListing(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: RequiredIdentifierStr
     root_path: Path
     diff_files: tuple[WorkspaceDiffFileSummary, ...] = ()
     is_git_repository: bool = False
@@ -149,6 +151,6 @@ class WorkspaceDiffListing(BaseModel):
 class WorkspaceSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: RequiredIdentifierStr
     root_path: Path
     tree: WorkspaceTreeNode

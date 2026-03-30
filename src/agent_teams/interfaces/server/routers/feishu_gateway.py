@@ -17,6 +17,7 @@ from agent_teams.interfaces.server.deps import (
     get_feishu_gateway_service,
     get_feishu_subscription_service,
 )
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 
@@ -49,7 +50,7 @@ def create_feishu_account(
 
 @router.patch("/accounts/{account_id}", response_model=FeishuGatewayAccountRecord)
 def update_feishu_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     req: FeishuGatewayAccountUpdateInput,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -78,7 +79,7 @@ def update_feishu_account(
 
 @router.post("/accounts/{account_id}:enable", response_model=FeishuGatewayAccountRecord)
 def enable_feishu_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
         FeishuSubscriptionService,
@@ -99,7 +100,7 @@ def enable_feishu_account(
     "/accounts/{account_id}:disable", response_model=FeishuGatewayAccountRecord
 )
 def disable_feishu_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
         FeishuSubscriptionService,
@@ -116,7 +117,7 @@ def disable_feishu_account(
 
 @router.delete("/accounts/{account_id}")
 def delete_feishu_account(
-    account_id: str,
+    account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
         FeishuSubscriptionService,

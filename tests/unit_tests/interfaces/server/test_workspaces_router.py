@@ -121,6 +121,22 @@ def test_create_workspace(tmp_path: Path) -> None:
     assert payload["root_path"] == str(root_path.resolve())
 
 
+def test_create_workspace_rejects_none_like_workspace_id(tmp_path: Path) -> None:
+    client, _ = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+
+    response = client.post(
+        "/api/workspaces",
+        json={
+            "workspace_id": "None",
+            "root_path": str(root_path),
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_list_and_get_workspaces(tmp_path: Path) -> None:
     client, service = _create_test_client(tmp_path)
     root_path = tmp_path / "workspace-root"
@@ -137,6 +153,14 @@ def test_list_and_get_workspaces(tmp_path: Path) -> None:
     assert [item["workspace_id"] for item in list_response.json()] == ["project-alpha"]
     assert get_response.status_code == 200
     assert get_response.json()["root_path"] == str(root_path.resolve())
+
+
+def test_get_workspace_rejects_none_like_path_identifier(tmp_path: Path) -> None:
+    client, _ = _create_test_client(tmp_path)
+
+    response = client.get("/api/workspaces/None")
+
+    assert response.status_code == 422
 
 
 def test_create_workspace_rejects_missing_root(tmp_path: Path) -> None:
