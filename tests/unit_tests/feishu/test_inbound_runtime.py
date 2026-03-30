@@ -90,6 +90,9 @@ class _FakeRunService:
         self.started: list[str] = []
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         self.created.append(intent)
         return f"run-{len(self.created)}", intent.session_id
 

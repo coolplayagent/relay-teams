@@ -183,6 +183,7 @@ class AutomationRunDeliveryRecord(BaseModel):
     terminal_attempts: int = Field(default=0, ge=0)
     started_message: str | None = None
     terminal_message: str | None = None
+    reply_to_message_id: OptionalIdentifierStr = None
     started_message_id: OptionalIdentifierStr = None
     terminal_message_id: OptionalIdentifierStr = None
     started_sent_at: datetime | None = None

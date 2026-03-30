@@ -56,6 +56,22 @@ class TerminalNotificationSuppressor(Protocol):
     def should_suppress_terminal_notification(self, run_id: str | None) -> bool: ...
 
 
+class CompositeTerminalNotificationSuppressor:
+    def __init__(
+        self,
+        *suppressors: TerminalNotificationSuppressor | None,
+    ) -> None:
+        self._suppressors = tuple(
+            suppressor for suppressor in suppressors if suppressor is not None
+        )
+
+    def should_suppress_terminal_notification(self, run_id: str | None) -> bool:
+        return any(
+            suppressor.should_suppress_terminal_notification(run_id)
+            for suppressor in self._suppressors
+        )
+
+
 class FeishuNotificationDispatcher:
     def __init__(
         self,

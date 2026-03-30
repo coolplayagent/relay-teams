@@ -34,6 +34,14 @@ class WeChatUploadMediaType(int, Enum):
     VOICE = 4
 
 
+class WeChatInboundQueueStatus(str, Enum):
+    QUEUED = "queued"
+    STARTING = "starting"
+    WAITING_RESULT = "waiting_result"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class WeChatAccountRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -188,6 +196,25 @@ class WeChatInboundMessage(BaseModel):
     message_state: int | None = None
     item_list: tuple[WeChatMessageItem, ...] = ()
     context_token: str | None = None
+
+
+class WeChatInboundQueueRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    inbound_queue_id: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    message_key: str = Field(min_length=1)
+    gateway_session_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    peer_user_id: str = Field(min_length=1)
+    context_token: str | None = None
+    text: str = Field(min_length=1)
+    status: WeChatInboundQueueStatus = WeChatInboundQueueStatus.QUEUED
+    run_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    completed_at: datetime | None = None
 
 
 class WeChatGetUpdatesResponse(BaseModel):

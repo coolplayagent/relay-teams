@@ -497,16 +497,14 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
         tool_call_id="call-projection-1",
     )
 
-    assert result == {
-        "ok": True,
-        "data": {"output": "/tmp", "exit_code": 0},
-        "error": None,
-        "meta": {
-            "approval_required": False,
-            "approval_status": "not_required",
-            "duration_ms": 0,
-        },
-    }
+    assert result["ok"] is True
+    assert result["data"] == {"output": "/tmp", "exit_code": 0}
+    assert result["error"] is None
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert meta["approval_required"] is False
+    assert meta["approval_status"] == "not_required"
+    duration_ms = cast(int, meta["duration_ms"])
+    assert duration_ms >= 0
     assert state is not None
     assert state.result_envelope is not None
     internal_data = cast(

@@ -109,12 +109,24 @@ class _FakeRuntimeConfigLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, str]] = []
+        self.reply_messages: list[dict[str, str]] = []
         self.deleted_messages: list[str] = []
 
     def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
         return f"om_{len(self.sent_messages)}"
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment=None,
+    ) -> str:
+        _ = environment
+        self.reply_messages.append({"message_id": message_id, "text": text})
+        return f"om_reply_{len(self.reply_messages)}"
 
     def delete_message(self, *, message_id: str, environment=None) -> None:
         _ = environment
@@ -300,8 +312,8 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
     )
     assert (
         run_service.created_intents[0].conversation_context is not None
-        and run_service.created_intents[0].conversation_context.im_force_direct_send
-        is True
+        and run_service.created_intents[0].conversation_context.im_reply_to_message_id
+        is None
     )
     assert run_service.started_run_ids == ["run-1"]
     assert len(delivery_service.register_calls) == 1
@@ -404,12 +416,18 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert run_service.started_run_ids == ["run-1"]
     assert len(waiting_records) == 1
     assert waiting_records[0].run_id == "run-1"
-    assert waiting_records[0].queue_cleanup_status == AutomationCleanupStatus.CLEANED
+    assert waiting_records[0].queue_cleanup_status == AutomationCleanupStatus.SKIPPED
     assert len(delivery_service.register_calls) == 1
     assert delivery_service.register_calls[0]["send_started"] is False
     assert project_repo.project.last_session_id == "session-1"
     assert project_repo.project.last_run_started_at is not None
-    assert _feishu_client.deleted_messages == ["om_1"]
+    assert delivery_service.register_calls[0]["reply_to_message_id"] == "om_1"
+    assert run_service.created_intents[0].conversation_context is not None
+    assert (
+        run_service.created_intents[0].conversation_context.im_reply_to_message_id
+        == "om_1"
+    )
+    assert _feishu_client.deleted_messages == []
 
 
 def test_materialize_execution_fails_when_bound_session_is_missing(
@@ -602,11 +620,12 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
     assert progressed is True
     assert run_service.resume_run_ids == ["run-1"]
     assert failed_record.status == AutomationBoundSessionQueueStatus.FAILED
-    assert failed_record.queue_cleanup_status == AutomationCleanupStatus.CLEANED
-    assert "自动恢复失败" in feishu_client.sent_messages[-1]["text"]
-    assert feishu_client.deleted_messages == ["om_1"]
+    assert failed_record.queue_cleanup_status == AutomationCleanupStatus.SKIPPED
+    assert feishu_client.reply_messages
+    assert "自动恢复失败" in feishu_client.reply_messages[-1]["text"]
+    assert feishu_client.deleted_messages == []
     assert delivery_service.skipped_terminal_runs == [
-        ("run-1", feishu_client.sent_messages[-1]["text"])
+        ("run-1", feishu_client.reply_messages[-1]["text"])
     ]
 
 

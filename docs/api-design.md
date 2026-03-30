@@ -1295,6 +1295,9 @@ Behavior:
   `收到来自 {sender_name} 的飞书消息：{message}` with `sender_open_id` fallback.
 - Deduplicates delivery using Feishu `message_id`, falling back to `event_id`.
 - Same-chat inbound messages are processed in queue order.
+- Inbound Feishu messages enter the shared gateway session ingress path and start
+  detached runs only when the bound internal session is idle.
+- A Feishu message never implicitly attaches to an already running session run.
 - Accepted group messages use a Feishu reaction acknowledgement with emoji `eyes`.
 - Only queued messages send a separate text reply: `已进入队列，前面还有 N 条消息。`
 - Group command responses and group final run replies use Feishu reply-to-message on the triggering message.
@@ -1393,6 +1396,9 @@ Each record includes:
 Notes:
 - WeChat is managed as a long-lived conversational gateway, not as a trigger.
 - Current implementation handles direct chat only. Group chat routing is reserved for later expansion.
+- Accepted WeChat direct messages are persisted into a local inbound queue before run start.
+- WeChat inbound messages also use the shared gateway session ingress path, so busy
+  sessions queue later messages instead of auto-attaching them to the active run.
 
 ### `POST /gateway/wechat/login/start`
 
@@ -1590,6 +1596,12 @@ session; projects with a Feishu delivery binding reuse the exact saved bound ses
 Response fields:
 - `automation_project_id`
 - `session_id`
+
+Behavior notes:
+- Bound-session automation execution also goes through the shared gateway session
+  ingress path and always starts detached runs.
+- If the bound session is busy, the automation job queues behind the current
+  session backlog instead of inserting prompt text into the active run.
 
 ### `POST /automation/projects/{automation_project_id}:enable`
 
