@@ -43,6 +43,13 @@ function main() {
   const { result, lines } = captureLogs(() =>
     generateReport(results, {
       pageCountMismatch: "expected 2 slides but found 1 in pages.pptx",
+      deckIssues: [
+        {
+          type: "visual_qa_runtime_failure",
+          severity: "error",
+          detail: "visual QA failed at runtime: playwright timeout",
+        },
+      ],
       mode: "visual+structural",
       capabilities: { visual: true },
     })
@@ -50,9 +57,11 @@ function main() {
 
   const output = lines.join("\n");
   assert.strictEqual(result.hasIssues, true, "report should fail on deck/page issues");
+  assert.strictEqual(result.jsonResult.failed_pages[0].issues.length, 2);
   assert.match(output, /Export QA Report/);
   assert.match(output, /Mode: visual\+structural/);
   assert.match(output, /\[error\] slide_count_mismatch: expected 2 slides but found 1 in pages\.pptx/);
+  assert.match(output, /\[error\] visual_qa_runtime_failure: visual QA failed at runtime: playwright timeout/);
   assert.match(output, /Page 1: FAIL \(1 issues\)/);
   assert.match(output, /\[error\] badge_alignment: 近7年低点 is not aligned with Badge Background/);
   assert.match(output, /Page 2: PASS/);

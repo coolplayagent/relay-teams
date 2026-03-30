@@ -753,34 +753,77 @@ async function runVisualQa(results, pageFiles, pptxPath, capabilities) {
     fs.mkdirSync(htmlSlidesDir, { recursive: true });
     fs.mkdirSync(pptSlidesDir, { recursive: true });
 
-    try {
-      const htmlImages = await renderHtmlSlides(pageFiles, htmlSlidesDir);
-      const pptImages = renderPptxSlides(pptxPath, pptSlidesDir, capabilities);
-      for (let index = 0; index < results.length; index++) {
-        const htmlImage = htmlImages[index];
-        const pptImage = pptImages[index];
-        if (!htmlImage || !pptImage) {
-          continue;
-        }
-        const diffRatio = computeVisualDiffRatio(htmlImage, pptImage);
-        results[index].visualDiffRatio = Number(diffRatio.toFixed(4));
-        if (diffRatio > VISUAL_DIFF_THRESHOLD) {
-          results[index].issues.push({
-            type: "visual_regression",
-            severity: "error",
-            detail: `visual diff ratio ${diffRatio.toFixed(3)} exceeds ${VISUAL_DIFF_THRESHOLD}`,
-          });
-        }
+    const htmlImages = await renderHtmlSlides(pageFiles, htmlSlidesDir);
+    const pptImages = renderPptxSlides(pptxPath, pptSlidesDir, capabilities);
+    for (let index = 0; index < results.length; index++) {
+      const htmlImage = htmlImages[index];
+      const pptImage = pptImages[index];
+      if (!htmlImage || !pptImage) {
+        continue;
       }
-      return results;
-    } catch (error) {
-      for (const result of results) {
-        result.visualWarning = `visual QA skipped: ${error.message}`;
+      const diffRatio = computeVisualDiffRatio(htmlImage, pptImage);
+      results[index].visualDiffRatio = Number(diffRatio.toFixed(4));
+      if (diffRatio > VISUAL_DIFF_THRESHOLD) {
+        results[index].issues.push({
+          type: "visual_regression",
+          severity: "error",
+          detail: `visual diff ratio ${diffRatio.toFixed(3)} exceeds ${VISUAL_DIFF_THRESHOLD}`,
+        });
       }
-      return results;
     }
+    return results;
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function buildCapabilityReport(capabilities, overrides = {}) {
+  return {
+    visual: capabilities.enabled,
+    soffice: Boolean(capabilities.soffice),
+    pdftoppm: Boolean(capabilities.pdftoppm),
+    reason: capabilities.reason,
+    ...overrides,
+  };
+}
+
+async function applyVisualQa(results, pageFiles, pptxPath, capabilities, runner = runVisualQa) {
+  if (!capabilities.enabled) {
+    return {
+      qaResults: results,
+      deckIssues: [],
+      mode: "structural_only",
+      capabilityReport: buildCapabilityReport(capabilities),
+    };
+  }
+
+  try {
+    return {
+      qaResults: await runner(results, pageFiles, pptxPath, capabilities),
+      deckIssues: [],
+      mode: "visual+structural",
+      capabilityReport: buildCapabilityReport(capabilities),
+    };
+  } catch (error) {
+    const detail = `visual QA failed at runtime: ${error.message}`;
+    return {
+      qaResults: results.map((result) => ({
+        ...result,
+        visualWarning: `${detail}; structural checks only`,
+      })),
+      deckIssues: [
+        {
+          type: "visual_qa_runtime_failure",
+          severity: "error",
+          detail,
+        },
+      ],
+      mode: "structural_only",
+      capabilityReport: buildCapabilityReport(capabilities, {
+        visual: false,
+        reason: detail,
+      }),
+    };
   }
 }
 
@@ -816,7 +859,12 @@ function formatIssue(issue) {
 }
 
 function generateReport(results, options = {}) {
-  const { pageCountMismatch = null, mode = "structural_only", capabilities = {} } = options;
+  const {
+    pageCountMismatch = null,
+    deckIssues = [],
+    mode = "structural_only",
+    capabilities = {},
+  } = options;
 
   console.log(`\n${"=".repeat(60)}`);
   console.log("Export QA Report");
@@ -826,25 +874,29 @@ function generateReport(results, options = {}) {
   let hasIssues = false;
   const jsonResult = createJsonResult(results.length, mode, capabilities);
 
+  const allDeckIssues = [...deckIssues];
   if (pageCountMismatch) {
+    allDeckIssues.unshift({
+      type: "slide_count_mismatch",
+      severity: "error",
+      detail: pageCountMismatch,
+    });
+  }
+
+  if (allDeckIssues.length > 0) {
     hasIssues = true;
     jsonResult.passed = false;
     const deckFailure = {
       file: "deck",
       type: "deck",
-      issues: [
-        {
-          type: "slide_count_mismatch",
-          severity: "error",
-          detail: pageCountMismatch,
-        },
-      ],
+      issues: [],
     };
     jsonResult.failed_pages.push(deckFailure);
-    jsonResult.summary.total_issues += 1;
-    jsonResult.summary.errors += 1;
     console.log(`Deck: FAIL`);
-    console.log(`  - [error] slide_count_mismatch: ${pageCountMismatch}`);
+    for (const issue of allDeckIssues) {
+      pushIssue(jsonResult, deckFailure, issue);
+      console.log(formatIssue(issue));
+    }
   }
 
   results.forEach((slide, index) => {
@@ -919,19 +971,18 @@ async function runExportQa(options) {
   }));
 
   const capabilities = getVisualCapabilities();
-  const mode = capabilities.enabled ? "visual+structural" : "structural_only";
-  const qaResults = capabilities.enabled
-    ? await runVisualQa(results, pageFiles, pptxPath, capabilities)
-    : results;
+  const { qaResults, deckIssues, mode, capabilityReport } = await applyVisualQa(
+    results,
+    pageFiles,
+    pptxPath,
+    capabilities
+  );
+
   const { hasIssues, jsonResult } = generateReport(qaResults, {
     pageCountMismatch: slideCountMismatch,
+    deckIssues,
     mode,
-    capabilities: {
-      visual: capabilities.enabled,
-      soffice: Boolean(capabilities.soffice),
-      pdftoppm: Boolean(capabilities.pdftoppm),
-      reason: capabilities.reason,
-    },
+    capabilities: capabilityReport,
   });
 
   const jsonOutputPath = path.join(path.dirname(pagesDir), "export_qa_result.json");
@@ -956,6 +1007,8 @@ async function main() {
 }
 
 module.exports = {
+  applyVisualQa,
+  buildCapabilityReport,
   computeVisualDiffRatio,
   detectBadgeHeaderIssues,
   detectBarChartIssues,
@@ -964,6 +1017,7 @@ module.exports = {
   generateReport,
   getVisualCapabilities,
   parseSlideXml,
+  runVisualQa,
   runExportQa,
   writeJsonOutput,
 };
