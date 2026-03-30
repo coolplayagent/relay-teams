@@ -15,7 +15,7 @@ import { appendStructuredContentPart, renderRichContent } from './content.js';
 
 const STREAMING_CURSOR_CLASS = 'streaming-cursor';
 
-export function renderMessageBlock(container, role, label, parts = []) {
+export function renderMessageBlock(container, role, label, parts = [], options = {}) {
     const safeLabel = label || 'Agent';
     if (container) {
         const empty = container.querySelector('.panel-empty');
@@ -24,6 +24,7 @@ export function renderMessageBlock(container, role, label, parts = []) {
     const wrapper = document.createElement('div');
     wrapper.className = 'message';
     wrapper.dataset.role = role;
+    applyMessageMetadata(wrapper, options);
 
     const roleClass = roleClassName(role, safeLabel);
     wrapper.innerHTML = `
@@ -43,6 +44,17 @@ export function renderMessageBlock(container, role, label, parts = []) {
     }
 
     return { wrapper, contentEl, pendingToolBlocks };
+}
+
+function applyMessageMetadata(wrapper, options = {}) {
+    const runId = String(options.runId || '').trim();
+    const instanceId = String(options.instanceId || '').trim();
+    const roleId = String(options.roleId || '').trim();
+    const streamKey = String(options.streamKey || '').trim();
+    if (runId) wrapper.dataset.runId = runId;
+    if (instanceId) wrapper.dataset.instanceId = instanceId;
+    if (roleId) wrapper.dataset.roleId = roleId;
+    if (streamKey) wrapper.dataset.streamKey = streamKey;
 }
 
 export function renderParts(contentEl, parts, pendingToolBlocks) {

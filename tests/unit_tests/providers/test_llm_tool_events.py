@@ -284,7 +284,7 @@ def test_commit_ready_messages_defers_tool_call_event_until_safe_commit() -> Non
     assert hub.events == []
 
 
-def test_commit_ready_messages_publishes_tool_events_after_safe_commit() -> None:
+def test_commit_ready_messages_publishes_only_tool_outcomes_after_safe_commit() -> None:
     hub = _FakeRunEventHub()
     provider = _provider_with_hub(hub)
     fake_repo = _FakeMessageRepository()
@@ -321,10 +321,48 @@ def test_commit_ready_messages_publishes_tool_events_after_safe_commit() -> None
     assert len(history) == 2
     assert pending == []
     assert tool_events_published is True
-    assert [event.event_type for event in hub.events] == [
-        RunEventType.TOOL_CALL,
-        RunEventType.TOOL_RESULT,
-    ]
+    assert [event.event_type for event in hub.events] == [RunEventType.TOOL_RESULT]
+
+
+def test_publish_tool_call_events_deduplicates_published_tool_call_ids() -> None:
+    hub = _FakeRunEventHub()
+    provider = _provider_with_hub(hub)
+    published_tool_call_ids: set[str] = set()
+
+    emitted_first = provider._publish_tool_call_events_from_messages(
+        request=_request(),
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create_tasks",
+                        args={"objective": "x"},
+                        tool_call_id="call-live",
+                    )
+                ]
+            )
+        ],
+        published_tool_call_ids=published_tool_call_ids,
+    )
+    emitted_second = provider._publish_tool_call_events_from_messages(
+        request=_request(),
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create_tasks",
+                        args={"objective": "x"},
+                        tool_call_id="call-live",
+                    )
+                ]
+            )
+        ],
+        published_tool_call_ids=published_tool_call_ids,
+    )
+
+    assert emitted_first is True
+    assert emitted_second is False
+    assert [event.event_type for event in hub.events] == [RunEventType.TOOL_CALL]
 
 
 def test_publish_tool_events_skips_retry_without_tool_name() -> None:

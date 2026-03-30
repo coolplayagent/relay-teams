@@ -22,9 +22,11 @@ export {
 
 export {
     buildToolBlock,
+    buildPendingToolBlock,
     findToolBlock,
     setToolValidationFailureState,
     applyToolReturn,
+    setToolStatus,
     indexPendingToolBlock,
     resolvePendingToolBlock,
     findToolBlockInContainer,

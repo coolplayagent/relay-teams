@@ -1459,9 +1459,14 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
 
     history_after_cancel = message_repo.get_history("inst-sub")
     assert len(history_after_cancel) == 1
-    assert not any(
-        event.event_type == RunEventType.TOOL_CALL for event in cancel_hub.events
-    )
+    cancel_tool_call_payloads = [
+        json.loads(event.payload_json)
+        for event in cancel_hub.events
+        if event.event_type == RunEventType.TOOL_CALL
+    ]
+    assert [payload["tool_call_id"] for payload in cancel_tool_call_payloads] == [
+        "call-pre"
+    ]
     assert not any(
         event.event_type == RunEventType.TOOL_RESULT for event in cancel_hub.events
     )

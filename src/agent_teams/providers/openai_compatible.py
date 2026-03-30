@@ -265,10 +265,12 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
-        self._session._publish_tool_call_events_from_messages(
+        published_tool_call_ids: set[str] | None = None,
+    ) -> bool:
+        return self._session._publish_tool_call_events_from_messages(
             request=request,
             messages=messages,
+            published_tool_call_ids=published_tool_call_ids,
         )
 
     def _publish_committed_tool_outcome_events_from_messages(

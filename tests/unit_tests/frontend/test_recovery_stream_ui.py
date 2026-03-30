@@ -148,15 +148,28 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "function resolveReusableRawText(overlayEntry) {" in renderer_stream_script
     assert "let lastRenderedMessage = null;" in history_script
     assert (
-        "renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage);"
-        in history_script
-    )
-    assert "return lastRenderedMessage.contentEl;" in history_script
-    assert (
-        "const lastMessageContentEl = findLastCompatibleMessageContent(container, safeLabel);"
+        "renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage, runId);"
         in history_script
     )
     assert (
-        "function findLastCompatibleMessageContent(container, label) {"
+        "const streamKey = resolveStreamKey(instanceId, roleId);"
+        in renderer_stream_script
+    )
+    assert "wrapper.dataset.streamKey = streamKey;" in (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "helpers"
+        / "block.js"
+    ).read_text(encoding="utf-8")
+    assert (
+        "const lastMessageContentEl = findLastCompatibleMessageContent(container, safeLabel, {"
+        in history_script
+    )
+    assert (
+        "function findLastCompatibleMessageContent(container, label, options = {}) {"
         in history_script
     )

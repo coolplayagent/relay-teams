@@ -740,7 +740,8 @@
 }
 
 .msg-text > .msg-image,
-.tool-result > .msg-image {
+.tool-result > .msg-image,
+.tool-output > .msg-image {
     margin-top: 0.75rem;
 }
 
@@ -4858,7 +4859,7 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 .msg-header {
-    margin-bottom: 0.4rem;
+    display: none;
 }
 
 .msg-role {
@@ -4885,29 +4886,8 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 .markdown-code-block,
 .msg-content pre,
 .msg-text pre,
-.tool-block,
-.tool-result,
 .tool-call {
     border-radius: 8px;
-}
-
-.tool-block {
-    background: var(--bg-tool-block);
-    border-color: var(--border-color);
-}
-
-.tool-header {
-    padding: 0.7rem 0.85rem;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.tool-header:hover {
-    background: var(--bg-hover);
-}
-
-.tool-body {
-    background: var(--bg-surface);
 }
 
 #prompt-input {
@@ -5308,7 +5288,6 @@ body.light-theme .session-item:hover {
     background: color-mix(in srgb, var(--bg-surface-muted) 84%, #eceeed 16%);
 }
 
-body.light-theme .tool-header,
 body.light-theme .round-state-pill,
 body.light-theme .round-nav-state,
 body.light-theme .recovery-status-pill,
@@ -5912,8 +5891,6 @@ body.light-theme .subagent-toggle-btn.active {
     background: var(--bg-hover);
 }
 
-body.light-theme .tool-body,
-body.light-theme .tool-result,
 body.light-theme .tool-call,
 body.light-theme .markdown-code-block,
 body.light-theme .msg-content pre,
@@ -5921,27 +5898,9 @@ body.light-theme .msg-text pre {
     background: var(--bg-surface-muted);
 }
 
-body.light-theme .tool-block,
-body.light-theme .tool-header,
-body.light-theme .tool-body,
-body.light-theme .tool-call,
-body.light-theme .tool-result {
-    background: var(--bg-tool-block);
-}
-
-body.light-theme .tool-header {
-    background: var(--bg-tool-header);
-    border-bottom-color: var(--border-color);
-}
-
-body.light-theme .tool-header:hover {
-    background: var(--bg-tool-header-hover);
-}
-
-body.light-theme .tool-body,
-body.light-theme .tool-call,
-body.light-theme .tool-result {
-    background: var(--bg-tool-body);
+body.light-theme .tool-detail-card {
+    background: var(--bg-surface-muted);
+    border-color: var(--border-color);
 }
 
 body.light-theme .markdown-code-header {
@@ -5970,7 +5929,6 @@ body.light-theme .round-nav-float,
 body.light-theme .recovery-banner,
 body.light-theme .human-dispatch-panel,
 body.light-theme .gate-card,
-body.light-theme .tool-block,
 body.light-theme .system-intro {
     border-color: var(--border-color);
 }
@@ -5982,112 +5940,8 @@ body.light-theme .composer-select-field select,
 body.light-theme .composer-mode-inline-select {
     background: var(--bg-surface);
 }
-/* Tool Call Blocks */
-.tool-block {
-    margin: 0.5rem 0 1rem 0;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background-color: var(--bg-tool-block);
-    overflow: hidden;
-}
-
-.tool-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    background-color: var(--bg-tool-header);
-    cursor: pointer;
-    user-select: none;
-    transition: background-color 0.2s;
-}
-
-.tool-header:hover {
-    background-color: var(--bg-tool-header-hover);
-}
-
-.tool-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-}
-
-.tool-title .name {
-    color: var(--text-tool-name);
-    font-weight: 500;
-}
-
-.tool-status {
-    display: flex;
-    align-items: center;
-}
-
-.spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid var(--bg-hover-strong);
-    border-top-color: var(--primary);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-.status-icon {
-    width: 16px;
-    height: 16px;
-}
-
-.status-success {
-    color: var(--success);
-}
-
-.status-error {
-    color: var(--danger);
-}
-
-.status-warning {
-    color: var(--warning);
-}
-
-.tool-body {
-    padding: 1rem;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-tool-body);
-    font-size: 0.8125rem;
-    font-family: var(--font-mono);
-    display: none;
-    /* hidden by default, toggled via JS */
-}
-
-.tool-body.open {
-    display: block;
-    animation: fadeIn 0.3s;
-}
-
-.tool-args {
-    color: var(--text-tool-args);
-    margin-bottom: 0.5rem;
-}
-
-.tool-result {
-    color: var(--text-secondary);
-    white-space: pre-wrap;
-}
-
-.tool-result.error-text {
-    color: var(--danger);
-}
-
-.tool-result.warning-text {
-    color: var(--warning);
-}
-
-.tool-approval-inline {
-    margin-bottom: 0.65rem;
-}
-
+/* Tool Call Blocks - styles moved to components/tools.css */
+/* Only keep approval-state here for backward compat */
 .tool-approval-state {
     display: inline-flex;
     align-items: center;

@@ -377,6 +377,7 @@ class AgentLlmSession:
         attempt_text_emitted = False
         attempt_tool_event_emitted = False
         attempt_messages_committed = False
+        published_tool_call_ids: set[str] = set()
         history: list[ModelRequest | ModelResponse] = (
             self._truncate_history_to_safe_boundary(
                 self._filter_model_messages(
@@ -526,6 +527,15 @@ class AgentLlmSession:
                             new_messages=new_batch,
                         )
                         if new_to_process:
+                            tool_call_events_emitted = (
+                                self._publish_tool_call_events_from_messages(
+                                    request=request,
+                                    messages=new_to_process,
+                                    published_tool_call_ids=published_tool_call_ids,
+                                )
+                            )
+                            if tool_call_events_emitted:
+                                attempt_tool_event_emitted = True
                             buffered_messages.extend(new_to_process)
                             previous_history_size = len(history)
                             (
@@ -602,6 +612,15 @@ class AgentLlmSession:
                         new_messages=list(all_new)[seen_count:],
                     )
                     if to_save:
+                        tool_call_events_emitted = (
+                            self._publish_tool_call_events_from_messages(
+                                request=request,
+                                messages=to_save,
+                                published_tool_call_ids=published_tool_call_ids,
+                            )
+                        )
+                        if tool_call_events_emitted:
+                            attempt_tool_event_emitted = True
                         buffered_messages.extend(to_save)
                     previous_history_size = len(history)
                     (
@@ -1656,10 +1675,6 @@ class AgentLlmSession:
             trace_id=request.trace_id,
             messages=ready,
         )
-        self._publish_tool_call_events_from_messages(
-            request=request,
-            messages=ready,
-        )
         self._publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
@@ -1810,12 +1825,19 @@ class AgentLlmSession:
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
+        published_tool_call_ids: set[str] | None = None,
+    ) -> bool:
+        emitted = False
         for msg in messages:
             if isinstance(msg, ModelResponse):
                 for part in msg.parts:
                     if not isinstance(part, ToolCallPart):
                         continue
+                    tool_call_id = str(part.tool_call_id or "").strip()
+                    if tool_call_id and published_tool_call_ids is not None:
+                        if tool_call_id in published_tool_call_ids:
+                            continue
+                        published_tool_call_ids.add(tool_call_id)
                     self._run_event_hub.publish(
                         RunEvent(
                             session_id=request.session_id,
@@ -1828,7 +1850,7 @@ class AgentLlmSession:
                             payload_json=self._to_json(
                                 {
                                     "tool_name": part.tool_name,
-                                    "tool_call_id": part.tool_call_id,
+                                    "tool_call_id": tool_call_id,
                                     "args": part.args,
                                     "role_id": request.role_id,
                                     "instance_id": request.instance_id,
@@ -1836,6 +1858,8 @@ class AgentLlmSession:
                             ),
                         )
                     )
+                    emitted = True
+        return emitted
 
     def _publish_committed_tool_outcome_events_from_messages(
         self,

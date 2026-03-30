@@ -7,10 +7,7 @@
 }
 
 .msg-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.35rem;
+    display: none;
 }
 
 .msg-role {
@@ -175,7 +172,8 @@
 }
 
 .msg-text > .msg-image,
-.tool-result > .msg-image {
+.tool-result > .msg-image,
+.tool-output > .msg-image {
     margin-top: 0.75rem;
 }
 

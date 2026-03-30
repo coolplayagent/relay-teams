@@ -11,18 +11,17 @@ export function decoratePendingApprovalBlock(toolBlock, approval) {
     }
 
     const statusEl = toolBlock.querySelector('.tool-status');
-    const resultEl = toolBlock.querySelector('.tool-result');
+    const outputEl = toolBlock.querySelector('.tool-output');
     if (statusEl) {
-        statusEl.innerHTML = `<svg class="status-icon status-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86l-8.2 14.2A2 2 0 0 0 3.8 21h16.4a2 2 0 0 0 1.73-2.94l-8.2-14.2a2 2 0 0 0-3.46 0z"/></svg>`;
+        statusEl.innerHTML = `<svg class="status-icon status-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86l-8.2 14.2A2 2 0 0 0 3.8 21h16.4a2 2 0 0 0 1.73-2.94l-8.2-14.2a2 2 0 0 0-3.46 0z"/></svg>`;
     }
-    if (resultEl) {
-        resultEl.classList.remove('error-text');
-        resultEl.classList.add('warning-text');
-        resultEl.innerHTML = parseMarkdown(formatPendingApprovalResult(approval));
+    if (outputEl) {
+        outputEl.classList.remove('error-text');
+        outputEl.classList.add('warning-text');
+        outputEl.innerHTML = parseMarkdown(formatPendingApprovalResult(approval));
     }
     if (String(approval?.status || 'requested').toLowerCase() === 'requested') {
-        const body = toolBlock.querySelector('.tool-body');
-        if (body) body.classList.add('open');
+        toolBlock.open = true;
     }
 
     let approvalEl = toolBlock.querySelector('.tool-approval-inline');
@@ -30,11 +29,14 @@ export function decoratePendingApprovalBlock(toolBlock, approval) {
         approvalEl = document.createElement('div');
         approvalEl.className = 'tool-approval-inline';
         approvalEl.innerHTML = `<div class="tool-approval-state"></div>`;
-        const body = toolBlock.querySelector('.tool-body');
-        if (body && resultEl) {
-            body.insertBefore(approvalEl, resultEl);
-        } else if (body) {
-            body.appendChild(approvalEl);
+        const detail = toolBlock.querySelector('.tool-detail');
+        if (detail && outputEl) {
+            const card = toolBlock.querySelector('.tool-detail-card');
+            if (card) {
+                card.insertBefore(approvalEl, outputEl);
+            }
+        } else if (detail) {
+            detail.appendChild(approvalEl);
         }
     }
     const stateEl = approvalEl.querySelector('.tool-approval-state');
@@ -63,12 +65,12 @@ export function syncApprovalStateFromEnvelope(toolBlock, envelope) {
         approvalEl = document.createElement('div');
         approvalEl.className = 'tool-approval-inline';
         approvalEl.innerHTML = `<div class="tool-approval-state"></div>`;
-        const body = toolBlock.querySelector('.tool-body');
-        const resultEl = toolBlock.querySelector('.tool-result');
-        if (body && resultEl) {
-            body.insertBefore(approvalEl, resultEl);
-        } else if (body) {
-            body.appendChild(approvalEl);
+        const card = toolBlock.querySelector('.tool-detail-card');
+        const outputEl = toolBlock.querySelector('.tool-output');
+        if (card && outputEl) {
+            card.insertBefore(approvalEl, outputEl);
+        } else if (card) {
+            card.appendChild(approvalEl);
         }
     }
 
