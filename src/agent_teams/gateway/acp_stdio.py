@@ -18,6 +18,12 @@ from agent_teams.gateway.gateway_model_profile_override import (
 )
 from agent_teams.gateway.gateway_models import GatewayChannelType, GatewayMcpServerSpec
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
+from agent_teams.gateway.session_ingress_service import (
+    GatewaySessionBusyError,
+    GatewaySessionIngressBusyPolicy,
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
 from agent_teams.logger import get_logger, log_event
 from agent_teams.media import (
     ContentPart,
@@ -94,6 +100,7 @@ class AcpGatewayServer:
         media_asset_service: MediaAssetService,
         notify: AcpNotifier,
         mcp_relay: AcpMcpRelay | None = None,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._gateway_session_service = gateway_session_service
         self._session_service = session_service
@@ -103,6 +110,7 @@ class AcpGatewayServer:
         self._active_runs: dict[str, str] = {}
         self._zed_compat_mode = False
         self._mcp_relay = mcp_relay or AcpMcpRelay()
+        self._session_ingress_service = session_ingress_service
 
     def set_notify(self, notify: AcpNotifier) -> None:
         self._notify = notify
@@ -319,15 +327,21 @@ class AcpGatewayServer:
             raise AcpProtocolError(
                 -32602, "prompt must contain at least one supported content block"
             )
+        intent = IntentInput(
+            session_id=record.internal_session_id,
+            input=prompt_input,
+            yolo=True,
+        )
         with self._mcp_relay.session_scope(gateway_session_id):
-            run_id, _ = self._run_service.create_run(
-                IntentInput(
-                    session_id=record.internal_session_id,
-                    input=prompt_input,
-                    yolo=True,
+            try:
+                run_id = self._start_prompt_run(intent)
+            except GatewaySessionBusyError as exc:
+                raise AcpProtocolError(
+                    -32000,
+                    f"Session already has an active run: {exc.blocking_run_id}",
                 )
-            )
-            self._run_service.ensure_run_started(run_id)
+            except RuntimeError as exc:
+                raise AcpProtocolError(-32000, str(exc)) from exc
             self._active_runs[gateway_session_id] = run_id
             _ = self._gateway_session_service.bind_active_run(
                 gateway_session_id, run_id
@@ -362,6 +376,21 @@ class AcpGatewayServer:
             "runStatus": result.run_status,
             "recoverable": result.recoverable,
         }
+
+    def _start_prompt_run(self, intent: IntentInput) -> str:
+        if self._session_ingress_service is not None:
+            result = self._session_ingress_service.require_started(
+                GatewaySessionIngressRequest(
+                    intent=intent,
+                    busy_policy=GatewaySessionIngressBusyPolicy.REJECT_IF_BUSY,
+                )
+            )
+            if result.run_id is None:
+                raise RuntimeError("acp_run_not_started")
+            return result.run_id
+        run_id, _ = self._run_service.create_run(intent)
+        self._run_service.ensure_run_started(run_id)
+        return run_id
 
     async def _resume_session(
         self,

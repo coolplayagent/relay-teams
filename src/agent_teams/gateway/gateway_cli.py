@@ -334,6 +334,7 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         media_asset_service=container.media_asset_service,
         notify=_noop_notify,
         mcp_relay=mcp_relay,
+        session_ingress_service=container.session_ingress_service,
     )
     runtime = AcpStdioRuntime(
         server=server,

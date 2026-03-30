@@ -84,6 +84,23 @@ def test_create_run_route_accepts_yolo() -> None:
     assert fake_service.started_run_ids == ["run-1"]
 
 
+def test_create_run_route_rejects_none_like_session_id() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "None",
+            "intent": "hello",
+            "execution_mode": "ai",
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_run_inputs == []
+
+
 def test_create_run_route_accepts_thinking_config() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
@@ -145,3 +162,13 @@ def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:
     assert response.json()["detail"] == (
         "Run run-1 is stopped. Resume the run before resolving tool approval."
     )
+
+
+def test_resume_route_rejects_none_like_run_id() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/runs/None:resume")
+
+    assert response.status_code == 422
+    assert fake_service.resumed_run_ids == []

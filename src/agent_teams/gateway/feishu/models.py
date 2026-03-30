@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
 from agent_teams.sessions.session_models import SessionMode
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 FEISHU_PLATFORM = "feishu"
 FEISHU_METADATA_PLATFORM_KEY = "feishu_platform"
@@ -40,7 +41,7 @@ class FeishuMessageFormat(str, Enum):
 class FeishuEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    app_id: str = Field(min_length=1)
+    app_id: RequiredIdentifierStr
     app_secret: str = Field(min_length=1)
     app_name: str | None = None
     verification_token: str | None = None
@@ -50,8 +51,8 @@ class FeishuEnvironment(BaseModel):
 class FeishuNotificationTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    tenant_key: str = Field(min_length=1)
-    chat_id: str = Field(min_length=1)
+    tenant_key: RequiredIdentifierStr
+    chat_id: RequiredIdentifierStr
     chat_type: str = Field(min_length=1)
 
 
@@ -76,17 +77,17 @@ class FeishuTriggerSourceConfig(BaseModel):
 
     provider: Literal["feishu"] = FEISHU_PLATFORM
     trigger_rule: Literal["mention_only", "all_messages"] = "mention_only"
-    app_id: str = Field(min_length=1)
+    app_id: RequiredIdentifierStr
     app_name: str = Field(min_length=1)
 
 
 class FeishuTriggerTargetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(default="default", min_length=1)
+    workspace_id: RequiredIdentifierStr = "default"
     session_mode: SessionMode = SessionMode.NORMAL
-    normal_root_role_id: str | None = None
-    orchestration_preset_id: str | None = None
+    normal_root_role_id: OptionalIdentifierStr = None
+    orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
@@ -105,7 +106,7 @@ class FeishuTriggerTargetConfig(BaseModel):
 class FeishuTriggerRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    trigger_id: str = Field(min_length=1)
+    trigger_id: RequiredIdentifierStr
     trigger_name: str = Field(min_length=1)
     source: FeishuTriggerSourceConfig
     target: FeishuTriggerTargetConfig
@@ -129,7 +130,7 @@ class FeishuGatewayAccountStatus(str, Enum):
 class FeishuGatewayAccountCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1)
+    name: RequiredIdentifierStr
     display_name: str | None = None
     source_config: dict[str, JsonValue] = Field(default_factory=dict)
     target_config: dict[str, JsonValue] | None = None
@@ -140,7 +141,7 @@ class FeishuGatewayAccountCreateInput(BaseModel):
 class FeishuGatewayAccountUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(default=None, min_length=1)
+    name: OptionalIdentifierStr = None
     display_name: str | None = None
     source_config: dict[str, JsonValue] | None = None
     target_config: dict[str, JsonValue] | None = None
@@ -150,8 +151,8 @@ class FeishuGatewayAccountUpdateInput(BaseModel):
 class FeishuGatewayAccountRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    account_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    account_id: RequiredIdentifierStr
+    name: RequiredIdentifierStr
     display_name: str = Field(min_length=1)
     status: FeishuGatewayAccountStatus
     source_config: dict[str, JsonValue] = Field(default_factory=dict)
@@ -187,12 +188,12 @@ class TriggerProcessingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(min_length=1)
-    trigger_id: str | None = None
+    trigger_id: OptionalIdentifierStr = None
     trigger_name: str | None = None
-    event_id: str | None = None
+    event_id: OptionalIdentifierStr = None
     duplicate: bool = False
-    session_id: str | None = None
-    run_id: str | None = None
+    session_id: OptionalIdentifierStr = None
+    run_id: OptionalIdentifierStr = None
     ignored: bool = False
     reason: str | None = None
 
@@ -220,15 +221,15 @@ class FeishuMessagePoolRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sequence_id: int = Field(default=0, ge=0)
-    message_pool_id: str = Field(min_length=1)
-    trigger_id: str = Field(min_length=1)
+    message_pool_id: RequiredIdentifierStr
+    trigger_id: RequiredIdentifierStr
     trigger_name: str = Field(min_length=1)
-    tenant_key: str = Field(min_length=1)
-    chat_id: str = Field(min_length=1)
+    tenant_key: RequiredIdentifierStr
+    chat_id: RequiredIdentifierStr
     chat_type: str = Field(min_length=1)
-    event_id: str = Field(min_length=1)
-    message_key: str = Field(min_length=1)
-    message_id: str | None = None
+    event_id: RequiredIdentifierStr
+    message_key: RequiredIdentifierStr
+    message_id: OptionalIdentifierStr = None
     command_name: str | None = None
     sender_name: str | None = None
     intent_text: str = ""
@@ -250,8 +251,8 @@ class FeishuMessagePoolRecord(BaseModel):
     process_attempts: int = Field(default=0, ge=0)
     ack_attempts: int = Field(default=0, ge=0)
     final_reply_attempts: int = Field(default=0, ge=0)
-    session_id: str | None = None
-    run_id: str | None = None
+    session_id: OptionalIdentifierStr = None
+    run_id: OptionalIdentifierStr = None
     next_attempt_at: datetime
     last_claimed_at: datetime | None = None
     last_error: str | None = None
@@ -263,10 +264,10 @@ class FeishuMessagePoolRecord(BaseModel):
 class FeishuChatQueueItemPreview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    message_pool_id: str = Field(min_length=1)
+    message_pool_id: RequiredIdentifierStr
     processing_status: FeishuMessageProcessingStatus
     intent_preview: str = ""
-    run_id: str | None = None
+    run_id: OptionalIdentifierStr = None
     run_status: str | None = None
     run_phase: str | None = None
     blocking_reason: str | None = None
@@ -276,9 +277,9 @@ class FeishuChatQueueItemPreview(BaseModel):
 class FeishuChatQueueSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    trigger_id: str = Field(min_length=1)
-    tenant_key: str = Field(min_length=1)
-    chat_id: str = Field(min_length=1)
+    trigger_id: RequiredIdentifierStr
+    tenant_key: RequiredIdentifierStr
+    chat_id: RequiredIdentifierStr
     active_total: int = Field(default=0, ge=0)
     queued_count: int = Field(default=0, ge=0)
     claimed_count: int = Field(default=0, ge=0)
@@ -293,8 +294,8 @@ class FeishuChatQueueSummary(BaseModel):
 class FeishuChatQueueClearResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    trigger_id: str = Field(min_length=1)
-    tenant_key: str = Field(min_length=1)
-    chat_id: str = Field(min_length=1)
+    trigger_id: RequiredIdentifierStr
+    tenant_key: RequiredIdentifierStr
+    chat_id: RequiredIdentifierStr
     cleared_queue_count: int = Field(default=0, ge=0)
     stopped_run_count: int = Field(default=0, ge=0)

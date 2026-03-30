@@ -35,6 +35,7 @@ class _FakeContainer:
         self.session_service = object()
         self.workspace_service = object()
         self.run_service = object()
+        self.session_ingress_service = object()
         self.media_asset_service = object()
         self.role_registry = _FakeRoleRegistry()
         self.refreshed = False

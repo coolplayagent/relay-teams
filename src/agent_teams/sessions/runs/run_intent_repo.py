@@ -24,6 +24,7 @@ from agent_teams.sessions.runs.run_models import (
 )
 from agent_teams.persistence.db import open_sqlite
 from agent_teams.sessions.session_models import SessionMode
+from agent_teams.validation import normalize_persisted_text
 
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 _MediaGenerationConfigAdapter = TypeAdapter(MediaGenerationConfig)
@@ -220,7 +221,12 @@ class RunIntentRepository:
         )
         self._conn.commit()
 
-    def get(self, run_id: str) -> IntentInput:
+    def get(
+        self,
+        run_id: str,
+        *,
+        fallback_session_id: str | None = None,
+    ) -> IntentInput:
         row = self._conn.execute(
             """
             SELECT
@@ -245,8 +251,14 @@ class RunIntentRepository:
         ).fetchone()
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
+        session_id = _coerce_session_id(
+            row["session_id"],
+            fallback_session_id=fallback_session_id,
+        )
+        if session_id is None:
+            raise KeyError(f"Unknown run_id: {run_id}")
         return IntentInput(
-            session_id=str(row["session_id"]),
+            session_id=session_id,
             input=_coerce_input_parts(row["input_json"], row["intent"]),
             run_kind=RunKind(str(row["run_kind"] or RunKind.CONVERSATION.value)),
             generation_config=_coerce_generation_config(row["generation_config_json"]),
@@ -259,17 +271,27 @@ class RunIntentRepository:
                 enabled=str(row["thinking_enabled"]).strip().lower() == "true",
                 effort=_coerce_thinking_effort(row["thinking_effort"]),
             ),
-            target_role_id=(
-                str(row["target_role_id"])
-                if row["target_role_id"] is not None
-                else None
-            ),
+            target_role_id=normalize_persisted_text(row["target_role_id"]),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             topology=_coerce_topology(row["topology_json"]),
             conversation_context=_coerce_conversation_context(
                 row["conversation_context_json"]
             ),
         )
+
+
+def _coerce_session_id(
+    value: object,
+    *,
+    fallback_session_id: str | None,
+) -> str | None:
+    normalized = normalize_persisted_text(value)
+    if normalized is not None:
+        return normalized
+    fallback = normalize_persisted_text(fallback_session_id)
+    if fallback is not None:
+        return fallback
+    return None
 
 
 def _coerce_thinking_effort(

@@ -16,6 +16,7 @@ from agent_teams.sessions.runs.enums import (
     RunEventType,
 )
 from agent_teams.sessions.session_models import SessionMode
+from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 
 class RunKind(str, Enum):
@@ -36,10 +37,10 @@ class RunTopologySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     session_mode: SessionMode
-    main_agent_role_id: str = Field(min_length=1)
-    normal_root_role_id: str = Field(min_length=1)
-    coordinator_role_id: str = Field(min_length=1)
-    orchestration_preset_id: str | None = None
+    main_agent_role_id: RequiredIdentifierStr
+    normal_root_role_id: RequiredIdentifierStr
+    coordinator_role_id: RequiredIdentifierStr
+    orchestration_preset_id: OptionalIdentifierStr = None
     orchestration_prompt: str = ""
     allowed_role_ids: tuple[str, ...] = ()
 
@@ -51,6 +52,7 @@ class RuntimePromptConversationContext(BaseModel):
     source_kind: str | None = None
     feishu_chat_type: str | None = None
     im_force_direct_send: bool = False
+    im_reply_to_message_id: str | None = None
 
 
 class ImageGenerationConfig(BaseModel):
@@ -91,7 +93,7 @@ MediaGenerationConfig = (
 class IntentInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str = Field(min_length=1)
+    session_id: RequiredIdentifierStr
     input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
@@ -99,7 +101,7 @@ class IntentInput(BaseModel):
     yolo: bool = False
     reuse_root_instance: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
-    target_role_id: str | None = None
+    target_role_id: OptionalIdentifierStr = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
     conversation_context: RuntimePromptConversationContext | None = None
@@ -129,8 +131,8 @@ class IntentInput(BaseModel):
 class RunResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    trace_id: str
-    root_task_id: str
+    trace_id: RequiredIdentifierStr
+    root_task_id: RequiredIdentifierStr
     status: Literal["completed", "failed"]
     output: tuple[ContentPart, ...] = Field(default_factory=tuple)
 
@@ -158,12 +160,12 @@ class RunResult(BaseModel):
 class InjectionMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str = Field(min_length=1)
-    recipient_instance_id: str = Field(min_length=1)
+    run_id: RequiredIdentifierStr
+    recipient_instance_id: RequiredIdentifierStr
     source: InjectionSource
     content: str = Field(min_length=1)
-    sender_instance_id: str | None = None
-    sender_role_id: str | None = None
+    sender_instance_id: OptionalIdentifierStr = None
+    sender_role_id: OptionalIdentifierStr = None
     priority: int = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -171,12 +173,12 @@ class InjectionMessage(BaseModel):
 class RunEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session_id: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    trace_id: str = Field(min_length=1)
-    task_id: str | None = None
-    instance_id: str | None = None
-    role_id: str | None = None
+    session_id: RequiredIdentifierStr
+    run_id: RequiredIdentifierStr
+    trace_id: RequiredIdentifierStr
+    task_id: OptionalIdentifierStr = None
+    instance_id: OptionalIdentifierStr = None
+    role_id: OptionalIdentifierStr = None
     event_type: RunEventType
     payload_json: str = Field(default="{}")
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

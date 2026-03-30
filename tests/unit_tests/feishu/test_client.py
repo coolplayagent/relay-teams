@@ -311,12 +311,13 @@ def test_reply_text_message_uses_reply_endpoint(monkeypatch) -> None:
     client = FeishuClient()
     environment = FeishuEnvironment(app_id="cli_1", app_secret="secret", app_name="bot")
 
-    client.reply_text_message(
+    message_id = client.reply_text_message(
         message_id="om_1",
         text="queued",
         environment=environment,
     )
 
+    assert message_id == "om_reply_1"
     assert [request[:2] for request in fake_client.requests] == [
         ("POST", f"{base_url}/open-apis/auth/v3/tenant_access_token/internal"),
         ("POST", f"{base_url}/open-apis/im/v1/messages/om_1/reply"),

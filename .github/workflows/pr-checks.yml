@@ -16,6 +16,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   agents-self-check:
@@ -29,6 +30,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Require linked issue for PRs into main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: python src/agent_teams/release/pull_request_issue_link.py
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6

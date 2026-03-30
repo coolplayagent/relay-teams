@@ -17,13 +17,14 @@ from agent_teams.media import (
     infer_media_modality,
 )
 from agent_teams.sessions import SessionService
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
 @router.get("/{session_id}/media", response_model=list[MediaRefContentPart])
 def list_session_media(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> list[MediaRefContentPart]:
@@ -39,7 +40,7 @@ def list_session_media(
 
 @router.post("/{session_id}/media", response_model=MediaRefContentPart)
 async def upload_session_media(
-    session_id: str,
+    session_id: RequiredIdentifierStr,
     file: Annotated[UploadFile, File(...)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
@@ -85,8 +86,8 @@ async def upload_session_media(
 
 @router.get("/{session_id}/media/{asset_id}", response_model=MediaRefContentPart)
 def get_session_media(
-    session_id: str,
-    asset_id: str,
+    session_id: RequiredIdentifierStr,
+    asset_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> MediaRefContentPart:
@@ -102,8 +103,8 @@ def get_session_media(
 
 @router.get("/{session_id}/media/{asset_id}/file", response_model=None)
 def get_session_media_file(
-    session_id: str,
-    asset_id: str,
+    session_id: RequiredIdentifierStr,
+    asset_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> FileResponse | RedirectResponse:

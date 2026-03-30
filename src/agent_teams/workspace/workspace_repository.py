@@ -2,17 +2,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from pydantic import JsonValue, ValidationError
+
+from agent_teams.logger import get_logger, log_event
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.validation import (
+    parse_persisted_datetime_or_none,
+    require_persisted_identifier,
+)
 from agent_teams.workspace.workspace_models import (
     WorkspaceProfile,
     WorkspaceRecord,
     default_workspace_profile,
 )
+
+LOGGER = get_logger(__name__)
 
 
 class WorkspaceRepository:
@@ -105,14 +115,24 @@ class WorkspaceRepository:
             ).fetchone()
         if row is None:
             raise KeyError(f"Unknown workspace_id: {workspace_id}")
-        return self._to_record(row)
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            _log_invalid_workspace_row(row=row, error=exc)
+            raise KeyError(f"Unknown workspace_id: {workspace_id}") from exc
 
     def list_all(self) -> tuple[WorkspaceRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM workspaces ORDER BY created_at DESC"
             ).fetchall()
-        return tuple(self._to_record(row) for row in rows)
+        records: list[WorkspaceRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_workspace_row(row=row, error=exc)
+        return tuple(records)
 
     def delete(self, workspace_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -144,9 +164,80 @@ class WorkspaceRepository:
             else default_workspace_profile()
         )
         return WorkspaceRecord(
-            workspace_id=str(row["workspace_id"]),
+            workspace_id=require_persisted_identifier(
+                row["workspace_id"],
+                field_name="workspace_id",
+            ),
             root_path=Path(str(row["root_path"])).resolve(),
             profile=profile,
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            created_at=_require_workspace_timestamp(
+                row=row,
+                workspace_id=str(row["workspace_id"]),
+                field_name="created_at",
+            ),
+            updated_at=_require_workspace_timestamp(
+                row=row,
+                workspace_id=str(row["workspace_id"]),
+                field_name="updated_at",
+            ),
         )
+
+
+def _require_workspace_timestamp(
+    *,
+    row: sqlite3.Row,
+    workspace_id: str,
+    field_name: str,
+) -> datetime:
+    parsed = parse_persisted_datetime_or_none(row[field_name])
+    if parsed is not None:
+        return parsed
+    _log_invalid_workspace_timestamp(
+        workspace_id=workspace_id,
+        field_name=field_name,
+        raw_preview=_persisted_value_preview(row[field_name]),
+    )
+    raise ValueError(f"Invalid persisted {field_name}")
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_workspace_timestamp(
+    *,
+    workspace_id: str,
+    field_name: str,
+    raw_preview: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "workspace_id": workspace_id,
+        "field_name": field_name,
+        "raw_preview": raw_preview,
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="workspace.repository.timestamp_invalid",
+        message="Invalid persisted workspace timestamp",
+        payload=payload,
+    )
+
+
+def _log_invalid_workspace_row(*, row: sqlite3.Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "workspace_id": _persisted_value_preview(row["workspace_id"]),
+        "created_at": _persisted_value_preview(row["created_at"]),
+        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="workspace.repository.row_invalid",
+        message="Skipping invalid persisted workspace row",
+        payload=payload,
+    )

@@ -15,6 +15,7 @@ from agent_teams.automation import (
     AutomationService,
 )
 from agent_teams.interfaces.server.deps import get_automation_service
+from agent_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
 
@@ -48,7 +49,7 @@ def list_projects(
 
 @router.get("/projects/{automation_project_id}", response_model=AutomationProjectRecord)
 def get_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
@@ -61,7 +62,7 @@ def get_project(
     "/projects/{automation_project_id}", response_model=AutomationProjectRecord
 )
 def update_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     req: AutomationProjectUpdateInput,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
@@ -77,7 +78,7 @@ def update_project(
 
 @router.delete("/projects/{automation_project_id}")
 def delete_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> dict[str, JsonValue]:
     try:
@@ -89,7 +90,7 @@ def delete_project(
 
 @router.post("/projects/{automation_project_id}:run")
 async def run_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> dict[str, JsonValue]:
     try:
@@ -104,7 +105,7 @@ async def run_project(
     "/projects/{automation_project_id}:enable", response_model=AutomationProjectRecord
 )
 def enable_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
@@ -123,7 +124,7 @@ def enable_project(
     response_model=AutomationProjectRecord,
 )
 def disable_project(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
@@ -137,7 +138,7 @@ def disable_project(
 
 @router.get("/projects/{automation_project_id}/sessions")
 def list_project_sessions(
-    automation_project_id: str,
+    automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[dict[str, object]]:
     try:

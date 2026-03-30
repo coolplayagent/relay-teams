@@ -90,6 +90,41 @@ def test_ai_run_uses_fake_llm(
     assert after_calls > before_calls
 
 
+def test_ai_run_continues_after_invalid_tool_args_validation_failure(
+    api_client: httpx.Client,
+) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-invalid-json"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[invalid-json-auto-recovery] 先执行一个工具，再从坏的工具参数 JSON 中自动恢复。",
+        execution_mode="ai",
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "run_paused" not in event_types
+    assert "tool_call" in event_types
+    assert "tool_result" in event_types
+    assert "tool_input_validation_failed" in event_types
+
+    validation_payloads = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_input_validation_failed"
+    ]
+    assert any(
+        payload.get("tool_name") == "read"
+        and payload.get("reason") == "Input validation failed before tool execution."
+        for payload in validation_payloads
+    )
+
+
 def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None:
     session_id = create_session(api_client, session_id=new_session_id("session-task"))
     run_id = create_run(

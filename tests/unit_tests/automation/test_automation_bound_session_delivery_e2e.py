@@ -85,12 +85,24 @@ class _FakeRuntimeConfigLookup:
 class _FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, str]] = []
+        self.reply_messages: list[dict[str, str]] = []
         self.deleted_messages: list[str] = []
 
     def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
         return f"om_{len(self.sent_messages)}"
+
+    def reply_text_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        environment=None,
+    ) -> str:
+        _ = environment
+        self.reply_messages.append({"message_id": message_id, "text": text})
+        return f"om_reply_{len(self.reply_messages)}"
 
     def delete_message(self, *, message_id: str, environment=None) -> None:
         _ = environment
@@ -212,9 +224,9 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
     waiting_record = queue_repo.list_waiting_for_result(limit=10)[0]
     delivery_record = delivery_repo.get_by_run_id("run-1")
     assert waiting_record.run_id == "run-1"
-    assert waiting_record.queue_cleanup_status == AutomationCleanupStatus.CLEANED
+    assert waiting_record.queue_cleanup_status == AutomationCleanupStatus.SKIPPED
     assert delivery_record.started_status == AutomationDeliveryStatus.SKIPPED
-    assert feishu_client.deleted_messages == ["om_1"]
+    assert feishu_client.deleted_messages == []
 
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
@@ -271,8 +283,10 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
     assert delivery_record.terminal_status == AutomationDeliveryStatus.SENT
     assert delivery_record.terminal_event == AutomationDeliveryEvent.COMPLETED
     assert delivery_record.terminal_message == "Recovered report is ready."
-    assert delivery_record.terminal_message_id == "om_2"
+    assert delivery_record.terminal_message_id == "om_reply_1"
     assert all(
         "执行失败" not in message["text"] for message in feishu_client.sent_messages
     )
-    assert feishu_client.sent_messages[-1]["text"] == "Recovered report is ready."
+    assert feishu_client.reply_messages == [
+        {"message_id": "om_1", "text": "Recovered report is ready."}
+    ]

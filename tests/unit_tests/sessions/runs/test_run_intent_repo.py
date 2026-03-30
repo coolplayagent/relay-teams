@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.enums import ExecutionMode
 from agent_teams.sessions.runs.run_models import (
@@ -69,6 +71,120 @@ def test_run_intent_repo_backfills_yolo_from_legacy_approval_mode(
     record = RunIntentRepository(db_path).get("run-1")
 
     assert record.yolo is True
+
+
+def test_run_intent_repo_uses_fallback_session_id_for_legacy_none_like_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_legacy_session.db"
+    repo = RunIntentRepository(db_path)
+    now = "2026-03-20T00:00:00Z"
+    repo._conn.execute(
+        """
+        INSERT INTO run_intents(
+            run_id,
+            session_id,
+            intent,
+            input_json,
+            run_kind,
+            generation_config_json,
+            execution_mode,
+            yolo,
+            reuse_root_instance,
+            thinking_enabled,
+            thinking_effort,
+            target_role_id,
+            session_mode,
+            topology_json,
+            conversation_context_json,
+            created_at,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "run-legacy",
+            "None",
+            "ship it",
+            None,
+            "conversation",
+            None,
+            "ai",
+            "false",
+            "true",
+            "false",
+            None,
+            "None",
+            "normal",
+            None,
+            None,
+            now,
+            now,
+        ),
+    )
+    repo._conn.commit()
+
+    record = repo.get("run-legacy", fallback_session_id="session-1")
+
+    assert record.session_id == "session-1"
+    assert record.target_role_id is None
+
+
+def test_run_intent_repo_raises_key_error_for_unrecoverable_legacy_session_id(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_unrecoverable_session.db"
+    repo = RunIntentRepository(db_path)
+    now = "2026-03-20T00:00:00Z"
+    repo._conn.execute(
+        """
+        INSERT INTO run_intents(
+            run_id,
+            session_id,
+            intent,
+            input_json,
+            run_kind,
+            generation_config_json,
+            execution_mode,
+            yolo,
+            reuse_root_instance,
+            thinking_enabled,
+            thinking_effort,
+            target_role_id,
+            session_mode,
+            topology_json,
+            conversation_context_json,
+            created_at,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "run-unrecoverable",
+            "None",
+            "ship it",
+            None,
+            "conversation",
+            None,
+            "ai",
+            "false",
+            "true",
+            "false",
+            None,
+            None,
+            "normal",
+            None,
+            None,
+            now,
+            now,
+        ),
+    )
+    repo._conn.commit()
+
+    with pytest.raises(KeyError):
+        repo.get("run-unrecoverable")
+    with pytest.raises(KeyError):
+        repo.get("run-unrecoverable", fallback_session_id="null")
 
 
 def test_run_intent_repo_round_trips_thinking_config(tmp_path: Path) -> None:
