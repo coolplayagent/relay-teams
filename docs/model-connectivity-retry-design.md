@@ -203,8 +203,9 @@ class RetryDecision(BaseModel):
 触发规则：
 
 1. 调用失败且可重试 -> 自动重试。
-2. 达到 `max_attempts` 仍失败，或在安全边界之后遇到可重试断流 -> emit `model_retry_exhausted`（若适用），切 `paused/awaiting_recovery`，emit `run_paused`。
-3. 用户调用 `:resume`，或 ACP `session/resume`，或 IM `resume` 命令 -> 切 `running`，emit `run_resumed`，从最近 checkpoint 继续。
+2. 若模型在安全边界之后产出非法 tool args JSON（`model_tool_args_invalid_json`），后端先追加一条系统恢复提示并自动走一次内部 resume；成功进入恢复时 emit `run_resumed(reason=auto_recovery_invalid_tool_args_json)`，不中断当前 SSE turn。
+3. 达到 `max_attempts` 仍失败，或自动恢复预算耗尽，或在安全边界之后遇到其他可重试断流 -> emit `model_retry_exhausted`（若适用），切 `paused/awaiting_recovery`，emit `run_paused`。
+4. 用户调用 `:resume`，或 ACP `session/resume`，或 IM `resume` 命令 -> 切 `running`，emit `run_resumed`，从最近 checkpoint 继续。
 
 恢复点要求：
 

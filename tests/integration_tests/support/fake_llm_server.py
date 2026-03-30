@@ -65,14 +65,18 @@ def stream_chat_completions(
     created = int(time.time())
     completion_id = f"chatcmpl-{_chat_completions_calls}"
 
-    if str(response_spec.get("kind") or "") == "tool_call":
+    response_kind = str(response_spec.get("kind") or "")
+    if response_kind in {"tool_call", "invalid_tool_call"}:
         tool_name = str(response_spec.get("tool_name") or "")
         tool_call_id = str(response_spec.get("tool_call_id") or "")
-        arguments = json.dumps(
-            response_spec.get("arguments") or {},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        if response_kind == "invalid_tool_call":
+            arguments = str(response_spec.get("arguments_text") or "")
+        else:
+            arguments = json.dumps(
+                response_spec.get("arguments") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -145,8 +149,17 @@ def build_chat_completion_response(
 ) -> dict[str, object]:
     message: dict[str, object]
     finish_reason = "stop"
-    if str(response_spec.get("kind") or "") == "tool_call":
+    response_kind = str(response_spec.get("kind") or "")
+    if response_kind in {"tool_call", "invalid_tool_call"}:
         finish_reason = "tool_calls"
+        if response_kind == "invalid_tool_call":
+            arguments = str(response_spec.get("arguments_text") or "")
+        else:
+            arguments = json.dumps(
+                response_spec.get("arguments") or {},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         message = {
             "role": "assistant",
             "content": None,
@@ -156,11 +169,7 @@ def build_chat_completion_response(
                     "type": "function",
                     "function": {
                         "name": str(response_spec.get("tool_name") or ""),
-                        "arguments": json.dumps(
-                            response_spec.get("arguments") or {},
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
+                        "arguments": arguments,
                     },
                 }
             ],
@@ -196,6 +205,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return {"kind": "text", "content": "fake-response"}
+    if _invalid_json_auto_recovery_mode(messages):
+        return _plan_invalid_json_auto_recovery_response(payload, messages)
     computer_validation_mode = _computer_validation_mode(messages)
     if computer_validation_mode is not None:
         response_spec = _plan_computer_validation_response(
@@ -206,6 +217,54 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         if response_spec is not None:
             return response_spec
     return {"kind": "text", "content": build_fake_response_text(payload)}
+
+
+def _invalid_json_auto_recovery_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[invalid-json-auto-recovery]")
+
+
+def _plan_invalid_json_auto_recovery_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if _messages_contain_user_text(
+        messages,
+        "The previous tool call arguments were not valid JSON.",
+    ):
+        return {
+            "kind": "text",
+            "content": "[fake-llm] Recovered after invalid tool args JSON.",
+        }
+
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        if "read" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] read is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "read",
+            "tool_call_id": "call-read-1",
+            "arguments": {
+                "path": "README.md",
+            },
+        }
+
+    if last_tool_call_id == "call-read-1":
+        return {
+            "kind": "invalid_tool_call",
+            "tool_name": "read",
+            "tool_call_id": "call-read-2",
+            "arguments_text": "{bad json",
+        }
+
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Invalid JSON auto-recovery scenario reached an unknown step.",
+    }
 
 
 def build_fake_response_text(payload: object) -> str:
@@ -412,6 +471,29 @@ def _extract_last_user_text(messages: list[object]) -> str:
             if parts:
                 return " ".join(parts)
     return ""
+
+
+def _messages_contain_user_text(messages: list[object], snippet: str) -> bool:
+    normalized_snippet = snippet.strip()
+    if not normalized_snippet:
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and normalized_snippet in content:
+            return True
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and normalized_snippet in text:
+                return True
+    return False
 
 
 def split_text(text: str, *, size: int) -> list[str]:

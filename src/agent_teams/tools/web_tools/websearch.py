@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from urllib.parse import urlencode
+from typing import Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Agent
 
+from agent_teams.env.web_config_models import WebConfig
 from agent_teams.env.web_config_models import WebProvider
 from agent_teams.net.clients import create_async_http_client
 from agent_teams.tools._description_loader import load_tool_description
@@ -23,10 +25,16 @@ EXA_BASE_URL = "https://mcp.exa.ai"
 EXA_PATH = "/mcp"
 EXA_TOOL_NAME = "web_search_exa"
 DEFAULT_NUM_RESULTS = 8
-DEFAULT_LIVECRAWL = "fallback"
-DEFAULT_SEARCH_TYPE = "auto"
+DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_TIMEOUT_SECONDS = 25.0
 DESCRIPTION = load_tool_description(__file__)
+
+
+class WebSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    num_results: int = Field(default=DEFAULT_NUM_RESULTS, ge=1)
 
 
 class ExaSearchArguments(BaseModel):
@@ -34,9 +42,7 @@ class ExaSearchArguments(BaseModel):
 
     query: str
     numResults: int
-    livecrawl: str
-    type: str
-    contextMaxCharacters: int | None = None
+    type: Literal["auto", "fast"]
 
 
 class ExaSearchRequest(BaseModel):
@@ -48,53 +54,55 @@ class ExaSearchRequest(BaseModel):
     params: dict[str, JsonValue]
 
 
+class PreparedSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: WebProvider
+    endpoint: str
+    payload: dict[str, JsonValue]
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def websearch(
         ctx: ToolContext,
         query: str,
         num_results: int | None = None,
-        livecrawl: str | None = None,
-        search_type: str | None = None,
-        context_max_characters: int | None = None,
     ) -> dict[str, JsonValue]:
         """Search the web and return a text summary."""
 
         async def _action() -> ToolResultProjection:
             config = load_runtime_web_config()
-            if config.provider != WebProvider.EXA:
-                raise ValueError(f"Unsupported web provider: {config.provider.value}")
-
-            payload = build_exa_search_request(
+            request = WebSearchRequest(
                 query=query,
-                num_results=num_results,
-                livecrawl=livecrawl,
-                search_type=search_type,
-                context_max_characters=context_max_characters,
+                num_results=num_results or DEFAULT_NUM_RESULTS,
             )
-            endpoint = build_exa_search_url(api_key=config.api_key)
+            prepared_request = build_provider_search_request(
+                config=config,
+                request=request,
+            )
             async with create_async_http_client(
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 follow_redirects=True,
             ) as client:
                 response_text = await fetch_exa_search_response(
                     client=client,
-                    endpoint=endpoint,
-                    payload=payload,
+                    endpoint=prepared_request.endpoint,
+                    payload=prepared_request.payload,
                 )
 
             output = extract_search_output(response_text)
             visible_data: dict[str, JsonValue] = {
                 "output": output
                 or "No search results found. Please try a different query.",
-                "backend": config.provider.value,
+                "backend": prepared_request.provider.value,
                 "query": query,
             }
             return ToolResultProjection(
                 visible_data=visible_data,
                 internal_data={
                     **visible_data,
-                    "endpoint": endpoint,
+                    "endpoint": prepared_request.endpoint,
                 },
             )
 
@@ -104,28 +112,37 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             args_summary={
                 "query": query,
                 "num_results": num_results,
-                "livecrawl": livecrawl,
-                "search_type": search_type,
-                "context_max_characters": context_max_characters,
             },
             action=_action,
         )
 
 
+def build_provider_search_request(
+    *,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> PreparedSearchRequest:
+    if config.provider == WebProvider.EXA:
+        return PreparedSearchRequest(
+            provider=config.provider,
+            endpoint=build_exa_search_url(api_key=config.api_key),
+            payload=build_exa_search_request(
+                query=request.query,
+                num_results=request.num_results,
+            ),
+        )
+    raise ValueError(f"Unsupported web provider: {config.provider.value}")
+
+
 def build_exa_search_request(
     *,
     query: str,
-    num_results: int | None,
-    livecrawl: str | None,
-    search_type: str | None,
-    context_max_characters: int | None,
+    num_results: int,
 ) -> dict[str, JsonValue]:
     arguments = ExaSearchArguments(
         query=query,
-        numResults=num_results or DEFAULT_NUM_RESULTS,
-        livecrawl=livecrawl or DEFAULT_LIVECRAWL,
-        type=search_type or DEFAULT_SEARCH_TYPE,
-        contextMaxCharacters=context_max_characters,
+        numResults=num_results,
+        type=DEFAULT_EXA_SEARCH_TYPE,
     )
     request = ExaSearchRequest(
         params={
