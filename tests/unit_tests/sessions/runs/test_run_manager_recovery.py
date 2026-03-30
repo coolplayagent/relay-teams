@@ -77,7 +77,9 @@ class _EventBus:
         _ = event
 
 
-def _build_manager(db_path: Path) -> RunManager:
+def _build_manager(
+    db_path: Path, *, attach_manager_event_log: bool = True
+) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
     agent_repo = AgentInstanceRepository(db_path)
@@ -106,7 +108,7 @@ def _build_manager(db_path: Path) -> RunManager:
         tool_approval_manager=ToolApprovalManager(),
         session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
         active_run_registry=active_run_registry,
-        event_log=event_log,
+        event_log=event_log if attach_manager_event_log else None,
         task_repo=task_repo,
         agent_repo=agent_repo,
         message_repo=message_repo,
@@ -876,6 +878,70 @@ async def test_worker_pauses_after_invalid_tool_args_auto_recovery_budget_exhaus
     assert paused_payload["auto_recovery_exhausted"] is True
     assert paused_payload["attempt"] == 1
     assert paused_payload["max_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_caps_invalid_tool_args_auto_recovery_without_event_log(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_invalid_json_no_event_log.db"
+    manager = _build_manager(db_path, attach_manager_event_log=False)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="model_tool_args_invalid_json",
+        error_message="Expecting property name enclosed in double quotes",
+        retries_used=0,
+        total_attempts=6,
+    )
+
+    class _LoopingMetaAgent:
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            raise AssertionError("not expected")
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:
+            raise RecoverableRunPauseError(payload)
+
+    manager._meta_agent = cast(MetaAgent, cast(object, _LoopingMetaAgent()))
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+    assert manager._auto_recovery_attempts["run-existing"] == 1
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    event_types = [str(event["event_type"]) for event in events]
+    assert event_types.count(RunEventType.RUN_RESUMED.value) == 1
+    assert event_types[-1] == RunEventType.RUN_PAUSED.value
 
 
 @pytest.mark.asyncio

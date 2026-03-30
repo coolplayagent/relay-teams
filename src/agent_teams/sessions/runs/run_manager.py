@@ -148,6 +148,7 @@ class RunManager:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
+        self._auto_recovery_attempts: dict[str, int] = {}
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
     def replace_runtime_dependencies(
@@ -588,6 +589,7 @@ class RunManager:
                 attempt = self._next_auto_recovery_attempt(exc.payload)
                 if attempt is None:
                     raise
+                self._record_auto_recovery_attempt(run_id=run_id, attempt=attempt)
                 self._queue_auto_recovery_prompt(run_id=run_id)
                 resume_payload = self._transition_run_to_resumed(
                     run_id=run_id,
@@ -1058,6 +1060,7 @@ class RunManager:
         if runtime is not None and runtime.is_recoverable:
             self._remember_active_run(session_id, run_id)
             return
+        _ = self._auto_recovery_attempts.pop(run_id, None)
         if self._runtime_role_resolver is not None:
             self._runtime_role_resolver.cleanup_run(run_id=run_id)
         self._drop_active_run(session_id, run_id)
@@ -1693,6 +1696,11 @@ class RunManager:
         return attempts + 1
 
     def _count_auto_recovery_attempts(self, run_id: str) -> int:
+        persisted_attempts = self._count_persisted_auto_recovery_attempts(run_id)
+        in_memory_attempts = self._auto_recovery_attempts.get(run_id, 0)
+        return max(persisted_attempts, in_memory_attempts)
+
+    def _count_persisted_auto_recovery_attempts(self, run_id: str) -> int:
         if self._event_log is None:
             return 0
         count = 0
@@ -1711,6 +1719,10 @@ class RunManager:
             if str(parsed.get("reason") or "") == AUTO_RECOVERY_REASON:
                 count += 1
         return count
+
+    def _record_auto_recovery_attempt(self, *, run_id: str, attempt: int) -> None:
+        current = self._auto_recovery_attempts.get(run_id, 0)
+        self._auto_recovery_attempts[run_id] = max(current, attempt)
 
     def _queue_auto_recovery_prompt(self, *, run_id: str) -> None:
         try:
