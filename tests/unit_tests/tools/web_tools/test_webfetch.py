@@ -127,8 +127,8 @@ def _parse_range_header(value: str, total_size: int) -> tuple[int, int]:
 def _build_binary_transport(
     *,
     data: bytes,
-    etag: str = '"etag-1"',
-    last_modified: str = LAST_MODIFIED,
+    etag: str | None = '"etag-1"',
+    last_modified: str | None = LAST_MODIFIED,
     ignore_range_probe: bool = False,
     fail_once_ranges: dict[str, int] | None = None,
     request_log: list[str] | None = None,
@@ -142,10 +142,12 @@ def _build_binary_transport(
         base_headers = {
             "content-type": "application/pdf",
             "content-length": str(len(data)),
-            "etag": etag,
-            "last-modified": last_modified,
             "accept-ranges": "bytes",
         }
+        if etag is not None:
+            base_headers["etag"] = etag
+        if last_modified is not None:
+            base_headers["last-modified"] = last_modified
         if ignore_range_probe and range_header == webfetch.RANGE_PROBE_HEADER_VALUE:
             return httpx.Response(
                 200,
@@ -376,6 +378,40 @@ async def test_download_binary_response_streams_parallel_ranges_to_file(
 
 
 @pytest.mark.asyncio
+async def test_fetch_webfetch_projection_avoids_preflight_binary_get(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(webfetch.PARALLEL_DOWNLOAD_THRESHOLD_BYTES + 8192)
+    request_log: list[str] = []
+    client = httpx.AsyncClient(
+        transport=_build_binary_transport(data=payload, request_log=request_log)
+    )
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.fetch_webfetch_projection(
+            client=client,
+            requested_url="https://example.com/projection.pdf",
+            response_format="markdown",
+            extract=webfetch.WebFetchExtractMode.NONE,
+            item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            tool_call_id="webfetch",
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    assert projection.visible_data is not None
+    data = cast(dict[str, object], projection.visible_data)
+    saved_path = Path(str(data["saved_path"]))
+    assert saved_path.read_bytes() == payload
+    assert request_log.count(webfetch.RANGE_PROBE_HEADER_VALUE) == 1
+    assert "" not in request_log
+
+
+@pytest.mark.asyncio
 async def test_download_binary_response_resumes_across_calls(tmp_path: Path) -> None:
     payload = _make_binary_bytes(2 * 1024 * 1024)
     request_log: list[str] = []
@@ -420,6 +456,55 @@ async def test_download_binary_response_resumes_across_calls(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_download_binary_response_does_not_resume_without_strong_validators(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(2 * 1024 * 1024)
+    full_range = f"bytes=0-{len(payload) - 1}"
+    request_log: list[str] = []
+    transport = _build_binary_transport(
+        data=payload,
+        etag=None,
+        last_modified=None,
+        request_log=request_log,
+        fail_once_ranges={full_range: 786432},
+    )
+    client = httpx.AsyncClient(transport=transport)
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.download_binary_response(
+                client=client,
+                requested_url="https://example.com/no-validator-resume.pdf",
+                response_format="markdown",
+                workspace_dir=tmp_path,
+                workspace_id="workspace-1",
+                shared_store=shared_store,
+                cancel_check=lambda: None,
+            )
+        assert exc_info.value.error_type == "network_error"
+
+        projection = await webfetch.download_binary_response(
+            client=client,
+            requested_url="https://example.com/no-validator-resume.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    assert projection.visible_data is not None
+    data = cast(dict[str, object], projection.visible_data)
+    saved_path = Path(str(data["saved_path"]))
+    assert saved_path.read_bytes() == payload
+    assert request_log.count(full_range) == 2
+    assert f"bytes=786432-{len(payload) - 1}" not in request_log
+
+
+@pytest.mark.asyncio
 async def test_download_binary_response_reuses_completed_file_when_validators_match(
     tmp_path: Path,
 ) -> None:
@@ -455,6 +540,66 @@ async def test_download_binary_response_reuses_completed_file_when_validators_ma
     second_data = cast(dict[str, object], second.visible_data)
     assert first_data["saved_path"] == second_data["saved_path"]
     assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE]
+
+
+@pytest.mark.asyncio
+async def test_download_binary_response_redownloads_completed_file_without_strong_validators(
+    tmp_path: Path,
+) -> None:
+    original_payload = _make_binary_bytes(1024 * 1024)
+    updated_payload = b"updated" + original_payload[7:]
+    shared_store = _build_shared_store(tmp_path)
+
+    first_client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=original_payload,
+            etag=None,
+            last_modified=None,
+        )
+    )
+    try:
+        first = await webfetch.download_binary_response(
+            client=first_client,
+            requested_url="https://example.com/no-validator-cache.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await first_client.aclose()
+
+    request_log: list[str] = []
+    second_client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=updated_payload,
+            etag=None,
+            last_modified=None,
+            request_log=request_log,
+        )
+    )
+    try:
+        second = await webfetch.download_binary_response(
+            client=second_client,
+            requested_url="https://example.com/no-validator-cache.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await second_client.aclose()
+
+    first_data = cast(dict[str, object], first.visible_data)
+    second_data = cast(dict[str, object], second.visible_data)
+    assert first_data["saved_path"] == second_data["saved_path"]
+    assert Path(str(second_data["saved_path"])).read_bytes() == updated_payload
+    assert request_log == [
+        webfetch.RANGE_PROBE_HEADER_VALUE,
+        f"bytes=0-{len(updated_payload) - 1}",
+    ]
 
 
 @pytest.mark.asyncio

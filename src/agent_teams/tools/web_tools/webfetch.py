@@ -180,49 +180,23 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 timeout_seconds=float(resolved_timeout),
                 follow_redirects=True,
             ) as client:
-                response = await fetch_url(
+                return await fetch_webfetch_projection(
                     client=client,
-                    url=url,
+                    requested_url=url,
                     response_format=format,
-                )
-                try:
-                    content_type = normalize_content_type(
-                        response.headers.get("content-type", "")
-                    )
-                    if is_binary_response(content_type) and (
-                        resolved_extract is WebFetchExtractMode.NONE
-                    ):
-                        await response.aclose()
-                        return await download_binary_response(
-                            client=client,
-                            requested_url=url,
-                            response_format=format,
-                            workspace_dir=ctx.deps.workspace.locations.workspace_dir,
-                            workspace_id=ctx.deps.workspace_id,
-                            shared_store=ctx.deps.shared_store,
-                            cancel_check=lambda: (
-                                ctx.deps.run_control_manager.raise_if_cancelled(
-                                    run_id=ctx.deps.run_id,
-                                    instance_id=ctx.deps.instance_id,
-                                )
-                            ),
+                    extract=resolved_extract,
+                    item_limit=resolved_item_limit,
+                    workspace_dir=ctx.deps.workspace.locations.workspace_dir,
+                    workspace_id=ctx.deps.workspace_id,
+                    shared_store=ctx.deps.shared_store,
+                    tool_call_id=ctx.tool_call_id or "webfetch",
+                    cancel_check=lambda: (
+                        ctx.deps.run_control_manager.raise_if_cancelled(
+                            run_id=ctx.deps.run_id,
+                            instance_id=ctx.deps.instance_id,
                         )
-
-                    enforce_text_content_length_limit(response)
-                    body = await read_response_body(response)
-                    return build_webfetch_projection(
-                        workspace_dir=ctx.deps.workspace.locations.workspace_dir,
-                        tool_call_id=ctx.tool_call_id or "webfetch",
-                        requested_url=url,
-                        final_url=str(response.url),
-                        response_format=format,
-                        content_type=content_type,
-                        body=body,
-                        extract=resolved_extract,
-                        item_limit=resolved_item_limit,
-                    )
-                finally:
-                    await response.aclose()
+                    ),
+                )
 
         return await execute_tool(
             ctx,
@@ -236,6 +210,61 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             },
             action=_action,
         )
+
+
+async def fetch_webfetch_projection(
+    *,
+    client: httpx.AsyncClient,
+    requested_url: str,
+    response_format: str,
+    extract: WebFetchExtractMode,
+    item_limit: int,
+    workspace_dir: Path,
+    workspace_id: str,
+    shared_store: SharedStateRepository,
+    tool_call_id: str,
+    cancel_check: Callable[[], None],
+) -> ToolResultProjection:
+    if extract is WebFetchExtractMode.NONE:
+        probe = await probe_binary_download(
+            client=client,
+            url=requested_url,
+            response_format=response_format,
+        )
+        if is_binary_response(probe.content_type):
+            return await download_binary_response(
+                client=client,
+                requested_url=requested_url,
+                response_format=response_format,
+                workspace_dir=workspace_dir,
+                workspace_id=workspace_id,
+                shared_store=shared_store,
+                cancel_check=cancel_check,
+                probe=probe,
+            )
+
+    response = await fetch_url(
+        client=client,
+        url=requested_url,
+        response_format=response_format,
+    )
+    try:
+        content_type = normalize_content_type(response.headers.get("content-type", ""))
+        enforce_text_content_length_limit(response)
+        body = await read_response_body(response)
+        return build_webfetch_projection(
+            workspace_dir=workspace_dir,
+            tool_call_id=tool_call_id,
+            requested_url=requested_url,
+            final_url=str(response.url),
+            response_format=response_format,
+            content_type=content_type,
+            body=body,
+            extract=extract,
+            item_limit=item_limit,
+        )
+    finally:
+        await response.aclose()
 
 
 def validate_web_url(url: str) -> None:
@@ -609,6 +638,7 @@ async def download_binary_response(
     workspace_id: str,
     shared_store: SharedStateRepository,
     cancel_check: Callable[[], None],
+    probe: BinaryDownloadProbe | None = None,
 ) -> ToolResultProjection:
     normalized_url = normalize_requested_download_url(requested_url)
     download_key = build_binary_download_key(normalized_url)
@@ -620,21 +650,23 @@ async def download_binary_response(
         if manifest is None:
             _cleanup_binary_download_dir(download_dir)
 
-    probe = await probe_binary_download(
-        client=client,
-        url=requested_url,
-        response_format=response_format,
-    )
+    active_probe = probe
+    if active_probe is None:
+        active_probe = await probe_binary_download(
+            client=client,
+            url=requested_url,
+            response_format=response_format,
+        )
     if (
-        probe.total_size is not None
-        and probe.total_size > MAX_BINARY_DOWNLOAD_SIZE_BYTES
+        active_probe.total_size is not None
+        and active_probe.total_size > MAX_BINARY_DOWNLOAD_SIZE_BYTES
     ):
         _cleanup_binary_download_dir(download_dir)
         _raise_binary_size_limit_error(MAX_BINARY_DOWNLOAD_SIZE_BYTES)
 
     if manifest is not None and not binary_download_manifest_matches_probe(
         manifest=manifest,
-        probe=probe,
+        probe=active_probe,
     ):
         _cleanup_binary_download_dir(download_dir)
         manifest = None
@@ -642,7 +674,10 @@ async def download_binary_response(
     if (
         manifest is not None
         and manifest.completed
-        and binary_download_manifest_is_usable(manifest=manifest, probe=probe)
+        and binary_download_manifest_is_usable(
+            manifest=manifest,
+            probe=active_probe,
+        )
     ):
         save_binary_download_manifest(
             manifest=manifest,
@@ -661,7 +696,7 @@ async def download_binary_response(
     if manifest is None:
         manifest = initialize_binary_download_manifest(
             normalized_requested_url=normalized_url,
-            probe=probe,
+            probe=active_probe,
             download_dir=download_dir,
         )
         save_binary_download_manifest(
@@ -672,11 +707,11 @@ async def download_binary_response(
             download_key=download_key,
         )
 
-    if not probe.range_supported or probe.total_size is None:
+    if not active_probe.range_supported or active_probe.total_size is None:
         _cleanup_binary_download_dir(download_dir)
         manifest = initialize_binary_download_manifest(
             normalized_requested_url=normalized_url,
-            probe=probe,
+            probe=active_probe,
             download_dir=download_dir,
         )
         manifest = await download_binary_without_resume(
@@ -705,7 +740,7 @@ async def download_binary_response(
             _cleanup_binary_download_dir(download_dir)
             active_manifest = initialize_binary_download_manifest(
                 normalized_requested_url=normalized_url,
-                probe=probe,
+                probe=active_probe,
                 download_dir=download_dir,
             )
             save_binary_download_manifest(
@@ -721,7 +756,7 @@ async def download_binary_response(
                 requested_url=requested_url,
                 response_format=response_format,
                 manifest=active_manifest,
-                probe=probe,
+                probe=active_probe,
                 download_dir=download_dir,
                 manifest_path=manifest_path,
                 shared_store=shared_store,
@@ -1165,13 +1200,19 @@ def binary_download_manifest_matches_probe(
         return False
     if manifest.mime_type != probe.content_type:
         return False
-    if manifest.etag or probe.etag:
-        return manifest.etag == probe.etag
-    if manifest.last_modified or probe.last_modified:
-        return manifest.last_modified == probe.last_modified
-    if manifest.total_size is None or probe.total_size is None:
+    if not binary_download_has_strong_validator(
+        etag=probe.etag,
+        last_modified=probe.last_modified,
+    ):
         return False
-    return manifest.total_size == probe.total_size
+    if manifest.etag is not None or probe.etag is not None:
+        return manifest.etag is not None and manifest.etag == probe.etag
+    if manifest.last_modified is not None or probe.last_modified is not None:
+        return (
+            manifest.last_modified is not None
+            and manifest.last_modified == probe.last_modified
+        )
+    return False
 
 
 def binary_download_manifest_is_usable(
@@ -1389,6 +1430,14 @@ def build_if_range_header(probe: BinaryDownloadProbe) -> str | None:
     if probe.last_modified:
         return probe.last_modified
     return None
+
+
+def binary_download_has_strong_validator(
+    *,
+    etag: str | None,
+    last_modified: str | None,
+) -> bool:
+    return etag is not None or last_modified is not None
 
 
 def parse_content_range(content_range: str | None) -> tuple[int, int, int] | None:
