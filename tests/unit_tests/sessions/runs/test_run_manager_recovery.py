@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Literal, cast
 
@@ -727,6 +728,154 @@ async def test_worker_marks_recoverable_pause_without_run_failed(
     assert not any(
         str(event["event_type"]) == RunEventType.RUN_FAILED.value for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_auto_recovers_invalid_tool_args_json_once(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_invalid_json_recovered.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+
+    class _RecoveringMetaAgent:
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            raise AssertionError("not expected")
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:
+            assert trace_id == "run-existing"
+            return RunResult(
+                trace_id=trace_id,
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text("recovered after auto resume"),
+            )
+
+    manager._meta_agent = cast(MetaAgent, cast(object, _RecoveringMetaAgent()))
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="model_tool_args_invalid_json",
+        error_message="Expecting property name enclosed in double quotes",
+        retries_used=0,
+        total_attempts=6,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    event_types = [str(event["event_type"]) for event in events]
+    assert RunEventType.RUN_RESUMED.value in event_types
+    assert event_types[-1] == RunEventType.RUN_COMPLETED.value
+    assert RunEventType.RUN_PAUSED.value not in event_types
+
+    resumed_payload = next(
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event["event_type"]) == RunEventType.RUN_RESUMED.value
+    )
+    assert resumed_payload["reason"] == "auto_recovery_invalid_tool_args_json"
+    assert resumed_payload["attempt"] == 1
+    assert resumed_payload["max_attempts"] == 1
+
+    messages = MessageRepository(db_path).get_messages_by_session("session-1")
+    assert any(
+        "The previous tool call arguments were not valid JSON."
+        in json.dumps(message["message"], ensure_ascii=False)
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_pauses_after_invalid_tool_args_auto_recovery_budget_exhausted(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_invalid_json_exhausted.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    EventLog(db_path).emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-existing",
+            trace_id="run-existing",
+            event_type=RunEventType.RUN_RESUMED,
+            payload_json='{"session_id":"session-1","reason":"auto_recovery_invalid_tool_args_json","attempt":1,"max_attempts":1}',
+        )
+    )
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="coordinator_agent",
+        error_code="model_tool_args_invalid_json",
+        error_message="Expecting property name enclosed in double quotes",
+        retries_used=0,
+        total_attempts=6,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    assert events[-1]["event_type"] == RunEventType.RUN_PAUSED.value
+    paused_payload = json.loads(str(events[-1]["payload_json"]))
+    assert paused_payload["auto_recovery_exhausted"] is True
+    assert paused_payload["attempt"] == 1
+    assert paused_payload["max_attempts"] == 1
 
 
 @pytest.mark.asyncio

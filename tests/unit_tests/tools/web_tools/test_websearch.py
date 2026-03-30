@@ -5,6 +5,7 @@ import httpx
 from typing import cast
 import pytest
 
+from agent_teams.env.web_config_models import WebConfig, WebProvider
 from agent_teams.tools.runtime import ToolExecutionError
 from agent_teams.tools.web_tools import websearch
 
@@ -12,10 +13,7 @@ from agent_teams.tools.web_tools import websearch
 def test_build_exa_search_request_uses_hardcoded_defaults() -> None:
     payload = websearch.build_exa_search_request(
         query="latest ai news",
-        num_results=None,
-        livecrawl=None,
-        search_type=None,
-        context_max_characters=None,
+        num_results=8,
     )
 
     params = cast(dict[str, object], payload["params"])
@@ -23,8 +21,26 @@ def test_build_exa_search_request_uses_hardcoded_defaults() -> None:
     arguments = cast(dict[str, object], params["arguments"])
     assert arguments["query"] == "latest ai news"
     assert arguments["numResults"] == 8
-    assert arguments["livecrawl"] == "fallback"
     assert arguments["type"] == "auto"
+    assert "livecrawl" not in arguments
+    assert "contextMaxCharacters" not in arguments
+
+
+def test_build_provider_search_request_uses_provider_adapter() -> None:
+    prepared = websearch.build_provider_search_request(
+        config=WebConfig(provider=WebProvider.EXA, api_key="secret"),
+        request=websearch.WebSearchRequest(query="latest ai news"),
+    )
+
+    assert prepared.provider == WebProvider.EXA
+    assert prepared.endpoint == "https://mcp.exa.ai/mcp?exaApiKey=secret"
+    params = cast(dict[str, object], prepared.payload["params"])
+    arguments = cast(dict[str, object], params["arguments"])
+    assert arguments == {
+        "query": "latest ai news",
+        "numResults": 8,
+        "type": "auto",
+    }
 
 
 def test_build_exa_search_url_appends_optional_api_key() -> None:
