@@ -57,12 +57,16 @@ function applyMessageMetadata(wrapper, options = {}) {
     if (streamKey) wrapper.dataset.streamKey = streamKey;
 }
 
-export function renderParts(contentEl, parts, pendingToolBlocks) {
+export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
     let combinedText = '';
 
     const flushText = () => {
         if (combinedText.trim()) {
-            appendMessageText(contentEl, combinedText.trim());
+            if (options.collapseUserPrompt === true) {
+                appendUserPromptText(contentEl, combinedText.trim());
+            } else {
+                appendMessageText(contentEl, combinedText.trim());
+            }
             combinedText = '';
         }
     };
@@ -234,6 +238,23 @@ export function appendMessageText(contentEl, text, options = {}) {
     return textEl;
 }
 
+export function appendUserPromptText(contentEl, text) {
+    const promptEl = document.createElement('details');
+    promptEl.className = 'user-prompt-block';
+    promptEl.innerHTML = `
+        <summary class="user-prompt-summary">
+            <span class="user-prompt-title"></span>
+            <span class="user-prompt-preview"></span>
+        </summary>
+        <div class="user-prompt-body">
+            <div class="user-prompt-text"></div>
+        </div>
+    `;
+    updateUserPromptText(promptEl, text);
+    contentEl.appendChild(promptEl);
+    return promptEl;
+}
+
 export function appendThinkingText(contentEl, text, options = {}) {
     const { textEl } = ensureThinkingBlock(contentEl, options);
     updateThinkingText(textEl, text, options);
@@ -244,6 +265,26 @@ export function updateMessageText(textEl, text, options = {}) {
     renderRichContent(textEl, String(text || ''));
     syncStreamingCursor(textEl, options.streaming === true);
     return textEl;
+}
+
+export function updateUserPromptText(promptEl, text) {
+    const normalized = String(text || '').replace(/\r\n?/g, '\n').trim();
+    const lines = normalized ? normalized.split('\n') : [];
+    const title = lines[0] || t('subagent.task_prompt');
+    const preview = lines.length > 1 ? lines.slice(1).join('\n') : title;
+    const titleEl = promptEl?.querySelector('.user-prompt-title');
+    const previewEl = promptEl?.querySelector('.user-prompt-preview');
+    const bodyEl = promptEl?.querySelector('.user-prompt-text');
+    if (titleEl) {
+        titleEl.textContent = title;
+    }
+    if (previewEl) {
+        previewEl.textContent = preview;
+    }
+    if (bodyEl) {
+        bodyEl.textContent = normalized;
+    }
+    return promptEl;
 }
 
 export function updateThinkingText(textEl, text, options = {}) {
