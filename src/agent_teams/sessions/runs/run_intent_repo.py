@@ -47,6 +47,7 @@ class RunIntentRepository:
                 generation_config_json TEXT,
                 execution_mode TEXT NOT NULL,
                 yolo           TEXT NOT NULL DEFAULT 'false',
+                reuse_root_instance TEXT NOT NULL DEFAULT 'true',
                 thinking_enabled TEXT NOT NULL DEFAULT 'false',
                 thinking_effort TEXT,
                 target_role_id TEXT,
@@ -79,6 +80,10 @@ class RunIntentRepository:
         if "thinking_enabled" not in columns:
             self._conn.execute(
                 "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"
+            )
+        if "reuse_root_instance" not in columns:
+            self._conn.execute(
+                "ALTER TABLE run_intents ADD COLUMN reuse_root_instance TEXT NOT NULL DEFAULT 'true'"
             )
         if "input_json" not in columns:
             self._conn.execute("ALTER TABLE run_intents ADD COLUMN input_json TEXT")
@@ -124,6 +129,7 @@ class RunIntentRepository:
                 generation_config_json,
                 execution_mode,
                 yolo,
+                reuse_root_instance,
                 thinking_enabled,
                 thinking_effort,
                 target_role_id,
@@ -133,7 +139,7 @@ class RunIntentRepository:
                 created_at,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id)
             DO UPDATE SET
                 session_id=excluded.session_id,
@@ -143,6 +149,7 @@ class RunIntentRepository:
                 generation_config_json=excluded.generation_config_json,
                 execution_mode=excluded.execution_mode,
                 yolo=excluded.yolo,
+                reuse_root_instance=excluded.reuse_root_instance,
                 thinking_enabled=excluded.thinking_enabled,
                 thinking_effort=excluded.thinking_effort,
                 target_role_id=excluded.target_role_id,
@@ -164,6 +171,7 @@ class RunIntentRepository:
                 ),
                 intent.execution_mode.value,
                 "true" if intent.yolo else "false",
+                "true" if intent.reuse_root_instance else "false",
                 "true" if intent.thinking.enabled else "false",
                 intent.thinking.effort,
                 intent.target_role_id,
@@ -223,6 +231,7 @@ class RunIntentRepository:
                 generation_config_json,
                 execution_mode,
                 yolo,
+                reuse_root_instance,
                 thinking_enabled,
                 thinking_effort,
                 target_role_id,
@@ -243,6 +252,9 @@ class RunIntentRepository:
             generation_config=_coerce_generation_config(row["generation_config_json"]),
             execution_mode=ExecutionMode(str(row["execution_mode"])),
             yolo=str(row["yolo"]).strip().lower() == "true",
+            reuse_root_instance=(
+                str(row["reuse_root_instance"]).strip().lower() != "false"
+            ),
             thinking=RunThinkingConfig(
                 enabled=str(row["thinking_enabled"]).strip().lower() == "true",
                 effort=_coerce_thinking_effort(row["thinking_effort"]),

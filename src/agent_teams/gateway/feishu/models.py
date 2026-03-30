@@ -158,6 +158,7 @@ class FeishuGatewayAccountRecord(BaseModel):
     target_config: dict[str, JsonValue] | None = None
     secret_config: dict[str, str] | None = None
     secret_status: dict[str, bool] | None = None
+    last_error: str | None = None
     created_at: datetime
     updated_at: datetime
 

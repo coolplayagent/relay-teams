@@ -136,6 +136,8 @@ class _FakeAutomationService:
         automation_project_id: str,
         status: AutomationProjectStatus,
     ) -> AutomationProjectRecord:
+        if automation_project_id == "invalid":
+            raise ValueError("Unknown workspace: missing-workspace")
         if automation_project_id != "aut_1":
             raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
         self.status_calls.append((automation_project_id, status))
@@ -292,6 +294,15 @@ def test_enable_project_route_returns_enabled_record() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "enabled"
     assert fake_service.status_calls == [("aut_1", AutomationProjectStatus.ENABLED)]
+
+
+def test_enable_project_route_maps_validation_error_to_422() -> None:
+    client = _client(_FakeAutomationService())
+
+    response = client.post("/api/automation/projects/invalid:enable")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unknown workspace: missing-workspace"
 
 
 def test_disable_project_route_returns_disabled_record() -> None:

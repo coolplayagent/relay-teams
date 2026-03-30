@@ -29,6 +29,7 @@ from agent_teams.tools.runtime.models import (
     ToolApprovalDecision,
     ToolApprovalRequest,
     ToolError,
+    ToolExecutionError,
     ToolInternalRecord,
     ToolResultEnvelope,
     ToolResultProjection,
@@ -186,12 +187,15 @@ async def execute_tool(
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
             error = _error_payload(exc)
+            if error.details:
+                meta["error_details"] = dict(error.details)
 
             compact = json.dumps(
                 {
                     "tool": tool_name,
                     "type": error.type,
                     "message": error.message,
+                    "details": error.details,
                 },
                 ensure_ascii=False,
             )
@@ -206,6 +210,7 @@ async def execute_tool(
                     "tool_name": tool_name,
                     "error_type": error.type,
                     "retryable": error.retryable,
+                    "details": error.details,
                 },
             )
             envelope = _visible_envelope(
@@ -260,6 +265,14 @@ def _record_tool_metrics(
 
 
 def _error_payload(exc: Exception) -> ToolError:
+    if isinstance(exc, ToolExecutionError):
+        return ToolError(
+            type=exc.error_type,
+            message=str(exc) or exc.__class__.__name__,
+            retryable=exc.retryable,
+            details=exc.details,
+        )
+
     err_type = "internal_error"
     retryable = False
     message = str(exc) or exc.__class__.__name__

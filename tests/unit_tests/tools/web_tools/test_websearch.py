@@ -5,6 +5,7 @@ import httpx
 from typing import cast
 import pytest
 
+from agent_teams.tools.runtime import ToolExecutionError
 from agent_teams.tools.web_tools import websearch
 
 
@@ -44,13 +45,13 @@ def test_extract_search_output_reads_first_sse_text_block() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_exa_search_response_wraps_http_errors() -> None:
+async def test_fetch_exa_search_response_classifies_http_errors() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, request=request, text="boom")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
     try:
-        with pytest.raises(RuntimeError, match="Search error \\(500\\): boom"):
+        with pytest.raises(ToolExecutionError) as exc_info:
             await websearch.fetch_exa_search_response(
                 client=client,
                 endpoint="https://mcp.exa.ai/mcp",
@@ -63,3 +64,11 @@ async def test_fetch_exa_search_response_wraps_http_errors() -> None:
             )
     finally:
         await client.aclose()
+
+    assert exc_info.value.error_type == "upstream_unavailable"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {
+        "provider": "exa",
+        "endpoint_host": "mcp.exa.ai",
+        "status_code": 500,
+    }

@@ -39,6 +39,7 @@ from agent_teams.sessions import ProjectKind
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput
 from agent_teams.sessions.session_service import SessionService
+from agent_teams.workspace import WorkspaceService
 
 
 class AutomationService:
@@ -52,6 +53,7 @@ class AutomationService:
         feishu_binding_service: AutomationFeishuBindingService | None = None,
         delivery_service: AutomationDeliveryService | None = None,
         bound_session_queue_service: AutomationBoundSessionQueueService | None = None,
+        workspace_service: WorkspaceService | None = None,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
@@ -60,12 +62,14 @@ class AutomationService:
         self._feishu_binding_service = feishu_binding_service
         self._delivery_service = delivery_service
         self._bound_session_queue_service = bound_session_queue_service
+        self._workspace_service = workspace_service
 
     def create_project(
         self,
         payload: AutomationProjectCreateInput,
     ) -> AutomationProjectRecord:
         timezone_name = _validate_timezone(payload.timezone)
+        self._validate_workspace(payload.workspace_id)
         delivery_binding = self._resolve_delivery_binding(
             payload.delivery_binding,
             existing_binding=None,
@@ -169,6 +173,7 @@ class AutomationService:
                 else existing.status == AutomationProjectStatus.ENABLED
             ),
         )
+        self._validate_workspace(probe.workspace_id)
         now = datetime.now(tz=UTC)
         updated = existing.model_copy(
             update={
@@ -210,6 +215,8 @@ class AutomationService:
         status: AutomationProjectStatus,
     ) -> AutomationProjectRecord:
         existing = self._repository.get(automation_project_id)
+        if status == AutomationProjectStatus.ENABLED:
+            self._validate_workspace(existing.workspace_id)
         now = datetime.now(tz=UTC)
         updated = existing.model_copy(
             update={
@@ -457,6 +464,14 @@ class AutomationService:
             project=project,
             reason=reason,
         )
+
+    def _validate_workspace(self, workspace_id: str) -> None:
+        if self._workspace_service is None:
+            return
+        try:
+            _ = self._workspace_service.require_workspace(workspace_id)
+        except KeyError as exc:
+            raise ValueError(f"Unknown workspace: {workspace_id}") from exc
 
     def _record_execution_event(
         self,

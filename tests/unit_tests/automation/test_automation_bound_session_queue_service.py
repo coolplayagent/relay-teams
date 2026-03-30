@@ -32,11 +32,24 @@ from agent_teams.sessions.session_models import ProjectKind, SessionRecord
 class _FakeSessionLookup:
     def __init__(self, sessions: dict[str, SessionRecord]) -> None:
         self._sessions = sessions
+        self.rebind_calls: list[tuple[str, str]] = []
 
     def get_session(self, session_id: str) -> SessionRecord:
         if session_id not in self._sessions:
             raise KeyError(session_id)
         return self._sessions[session_id]
+
+    def rebind_session_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_id: str,
+    ) -> SessionRecord:
+        session = self.get_session(session_id)
+        rebound = session.model_copy(update={"workspace_id": workspace_id})
+        self._sessions[session_id] = rebound
+        self.rebind_calls.append((session_id, workspace_id))
+        return rebound
 
 
 class _FakeRunService:
@@ -157,6 +170,7 @@ def _build_service(
     tmp_path: Path,
 ) -> tuple[
     AutomationBoundSessionQueueService,
+    _FakeSessionLookup,
     AutomationBoundSessionQueueRepository,
     RunRuntimeRepository,
     _FakeRunService,
@@ -172,18 +186,19 @@ def _build_service(
     delivery_service = _FakeDeliveryService()
     feishu_client = _FakeFeishuClient()
     project_repo = _FakeProjectRepository(project)
+    session_lookup = _FakeSessionLookup(
+        {
+            "session-1": SessionRecord(
+                session_id="session-1",
+                workspace_id="default",
+                project_kind=ProjectKind.WORKSPACE,
+                metadata={"title": "Bound Session"},
+            )
+        }
+    )
     service = AutomationBoundSessionQueueService(
         repository=queue_repo,
-        session_lookup=_FakeSessionLookup(
-            {
-                "session-1": SessionRecord(
-                    session_id="session-1",
-                    workspace_id="default",
-                    project_kind=ProjectKind.WORKSPACE,
-                    metadata={"title": "Bound Session"},
-                )
-            }
-        ),
+        session_lookup=session_lookup,
         run_service=run_service,
         run_runtime_repo=run_runtime_repo,
         delivery_service=cast(AutomationDeliveryService, delivery_service),
@@ -193,6 +208,7 @@ def _build_service(
     )
     return (
         service,
+        session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -206,6 +222,7 @@ def _queue_and_start_bound_run(
     tmp_path: Path,
 ) -> tuple[
     AutomationBoundSessionQueueService,
+    _FakeSessionLookup,
     AutomationBoundSessionQueueRepository,
     RunRuntimeRepository,
     _FakeRunService,
@@ -215,6 +232,7 @@ def _queue_and_start_bound_run(
 ]:
     (
         service,
+        session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -242,6 +260,7 @@ def _queue_and_start_bound_run(
     _ = service.process_pending()
     return (
         service,
+        session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -256,6 +275,7 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         _run_runtime_repo,
         run_service,
@@ -270,7 +290,9 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
     assert handle.session_id == "session-1"
     assert handle.run_id == "run-1"
     assert handle.queued is False
-    assert queue_repo.count_non_terminal_by_session("session-1") == 0
+    waiting_records = queue_repo.list_waiting_for_result(limit=10)
+    assert len(waiting_records) == 1
+    assert waiting_records[0].run_id == "run-1"
     assert len(run_service.created_intents) == 1
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
@@ -292,6 +314,7 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -343,6 +366,7 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -393,6 +417,7 @@ def test_materialize_execution_fails_when_bound_session_is_missing(
 ) -> None:
     (
         service,
+        _session_lookup,
         _queue_repo,
         _run_runtime_repo,
         run_service,
@@ -427,6 +452,7 @@ def test_process_pending_schedules_recoverable_resume_with_backoff(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -460,6 +486,7 @@ def test_process_pending_requests_resume_after_backoff_elapsed(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -499,6 +526,7 @@ def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -539,6 +567,7 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
 ) -> None:
     (
         service,
+        _session_lookup,
         queue_repo,
         run_runtime_repo,
         run_service,
@@ -579,3 +608,67 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
     assert delivery_service.skipped_terminal_runs == [
         ("run-1", feishu_client.sent_messages[-1]["text"])
     ]
+
+
+def test_materialize_execution_rebinds_bound_session_workspace_before_start(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        session_lookup,
+        _queue_repo,
+        _run_runtime_repo,
+        run_service,
+        _delivery_service,
+        _feishu_client,
+        _project_repo,
+    ) = _build_service(tmp_path)
+    session_lookup._sessions["session-1"] = session_lookup._sessions[
+        "session-1"
+    ].model_copy(update={"workspace_id": "stale-worktree"})
+    project = _build_project().model_copy(update={"workspace_id": "fresh-worktree"})
+
+    handle = service.materialize_execution(project=project, reason="manual")
+
+    assert handle is not None
+    assert session_lookup.rebind_calls == [("session-1", "fresh-worktree")]
+    assert run_service.created_intents[0].reuse_root_instance is False
+
+
+def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _session_lookup,
+        queue_repo,
+        run_runtime_repo,
+        run_service,
+        _delivery_service,
+        _feishu_client,
+        _project_repo,
+    ) = _build_service(tmp_path)
+    _ = service.materialize_execution(project=_build_project(), reason="schedule")
+    waiting = queue_repo.list_waiting_for_result(limit=10)[0]
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id=str(waiting.run_id),
+            session_id="session-1",
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_RECOVERY,
+            last_error="stream interrupted",
+        )
+    )
+    _ = queue_repo.update(
+        waiting.model_copy(
+            update={"resume_next_attempt_at": datetime.now(tz=timezone.utc)}
+        )
+    )
+
+    progressed = service.process_pending()
+
+    updated = queue_repo.list_waiting_for_result(limit=10)[0]
+    assert progressed is True
+    assert run_service.resume_run_ids == ["run-1"]
+    assert updated.resume_attempts == 1
+    assert updated.last_error is None

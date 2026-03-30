@@ -635,6 +635,7 @@ class ServerContainer:
             feishu_binding_service=self.automation_feishu_binding_service,
             delivery_service=self.automation_delivery_service,
             bound_session_queue_service=self.automation_bound_session_queue_service,
+            workspace_service=self.workspace_service,
         )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)

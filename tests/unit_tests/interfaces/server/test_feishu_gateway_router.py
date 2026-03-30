@@ -72,6 +72,8 @@ class _FakeFeishuGatewayService:
         account_id: str,
         enabled: bool,
     ) -> FeishuGatewayAccountRecord:
+        if account_id == "invalid":
+            raise ValueError("Unknown workspace: missing-workspace")
         return self._record().model_copy(
             update={
                 "account_id": account_id,
@@ -200,3 +202,12 @@ def test_delete_feishu_account_route_maps_missing_account_to_404() -> None:
 
     assert response.status_code == 404
     assert "Unknown Feishu account" in response.json()["detail"]
+
+
+def test_enable_feishu_account_route_maps_validation_error_to_422() -> None:
+    client = _client(_FakeFeishuGatewayService(), _FakeSubscriptionService())
+
+    response = client.post("/api/gateway/feishu/accounts/invalid:enable")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unknown workspace: missing-workspace"

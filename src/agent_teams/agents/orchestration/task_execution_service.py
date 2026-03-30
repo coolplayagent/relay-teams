@@ -560,6 +560,7 @@ class TaskExecutionService(BaseModel):
     ) -> PreparedRuntimeSnapshot:
         topology = self._topology_for_run(task.trace_id)
         conversation_context = self._conversation_context_for_run(task.trace_id)
+        runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
         prompt_sections = await self.prompt_builder.build_sections(
             PromptBuildInput(
                 role=role,
@@ -569,6 +570,7 @@ class TaskExecutionService(BaseModel):
                 working_directory=working_directory,
                 worktree_root=worktree_root,
                 conversation_context=conversation_context,
+                runtime_tools=runtime_tools,
             )
         )
         record_prompt_instruction_paths_loaded(
@@ -576,7 +578,6 @@ class TaskExecutionService(BaseModel):
             task_id=task.task_id,
             paths=prompt_sections.local_instruction_paths,
         )
-        runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
         user_prompt, skill_instructions = self._build_user_prompt(
             role=role,
             objective=objective,

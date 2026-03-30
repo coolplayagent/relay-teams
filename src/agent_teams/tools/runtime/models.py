@@ -6,7 +6,7 @@ from agent_teams.computer import (
     ComputerPermissionScope,
     ExecutionSurface,
 )
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_serializer
 
 
 class ToolError(BaseModel):
@@ -15,6 +15,29 @@ class ToolError(BaseModel):
     type: str = Field(min_length=1)
     message: str = Field(min_length=1)
     retryable: bool = False
+    details: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        payload = handler(self)
+        if not self.details:
+            payload.pop("details", None)
+        return payload
+
+
+class ToolExecutionError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        error_type: str,
+        message: str,
+        retryable: bool = False,
+        details: dict[str, JsonValue] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.details = {} if details is None else dict(details)
 
 
 class ToolResultEnvelope(BaseModel):

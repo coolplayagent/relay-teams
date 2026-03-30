@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_teams.agents.instances.models import RuntimeToolsSnapshot
 from agent_teams.agents.execution.prompt_instructions import (
     LoadedPromptInstructions,
     PromptInstructionResolver,
@@ -72,6 +73,7 @@ ROLE_BLOCK_SKILLS_PREFIX = "- Skills: "
 AVAILABLE_SKILLS_HEADING = "## Available Skills"
 AVAILABLE_SKILL_ITEM_PREFIX = "- "
 NONE_LABEL = "none"
+AUTHORIZED_RUNTIME_TOOLS_HEADING = "## Authorized Runtime Tools"
 
 
 class RuntimePromptBuildInput(BaseModel):
@@ -84,6 +86,7 @@ class RuntimePromptBuildInput(BaseModel):
     working_directory: Path | None = None
     worktree_root: Path | None = None
     conversation_context: RuntimePromptConversationContext | None = None
+    runtime_tools: RuntimeToolsSnapshot | None = None
 
 
 class PromptSkillInstruction(BaseModel):
@@ -244,6 +247,9 @@ async def build_runtime_system_prompt_result(
     workspace_context_sections.extend(loaded_instructions.sections)
     if _is_feishu_group_conversation(data.conversation_context):
         workspace_context_sections.append(FEISHU_GROUP_CONTEXT_PROMPT)
+    runtime_tools_prompt = build_runtime_tools_prompt(data.runtime_tools)
+    if runtime_tools_prompt:
+        workspace_context_sections.append(runtime_tools_prompt)
 
     if is_main_agent_role_definition(data.role):
         return _build_runtime_prompt_sections(
@@ -353,6 +359,21 @@ def build_skill_instructions_prompt(
     )
 
 
+def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> str:
+    if runtime_tools is None:
+        return ""
+    lines = [AUTHORIZED_RUNTIME_TOOLS_HEADING]
+    lines.append("- Only call tools that appear in this runtime-authorized list.")
+    lines.append(
+        "- Local Tools: " + _format_names(_tool_names(runtime_tools.local_tools))
+    )
+    lines.append(
+        "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
+    )
+    lines.extend(_format_mcp_tool_lines(runtime_tools))
+    return "\n".join(lines)
+
+
 def compose_system_prompt(data: SystemPromptSectionsInput) -> str:
     sections: list[str] = [data.base_instructions]
     skill_prompt = build_skill_instructions_prompt(data.skill_instructions)
@@ -453,6 +474,31 @@ def _format_names(names: tuple[str, ...]) -> str:
     if not names:
         return NONE_LABEL
     return ", ".join(names)
+
+
+def _tool_names(entries: Sequence[object]) -> tuple[str, ...]:
+    names: list[str] = []
+    for entry in entries:
+        name = getattr(entry, "name", None)
+        if isinstance(name, str) and name.strip():
+            names.append(name)
+    return tuple(names)
+
+
+def _format_mcp_tool_lines(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
+    if not runtime_tools.mcp_tools:
+        return ["- MCP Tools: none"]
+    grouped: dict[str, list[str]] = {}
+    for entry in runtime_tools.mcp_tools:
+        server_name = entry.server_name or "unknown"
+        grouped.setdefault(server_name, []).append(entry.name)
+    lines: list[str] = []
+    for index, server_name in enumerate(sorted(grouped.keys())):
+        prefix = "- MCP Tools: " if index == 0 else "- MCP Tools "
+        lines.append(
+            f"{prefix}{server_name}: {', '.join(sorted(grouped[server_name]))}"
+        )
+    return lines
 
 
 def _validate_base_instruction_prefix(

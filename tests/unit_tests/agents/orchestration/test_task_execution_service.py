@@ -461,6 +461,85 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
 
 
 @pytest.mark.asyncio
+async def test_execute_runtime_prompt_lists_authorized_runtime_tools(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_runtime_tools_prompt.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=lambda _, __=None: provider,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert "## Authorized Runtime Tools" in runtime_record.runtime_system_prompt
+    assert "Local Tools: read" in runtime_record.runtime_system_prompt
+
+
+@pytest.mark.asyncio
 async def test_execute_persists_followup_prompt_before_turn(
     tmp_path: Path,
 ) -> None:
