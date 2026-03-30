@@ -374,17 +374,21 @@ npm run smoke
 
 在生成所有成品 HTML 页面后，自动执行以下步骤：
 
-1. **调用转换脚本**：
+1. **调用统一交付脚本**：
    ```bash
    node scripts/convert_pages.js {output_dir}
    ```
-   - 这是对外推荐的稳定入口
-   - 该脚本内部实际调用的是 `designer/lib/html-to-pptx/node/convert.js`
+   - 这是对外推荐的稳定入口，也是**唯一允许**的交付入口
+   - 该脚本内部会先调用 `designer/lib/html-to-pptx/node/convert.js` 生成 `{output_dir}/pages.pptx`
+   - 生成 PPTX 后会自动执行导出 QA，并生成 `export_qa_result.json`
    - 不要在文档或调用说明中写成裸的 `convert.js`
-   - 该脚本会将 `{output_dir}/page-N.pptx.html` 转换为 `{output_dir}/pages.pptx`
+   - 禁止只转换不验；`convert_pages.js` 返回非 0 即视为交付失败
 
-2. **验证 PPTX 输出**：
+2. **验证 PPTX 输出与导出 QA**：
    - 检查 `{output_dir}/pages.pptx` 是否生成
+   - 检查 `path.dirname({output_dir})/export_qa_result.json` 是否生成
+   - `export_qa_result.json` 中 `passed` 必须为 `true`
+   - `mode` 可能为 `visual+structural` 或 `structural_only`
    - 如转换失败，保留 HTML 文件供排查
 
 **最终产物**：`{output_dir}/pages.pptx`
@@ -438,12 +442,14 @@ npm run smoke
 - 核心信息优先放在普通文本、基础布局、基础图形上
 - 复杂 CSS 可以用，但更适合做增强视觉，不适合作为唯一的信息承载方式
 - 如果某个视觉模块严重依赖高级 CSS，优先先做一次转换验证；必要时将该模块预渲染为图片再参与转换
+- 关键标签、短标题、徽标式色块，优先使用“单元素文本容器 + 背景填充”的稳定表达，不要用独立底色 shape 和独立文字硬拼
+- 图表柱体、数值标签、年份标签必须共享统一的中心线与坐标基准，不要依赖肉眼微调偏移
 
 **失败预防建议**：
 - 先生成结构稳定的 HTML，再做轻量视觉增强
 - 高风险视觉效果优先作为装饰层，不作为唯一的信息承载主体
-- 转 PPTX 前必须运行 QA，并人工抽查关键页面
-- 对高风险页面，优先做“浏览器截图对照 + PPTX 结果复核”
+- 转 PPTX 前必须运行 HTML QA，转 PPTX 后必须运行导出 QA
+- 人工抽查只作为排障与验收补充，不作为跳过 QA 的理由
 
 #### 生成时的布局质量预检要求
 
