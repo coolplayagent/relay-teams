@@ -4,11 +4,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.persistence.db import open_sqlite
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 from agent_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
 from agent_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
@@ -73,7 +72,7 @@ class SessionTokenUsage(BaseModel):
     by_role: dict[str, AgentTokenSummary]
 
 
-class TokenUsageRepository:
+class TokenUsageRepository(SharedSqliteRepository):
     _NUMERIC_COLUMNS: tuple[str, ...] = (
         "input_tokens",
         "cached_input_tokens",
@@ -89,14 +88,12 @@ class TokenUsageRepository:
         *,
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
     ) -> None:
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._session_history_marker_repo = session_history_marker_repo
         self._init_tables()
 
     def _init_tables(self) -> None:
-        with self._lock:
+        def operation() -> None:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS token_usage (
@@ -150,7 +147,8 @@ class TokenUsageRepository:
                 "CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id)"
             )
             self._sanitize_numeric_columns()
-            self._conn.commit()
+
+        self._run_write(operation_name="init_tables", operation=operation)
 
     def record(
         self,
@@ -166,7 +164,7 @@ class TokenUsageRepository:
         requests: int = 0,
         tool_calls: int = 0,
     ) -> None:
-        with self._lock:
+        def operation() -> None:
             now = self._next_recorded_at(session_id=session_id)
             self._conn.execute(
                 """
@@ -190,14 +188,16 @@ class TokenUsageRepository:
                     now.isoformat(),
                 ),
             )
-            self._conn.commit()
+
+        self._run_write(operation_name="record", operation=operation)
 
     def get_by_run(self, run_id: str) -> RunTokenUsage:
-        with self._lock:
-            rows = self._conn.execute(
+        rows = self._run_read(
+            lambda: self._conn.execute(
                 "SELECT * FROM token_usage WHERE run_id=? ORDER BY id ASC",
                 (run_id,),
             ).fetchall()
+        )
 
         by_instance: dict[str, AgentTokenSummary] = {}
         for row in rows:
@@ -269,11 +269,12 @@ class TokenUsageRepository:
                 query += " AND recorded_at>?"
                 params = (session_id, cutoff)
         query += " ORDER BY id ASC"
-        with self._lock:
-            rows = self._conn.execute(
+        rows = self._run_read(
+            lambda: self._conn.execute(
                 query,
                 params,
             ).fetchall()
+        )
 
         by_role: dict[str, AgentTokenSummary] = {}
         for row in rows:
@@ -332,11 +333,12 @@ class TokenUsageRepository:
         )
 
     def delete_by_session(self, session_id: str) -> None:
-        with self._lock:
-            self._conn.execute(
+        self._run_write(
+            operation_name="delete_by_session",
+            operation=lambda: self._conn.execute(
                 "DELETE FROM token_usage WHERE session_id=?", (session_id,)
-            )
-            self._conn.commit()
+            ),
+        )
 
     def _latest_clear_cutoff(self, session_id: str) -> str | None:
         if self._session_history_marker_repo is None:

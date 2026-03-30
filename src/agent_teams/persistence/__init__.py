@@ -13,6 +13,7 @@ from agent_teams.persistence.db import (
     sqlite_supports_fts5,
 )
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
 from agent_teams.persistence.shared_state_repo import (
     SharedStateRepository,
     build_global_scope_ref,
@@ -25,6 +26,7 @@ __all__ = [
     "SQLITE_WRITE_RETRY_ATTEMPTS",
     "ScopeRef",
     "ScopeType",
+    "SharedSqliteRepository",
     "SharedStateRepository",
     "StateMutation",
     "build_global_scope_ref",
