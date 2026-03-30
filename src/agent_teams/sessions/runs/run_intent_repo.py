@@ -251,11 +251,14 @@ class RunIntentRepository:
         ).fetchone()
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
+        session_id = _coerce_session_id(
+            row["session_id"],
+            fallback_session_id=fallback_session_id,
+        )
+        if session_id is None:
+            raise KeyError(f"Unknown run_id: {run_id}")
         return IntentInput(
-            session_id=_coerce_session_id(
-                row["session_id"],
-                fallback_session_id=fallback_session_id,
-            ),
+            session_id=session_id,
             input=_coerce_input_parts(row["input_json"], row["intent"]),
             run_kind=RunKind(str(row["run_kind"] or RunKind.CONVERSATION.value)),
             generation_config=_coerce_generation_config(row["generation_config_json"]),
@@ -281,14 +284,14 @@ def _coerce_session_id(
     value: object,
     *,
     fallback_session_id: str | None,
-) -> str:
+) -> str | None:
     normalized = normalize_persisted_text(value)
     if normalized is not None:
         return normalized
     fallback = normalize_persisted_text(fallback_session_id)
     if fallback is not None:
         return fallback
-    return str(value)
+    return None
 
 
 def _coerce_thinking_effort(
