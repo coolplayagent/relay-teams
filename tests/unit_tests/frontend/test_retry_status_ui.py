@@ -60,7 +60,7 @@ globalThis.window = {
 
 showLlmRetryStatus(
     {
-        role_id: "coordinator_agent",
+        role_id: "Coordinator",
         instance_id: "inst-1",
         attempt_number: 2,
         total_attempts: 6,
@@ -75,7 +75,7 @@ beginLlmRetryAttempt();
 
 showLlmRetryStatus(
     {
-        role_id: "coordinator_agent",
+        role_id: "Coordinator",
         instance_id: "inst-1",
         attempt_number: 3,
         total_attempts: 6,
@@ -97,7 +97,7 @@ const beforeSuccess = {
 
 showLlmRetryStatus(
     {
-        role_id: "coordinator_agent",
+        role_id: "Coordinator",
         instance_id: "inst-1",
         attempt_number: 2,
         total_attempts: 6,

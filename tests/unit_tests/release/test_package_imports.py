@@ -35,3 +35,12 @@ def test_root_package_defers_missing_external_sdk_dependency(
 
     with pytest.raises(ModuleNotFoundError, match="SDK dependencies"):
         _ = package_getattr("AgentTeamsClient")
+
+
+def test_root_package_no_longer_exports_legacy_agent_teams_app() -> None:
+    namespace = runpy.run_path(
+        str(Path("src") / "agent_teams" / "__init__.py"),
+        init_globals={"__name__": "agent_teams"},
+    )
+
+    assert "AgentTeamsApp" not in cast(list[str], namespace["__all__"])

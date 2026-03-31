@@ -41,7 +41,7 @@ def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:
     assert record.yolo is True
 
 
-def test_run_intent_repo_backfills_yolo_from_legacy_approval_mode(
+def test_run_intent_repo_does_not_backfill_yolo_from_legacy_approval_mode(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "run_intent_legacy.db"
@@ -72,7 +72,7 @@ def test_run_intent_repo_backfills_yolo_from_legacy_approval_mode(
 
     record = RunIntentRepository(db_path).get("run-1")
 
-    assert record.yolo is True
+    assert record.yolo is False
 
 
 def test_run_intent_repo_uses_fallback_session_id_for_legacy_none_like_rows(

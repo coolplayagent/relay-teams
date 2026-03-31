@@ -410,7 +410,7 @@ class AgentTeamsBackend(AgentBackend):
 
             _log(workspace.item_id, "creating run ...")
             run_handle = client.create_run(
-                intent=intent,
+                input=intent,
                 session_id=session_id,
                 execution_mode=self._config.execution_mode,
                 yolo=self._config.yolo,

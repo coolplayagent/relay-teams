@@ -1164,7 +1164,7 @@ Rules:
 
 ### `POST /prompts:preview`
 
-Builds prompt preview payload for a specific role. Coordinator role IDs are resolved from the loaded role files and are not hardcoded to `coordinator_agent`.
+Builds prompt preview payload for a specific role. Coordinator role IDs are resolved from the loaded role files and are not hardcoded to any legacy identifier.
 
 Request:
 

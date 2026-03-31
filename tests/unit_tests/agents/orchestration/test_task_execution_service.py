@@ -872,7 +872,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator Agent",
             description="Coordinates delegated work.",
             version="1",
@@ -898,9 +898,9 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     workspace_id = "default"
-    conversation_id = build_conversation_id("session-1", "coordinator_agent")
+    conversation_id = build_conversation_id("session-1", "Coordinator")
     instance = create_subagent_instance(
-        "coordinator_agent",
+        "Coordinator",
         workspace_id=workspace_id,
         conversation_id=conversation_id,
     )
@@ -918,7 +918,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         trace_id="run-1",
         session_id="session-1",
         instance_id=instance.instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id=instance.workspace_id,
         conversation_id=instance.conversation_id,
         status=InstanceStatus.IDLE,
@@ -947,7 +947,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
 
     result = await service.execute(
         instance_id=instance.instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         task=task,
     )
 
@@ -979,7 +979,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator Agent",
             description="Coordinates delegated work.",
             version="1",
@@ -1024,7 +1024,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     )
 
     coordinator_snapshot = await service._build_runtime_tools_snapshot(
-        role_registry.get("coordinator_agent")
+        role_registry.get("Coordinator")
     )
     writer_snapshot = await service._build_runtime_tools_snapshot(
         role_registry.get("writer_agent")

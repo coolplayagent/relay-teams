@@ -671,7 +671,7 @@ CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
 Purpose: stores the run input and per-run execution settings needed for queued runs and recoverable resume paths.
 
 Notes:
-- `intent` remains a text summary used for previews, logs, and legacy fallbacks.
+- `intent` remains a text summary used for previews and logs.
 - `input_json` stores the canonical typed run input array, including text and media references.
 - `run_kind` distinguishes `conversation`, `generate_image`, `generate_audio`, and `generate_video`.
 - `generation_config_json` stores the typed native media-generation config for provider-native image/audio/video runs.

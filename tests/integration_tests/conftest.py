@@ -149,7 +149,7 @@ def integration_env(
                 "--log-level",
                 "warning",
             ),
-            cwd=runtime_root,
+            cwd=repo_root,
             env=shared_env,
             log_file=backend_log_file,
         )

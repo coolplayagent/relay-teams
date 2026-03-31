@@ -123,7 +123,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="coordinator",
             description="Coordinates delegated work.",
             version="1",
@@ -179,7 +179,7 @@ def _request() -> LLMRequest:
         session_id="session-1",
         workspace_id="default",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="sys",
         user_prompt="user",
     )

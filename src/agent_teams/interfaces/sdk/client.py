@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from agent_teams.media import content_parts_from_text
 from agent_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 
 
@@ -219,15 +220,20 @@ class AgentTeamsClient:
 
     def create_run(
         self,
-        intent: str,
+        input: str | list[JsonValue],
         session_id: str,
         execution_mode: str = "ai",
         yolo: bool = False,
         target_role_id: str | None = None,
     ) -> RunHandle:
+        normalized_input: JsonValue = (
+            [part.model_dump(mode="json") for part in content_parts_from_text(input)]
+            if isinstance(input, str)
+            else input
+        )
         payload: dict[str, JsonValue] = {
             "session_id": session_id,
-            "intent": intent,
+            "input": normalized_input,
             "execution_mode": execution_mode,
             "yolo": yolo,
             "target_role_id": target_role_id,
@@ -742,10 +748,6 @@ class AgentTeamsClient:
             raise RuntimeError(f"Failed to connect to server: {exc}") from exc
         except TimeoutError as exc:
             raise RuntimeError(f"Request timed out: {method} {path}") from exc
-
-
-# Backward-compatible alias.
-AgentTeamsApp = AgentTeamsClient
 
 
 def _expect_str(value: JsonValue | None, field_name: str) -> str:
