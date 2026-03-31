@@ -97,6 +97,7 @@ class ToolRegistry:
             resolved_names = tuple(
                 self._legacy_aliases.get(name, name) for name in resolved_names
             )
+            resolved_names = self._deduplicate_names(resolved_names)
         known_names = tuple(name for name in resolved_names if name in self._tools)
         unavailable_names = tuple(
             name for name in resolved_names if name in self._unavailable_tools

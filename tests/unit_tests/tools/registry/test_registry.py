@@ -112,6 +112,19 @@ def test_registry_resolve_known_applies_legacy_aliases_when_strict_is_false() ->
     assert resolved == ("exec_command",)
 
 
+def test_registry_resolve_known_deduplicates_after_legacy_aliases() -> None:
+    registry = ToolRegistry(
+        {
+            "write": _register_alpha,
+        },
+        legacy_aliases={"write_tmp": "write"},
+    )
+
+    resolved = registry.resolve_known(("write_tmp", "write"), strict=False)
+
+    assert resolved == ("write",)
+
+
 def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resolution() -> (
     None
 ):

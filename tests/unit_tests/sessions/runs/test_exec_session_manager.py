@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -87,10 +88,22 @@ async def test_exec_session_manager_completes_and_publishes_events(
     log_path = workspace.resolve_read_path(started.log_path)
     assert log_path.read_text(encoding="utf-8") == "hello\n"
     event_types = []
+    updated_payload = None
+    completed_payload = None
     while not queue.empty():
-        event_types.append(queue.get_nowait().event_type)
+        event = queue.get_nowait()
+        event_types.append(event.event_type)
+        if event.event_type == RunEventType.EXEC_SESSION_UPDATED:
+            updated_payload = json.loads(event.payload_json)
+        if event.event_type == RunEventType.EXEC_SESSION_COMPLETED:
+            completed_payload = json.loads(event.payload_json)
     assert RunEventType.EXEC_SESSION_STARTED in event_types
     assert RunEventType.EXEC_SESSION_COMPLETED in event_types
+    assert updated_payload is not None
+    assert "output_excerpt" not in updated_payload
+    assert updated_payload["delta"] == "hello\n"
+    assert completed_payload is not None
+    assert completed_payload["output_excerpt"] == "hello\n"
 
 
 @pytest.mark.asyncio

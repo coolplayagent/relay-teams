@@ -23,6 +23,8 @@ except ImportError:
     pty = None
     termios = None
 
+from pydantic import JsonValue
+
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -588,6 +590,11 @@ class ExecSessionManager:
         self._publish_exec_session_event(
             event_type=RunEventType.EXEC_SESSION_UPDATED,
             record=runtime.record,
+            payload=self._build_exec_session_update_payload(
+                record=runtime.record,
+                stream_name=stream_name,
+                chunk=chunk,
+            ),
         )
 
     async def _finalize_runtime(
@@ -734,6 +741,7 @@ class ExecSessionManager:
         *,
         event_type: RunEventType,
         record: ExecSessionRecord,
+        payload: dict[str, JsonValue] | None = None,
     ) -> None:
         self._run_event_hub.publish(
             RunEvent(
@@ -745,7 +753,8 @@ class ExecSessionManager:
                 role_id=record.role_id,
                 event_type=event_type,
                 payload_json=json.dumps(
-                    record.model_dump(mode="json"), ensure_ascii=False
+                    (record.model_dump(mode="json") if payload is None else payload),
+                    ensure_ascii=False,
                 ),
             )
         )
@@ -761,6 +770,18 @@ class ExecSessionManager:
                     "status": record.status.value,
                 },
             )
+
+    def _build_exec_session_update_payload(
+        self,
+        *,
+        record: ExecSessionRecord,
+        stream_name: str,
+        chunk: str,
+    ) -> dict[str, JsonValue]:
+        payload = record.model_dump(mode="json", exclude={"output_excerpt"})
+        payload["stream_name"] = stream_name
+        payload["delta"] = chunk
+        return payload
 
     def _get_record(self, exec_session_id: str) -> ExecSessionRecord:
         record = self._repository.get(exec_session_id)

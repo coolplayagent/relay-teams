@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+from typing import Literal
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from agent_teams.sessions.runs.exec_session_models import (
@@ -267,7 +268,7 @@ def _row_to_record(row: sqlite3.Row) -> ExecSessionRecord:
         tool_call_id=normalize_persisted_text(row["tool_call_id"]),
         command=str(row["command"]),
         cwd=str(row["cwd"]),
-        execution_mode="background",
+        execution_mode=_decode_execution_mode(row["execution_mode"]),
         status=ExecSessionStatus(str(row["status"])),
         tty=bool(int(row["tty"])),
         timeout_ms=int(row["timeout_ms"]) if row["timeout_ms"] is not None else None,
@@ -296,3 +297,10 @@ def _decode_lines(value: object) -> tuple[str, ...]:
         if isinstance(item, str) and item.strip():
             result.append(item)
     return tuple(result)
+
+
+def _decode_execution_mode(value: object) -> Literal["foreground", "background"]:
+    normalized = normalize_persisted_text(value)
+    if normalized == "foreground":
+        return "foreground"
+    return "background"

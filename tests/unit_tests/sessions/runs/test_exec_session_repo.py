@@ -24,6 +24,7 @@ def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
         tool_call_id="call-1",
         command="sleep 30",
         cwd="/tmp/project",
+        execution_mode="foreground",
         status=ExecSessionStatus.RUNNING,
         recent_output=("booting",),
         output_excerpt="booting",
@@ -36,7 +37,7 @@ def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
     assert persisted.exec_session_id == "exec-1"
     assert loaded is not None
     assert loaded.run_id == "run-1"
-    assert loaded.execution_mode == "background"
+    assert loaded.execution_mode == "foreground"
     assert loaded.output_excerpt == "booting"
     assert repo.list_by_run("run-1")[0].exec_session_id == "exec-1"
 
