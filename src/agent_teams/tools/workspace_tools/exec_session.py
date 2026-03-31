@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import cast
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
+from agent_teams.computer import ComputerActionRisk
 from agent_teams.sessions.runs.exec_session_models import ExecSessionRecord
 from agent_teams.tools.runtime import (
     ToolApprovalRequest,
@@ -134,10 +136,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             tool_name="write_stdin",
             args_summary={
                 "exec_session_id": exec_session_id,
+                "chars_preview": _build_chars_preview(chars),
                 "chars_length": len(chars),
                 "yield_time_ms": yield_time_ms,
             },
             action=_action,
+            approval_request=_build_write_stdin_approval_request(
+                exec_session_id=exec_session_id,
+                chars=chars,
+            ),
         )
 
     @agent.tool(description=_RESIZE_DESCRIPTION)
@@ -221,6 +228,44 @@ def _build_exec_command_cache_key(
             f"tty={tty_marker}",
         ]
     )
+
+
+def _build_write_stdin_approval_request(
+    *,
+    exec_session_id: str,
+    chars: str,
+) -> ToolApprovalRequest | None:
+    if not chars:
+        return None
+    return ToolApprovalRequest(
+        risk_level=ComputerActionRisk.GUARDED,
+        target_summary=f"stdin for exec session {exec_session_id}",
+        cache_key=_build_write_stdin_cache_key(
+            exec_session_id=exec_session_id,
+            chars=chars,
+        ),
+    )
+
+
+def _build_write_stdin_cache_key(
+    *,
+    exec_session_id: str,
+    chars: str,
+) -> str:
+    chars_digest = hashlib.sha256(chars.encode("utf-8", errors="replace")).hexdigest()
+    return "\n".join(
+        [
+            f"exec_session_id={exec_session_id.strip()}",
+            f"chars_sha256={chars_digest}",
+            f"chars_length={len(chars)}",
+        ]
+    )
+
+
+def _build_chars_preview(chars: str, *, limit: int = 160) -> str:
+    if len(chars) <= limit:
+        return chars
+    return chars[: limit - 3] + "..."
 
 
 def _resolve_cwd(

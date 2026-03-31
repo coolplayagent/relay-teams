@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
+    MAX_EXEC_SESSIONS,
+    PROTECTED_RECENT_EXEC_SESSIONS,
 )
 from agent_teams.sessions.runs.exec_session_models import (
+    ExecSessionRecord,
     ExecSessionStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import (
@@ -224,3 +228,86 @@ async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
         await manager.close()
 
     assert stopped.status == ExecSessionStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_prune_sessions_if_needed_reclaims_until_below_cap(
+    tmp_path: Path,
+) -> None:
+    repo = ExecSessionRepository(tmp_path / "background-terminal-prune.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
+
+    for index in range(MAX_EXEC_SESSIONS + 2):
+        record = ExecSessionRecord(
+            exec_session_id=f"exec_{index:03d}",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id=f"call-{index}",
+            command="printf 'done\\n'",
+            cwd=str(tmp_path),
+            status=ExecSessionStatus.COMPLETED,
+            created_at=created_at + timedelta(minutes=index),
+            updated_at=created_at + timedelta(minutes=index),
+            completed_at=created_at + timedelta(minutes=index),
+        )
+        repo.upsert(record)
+
+    try:
+        await manager._prune_sessions_if_needed()
+    finally:
+        await manager.close()
+
+    remaining_ids = {record.exec_session_id for record in repo.list_all()}
+    protected_ids = {
+        f"exec_{index:03d}"
+        for index in range(
+            MAX_EXEC_SESSIONS + 2 - PROTECTED_RECENT_EXEC_SESSIONS,
+            MAX_EXEC_SESSIONS + 2,
+        )
+    }
+
+    assert len(remaining_ids) == MAX_EXEC_SESSIONS - 1
+    assert "exec_000" not in remaining_ids
+    assert "exec_001" not in remaining_ids
+    assert "exec_002" not in remaining_ids
+    assert protected_ids.issubset(remaining_ids)
+
+
+@pytest.mark.asyncio
+async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
+    tmp_path: Path,
+) -> None:
+    repo = ExecSessionRepository(tmp_path / "background-terminal-prune-active.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
+
+    for index in range(MAX_EXEC_SESSIONS):
+        record = ExecSessionRecord(
+            exec_session_id=f"exec_{index:03d}",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id=f"call-{index}",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=ExecSessionStatus.RUNNING,
+            created_at=created_at + timedelta(minutes=index),
+            updated_at=created_at + timedelta(minutes=index),
+        )
+        repo.upsert(record)
+
+    try:
+        await manager._prune_sessions_if_needed()
+    finally:
+        await manager.close()
+
+    remaining_ids = {record.exec_session_id for record in repo.list_all()}
+
+    assert len(remaining_ids) == MAX_EXEC_SESSIONS - 1
+    assert "exec_000" not in remaining_ids

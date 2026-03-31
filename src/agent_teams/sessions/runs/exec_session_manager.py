@@ -706,6 +706,7 @@ class ExecSessionManager:
         records = list(self._repository.list_all())
         if len(records) < MAX_EXEC_SESSIONS:
             return
+        required_slots = len(records) - MAX_EXEC_SESSIONS + 1
         protected = {
             record.exec_session_id
             for record in sorted(
@@ -717,24 +718,24 @@ class ExecSessionManager:
             for record in sorted(records, key=lambda item: item.updated_at)
             if record.exec_session_id not in protected and not record.is_active
         ]
-        if reclaimable:
-            self._repository.delete(reclaimable[0].exec_session_id)
+        for record in reclaimable[:required_slots]:
+            self._repository.delete(record.exec_session_id)
+        required_slots -= min(required_slots, len(reclaimable))
+        if required_slots <= 0:
             return
-        oldest_active = next(
-            (
-                record
-                for record in sorted(records, key=lambda item: item.updated_at)
-                if record.exec_session_id not in protected
-            ),
-            None,
-        )
-        if oldest_active is not None:
+        active_candidates = [
+            record
+            for record in sorted(records, key=lambda item: item.updated_at)
+            if record.exec_session_id not in protected and record.is_active
+        ]
+        for record in active_candidates[:required_slots]:
             with contextlib.suppress(KeyError):
                 _ = await self.stop_for_run(
-                    run_id=oldest_active.run_id,
-                    exec_session_id=oldest_active.exec_session_id,
+                    run_id=record.run_id,
+                    exec_session_id=record.exec_session_id,
                     reason="lru_pruned",
                 )
+            self._repository.delete(record.exec_session_id)
 
     def _publish_exec_session_event(
         self,
