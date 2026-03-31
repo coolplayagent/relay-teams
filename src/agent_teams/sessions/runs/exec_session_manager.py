@@ -403,18 +403,27 @@ class ExecSessionManager:
                 rows=_DEFAULT_PTY_ROWS,
             )
             shell_env = await build_shell_env(env)
-            proc = await asyncio.create_subprocess_exec(
-                resolve_bash_path(),
-                "-lc",
-                record.command,
-                cwd=str(cwd),
-                env=shell_env,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                start_new_session=_start_new_session(),
-                creationflags=_creation_flags(),
-            )
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    resolve_bash_path(),
+                    "-lc",
+                    record.command,
+                    cwd=str(cwd),
+                    env=shell_env,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    start_new_session=_start_new_session(),
+                    creationflags=_creation_flags(),
+                )
+            except Exception:
+                with contextlib.suppress(OSError):
+                    os.close(master_fd)
+                with contextlib.suppress(OSError):
+                    os.close(slave_fd)
+                raise
+            with contextlib.suppress(OSError):
+                os.close(slave_fd)
             runtime = _ExecSessionRuntime(
                 record=record,
                 proc=proc,
@@ -423,7 +432,7 @@ class ExecSessionManager:
                 queue=queue,
                 stream_count=1,
                 master_fd=master_fd,
-                slave_fd=slave_fd,
+                slave_fd=None,
             )
             runtime.pump_tasks.append(
                 asyncio.create_task(self._pump_master_fd(runtime))

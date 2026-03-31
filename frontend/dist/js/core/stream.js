@@ -43,6 +43,8 @@ const unavailableSessionCooldownUntil = new Map();
 const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;
 const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
+// Keep some room in the browser connection pool for control actions like stop.
+const MAX_BACKGROUND_STREAMS = 2;
 
 function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
     state.isGenerating = isBusy;
@@ -554,7 +556,7 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
         }
     });
 
-    const desiredRunIds = new Set();
+    const candidates = [];
     for (const rawRecord of records) {
         const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : null;
         const sessionId = String(record?.session_id || '').trim();
@@ -571,6 +573,20 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
         }
         if (status !== 'running' && status !== 'queued') {
             continue;
+        }
+        candidates.push(record);
+    }
+
+    candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));
+
+    const desiredRunIds = new Set();
+    for (const record of candidates) {
+        const runId = String(record?.active_run_id || '').trim();
+        if (!runId) {
+            continue;
+        }
+        if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {
+            break;
         }
         desiredRunIds.add(runId);
         if (activeRunIds.has(runId)) {
@@ -589,6 +605,15 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
         }
         finishBackgroundConnection(connection);
     });
+}
+
+function backgroundRecordTimestamp(record) {
+    const raw = String(record?.updated_at || record?.updatedAt || '').trim();
+    if (!raw) {
+        return 0;
+    }
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 async function attachBackgroundStreamForSession(record) {

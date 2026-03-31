@@ -166,3 +166,48 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
         await manager.close()
 
     assert stopped.status == ExecSessionStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
+    tmp_path: Path,
+) -> None:
+    repo = ExecSessionRepository(tmp_path / "background-terminal-stop-tty.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+
+    try:
+        started = await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command=(
+                "python -u -c \"import time; print('ready', flush=True); "
+                "value = input(); print('echo:' + value, flush=True); time.sleep(30)\""
+            ),
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=True,
+        )
+        _, _ = await manager.interact_for_run(
+            run_id="run-1",
+            exec_session_id=started.exec_session_id,
+            chars="hello\n",
+            yield_time_ms=5000,
+        )
+        stopped = await asyncio.wait_for(
+            manager.stop_for_run(
+                run_id="run-1",
+                exec_session_id=started.exec_session_id,
+            ),
+            timeout=5,
+        )
+    finally:
+        await manager.close()
+
+    assert stopped.status == ExecSessionStatus.STOPPED

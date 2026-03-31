@@ -73,6 +73,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "clearAllStreamState({ preserveOverlay: true });" in timeline_script
     assert "export function attachRunStream(" in stream_script
     assert "const backgroundStreams = new Map();" in stream_script
+    assert "const MAX_BACKGROUND_STREAMS = 2;" in stream_script
     assert "const unavailableSessionCooldownUntil = new Map();" in stream_script
     assert "const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert (
@@ -94,6 +95,11 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "const sessions = await fetchSessions();" in stream_script
     assert "reason: 'background-discovery'," in stream_script
     assert "const snapshot = await fetchSessionRecovery(sessionId);" in stream_script
+    assert (
+        "candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));"
+        in stream_script
+    )
+    assert "if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {" in stream_script
     assert (
         "finishActiveConnection(connection, { preserveRunStreamState: true });"
         in stream_script
