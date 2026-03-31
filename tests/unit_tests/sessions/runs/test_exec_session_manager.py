@@ -131,6 +131,21 @@ class _FakeTransport:
         self.closed = True
 
 
+class _WaitableTransport(_FakeTransport):
+    def __init__(self, *, tty: bool = False) -> None:
+        super().__init__(tty=tty, returncode=None)
+        self._terminated = asyncio.Event()
+
+    async def wait(self) -> int | None:
+        await self._terminated.wait()
+        return self.returncode
+
+    async def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = 1
+        self._terminated.set()
+
+
 @pytest.mark.asyncio
 async def test_exec_session_manager_completes_and_publishes_events(
     tmp_path: Path,
@@ -228,12 +243,33 @@ async def test_exec_session_manager_write_finishes_shell_prompt(
 
 @pytest.mark.asyncio
 async def test_exec_session_manager_stop_marks_terminal_stopped(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
     repo = ExecSessionRepository(tmp_path / "background-terminal-stop.db")
     hub = RunEventHub()
     manager = ExecSessionManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
+    fake_transport = _WaitableTransport()
+
+    async def _fake_spawn_runtime(
+        *,
+        record: ExecSessionRecord,
+        cwd: Path,
+        env: dict[str, str] | None,
+        log_file_path: Path,
+    ) -> object:
+        del cwd, env, log_file_path
+        return manager_module._ExecSessionRuntime(
+            record=record,
+            transport=cast(manager_module._ExecSessionTransport, fake_transport),
+            log_file_path=workspace.resolve_tmp_path("stopped.log", write=True),
+            queue=asyncio.Queue(),
+        )
+
+    monkeypatch.setattr(manager, "_spawn_runtime", _fake_spawn_runtime)
 
     try:
         started = await manager.start_session(
@@ -263,6 +299,13 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
 async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
     tmp_path: Path,
 ) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    if not (
+        manager_module._posix_pty_supported() or manager_module._windows_tty_supported()
+    ):
+        pytest.skip("TTY exec sessions are not supported on this host")
+
     repo = ExecSessionRepository(tmp_path / "background-terminal-stop-tty.db")
     hub = RunEventHub()
     manager = ExecSessionManager(repository=repo, run_event_hub=hub)
@@ -302,6 +345,74 @@ async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
         await manager.close()
 
     assert stopped.status == ExecSessionStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_stop_all_for_run_can_leave_background_sessions_running(
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    repo = ExecSessionRepository(tmp_path / "background-terminal-stop-filtered.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+
+    foreground = repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-foreground",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            command="printf ready",
+            cwd=str(tmp_path),
+            execution_mode="foreground",
+            status=ExecSessionStatus.RUNNING,
+        )
+    )
+    background = repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-background",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-2",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            execution_mode="background",
+            status=ExecSessionStatus.RUNNING,
+        )
+    )
+
+    for record in (foreground, background):
+        runtime = manager_module._ExecSessionRuntime(
+            record=record,
+            transport=cast(manager_module._ExecSessionTransport, _WaitableTransport()),
+            log_file_path=tmp_path / f"{record.exec_session_id}.log",
+            queue=asyncio.Queue(),
+        )
+        manager._runtimes[record.exec_session_id] = runtime
+        runtime.supervisor_task = asyncio.create_task(manager._supervise(runtime))
+
+    try:
+        await manager.stop_all_for_run(
+            run_id="run-1",
+            reason="run_finalized",
+            execution_mode="foreground",
+        )
+
+        persisted_foreground = repo.get("exec-foreground")
+        persisted_background = repo.get("exec-background")
+        assert persisted_foreground is not None
+        assert persisted_background is not None
+        assert persisted_foreground.status == ExecSessionStatus.STOPPED
+        assert persisted_background.status == ExecSessionStatus.RUNNING
+        assert "exec-foreground" not in manager._runtimes
+        assert "exec-background" in manager._runtimes
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

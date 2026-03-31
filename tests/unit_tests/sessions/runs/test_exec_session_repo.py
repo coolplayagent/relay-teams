@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 
 from agent_teams.sessions.runs.exec_session_models import (
     ExecSessionRecord,
@@ -29,6 +30,7 @@ def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
         recent_output=("booting",),
         output_excerpt="booting",
         log_path="tmp/exec_sessions/exec-1.log",
+        completion_notified_at=datetime.now(tz=timezone.utc),
     )
 
     persisted = repo.upsert(record)
@@ -39,6 +41,7 @@ def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
     assert loaded.run_id == "run-1"
     assert loaded.execution_mode == "foreground"
     assert loaded.output_excerpt == "booting"
+    assert loaded.completion_notified_at is not None
     assert repo.list_by_run("run-1")[0].exec_session_id == "exec-1"
 
 

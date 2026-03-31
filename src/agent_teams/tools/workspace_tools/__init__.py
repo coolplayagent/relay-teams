@@ -8,90 +8,126 @@ if TYPE_CHECKING:
     from agent_teams.tools.runtime import ToolDeps
 
 
-_EXEC_SESSION_REGISTERED_ATTR = "_agent_teams_exec_session_registered_names"
+_WORKSPACE_REGISTERED_ATTR = "_agent_teams_workspace_registered_names"
 
 
 def register_edit(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.edit import register as register_impl
-
-    register_impl(agent)
+    _register_workspace_tools(agent, ("edit",))
 
 
 def register_glob(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.glob import register as register_impl
-
-    register_impl(agent)
+    _register_workspace_tools(agent, ("glob",))
 
 
 def register_grep(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.grep import register as register_impl
-
-    register_impl(agent)
+    _register_workspace_tools(agent, ("grep",))
 
 
 def register_read(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.read import register as register_impl
+    _register_workspace_tools(agent, ("read",))
 
-    register_impl(agent)
+
+def register_shell(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("shell",))
+
+
+def register_list_background_tasks(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("list_background_tasks",))
+
+
+def register_wait_background_task(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("wait_background_task",))
+
+
+def register_stop_background_task(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("stop_background_task",))
 
 
 def register_exec_session(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(
-        agent,
-        (
-            "exec_command",
-            "list_exec_sessions",
-            "write_stdin",
-            "resize_exec_session",
-            "terminate_exec_session",
-        ),
-    )
+    register_shell(agent)
+    register_list_background_tasks(agent)
+    register_wait_background_task(agent)
+    register_stop_background_task(agent)
 
 
 def register_exec_command(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(agent, ("exec_command",))
+    register_shell(agent)
 
 
 def register_list_exec_sessions(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(agent, ("list_exec_sessions",))
+    register_list_background_tasks(agent)
 
 
 def register_write_stdin(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(agent, ("write_stdin",))
+    _register_workspace_tools(agent, ("write_stdin",))
 
 
 def register_resize_exec_session(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(agent, ("resize_exec_session",))
+    _register_workspace_tools(agent, ("resize_exec_session",))
 
 
 def register_terminate_exec_session(agent: Agent[ToolDeps, str]) -> None:
-    _register_exec_session_tools(agent, ("terminate_exec_session",))
+    register_stop_background_task(agent)
 
 
 def register_write(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.write import register as register_impl
-
-    register_impl(agent)
+    _register_workspace_tools(agent, ("write",))
 
 
-def _register_exec_session_tools(
+def _register_workspace_tools(
     agent: Agent[ToolDeps, str],
     requested_tools: tuple[str, ...],
 ) -> None:
-    registered = frozenset(getattr(agent, _EXEC_SESSION_REGISTERED_ATTR, ()))
+    registered = frozenset(getattr(agent, _WORKSPACE_REGISTERED_ATTR, ()))
     missing_tools = tuple(
         tool_name for tool_name in requested_tools if tool_name not in registered
     )
     if not missing_tools:
         return
-    from agent_teams.tools.workspace_tools.exec_session import register as register_impl
-
-    register_impl(agent, tool_names=missing_tools)
+    for tool_name in missing_tools:
+        _register_single_tool(agent, tool_name)
     setattr(
         agent,
-        _EXEC_SESSION_REGISTERED_ATTR,
+        _WORKSPACE_REGISTERED_ATTR,
         tuple(sorted(set(registered) | set(missing_tools))),
     )
+
+
+def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
+    if tool_name == "edit":
+        from agent_teams.tools.workspace_tools.edit import register as register_impl
+    elif tool_name == "glob":
+        from agent_teams.tools.workspace_tools.glob import register as register_impl
+    elif tool_name == "grep":
+        from agent_teams.tools.workspace_tools.grep import register as register_impl
+    elif tool_name == "read":
+        from agent_teams.tools.workspace_tools.read import register as register_impl
+    elif tool_name == "write":
+        from agent_teams.tools.workspace_tools.write import register as register_impl
+    elif tool_name == "shell":
+        from agent_teams.tools.workspace_tools.shell import register as register_impl
+    elif tool_name == "list_background_tasks":
+        from agent_teams.tools.workspace_tools.list_background_tasks import (
+            register as register_impl,
+        )
+    elif tool_name == "wait_background_task":
+        from agent_teams.tools.workspace_tools.wait_background_task import (
+            register as register_impl,
+        )
+    elif tool_name == "stop_background_task":
+        from agent_teams.tools.workspace_tools.stop_background_task import (
+            register as register_impl,
+        )
+    elif tool_name in {"write_stdin", "resize_exec_session"}:
+        from agent_teams.tools.workspace_tools.exec_session import (
+            register as register_impl,
+        )
+
+        register_impl(agent, tool_names=(tool_name,))
+        return
+    else:
+        raise ValueError(f"Unknown workspace tool: {tool_name}")
+    register_impl(agent)
 
 
 TOOLS = {
@@ -100,24 +136,27 @@ TOOLS = {
     "grep": register_grep,
     "read": register_read,
     "write": register_write,
-    "exec_command": register_exec_command,
-    "list_exec_sessions": register_list_exec_sessions,
-    "write_stdin": register_write_stdin,
-    "resize_exec_session": register_resize_exec_session,
-    "terminate_exec_session": register_terminate_exec_session,
+    "shell": register_shell,
+    "list_background_tasks": register_list_background_tasks,
+    "wait_background_task": register_wait_background_task,
+    "stop_background_task": register_stop_background_task,
 }
 
 __all__ = [
     "TOOLS",
     "register_edit",
+    "register_exec_command",
+    "register_exec_session",
     "register_glob",
     "register_grep",
-    "register_read",
-    "register_exec_session",
-    "register_exec_command",
+    "register_list_background_tasks",
     "register_list_exec_sessions",
-    "register_write_stdin",
+    "register_read",
     "register_resize_exec_session",
+    "register_shell",
+    "register_stop_background_task",
     "register_terminate_exec_session",
+    "register_wait_background_task",
     "register_write",
+    "register_write_stdin",
 ]

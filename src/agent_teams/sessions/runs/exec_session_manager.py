@@ -14,7 +14,7 @@ import logging
 import os
 from pathlib import Path
 import struct
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 try:
@@ -150,6 +150,10 @@ class _WindowsPtyProcessFactoryProtocol(Protocol):
         dimensions: tuple[int, int] = (24, 80),
         backend: int | None = None,
     ) -> _WindowsPtyProcessProtocol: ...
+
+
+class _ExecSessionCompletionListener(Protocol):
+    async def __call__(self, record: ExecSessionRecord) -> None: ...
 
 
 class _ExecSessionTransport(ABC):
@@ -395,6 +399,13 @@ class ExecSessionManager:
         self._run_event_hub = run_event_hub
         self._runtimes: dict[str, _ExecSessionRuntime] = {}
         self._admission_lock = asyncio.Lock()
+        self._completion_listener: _ExecSessionCompletionListener | None = None
+
+    def set_completion_listener(
+        self,
+        listener: _ExecSessionCompletionListener | None,
+    ) -> None:
+        self._completion_listener = listener
 
     async def start_session(
         self,
@@ -410,6 +421,7 @@ class ExecSessionManager:
         timeout_ms: int | None,
         env: dict[str, str] | None,
         tty: bool,
+        execution_mode: Literal["foreground", "background"] = "background",
     ) -> ExecSessionRecord:
         async with self._admission_lock:
             await self._prune_sessions_if_needed()
@@ -429,6 +441,7 @@ class ExecSessionManager:
                 tool_call_id=tool_call_id,
                 command=command,
                 cwd=str(cwd),
+                execution_mode=execution_mode,
                 tty=tty,
                 timeout_ms=effective_timeout_ms,
                 log_path=logical_log_path,
@@ -485,6 +498,7 @@ class ExecSessionManager:
             timeout_ms=timeout_ms,
             env=env,
             tty=tty,
+            execution_mode="background",
         )
         updated, _ = await self.interact_for_run(
             run_id=run_id,
@@ -603,11 +617,18 @@ class ExecSessionManager:
         await runtime.completed.wait()
         return self._get_record(exec_session_id)
 
-    async def stop_all_for_run(self, *, run_id: str, reason: str) -> None:
+    async def stop_all_for_run(
+        self,
+        *,
+        run_id: str,
+        reason: str,
+        execution_mode: str | None = None,
+    ) -> None:
         active_ids = [
             record.exec_session_id
             for record in self._repository.list_by_run(run_id)
             if record.is_active
+            and (execution_mode is None or record.execution_mode == execution_mode)
         ]
         for exec_session_id in active_ids:
             with contextlib.suppress(KeyError):
@@ -935,6 +956,8 @@ class ExecSessionManager:
             ),
             record=runtime.record,
         )
+        if self._completion_listener is not None:
+            await self._completion_listener(runtime.record)
 
     def _resolve_exec_session_status(
         self,

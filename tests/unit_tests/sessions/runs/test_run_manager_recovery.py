@@ -16,6 +16,10 @@ from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.exec_session_models import (
+    ExecSessionRecord,
+    ExecSessionStatus,
+)
 from agent_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
 from agent_teams.sessions.runs.recoverable_pause import (
@@ -79,7 +83,10 @@ class _EventBus:
 
 
 def _build_manager(
-    db_path: Path, *, attach_manager_event_log: bool = True
+    db_path: Path,
+    *,
+    attach_manager_event_log: bool = True,
+    meta_agent: object | None = None,
 ) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
@@ -102,7 +109,7 @@ def _build_manager(
         run_runtime_repo=run_runtime_repo,
     )
     return RunManager(
-        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
+        meta_agent=cast(MetaAgent, meta_agent or cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -133,6 +140,26 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
     )
 
 
+def _upsert_instance(
+    agent_repo: AgentInstanceRepository,
+    *,
+    instance_id: str,
+    role_id: str,
+    status: InstanceStatus,
+    conversation_id: str | None = None,
+) -> None:
+    agent_repo.upsert_instance(
+        run_id="run-existing",
+        trace_id="run-existing",
+        session_id="session-1",
+        instance_id=instance_id,
+        role_id=role_id,
+        workspace_id="default",
+        status=status,
+        conversation_id=conversation_id,
+    )
+
+
 def _create_root_task(
     task_repo: TaskRepository,
     *,
@@ -148,6 +175,29 @@ def _create_root_task(
             objective="existing work",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
+    )
+
+
+def _build_background_record(
+    *,
+    instance_id: str = "inst-worker",
+    role_id: str = "writer",
+) -> ExecSessionRecord:
+    return ExecSessionRecord(
+        exec_session_id="exec-1",
+        run_id="run-existing",
+        session_id="session-1",
+        instance_id=instance_id,
+        role_id=role_id,
+        tool_call_id="call-1",
+        command="python worker.py",
+        cwd="C:/workspace",
+        execution_mode="background",
+        status=ExecSessionStatus.COMPLETED,
+        exit_code=0,
+        recent_output=("done",),
+        output_excerpt="done",
+        log_path="tmp/exec_sessions/exec-1.log",
     )
 
 
@@ -183,6 +233,109 @@ def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
     queued = manager._injection_manager.drain_at_boundary("run-existing", "inst-1")
     assert len(queued) == 1
     assert queued[0].content == "follow up"
+
+
+def test_background_task_completion_enqueues_to_running_origin_instance(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_background_enqueue.db"
+    manager = _build_manager(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-worker",
+        role_id="writer",
+        status=InstanceStatus.RUNNING,
+        conversation_id="conv-worker",
+    )
+    _create_root_task(TaskRepository(db_path))
+    manager._running_run_ids.add("run-existing")
+    manager._injection_manager.activate("run-existing")
+
+    manager.handle_background_task_completion(
+        record=_build_background_record(),
+        message="background task finished",
+    )
+
+    queued = manager._injection_manager.drain_at_boundary(
+        "run-existing",
+        "inst-worker",
+    )
+    assert len(queued) == 1
+    assert queued[0].content == "background task finished"
+
+
+@pytest.mark.asyncio
+async def test_background_task_completion_starts_new_run_when_live_delivery_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    class _BlockingMetaAgent:
+        def __init__(self) -> None:
+            self.intent: IntentInput | None = None
+            self.trace_id: str | None = None
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def handle_intent(
+            self,
+            intent: IntentInput,
+            trace_id: str | None = None,
+        ) -> RunResult:
+            self.intent = intent
+            self.trace_id = trace_id
+            self.started.set()
+            await self.release.wait()
+            return RunResult(
+                trace_id=trace_id or "run-new",
+                root_task_id="task-root-new",
+                status="completed",
+                output=content_parts_from_text(intent.intent),
+            )
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:  # pragma: no cover
+            raise AssertionError(f"not expected: {trace_id}")
+
+    db_path = tmp_path / "run_background_spawn.db"
+    meta_agent = _BlockingMetaAgent()
+    manager = _build_manager(db_path, meta_agent=meta_agent)
+    agent_repo = AgentInstanceRepository(db_path)
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-worker",
+        role_id="writer",
+        status=InstanceStatus.COMPLETED,
+        conversation_id="conv-worker",
+    )
+    _create_root_task(TaskRepository(db_path))
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    manager.handle_background_task_completion(
+        record=_build_background_record(),
+        message="background task finished",
+    )
+    await asyncio.wait_for(meta_agent.started.wait(), timeout=1)
+
+    assert meta_agent.intent is not None
+    assert meta_agent.trace_id is not None
+    assert meta_agent.trace_id != "run-existing"
+    assert meta_agent.intent.intent == "background task finished"
+    assert meta_agent.intent.target_role_id is None
+    assert meta_agent.trace_id in manager._running_run_ids
+
+    meta_agent.release.set()
+    await asyncio.sleep(0)
 
 
 def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:

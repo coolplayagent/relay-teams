@@ -23,7 +23,6 @@ def test_registry_contains_registered_local_tools() -> None:
         "double_click_at",
         "drag_between",
         "edit",
-        "exec_command",
         "focus_window",
         "glob",
         "grep",
@@ -31,20 +30,20 @@ def test_registry_contains_registered_local_tools() -> None:
         "im_send",
         "launch_app",
         "list_available_roles",
+        "list_background_tasks",
         "list_delegated_tasks",
-        "list_exec_sessions",
         "list_windows",
         "read",
-        "resize_exec_session",
         "scroll_view",
-        "terminate_exec_session",
+        "shell",
+        "stop_background_task",
         "type_text",
         "update_task",
+        "wait_background_task",
         "wait_for_window",
         "webfetch",
         "websearch",
         "write",
-        "write_stdin",
     )
 
 
@@ -57,14 +56,25 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
 def test_default_registry_maps_legacy_tool_aliases_for_runtime_resolution() -> None:
     registry = build_default_registry()
 
-    assert registry.resolve_known(("shell",), strict=False) == ("exec_command",)
+    assert registry.resolve_known(("exec_command",), strict=False) == ("shell",)
+    assert registry.resolve_known(("list_exec_sessions",), strict=False) == (
+        "list_background_tasks",
+    )
+    assert registry.resolve_known(("terminate_exec_session",), strict=False) == (
+        "stop_background_task",
+    )
     assert registry.resolve_known(("write_tmp",), strict=False) == ("write",)
 
 
 def test_default_registry_rejects_legacy_tool_aliases_for_explicit_validation() -> None:
     registry = build_default_registry()
 
+    registry.validate_known(("shell",))
     with pytest.raises(ValueError, match="Unknown tools"):
-        registry.validate_known(("shell",))
+        registry.validate_known(("exec_command",))
+    with pytest.raises(ValueError, match="Unknown tools"):
+        registry.validate_known(("list_exec_sessions",))
+    with pytest.raises(ValueError, match="Unknown tools"):
+        registry.validate_known(("terminate_exec_session",))
     with pytest.raises(ValueError, match="Unknown tools"):
         registry.validate_known(("write_tmp",))

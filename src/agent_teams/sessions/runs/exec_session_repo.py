@@ -51,10 +51,21 @@ class ExecSessionRepository:
                     log_path         TEXT NOT NULL,
                     created_at       TEXT NOT NULL,
                     updated_at       TEXT NOT NULL,
-                    completed_at     TEXT
+                    completed_at     TEXT,
+                    completion_notified_at TEXT
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(exec_sessions)"
+                ).fetchall()
+            }
+            if "completion_notified_at" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE exec_sessions ADD COLUMN completion_notified_at TEXT"
+                )
             self._conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_exec_sessions_run
@@ -100,9 +111,10 @@ class ExecSessionRepository:
                     log_path,
                     created_at,
                     updated_at,
-                    completed_at
+                    completed_at,
+                    completion_notified_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(exec_session_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -122,7 +134,8 @@ class ExecSessionRepository:
                     log_path=excluded.log_path,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
-                    completed_at=excluded.completed_at
+                    completed_at=excluded.completed_at,
+                    completion_notified_at=excluded.completion_notified_at
                 """,
                 _record_params(record),
             )
@@ -247,6 +260,11 @@ def _record_params(record: ExecSessionRecord) -> tuple[object, ...]:
         record.created_at.isoformat(),
         record.updated_at.isoformat(),
         record.completed_at.isoformat() if record.completed_at is not None else None,
+        (
+            record.completion_notified_at.isoformat()
+            if record.completion_notified_at is not None
+            else None
+        ),
     )
 
 
@@ -279,6 +297,9 @@ def _row_to_record(row: sqlite3.Row) -> ExecSessionRecord:
         created_at=created_at,
         updated_at=updated_at,
         completed_at=parse_persisted_datetime_or_none(row["completed_at"]),
+        completion_notified_at=parse_persisted_datetime_or_none(
+            row["completion_notified_at"]
+        ),
     )
 
 

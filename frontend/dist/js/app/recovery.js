@@ -53,16 +53,16 @@ function isPrimaryOrReservedRoleId(roleId) {
 function isExecSessionPanelCollapsed(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return false;
-    return execSessionPanelCollapsedRunIds.has(safeRunId);
+    return !execSessionPanelCollapsedRunIds.has(safeRunId);
 }
 
 function setExecSessionPanelCollapsed(runId, collapsed) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
     if (collapsed) {
-        execSessionPanelCollapsedRunIds.add(safeRunId);
-    } else {
         execSessionPanelCollapsedRunIds.delete(safeRunId);
+    } else {
+        execSessionPanelCollapsedRunIds.add(safeRunId);
     }
 }
 
@@ -950,9 +950,14 @@ function renderRecoveryBanner() {
     const hideBanner = (
         !activeRun
         || (
-            isLocallyStreaming(activeRun.run_id)
-            && approvals.length === 0
+            approvals.length === 0
             && !pausedSubagent
+            && activeRun.status !== 'stopping'
+            && activeRun.phase !== 'stopping'
+            && (
+                isLocallyStreaming(activeRun.run_id)
+                || !activeRun.should_show_recover
+            )
         )
     );
     const nextSignature = recoveryBannerSignature({
@@ -972,7 +977,6 @@ function renderRecoveryBanner() {
         host.innerHTML = '';
         syncRecoveryRailMode({
             approvals: [],
-            backgroundTerminals: snapshot?.backgroundTerminals || [],
             pausedSubagent: null,
         });
         return;
@@ -1042,7 +1046,6 @@ function renderRecoveryBanner() {
 
     syncRecoveryRailMode({
         approvals,
-        backgroundTerminals: snapshot?.backgroundTerminals || [],
         pausedSubagent,
     });
 }
@@ -1090,33 +1093,28 @@ function ensureRecoveryBannerHost() {
 
 function ensureExecSessionHost() {
     if (els.execSessionHost) return els.execSessionHost;
+    const chatContainer = els.chatContainer || els.chatMessages?.parentElement;
     const inputContainer = document.querySelector('.input-container');
-    if (!inputContainer) return null;
+    if (!chatContainer || !inputContainer || inputContainer.parentNode !== chatContainer) return null;
     const host = document.createElement('div');
     host.id = 'exec-session-host';
-    host.className = 'recovery-banner-host';
+    host.className = 'background-task-strip-host';
     host.style.display = 'none';
-    const recoveryHost = ensureRecoveryBannerHost();
-    if (recoveryHost?.parentNode === inputContainer) {
-        inputContainer.insertBefore(host, recoveryHost.nextSibling);
-    } else {
-        inputContainer.insertBefore(host, inputContainer.firstChild);
-    }
+    chatContainer.insertBefore(host, inputContainer);
     els.execSessionHost = host;
     return host;
 }
 
-function syncRecoveryRailMode({ approvals = [], backgroundTerminals = [], pausedSubagent = null } = {}) {
+function syncRecoveryRailMode({ approvals = [], pausedSubagent = null } = {}) {
     const rightRail = els.rightRail || document.getElementById('right-rail');
     if (!rightRail) return;
     const hasPendingApprovals = Array.isArray(approvals) && approvals.length > 0;
-    const hasExecSessions = Array.isArray(backgroundTerminals) && backgroundTerminals.length > 0;
     const hasPausedSubagent = !!pausedSubagent;
 
     rightRail.classList.toggle('right-rail-recovery-priority', hasPendingApprovals);
     rightRail.classList.toggle(
         'right-rail-followup-priority',
-        !hasPendingApprovals && !hasExecSessions && hasPausedSubagent,
+        !hasPendingApprovals && hasPausedSubagent,
     );
 }
 
@@ -1353,9 +1351,12 @@ function renderExecSessionPanel() {
     if (!host) return;
 
     const snapshot = state.currentRecoverySnapshot;
-    const activeRun = getActiveRecoveryRun();
     const terminals = snapshot?.backgroundTerminals || [];
-    const hidePanel = !activeRun || terminals.length === 0;
+    const activeTerminals = terminals.filter(terminal => isExecSessionActive(terminal));
+    const runId = String(
+        snapshot?.activeRun?.run_id || activeTerminals[0]?.runId || terminals[0]?.runId || '',
+    ).trim();
+    const hidePanel = !runId || activeTerminals.length === 0;
 
     if (hidePanel) {
         host.style.display = 'none';
@@ -1363,70 +1364,33 @@ function renderExecSessionPanel() {
         return;
     }
 
-    const pillTone = stateTone(activeRun);
-    const collapsed = isExecSessionPanelCollapsed(activeRun.run_id);
     host.style.display = 'block';
     host.innerHTML = `
-        <div class="recovery-banner recovery-tone-${pillTone}">
-            <div class="recovery-banner-head">
-                <div class="recovery-banner-copy">
-                    <div class="recovery-banner-label">${t('recovery.exec_session.panel_label')}</div>
-                    <div class="recovery-banner-title">
-                        <span>Run ${shortRunId(activeRun.run_id)}</span>
-                        <span class="recovery-status-pill recovery-status-${pillTone}">
-                            ${stateLabel(activeRun)}
-                        </span>
-                    </div>
-                    <div class="recovery-banner-text">${describeExecSessionPanel(activeRun, terminals)}</div>
-                </div>
-                <button
-                    type="button"
-                    class="recovery-panel-toggle-btn"
-                    data-exec-session-panel-toggle="toggle"
-                    aria-expanded="${collapsed ? 'false' : 'true'}"
-                >
-                    ${escapeHtml(
-        collapsed
-            ? t('recovery.exec_session.expand')
-            : t('recovery.exec_session.collapse'),
-    )}
-                </button>
+        <div class="background-task-strip" role="status" aria-live="polite">
+            <div class="background-task-strip-summary">
+                <span class="background-task-strip-label">${escapeHtml(t('recovery.exec_session.panel_label'))}</span>
+                <span class="background-task-strip-meta">${escapeHtml(describeExecSessionPanel(activeTerminals))}</span>
             </div>
-            <div class="recovery-banner-body${collapsed ? ' is-collapsed' : ''}">
-                ${renderExecSessionList(activeRun, terminals)}
+            <div class="background-task-strip-items">
+                ${renderExecSessionList(runId, activeTerminals)}
             </div>
         </div>
     `;
-
-    const toggleButton = host.querySelector('[data-exec-session-panel-toggle]');
-    if (toggleButton) {
-        toggleButton.onclick = () => {
-            handleExecSessionPanelToggle(activeRun.run_id);
-        };
-    }
 
     host.querySelectorAll('[data-background-terminal-action]').forEach(button => {
         const terminalId = String(button.dataset.terminalId || '');
         const action = String(button.dataset.backgroundTerminalAction || '');
         if (!terminalId || !action) return;
-        const terminal = terminals.find(item => item.terminalId === terminalId);
+        const terminal = activeTerminals.find(item => item.terminalId === terminalId);
         if (!terminal) return;
         button.onclick = () => {
-            void handleExecSessionAction(activeRun.run_id, terminal, action);
+            void handleExecSessionAction(runId, terminal, action);
         };
     });
 }
 
-function describeExecSessionPanel(activeRun, terminals) {
-    const activeExecSessions = terminals.filter(terminal => isExecSessionActive(terminal));
-    if (activeExecSessions.length > 0) {
-        return activeExecSessions.length === 1
-            ? t('recovery.exec_session.active_one')
-            : formatMessage('recovery.exec_session.active_many', {
-                count: activeExecSessions.length,
-            });
-    }
-    return t('recovery.exec_session.available');
+function describeExecSessionPanel(terminals) {
+    return `${terminals.length} active`;
 }
 
 function stateLabel(activeRun) {
@@ -1492,68 +1456,69 @@ function shortRunId(runId) {
     return safe.length > 16 ? `${safe.slice(0, 8)}...${safe.slice(-4)}` : safe;
 }
 
-function renderExecSessionList(activeRun, terminals) {
+function renderExecSessionList(runId, terminals) {
     return `
-        <div class="recovery-approval-list">
-            ${terminals.map(item => renderExecSessionItem(activeRun, item)).join('')}
+        <div class="background-task-chip-list">
+            ${terminals.map(item => renderExecSessionItem(runId, item)).join('')}
         </div>
     `;
 }
 
-function renderExecSessionItem(activeRun, terminal) {
+function renderExecSessionItem(runId, terminal) {
     const terminalId = String(terminal?.terminalId || '');
     const busy = backgroundTerminalActionBusyIds.has(terminalId);
     const error = backgroundTerminalActionErrors.get(terminalId) || '';
-    const statusClass = error ? 'is-error' : busy ? 'is-busy' : '';
     const statusText = error
         || (busy ? t('recovery.applying') : backgroundTerminalStatusLabel(terminal));
-    const subtitle = [
-        terminal.cwd ? `cwd ${terminal.cwd}` : '',
-        terminal.logPath ? `log ${terminal.logPath}` : '',
-        terminal.exitCode === null ? '' : `exit ${terminal.exitCode}`,
-    ].filter(Boolean).join(' · ');
+    const chipTone = backgroundTerminalTone(terminal, { busy, error });
+    const details = [
+        statusText,
+        terminal.command || shortRunId(terminalId),
+        terminal.cwd ? `cwd: ${terminal.cwd}` : '',
+        terminal.logPath ? `log: ${terminal.logPath}` : '',
+        terminal.exitCode === null ? '' : `exit: ${terminal.exitCode}`,
+    ].filter(Boolean).join('\n');
 
     return `
-        <section class="recovery-approval-item">
-            <div class="recovery-approval-copy">
-                <div class="recovery-approval-title">${escapeHtml(terminal.command || shortRunId(terminalId))}</div>
-                <div class="recovery-approval-text">${escapeHtml(subtitle || shortRunId(terminalId))}</div>
-                <div class="recovery-approval-text">${escapeHtml(terminalOutputLines(terminal))}</div>
-            </div>
-            <div class="recovery-approval-actions">
-                <span class="recovery-approval-status ${statusClass}">${escapeHtml(statusText)}</span>
-                <div class="recovery-approval-buttons">
-                    ${isExecSessionActive(terminal)
+        <section class="background-task-chip background-task-chip-${chipTone}" title="${escapeAttribute(details)}">
+            <span class="background-task-chip-status">${escapeHtml(statusText)}</span>
+            <span class="background-task-chip-command">${escapeHtml(terminal.command || shortRunId(terminalId))}</span>
+            ${isExecSessionActive(terminal)
         ? `<button
-                            type="button"
-                            class="recovery-choice-btn recovery-choice-deny"
-                            data-background-terminal-action="stop"
-                            data-terminal-id="${escapeAttribute(terminalId)}"
-                            ${busy || recoveryActionBusy ? 'disabled' : ''}
-                        >
-                            ${escapeHtml(t('recovery.exec_session.stop'))}
-                        </button>`
+                    type="button"
+                    class="background-task-chip-stop"
+                    data-background-terminal-action="stop"
+                    data-terminal-id="${escapeAttribute(terminalId)}"
+                    data-run-id="${escapeAttribute(runId)}"
+                    ${busy || recoveryActionBusy ? 'disabled' : ''}
+                >
+                    ${escapeHtml(t('recovery.exec_session.stop'))}
+                </button>`
         : ''
     }
-                </div>
-            </div>
         </section>
     `;
 }
 
-function terminalOutputLines(terminal) {
-    const lines = Array.isArray(terminal?.recentOutput) && terminal.recentOutput.length > 0
-        ? terminal.recentOutput
-        : typeof terminal?.outputExcerpt === 'string' && terminal.outputExcerpt.trim()
-            ? terminal.outputExcerpt.trim().split('\n').filter(Boolean).slice(-3)
-            : [];
-    return lines.length > 0
-        ? lines.join('\n')
-        : t('recovery.exec_session.no_output');
-}
-
 function isExecSessionActive(terminal) {
     return terminal?.status === 'running' || terminal?.status === 'blocked';
+}
+
+function backgroundTerminalTone(terminal, { busy = false, error = '' } = {}) {
+    if (error) return 'danger';
+    if (busy) return 'warning';
+    switch (terminal?.status) {
+        case 'running':
+            return 'running';
+        case 'blocked':
+            return 'warning';
+        case 'completed':
+            return 'success';
+        case 'failed':
+            return 'danger';
+        default:
+            return 'idle';
+    }
 }
 
 function backgroundTerminalStatusLabel(terminal) {

@@ -40,6 +40,7 @@ class ExecSessionRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     completed_at: datetime | None = None
+    completion_notified_at: datetime | None = None
 
     @property
     def is_active(self) -> bool:

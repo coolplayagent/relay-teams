@@ -487,20 +487,100 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
             log_path="tmp/exec_sessions/exec-1.log",
         )
     )
+    terminal_repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-2",
+            run_id="run-active",
+            session_id="session-1",
+            instance_id="inst-2",
+            role_id="coordinator_agent",
+            tool_call_id="call-2",
+            command="sleep 1",
+            cwd="/tmp/project",
+            execution_mode="background",
+            status=ExecSessionStatus.COMPLETED,
+            recent_output=("done",),
+            output_excerpt="done",
+            log_path="tmp/exec_sessions/exec-2.log",
+        )
+    )
+    terminal_repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-3",
+            run_id="run-active",
+            session_id="session-1",
+            instance_id="inst-3",
+            role_id="coordinator_agent",
+            tool_call_id="call-3",
+            command="python task.py",
+            cwd="/tmp/project",
+            execution_mode="foreground",
+            status=ExecSessionStatus.RUNNING,
+            recent_output=("busy",),
+            output_excerpt="busy",
+            log_path="tmp/exec_sessions/exec-3.log",
+        )
+    )
 
     snapshot = service.get_recovery_snapshot("session-1")
 
     active_run = snapshot.get("active_run")
     assert isinstance(active_run, dict)
+    assert active_run.get("exec_session_count") == 2
+    exec_sessions = snapshot.get("exec_sessions")
+    assert isinstance(exec_sessions, list)
+    assert len(exec_sessions) == 2
+    assert [item["exec_session_id"] for item in exec_sessions] == ["exec-2", "exec-1"]
+    assert all("output_excerpt" not in item for item in exec_sessions)
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    assert round_snapshot.get("exec_session_count") == 2
+
+
+def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_tasks_exist(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_completed_background.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-completed", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-completed",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    ExecSessionRepository(db_path).upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-1",
+            run_id="run-completed",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="coordinator_agent",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd="/tmp/project",
+            execution_mode="background",
+            status=ExecSessionStatus.COMPLETED,
+            recent_output=("done",),
+            output_excerpt="done",
+            log_path="tmp/exec_sessions/exec-1.log",
+        )
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == "run-completed"
+    assert active_run.get("status") == "completed"
     assert active_run.get("exec_session_count") == 1
     exec_sessions = snapshot.get("exec_sessions")
     assert isinstance(exec_sessions, list)
     assert len(exec_sessions) == 1
-    assert exec_sessions[0]["exec_session_id"] == "exec-1"
-    assert "output_excerpt" not in exec_sessions[0]
-    round_snapshot = snapshot.get("round_snapshot")
-    assert isinstance(round_snapshot, dict)
-    assert round_snapshot.get("exec_session_count") == 1
 
 
 def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(

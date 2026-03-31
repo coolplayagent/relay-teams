@@ -656,9 +656,13 @@ class SessionService:
         exec_sessions = [
             record.model_dump(mode="json", exclude={"output_excerpt"})
             for record in (
-                self._exec_session_repo.list_by_run(run_id)
-                if self._exec_session_repo is not None
-                else ()
+                exec_record
+                for exec_record in (
+                    self._exec_session_repo.list_by_run(run_id)
+                    if self._exec_session_repo is not None
+                    else ()
+                )
+                if exec_record.execution_mode == "background"
             )
         ]
         active_run = {
@@ -842,7 +846,23 @@ class SessionService:
                 RunRuntimeStatus.QUEUED,
             }:
                 return runtime.run_id, runtime
+        for runtime in runtimes:
+            if runtime.status not in {
+                RunRuntimeStatus.COMPLETED,
+                RunRuntimeStatus.FAILED,
+            }:
+                continue
+            if self._has_background_exec_sessions(runtime.run_id):
+                return runtime.run_id, runtime
         return None
+
+    def _has_background_exec_sessions(self, run_id: str) -> bool:
+        if self._exec_session_repo is None:
+            return False
+        return any(
+            record.execution_mode == "background"
+            for record in self._exec_session_repo.list_by_run(run_id)
+        )
 
     def _paused_subagent_snapshot(
         self,

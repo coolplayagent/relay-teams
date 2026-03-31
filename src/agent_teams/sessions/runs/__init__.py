@@ -5,6 +5,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
     from agent_teams.sessions.runs.exec_session_manager import (
         ExecSessionManager,
     )
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActiveSessionRunRegistry",
+    "BackgroundTaskService",
     "ExecSessionManager",
     "ExecSessionRecord",
     "ExecSessionRepository",
@@ -102,6 +104,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActiveSessionRunRegistry": (
         "agent_teams.sessions.runs.active_run_registry",
         "ActiveSessionRunRegistry",
+    ),
+    "BackgroundTaskService": (
+        "agent_teams.sessions.runs.background_tasks",
+        "BackgroundTaskService",
     ),
     "ExecSessionManager": (
         "agent_teams.sessions.runs.exec_session_manager",

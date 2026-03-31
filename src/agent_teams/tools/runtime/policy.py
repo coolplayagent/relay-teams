@@ -13,6 +13,7 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "dispatch_task",
         "update_task",
         "exec_command",
+        "shell",
         "edit",
         "write",
         "webfetch",

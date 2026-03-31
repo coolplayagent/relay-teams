@@ -50,6 +50,7 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
 )
+from agent_teams.sessions.runs.exec_session_models import ExecSessionRecord
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
     RunEvent,
@@ -465,6 +466,17 @@ class RunManager:
                     )
                 return active_run_id, session_id
 
+        return self._queue_new_run(
+            session_id=session_id,
+            intent=intent,
+        )
+
+    def _queue_new_run(
+        self,
+        *,
+        session_id: str,
+        intent: IntentInput,
+    ) -> tuple[str, str]:
         run_id = new_trace_id().value
         self._pending_runs[run_id] = intent
         if self._run_runtime_repo is not None:
@@ -476,7 +488,9 @@ class RunManager:
             )
         if self._run_intent_repo is not None:
             self._run_intent_repo.upsert(
-                run_id=run_id, session_id=session_id, intent=intent
+                run_id=run_id,
+                session_id=session_id,
+                intent=intent,
             )
         self._remember_active_run(session_id, run_id)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
@@ -1110,6 +1124,7 @@ class RunManager:
                     await self._exec_session_manager.stop_all_for_run(
                         run_id=run_id,
                         reason="run_finalized",
+                        execution_mode="foreground",
                     )
                 except Exception as exc:
                     with bind_trace_context(
@@ -1250,6 +1265,23 @@ class RunManager:
             content=content,
         )
 
+    def handle_background_task_completion(
+        self,
+        *,
+        record: "ExecSessionRecord",
+        message: str,
+    ) -> None:
+        if self._should_delegate_to_bound_loop():
+            record_copy = record.model_copy(deep=True)
+            self._call_in_bound_loop(
+                lambda: self._handle_background_task_completion_local(
+                    record=record_copy,
+                    message=message,
+                )
+            )
+            return
+        self._handle_background_task_completion_local(record=record, message=message)
+
     def stop_run(self, run_id: str) -> None:
         if self._should_delegate_to_bound_loop():
             self._call_in_bound_loop(lambda: self._stop_run_local(run_id))
@@ -1318,6 +1350,95 @@ class RunManager:
                 event="run.stop.requested",
                 message="Run stop requested",
                 payload={"was_running": requested},
+            )
+
+    def _handle_background_task_completion_local(
+        self,
+        *,
+        record: "ExecSessionRecord",
+        message: str,
+    ) -> None:
+        task_id = self._find_task_for_instance(
+            run_id=record.run_id,
+            instance_id=record.instance_id or "",
+        )
+        if (
+            record.instance_id
+            and self._can_enqueue_followup_to_instance(
+                run_id=record.run_id,
+                instance_id=record.instance_id,
+            )
+            and self._append_followup_to_instance(
+                run_id=record.run_id,
+                instance_id=record.instance_id,
+                task_id=task_id or "background-task-notification",
+                content=message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+        ):
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+                instance_id=record.instance_id,
+                role_id=record.role_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.enqueued",
+                    message="Background task notification enqueued to originating instance",
+                    payload={"background_task_id": record.exec_session_id},
+                )
+            return
+        if self._can_enqueue_followup_to_coordinator(record.run_id) and (
+            self._append_followup_to_coordinator(
+                record.run_id,
+                message,
+                enqueue=True,
+            )
+        ):
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.enqueued",
+                    message="Background task notification enqueued to coordinator",
+                    payload={"background_task_id": record.exec_session_id},
+                )
+            return
+
+        session_id = self._ensure_session(record.session_id)
+        self._run_control_manager.assert_session_allows_main_input(session_id)
+        _ = self._session_repo.mark_started(session_id)
+        intent = IntentInput(
+            session_id=session_id,
+            input=(TextContentPart(text=message),),
+        )
+        new_run_id, _ = self._queue_new_run(
+            session_id=session_id,
+            intent=self._prepare_intent(intent),
+        )
+        self.ensure_run_started(new_run_id)
+        with bind_trace_context(
+            trace_id=new_run_id,
+            run_id=new_run_id,
+            session_id=record.session_id,
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event="background_task.notification.spawned",
+                message="Background task notification started a new run",
+                payload={
+                    "background_task_id": record.exec_session_id,
+                    "source_run_id": record.run_id,
+                },
             )
 
     def _should_delegate_to_bound_loop(self) -> bool:
@@ -1574,6 +1695,43 @@ class RunManager:
                 return record
         raise KeyError(f"No root task found for run_id={run_id}")
 
+    def _find_task_for_instance(self, *, run_id: str, instance_id: str) -> str | None:
+        if not instance_id:
+            return None
+        task_repo = self._require_task_repo()
+        for record in task_repo.list_by_trace(run_id):
+            if record.assigned_instance_id == instance_id:
+                return record.envelope.task_id
+        return None
+
+    def _can_enqueue_followup_to_instance(
+        self, *, run_id: str, instance_id: str
+    ) -> bool:
+        if not self._injection_manager.is_active(run_id):
+            return False
+        try:
+            record = self._require_agent_repo().get_instance(instance_id)
+        except KeyError:
+            return False
+        return record.run_id == run_id and record.status == InstanceStatus.RUNNING
+
+    def _can_enqueue_followup_to_coordinator(self, run_id: str) -> bool:
+        if not self._injection_manager.is_active(run_id):
+            return False
+        try:
+            root = self._root_task_for_run(run_id)
+            session_id = root.envelope.session_id
+            instance_id = self._run_control_manager.get_coordinator_instance_id(
+                run_id=run_id,
+                session_id=session_id,
+            )
+            if not instance_id:
+                return False
+            record = self._require_agent_repo().get_instance(instance_id)
+        except KeyError:
+            return False
+        return record.run_id == run_id and record.status == InstanceStatus.RUNNING
+
     def _append_followup_to_instance(
         self,
         *,
@@ -1642,7 +1800,7 @@ class RunManager:
         content: str,
         *,
         enqueue: bool,
-    ) -> None:
+    ) -> bool:
         try:
             root = self._root_task_for_run(run_id)
             session_id = root.envelope.session_id
@@ -1692,11 +1850,12 @@ class RunManager:
                         "length": len(content),
                     },
                 )
-            return
+            return True
         except KeyError:
             if self._run_intent_repo is None:
                 raise
             self._run_intent_repo.append_followup(run_id=run_id, content=content)
+            return False
 
     def _update_run_yolo(
         self,

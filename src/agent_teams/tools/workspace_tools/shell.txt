@@ -1,0 +1,7 @@
+Run a shell command in the managed runtime.
+
+- Pass only `command` for normal synchronous execution and wait for the command to finish.
+- Set `background=true` only when the task should continue after the current tool call returns.
+- Use `workdir` only when the command must run somewhere other than the workspace root.
+- Use `tty=true` only for commands that require an interactive terminal.
+- Prefer this tool over older exec-session tools.

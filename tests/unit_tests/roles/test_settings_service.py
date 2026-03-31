@@ -213,7 +213,7 @@ def test_get_role_document_canonicalizes_legacy_tool_names(tmp_path: Path) -> No
 
     record = service.get_role_document("legacy")
 
-    assert record.tools == ("write", "exec_command", "missing_tool")
+    assert record.tools == ("write", "shell", "missing_tool")
 
 
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
