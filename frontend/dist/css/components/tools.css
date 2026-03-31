@@ -360,6 +360,63 @@
     background: rgba(255, 255, 255, 0.015);
 }
 
+/* --- Tool Group - collapsible divider for grouped tool blocks --- */
+
+.tool-group {
+    margin: 0.35rem 0;
+}
+
+.tool-group-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    font-family: var(--font-ui);
+    user-select: none;
+    padding: 0.2rem 0;
+    transition: color 0.15s;
+}
+
+.tool-group-summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool-group-summary:hover {
+    color: var(--text-primary);
+}
+
+.tool-group-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.tool-group-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.tool-group-toggle {
+    flex: 0 0 auto;
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+}
+
+.tool-group[open] > .tool-group-summary .tool-group-toggle {
+    transform: rotate(90deg);
+}
+
+.tool-group-body {
+    overflow: hidden;
+}
+
 /* --- Animations --- */
 
 @keyframes tool-detail-in {

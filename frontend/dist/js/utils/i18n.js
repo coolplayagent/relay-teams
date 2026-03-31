@@ -2051,6 +2051,7 @@ Object.assign(TRANSLATIONS['en-US'], {
     'tool.status.running': 'Running...',
     'tool.action.copy': 'Copy',
     'tool.action.copied': 'Copied',
+    'tool.group.processed': 'Processed{duration}',
 });
 
 Object.assign(TRANSLATIONS['zh-CN'], {
@@ -2117,6 +2118,7 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'tool.status.running': '运行中...',
     'tool.action.copy': '复制',
     'tool.action.copied': '已复制',
+    'tool.group.processed': '已处理{duration}',
 });
 
 export function getCurrentLanguage() {

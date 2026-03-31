@@ -5445,7 +5445,8 @@ body.light-theme .round-clear-divider-line {
 }
 
 body.light-theme .round-history-divider-line,
-body.light-theme .message-history-divider-line {
+body.light-theme .message-history-divider-line,
+body.light-theme .tool-group-line {
     background: color-mix(in srgb, var(--border-color) 78%, transparent);
 }
 
