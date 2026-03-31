@@ -5,6 +5,16 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.sessions.runs.exec_session_manager import (
+        ExecSessionManager,
+    )
+    from agent_teams.sessions.runs.exec_session_models import (
+        ExecSessionRecord,
+        ExecSessionStatus,
+    )
+    from agent_teams.sessions.runs.exec_session_repo import (
+        ExecSessionRepository,
+    )
     from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
     from agent_teams.sessions.runs.recoverable_pause import (
@@ -51,6 +61,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActiveSessionRunRegistry",
+    "ExecSessionManager",
+    "ExecSessionRecord",
+    "ExecSessionRepository",
+    "ExecSessionStatus",
     "ExecutionMode",
     "EventLog",
     "InjectionMessage",
@@ -88,6 +102,22 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActiveSessionRunRegistry": (
         "agent_teams.sessions.runs.active_run_registry",
         "ActiveSessionRunRegistry",
+    ),
+    "ExecSessionManager": (
+        "agent_teams.sessions.runs.exec_session_manager",
+        "ExecSessionManager",
+    ),
+    "ExecSessionRecord": (
+        "agent_teams.sessions.runs.exec_session_models",
+        "ExecSessionRecord",
+    ),
+    "ExecSessionRepository": (
+        "agent_teams.sessions.runs.exec_session_repo",
+        "ExecSessionRepository",
+    ),
+    "ExecSessionStatus": (
+        "agent_teams.sessions.runs.exec_session_models",
+        "ExecSessionStatus",
     ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),
     "EventLog": ("agent_teams.sessions.runs.event_log", "EventLog"),

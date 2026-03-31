@@ -8,6 +8,7 @@ import { t, formatMessage } from '../../../utils/i18n.js';
 
 const TOOL_SUMMARY_MAP = {
     shell:     { key: 'tool.summary.shell',     fields: ['command', 'cmd'], detailKind: 'command' },
+    exec_command: { key: 'tool.summary.shell',  fields: ['command', 'cmd'], detailKind: 'command' },
     read:      { key: 'tool.summary.read',      fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'read' },
     write:     { key: 'tool.summary.write',     fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'write' },
     write_tmp: { key: 'tool.summary.write',     fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'write' },
@@ -574,7 +575,7 @@ function renderEnvelopeResult(targetEl, envelope, toolName) {
 
     const data = envelope.data;
 
-    if (toolName === 'shell' && data && typeof data === 'object') {
+    if ((toolName === 'shell' || toolName === 'exec_command') && data && typeof data === 'object') {
         const output = String(data.output || '');
         targetEl.textContent = output;
         return;

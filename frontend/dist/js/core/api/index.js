@@ -22,12 +22,15 @@ export {
 
 export {
     dispatchHumanTask,
+    fetchRunExecSession,
+    fetchRunExecSessions,
     injectMessage,
     injectSubagentMessage,
     resolveGate,
     resolveToolApproval,
     resumeRun,
     sendUserPrompt,
+    stopExecSession,
     stopRun,
 } from './runs.js';
 

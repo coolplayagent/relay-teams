@@ -9,6 +9,9 @@ from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketStatus,
     approval_signature_key,
 )
+from agent_teams.tools.workspace_tools.command_canonicalization import (
+    canonicalize_shell_command,
+)
 
 
 def test_approval_ticket_repo_skips_invalid_persisted_rows(tmp_path: Path) -> None:
@@ -100,6 +103,65 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
 
     assert record is not None
     assert record.tool_call_id == "call-valid"
+
+
+def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
+    canonical = canonicalize_shell_command("bash -lc 'pwd'")
+
+    wrapped = approval_signature_key(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "bash -lc \\"pwd\\""}',
+        cache_key=canonical,
+    )
+    direct = approval_signature_key(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "pwd"}',
+        cache_key=canonical,
+    )
+
+    assert wrapped == direct
+
+
+def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cache_key.db")
+    canonical = canonicalize_shell_command("bash -lc 'pwd'")
+
+    created = repository.upsert_requested(
+        tool_call_id="call-approved",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "bash -lc \\"pwd\\""}',
+        cache_key=canonical,
+    )
+    repository.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+    )
+
+    record = repository.find_reusable(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "pwd"}',
+        cache_key=canonical,
+    )
+
+    assert record is not None
+    assert record.tool_call_id == "call-approved"
 
 
 def _insert_approval_ticket_row(

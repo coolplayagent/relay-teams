@@ -367,6 +367,7 @@ async def _handle_tool_approval(
         meta["source"] = decision.source
     if decision.execution_surface is not None:
         meta["execution_surface"] = decision.execution_surface.value
+    cache_key = approval_request.cache_key if approval_request is not None else ""
     if not approval_required:
         meta["approval_status"] = "not_required"
         return None, None
@@ -378,6 +379,7 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
+        cache_key=cache_key,
     )
     if reusable_ticket is not None:
         if reusable_ticket.status == ApprovalTicketStatus.APPROVED:
@@ -419,6 +421,7 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
+        cache_key=cache_key,
     )
     return await _wait_for_ticket_resolution(
         ctx=ctx,

@@ -514,17 +514,40 @@ Gets one round projection.
 
 ### `GET /sessions/{session_id}/recovery`
 
-Returns active run recovery state, pending tool approvals, paused subagent state, and round snapshot.
+Returns active run recovery state, pending tool approvals, managed exec session state, paused subagent state, and round snapshot.
 
 `active_run` also includes:
 - `last_event_id`
 - `checkpoint_event_id`
+- `exec_session_count`
 - `stream_connected`
 - `should_show_recover`
 - `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
 `round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
+`round_snapshot.exec_session_count` mirrors the current managed exec session count for the active run.
+
+`exec_sessions[]` entries include:
+- `exec_session_id`
+- `run_id`
+- `session_id`
+- `instance_id`
+- `role_id`
+- `tool_call_id`
+- `command`
+- `cwd`
+- `execution_mode = "background"`
+- `status`: `running | blocked | stopped | failed | completed`
+- `tty`
+- `timeout_ms`
+- `exit_code`
+- `recent_output[]`
+- `output_excerpt`
+- `log_path`
+- `created_at`
+- `updated_at`
+- `completed_at`
 
 ### `GET /sessions/{session_id}/agents`
 
@@ -709,6 +732,12 @@ Retry events:
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
 - `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`. For `model_tool_args_invalid_json`, the payload also includes `auto_recovery_exhausted`, `attempt`, and `max_attempts`.
 - `run_resumed`: payload always includes `session_id` and `reason`. When the backend auto-recovers a malformed tool-arguments response, `reason="auto_recovery_invalid_tool_args_json"` and the payload also includes `attempt` and `max_attempts`.
+- Exec session lifecycle events:
+  - `exec_session_started`
+  - `exec_session_updated`
+  - `exec_session_completed`
+  - `exec_session_stopped`
+  Each payload is the current exec session snapshot, including `exec_session_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
@@ -718,6 +747,7 @@ Frontend behavior:
 - If a model emits malformed tool arguments JSON after a safe checkpoint, the backend may emit `run_resumed` with `reason="auto_recovery_invalid_tool_args_json"` and continue the same stream without surfacing `run_paused`.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
+- Exec session events are operator/UI continuity signals only. They update recovery state and `/ps`-style UI surfaces, but do not become model-visible conversation messages.
 
 ### `POST /runs/{run_id}/inject`
 
@@ -726,6 +756,49 @@ Injects follow-up content to active agents in a run.
 ### `GET /runs/{run_id}/tool-approvals`
 
 Lists pending tool approvals.
+
+### `GET /runs/{run_id}/exec-sessions`
+
+Lists managed exec sessions bound to the run.
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "exec_session_id": "exec_a1b2c3d4e5f6",
+      "run_id": "run-1",
+      "session_id": "session-1",
+      "command": "sleep 30",
+      "cwd": "/workspace/project",
+      "execution_mode": "background",
+      "status": "running",
+      "tty": false,
+      "timeout_ms": 1800000,
+      "exit_code": null,
+      "recent_output": [],
+      "output_excerpt": "",
+      "log_path": "tmp/exec_sessions/exec_a1b2c3d4e5f6.log",
+      "created_at": "2026-03-31T10:00:00Z",
+      "updated_at": "2026-03-31T10:00:00Z",
+      "completed_at": null
+    }
+  ]
+}
+```
+
+### `GET /runs/{run_id}/exec-sessions/{exec_session_id}`
+
+Returns one managed exec session snapshot for the run.
+
+### `POST /runs/{run_id}/exec-sessions/{exec_session_id}:stop`
+
+Stops one managed exec session and returns its final snapshot.
+
+Notes:
+- Exec sessions are scoped to the owning run. Cross-run access returns `404`.
+- The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
 

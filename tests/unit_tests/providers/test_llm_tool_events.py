@@ -145,6 +145,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         run_intent_repo=cast(RunIntentRepository, object()),
+        exec_session_manager=None,
         workspace_manager=WorkspaceManager(
             project_root=Path("."),
             shared_store=shared_store,

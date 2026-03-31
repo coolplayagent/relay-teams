@@ -38,6 +38,9 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
+from agent_teams.sessions.runs.exec_session_manager import (
+    ExecSessionManager,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.skills.skill_registry import SkillRegistry
@@ -115,6 +118,7 @@ class ExternalAcpHostToolBridge:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        exec_session_manager: ExecSessionManager | None,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
@@ -142,6 +146,7 @@ class ExternalAcpHostToolBridge:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
+        self._exec_session_manager = exec_session_manager
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -464,6 +469,7 @@ class ExternalAcpHostToolBridge:
             role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
+            exec_session_manager=self._exec_session_manager,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

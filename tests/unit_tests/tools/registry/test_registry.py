@@ -99,6 +99,19 @@ def test_registry_resolve_known_ignores_unknown_tools_when_strict_is_false() -> 
     assert resolved == ("beta", "alpha")
 
 
+def test_registry_resolve_known_applies_legacy_aliases_when_strict_is_false() -> None:
+    registry = ToolRegistry(
+        {
+            "exec_command": _register_alpha,
+        },
+        legacy_aliases={"shell": "exec_command"},
+    )
+
+    resolved = registry.resolve_known(("shell",), strict=False)
+
+    assert resolved == ("exec_command",)
+
+
 def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resolution() -> (
     None
 ):

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic_ai import Agent
 
-from agent_teams.tools.runtime import ToolDeps
+if TYPE_CHECKING:
+    from agent_teams.tools.runtime import ToolDeps
 
 
 def register_edit(agent: Agent[ToolDeps, str]) -> None:
@@ -29,8 +32,8 @@ def register_read(agent: Agent[ToolDeps, str]) -> None:
     register_impl(agent)
 
 
-def register_shell(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.shell import register as register_impl
+def register_exec_session(agent: Agent[ToolDeps, str]) -> None:
+    from agent_teams.tools.workspace_tools.exec_session import register as register_impl
 
     register_impl(agent)
 
@@ -54,7 +57,11 @@ TOOLS = {
     "read": register_read,
     "write": register_write,
     "write_tmp": register_write_tmp,
-    "shell": register_shell,
+    "exec_command": register_exec_session,
+    "list_exec_sessions": register_exec_session,
+    "write_stdin": register_exec_session,
+    "resize_exec_session": register_exec_session,
+    "terminate_exec_session": register_exec_session,
 }
 
 __all__ = [
@@ -63,7 +70,7 @@ __all__ = [
     "register_glob",
     "register_grep",
     "register_read",
-    "register_shell",
+    "register_exec_session",
     "register_write",
     "register_write_tmp",
 ]

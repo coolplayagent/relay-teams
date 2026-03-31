@@ -78,6 +78,12 @@ class InjectSubagentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class StopExecSessionResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    exec_session: dict[str, object]
+
+
 @router.post(
     "",
     response_model=CreateRunResponse,
@@ -246,6 +252,53 @@ def list_tool_approvals(
             payload={"count": len(result)},
         )
         return result
+
+
+@router.get("/{run_id}/exec-sessions")
+def list_exec_sessions(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {"items": list(service.list_exec_sessions(run_id))}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{run_id}/exec-sessions/{exec_session_id}")
+def get_exec_session(
+    run_id: RequiredIdentifierStr,
+    exec_session_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {
+            "exec_session": service.get_exec_session(
+                run_id=run_id,
+                exec_session_id=exec_session_id,
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{run_id}/exec-sessions/{exec_session_id}:stop",
+    response_model=StopExecSessionResponse,
+)
+async def stop_exec_session(
+    run_id: RequiredIdentifierStr,
+    exec_session_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> StopExecSessionResponse:
+    try:
+        result = await service.stop_exec_session(
+            run_id=run_id,
+            exec_session_id=exec_session_id,
+        )
+        return StopExecSessionResponse(exec_session=result)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")

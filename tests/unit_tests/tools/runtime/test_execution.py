@@ -206,7 +206,7 @@ def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="shell",
+            tool_name="exec_command",
             args_summary={"command": "pwd"},
             action=lambda: {"stdout": "/tmp"},
         )
@@ -294,7 +294,7 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="shell",
+            tool_name="exec_command",
             args_summary={"command": "echo hi"},
             action=lambda: "should_not_run",
         )
@@ -482,7 +482,7 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="shell",
+            tool_name="exec_command",
             args_summary={"command": "pwd"},
             action=lambda: ToolResultProjection(
                 visible_data={"output": "/tmp", "exit_code": 0},

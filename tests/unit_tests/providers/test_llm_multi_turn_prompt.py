@@ -642,6 +642,7 @@ def _build_provider(
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         run_intent_repo=RunIntentRepository(db_path),
+        exec_session_manager=None,
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),

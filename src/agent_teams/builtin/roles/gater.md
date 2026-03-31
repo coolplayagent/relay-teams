@@ -9,7 +9,7 @@ tools:
   - glob
   - read
   - write_tmp
-  - shell
+  - exec_command
 ---
 
 ## 角色：Gater (质量审计员) 

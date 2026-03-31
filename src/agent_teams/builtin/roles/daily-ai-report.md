@@ -9,7 +9,7 @@ tools:
 - glob
 - grep
 - read
-- shell
+- exec_command
 - webfetch
 - websearch
 - write
@@ -32,7 +32,7 @@ skills:
 
 ### 1. 获取当前精确时间
 
-- 必须先通过 `shell` 工具获取当前精确时间。
+- 必须先通过 `exec_command` 工具获取当前精确时间。
 - 输出中需要明确：
   - 当前日期
   - 当前时间

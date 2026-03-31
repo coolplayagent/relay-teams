@@ -10,7 +10,7 @@ tools:
   - read
   - edit
   - write
-  - shell
+  - exec_command
   - webfetch
   - websearch
 ---

@@ -103,6 +103,30 @@ export async function resumeRun(runId) {
     );
 }
 
+export async function fetchRunExecSessions(runId) {
+    return requestJson(
+        `/api/runs/${runId}/exec-sessions`,
+        undefined,
+        'Failed to fetch exec sessions',
+    );
+}
+
+export async function fetchRunExecSession(runId, execSessionId) {
+    return requestJson(
+        `/api/runs/${runId}/exec-sessions/${execSessionId}`,
+        undefined,
+        'Failed to fetch exec session',
+    );
+}
+
+export async function stopExecSession(runId, execSessionId) {
+    return requestJson(
+        `/api/runs/${runId}/exec-sessions/${execSessionId}:stop`,
+        { method: 'POST' },
+        'Failed to stop exec session',
+    );
+}
+
 export async function injectSubagentMessage(runId, instanceId, content) {
     return requestJson(
         `/api/runs/${runId}/subagents/${instanceId}/inject`,

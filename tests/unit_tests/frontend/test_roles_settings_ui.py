@@ -277,7 +277,7 @@ console.log(JSON.stringify({
     assert "Writer" in cast(str, payload["listHtml"])
 
 
-def test_role_settings_shows_shell_advisory_when_skills_are_selected(
+def test_role_settings_shows_exec_command_advisory_when_skills_are_selected(
     tmp_path: Path,
 ) -> None:
     payload = _run_roles_settings_script(
@@ -304,11 +304,11 @@ console.log(JSON.stringify({
     )
 
     assert (
-        "Roles that use skills usually work better with the shell tool enabled."
+        "Roles that use skills usually work better with the exec command tool enabled."
         in cast(str, payload["advisoryBefore"])
     )
     assert (
-        "Roles that use skills usually work better with the shell tool enabled."
+        "Roles that use skills usually work better with the exec command tool enabled."
         not in cast(str, payload["advisoryAfter"])
     )
 
@@ -511,8 +511,9 @@ console.log(JSON.stringify({
     initial_skills_html = cast(str, payload["initialSkillsHtml"])
     updated_skills_html = cast(str, payload["updatedSkillsHtml"])
     save_payload = cast(dict[str, JsonValue], payload["savePayload"])
-    assert "Roles that use skills usually work better with the shell tool enabled." in (
-        initial_skills_html
+    assert (
+        "Roles that use skills usually work better with the exec command tool enabled."
+        in (initial_skills_html)
     )
     assert "checked" in updated_skills_html
     assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
@@ -739,7 +740,7 @@ export async function fetchRoleConfigOptions() {
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
-        tools: ["read_file", "write_file", "shell"],
+        tools: ["read_file", "write_file", "exec_command"],
         mcp_servers: ["docs"],
         skills: [
             { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
@@ -860,7 +861,7 @@ const translations = {
     "settings.roles.no_tools": "No tools loaded.",
     "settings.roles.no_mcp": "No MCP servers loaded.",
     "settings.roles.no_skills": "No skills loaded.",
-    "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the shell tool enabled.",
+    "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the exec command tool enabled.",
 };
 
 export function t(key) {

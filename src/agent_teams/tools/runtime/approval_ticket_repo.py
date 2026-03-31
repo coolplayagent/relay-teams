@@ -57,7 +57,9 @@ def approval_signature_key(
     role_id: str,
     tool_name: str,
     args_preview: str,
+    cache_key: str = "",
 ) -> str:
+    signature_args = cache_key.strip() or args_preview.strip()
     raw = "||".join(
         [
             run_id.strip(),
@@ -65,7 +67,7 @@ def approval_signature_key(
             instance_id.strip(),
             role_id.strip(),
             tool_name.strip(),
-            args_preview.strip(),
+            signature_args,
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -131,6 +133,7 @@ class ApprovalTicketRepository:
         role_id: str,
         tool_name: str,
         args_preview: str,
+        cache_key: str = "",
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         signature_key = approval_signature_key(
@@ -140,6 +143,7 @@ class ApprovalTicketRepository:
             role_id=role_id,
             tool_name=tool_name,
             args_preview=args_preview,
+            cache_key=cache_key,
         )
 
         def operation() -> None:
@@ -279,6 +283,7 @@ class ApprovalTicketRepository:
         role_id: str,
         tool_name: str,
         args_preview: str,
+        cache_key: str = "",
     ) -> ApprovalTicketRecord | None:
         signature_key = approval_signature_key(
             run_id=run_id,
@@ -287,6 +292,7 @@ class ApprovalTicketRepository:
             role_id=role_id,
             tool_name=tool_name,
             args_preview=args_preview,
+            cache_key=cache_key,
         )
         with self._lock:
             rows = self._conn.execute(

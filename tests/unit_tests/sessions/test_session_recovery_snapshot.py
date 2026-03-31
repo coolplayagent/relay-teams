@@ -19,6 +19,13 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
+from agent_teams.sessions.runs.exec_session_models import (
+    ExecSessionRecord,
+    ExecSessionStatus,
+)
+from agent_teams.sessions.runs.exec_session_repo import (
+    ExecSessionRepository,
+)
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -46,6 +53,7 @@ def _build_service(
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_state_repo=RunStateRepository(db_path),
+        exec_session_repo=ExecSessionRepository(db_path),
         run_event_hub=run_event_hub,
         active_run_registry=active_run_registry,
         event_log=EventLog(db_path),
@@ -443,6 +451,55 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
     assert active_run.get("status") == "stopped"
     assert active_run.get("phase") == "awaiting_tool_approval"
     assert active_run.get("pending_tool_approval_count") == 1
+
+
+def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
+    db_path = tmp_path / "recovery_exec_sessions.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    terminal_repo = ExecSessionRepository(db_path)
+    terminal_repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-1",
+            run_id="run-active",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="coordinator_agent",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd="/tmp/project",
+            status=ExecSessionStatus.RUNNING,
+            recent_output=("booting",),
+            output_excerpt="booting",
+            log_path="tmp/exec_sessions/exec-1.log",
+        )
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("exec_session_count") == 1
+    exec_sessions = snapshot.get("exec_sessions")
+    assert isinstance(exec_sessions, list)
+    assert len(exec_sessions) == 1
+    assert exec_sessions[0]["exec_session_id"] == "exec-1"
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    assert round_snapshot.get("exec_session_count") == 1
 
 
 def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(
