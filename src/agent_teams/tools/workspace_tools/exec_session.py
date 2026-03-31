@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from pydantic import JsonValue
@@ -41,8 +42,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         workdir: str | None = None,
         tty: bool = False,
     ) -> dict[str, JsonValue]:
+        cwd = _resolve_cwd(ctx, workdir, ensure_tmp_root=False)
         approval_request = ToolApprovalRequest(
-            cache_key=canonicalize_shell_command(command),
+            cache_key=_build_exec_command_cache_key(
+                command,
+                cwd=cwd,
+                tty=tty,
+            ),
         )
 
         async def _action() -> ToolResultProjection:
@@ -55,7 +61,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 session_id=ctx.deps.session_id,
                 instance_id=ctx.deps.instance_id,
                 role_id=ctx.deps.role_id,
-                tool_call_id=ctx.tool_call_id or "",
+                tool_call_id=ctx.tool_call_id,
                 workspace=ctx.deps.workspace,
                 command=command,
                 cwd=cwd,
@@ -198,12 +204,35 @@ def _require_exec_session_manager(ctx: ToolContext):
     return manager
 
 
-def _resolve_cwd(ctx: ToolContext, workdir: str | None):
+def _build_exec_command_cache_key(
+    command: str,
+    *,
+    cwd: Path,
+    tty: bool,
+) -> str:
+    canonical = canonicalize_shell_command(command)
+    normalized_cwd = str(cwd.resolve()).strip()
+    tty_marker = "1" if tty else "0"
+    return "\n".join(
+        [
+            f"command={canonical}",
+            f"cwd={normalized_cwd}",
+            f"tty={tty_marker}",
+        ]
+    )
+
+
+def _resolve_cwd(
+    ctx: ToolContext,
+    workdir: str | None,
+    *,
+    ensure_tmp_root: bool = True,
+):
     if workdir:
         cwd = ctx.deps.workspace.resolve_workdir(workdir)
     else:
         cwd = ctx.deps.workspace.resolve_workdir()
-    if cwd == ctx.deps.workspace.tmp_root and not cwd.exists():
+    if ensure_tmp_root and cwd == ctx.deps.workspace.tmp_root and not cwd.exists():
         cwd.mkdir(parents=True, exist_ok=True)
     return cwd
 

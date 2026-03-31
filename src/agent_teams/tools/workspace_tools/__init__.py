@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from agent_teams.tools.runtime import ToolDeps
 
 
+_EXEC_SESSION_REGISTERED_ATTR = "_agent_teams_exec_session_registered"
+
+
 def register_edit(agent: Agent[ToolDeps, str]) -> None:
     from agent_teams.tools.workspace_tools.edit import register as register_impl
 
@@ -33,9 +36,12 @@ def register_read(agent: Agent[ToolDeps, str]) -> None:
 
 
 def register_exec_session(agent: Agent[ToolDeps, str]) -> None:
+    if bool(getattr(agent, _EXEC_SESSION_REGISTERED_ATTR, False)):
+        return
     from agent_teams.tools.workspace_tools.exec_session import register as register_impl
 
     register_impl(agent)
+    setattr(agent, _EXEC_SESSION_REGISTERED_ATTR, True)
 
 
 def register_write(agent: Agent[ToolDeps, str]) -> None:

@@ -9,8 +9,8 @@ from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketStatus,
     approval_signature_key,
 )
-from agent_teams.tools.workspace_tools.command_canonicalization import (
-    canonicalize_shell_command,
+from agent_teams.tools.workspace_tools.exec_session import (
+    _build_exec_command_cache_key,
 )
 
 
@@ -106,7 +106,11 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
 
 
 def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
-    canonical = canonicalize_shell_command("bash -lc 'pwd'")
+    cache_key = _build_exec_command_cache_key(
+        "bash -lc 'pwd'",
+        cwd=Path("/workspace"),
+        tty=False,
+    )
 
     wrapped = approval_signature_key(
         run_id="run-1",
@@ -115,7 +119,7 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
         role_id="writer",
         tool_name="exec_command",
         args_preview='{"command": "bash -lc \\"pwd\\""}',
-        cache_key=canonical,
+        cache_key=cache_key,
     )
     direct = approval_signature_key(
         run_id="run-1",
@@ -124,7 +128,7 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
         role_id="writer",
         tool_name="exec_command",
         args_preview='{"command": "pwd"}',
-        cache_key=canonical,
+        cache_key=cache_key,
     )
 
     assert wrapped == direct
@@ -132,7 +136,11 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
 
 def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> None:
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cache_key.db")
-    canonical = canonicalize_shell_command("bash -lc 'pwd'")
+    cache_key = _build_exec_command_cache_key(
+        "bash -lc 'pwd'",
+        cwd=Path("/workspace"),
+        tty=False,
+    )
 
     created = repository.upsert_requested(
         tool_call_id="call-approved",
@@ -143,7 +151,7 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
         role_id="writer",
         tool_name="exec_command",
         args_preview='{"command": "bash -lc \\"pwd\\""}',
-        cache_key=canonical,
+        cache_key=cache_key,
     )
     repository.resolve(
         tool_call_id=created.tool_call_id,
@@ -157,11 +165,53 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
         role_id="writer",
         tool_name="exec_command",
         args_preview='{"command": "pwd"}',
-        cache_key=canonical,
+        cache_key=cache_key,
     )
 
     assert record is not None
     assert record.tool_call_id == "call-approved"
+
+
+def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_exec_context.db")
+    approved_cache_key = _build_exec_command_cache_key(
+        "bash -lc 'pwd'",
+        cwd=Path("/workspace/one"),
+        tty=False,
+    )
+    mismatched_cache_key = _build_exec_command_cache_key(
+        "pwd",
+        cwd=Path("/workspace/two"),
+        tty=True,
+    )
+
+    created = repository.upsert_requested(
+        tool_call_id="call-approved",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "bash -lc \\"pwd\\""}',
+        cache_key=approved_cache_key,
+    )
+    repository.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+    )
+
+    record = repository.find_reusable(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="exec_command",
+        args_preview='{"command": "pwd"}',
+        cache_key=mismatched_cache_key,
+    )
+
+    assert record is None
 
 
 def _insert_approval_ticket_row(
