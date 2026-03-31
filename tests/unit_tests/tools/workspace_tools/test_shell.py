@@ -189,6 +189,60 @@ def test_resolve_bash_path_uses_system_bash_on_non_windows(monkeypatch) -> None:
     assert shell_executor.resolve_bash_path() == "/bin/bash"
 
 
+def test_resolve_exec_shell_falls_back_to_powershell_on_windows(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        shell_executor,
+        "resolve_bash_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing bash")),
+    )
+    monkeypatch.setattr(
+        shell_executor.shutil,
+        "which",
+        lambda name: (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if name == "powershell"
+            else None
+        ),
+    )
+
+    shell = shell_executor.resolve_exec_shell()
+
+    assert shell.kind == shell_executor.ShellKind.POWERSHELL
+    assert shell.executable.endswith("powershell.exe")
+
+
+def test_describe_runtime_shell_reports_powershell_when_git_bash_is_missing(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        shell_executor,
+        "resolve_bash_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing bash")),
+    )
+    monkeypatch.setattr(
+        shell_executor.shutil,
+        "which",
+        lambda name: (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if name == "powershell"
+            else None
+        ),
+    )
+
+    summary = shell_executor.describe_runtime_shell()
+
+    assert summary.shell_info == "PowerShell"
+    assert summary.shell_path.endswith("powershell.exe")
+
+
 # ---------------------------------------------------------------------------
 # spawn_shell: exit code + process group
 # ---------------------------------------------------------------------------
@@ -503,6 +557,68 @@ async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
     assert "PROMPT_COMMAND" not in env
     assert "PS1" not in env
     assert "BASH_FUNC_module%%" not in env
+
+
+@pytest.mark.asyncio
+async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_args: list[object] = []
+    captured_kwargs: dict[str, object] = {}
+
+    async def capturing_factory(*args: object, **kwargs: object) -> _FakeProcess:
+        captured_args.extend(args)
+        captured_kwargs.update(kwargs)
+        proc = _FakeProcess()
+        proc.stdout.feed_eof()
+        proc.stderr.feed_eof()
+        proc.returncode = 0
+        proc._wait_event.set()
+        return proc
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor.asyncio,
+        "create_subprocess_exec",
+        capturing_factory,
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {
+            "PATH": r"C:\Windows\System32",
+            "BASH_ENV": r"C:\tmp\bashrc",
+        },
+    )
+
+    _ = await shell_executor.create_shell_subprocess(
+        command="Write-Output 'hello'",
+        cwd=Path("."),
+        shell=shell,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    assert captured_args[0] == "powershell.exe"
+    assert captured_args[1] == "-NoProfile"
+    assert captured_args[2] == "-Command"
+    assert "OutputEncoding" in str(captured_args[3])
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env["BASH_ENV"] == r"C:\tmp\bashrc"
 
 
 def test_run_git_bash_strips_bash_startup_env(monkeypatch, tmp_path: Path) -> None:

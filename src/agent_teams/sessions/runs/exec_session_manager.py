@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from collections import deque
 import codecs
 import contextlib
 from datetime import datetime, timezone
 import errno
+import importlib
 import json
 import logging
 import os
 from pathlib import Path
 import struct
+from typing import Protocol, cast
 from uuid import uuid4
 
 try:
@@ -35,12 +38,15 @@ from agent_teams.sessions.runs.exec_session_models import (
 from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.tools.workspace_tools.shell_executor import (
-    _creation_flags,
+    ResolvedShell,
     _kill_process_tree,
+    _kill_process_tree_by_pid,
     _start_new_session,
     build_shell_env,
+    build_shell_command,
     create_shell_subprocess,
-    resolve_bash_path,
+    resolve_exec_shell,
+    windows_conpty_supported,
 )
 from agent_teams.workspace import WorkspaceHandle
 
@@ -119,27 +125,255 @@ class _HeadTailBuffer:
         return f"{head_text}\n\n... omitted ...\n\n{tail_text}"
 
 
+class _WindowsPtyProcessProtocol(Protocol):
+    pid: int | None
+
+    def read(self, size: int = 1024) -> str: ...
+
+    def write(self, s: str) -> int: ...
+
+    def isalive(self) -> bool: ...
+
+    def wait(self) -> int: ...
+
+    def close(self, force: bool = False) -> None: ...
+
+    def setwinsize(self, rows: int, cols: int) -> None: ...
+
+
+class _WindowsPtyProcessFactoryProtocol(Protocol):
+    @staticmethod
+    def spawn(
+        argv: str | list[str] | tuple[str, ...],
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        dimensions: tuple[int, int] = (24, 80),
+        backend: int | None = None,
+    ) -> _WindowsPtyProcessProtocol: ...
+
+
+class _ExecSessionTransport(ABC):
+    @property
+    @abstractmethod
+    def tty(self) -> bool: ...
+
+    @property
+    @abstractmethod
+    def stream_count(self) -> int: ...
+
+    @property
+    @abstractmethod
+    def pid(self) -> int | None: ...
+
+    @property
+    @abstractmethod
+    def returncode(self) -> int | None: ...
+
+    @abstractmethod
+    def start_pumps(
+        self,
+        *,
+        manager: ExecSessionManager,
+        runtime: _ExecSessionRuntime,
+    ) -> list[asyncio.Task[None]]: ...
+
+    @abstractmethod
+    async def wait(self) -> int | None: ...
+
+    @abstractmethod
+    async def write(self, chars: str) -> None: ...
+
+    @abstractmethod
+    async def resize(self, *, columns: int, rows: int) -> None: ...
+
+    @abstractmethod
+    async def terminate(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+
+class _PipeTransport(_ExecSessionTransport):
+    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+        self._proc = proc
+
+    @property
+    def tty(self) -> bool:
+        return False
+
+    @property
+    def stream_count(self) -> int:
+        return 2
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    def start_pumps(
+        self,
+        *,
+        manager: ExecSessionManager,
+        runtime: _ExecSessionRuntime,
+    ) -> list[asyncio.Task[None]]:
+        stdout = self._proc.stdout
+        stderr = self._proc.stderr
+        if stdout is None or stderr is None:
+            raise RuntimeError("Failed to capture exec session streams")
+        return [
+            asyncio.create_task(manager._pump_stream("stdout", stdout, runtime.queue)),
+            asyncio.create_task(manager._pump_stream("stderr", stderr, runtime.queue)),
+        ]
+
+    async def wait(self) -> int | None:
+        return await self._proc.wait()
+
+    async def write(self, chars: str) -> None:
+        writer = self._proc.stdin
+        if writer is None:
+            raise RuntimeError("Exec session stdin is not available")
+        writer.write(chars.encode("utf-8", errors="replace"))
+        await writer.drain()
+
+    async def resize(self, *, columns: int, rows: int) -> None:
+        _ = (columns, rows)
+        raise ValueError("resize is only supported for active TTY exec sessions")
+
+    async def terminate(self) -> None:
+        await _kill_process_tree(self._proc)
+
+    async def close(self) -> None:
+        if self._proc.stdin is not None:
+            self._proc.stdin.close()
+
+
+class _PosixPtyTransport(_ExecSessionTransport):
+    def __init__(
+        self,
+        *,
+        proc: asyncio.subprocess.Process,
+        master_fd: int,
+    ) -> None:
+        self._proc = proc
+        self._master_fd = master_fd
+
+    @property
+    def tty(self) -> bool:
+        return True
+
+    @property
+    def stream_count(self) -> int:
+        return 1
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    def start_pumps(
+        self,
+        *,
+        manager: ExecSessionManager,
+        runtime: _ExecSessionRuntime,
+    ) -> list[asyncio.Task[None]]:
+        return [asyncio.create_task(manager._pump_master_fd(runtime, self._master_fd))]
+
+    async def wait(self) -> int | None:
+        return await self._proc.wait()
+
+    async def write(self, chars: str) -> None:
+        os.write(self._master_fd, chars.encode("utf-8", errors="replace"))
+
+    async def resize(self, *, columns: int, rows: int) -> None:
+        _set_terminal_size(self._master_fd, columns=columns, rows=rows)
+
+    async def terminate(self) -> None:
+        await _kill_process_tree(self._proc)
+
+    async def close(self) -> None:
+        with contextlib.suppress(OSError):
+            os.close(self._master_fd)
+
+
+class _WindowsConPtyTransport(_ExecSessionTransport):
+    def __init__(self, proc: _WindowsPtyProcessProtocol) -> None:
+        self._proc = proc
+        self._cached_returncode: int | None = None
+
+    @property
+    def tty(self) -> bool:
+        return True
+
+    @property
+    def stream_count(self) -> int:
+        return 1
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._cached_returncode
+
+    def start_pumps(
+        self,
+        *,
+        manager: ExecSessionManager,
+        runtime: _ExecSessionRuntime,
+    ) -> list[asyncio.Task[None]]:
+        return [
+            asyncio.create_task(manager._pump_windows_pty_process(runtime, self._proc))
+        ]
+
+    async def wait(self) -> int | None:
+        if self._cached_returncode is not None:
+            return self._cached_returncode
+        loop = asyncio.get_running_loop()
+        self._cached_returncode = await loop.run_in_executor(None, self._proc.wait)
+        return self._cached_returncode
+
+    async def write(self, chars: str) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._proc.write, chars)
+
+    async def resize(self, *, columns: int, rows: int) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._proc.setwinsize, rows, columns)
+
+    async def terminate(self) -> None:
+        pid = self._proc.pid
+        if pid is not None:
+            await _kill_process_tree_by_pid(pid)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._proc.close, True)
+
+    async def close(self) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._proc.close)
+
+
 class _ExecSessionRuntime:
     def __init__(
         self,
         *,
         record: ExecSessionRecord,
-        proc: asyncio.subprocess.Process,
+        transport: _ExecSessionTransport,
         log_file_path: Path,
-        tty: bool,
         queue: asyncio.Queue[tuple[str, str] | None],
-        stream_count: int,
-        master_fd: int | None = None,
-        slave_fd: int | None = None,
     ) -> None:
         self.record = record
-        self.proc = proc
+        self.transport = transport
         self.log_file_path = log_file_path
-        self.tty = tty
+        self.tty = transport.tty
         self.queue = queue
-        self.stream_count = stream_count
-        self.master_fd = master_fd
-        self.slave_fd = slave_fd
+        self.stream_count = transport.stream_count
         self.recent_output = _RecentOutputBuffer(max_lines=MAX_RECENT_OUTPUT_LINES)
         self.output_buffer = _HeadTailBuffer(max_bytes=MAX_OUTPUT_BUFFER_BYTES)
         self.pump_tasks: list[asyncio.Task[None]] = []
@@ -335,9 +569,9 @@ class ExecSessionManager:
         runtime = self._runtimes.get(exec_session_id)
         if runtime is None or not record.is_active:
             return record
-        if not runtime.tty or runtime.master_fd is None:
+        if not runtime.tty:
             raise ValueError("resize is only supported for active TTY exec sessions")
-        _set_terminal_size(runtime.master_fd, columns=columns, rows=rows)
+        await runtime.transport.resize(columns=columns, rows=rows)
         return self._get_record(exec_session_id)
 
     async def stop_for_run(
@@ -353,8 +587,8 @@ class ExecSessionManager:
         if runtime is None or not record.is_active:
             return record
         runtime.stop_requested = True
-        if runtime.proc.returncode is None:
-            await _kill_process_tree(runtime.proc)
+        if runtime.transport.returncode is None:
+            await runtime.transport.terminate()
         await runtime.completed.wait()
         return self._get_record(exec_session_id)
 
@@ -395,78 +629,105 @@ class ExecSessionManager:
     ) -> _ExecSessionRuntime:
         queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
         if record.tty:
-            if not _pty_supported():
-                raise ValueError("TTY exec sessions are only supported on POSIX hosts")
-            assert pty is not None
-            master_fd, slave_fd = pty.openpty()
-            _set_terminal_size(
-                master_fd,
-                columns=_DEFAULT_PTY_COLUMNS,
-                rows=_DEFAULT_PTY_ROWS,
+            transport = await self._spawn_tty_transport(
+                command=record.command,
+                cwd=cwd,
+                env=env,
             )
-            shell_env = await build_shell_env(env)
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    resolve_bash_path(),
-                    "-lc",
-                    record.command,
-                    cwd=str(cwd),
-                    env=shell_env,
-                    stdin=slave_fd,
-                    stdout=slave_fd,
-                    stderr=slave_fd,
-                    start_new_session=_start_new_session(),
-                    creationflags=_creation_flags(),
-                )
-            except Exception:
-                with contextlib.suppress(OSError):
-                    os.close(master_fd)
-                with contextlib.suppress(OSError):
-                    os.close(slave_fd)
-                raise
-            with contextlib.suppress(OSError):
-                os.close(slave_fd)
-            runtime = _ExecSessionRuntime(
-                record=record,
-                proc=proc,
-                log_file_path=log_file_path,
-                tty=True,
-                queue=queue,
-                stream_count=1,
-                master_fd=master_fd,
-                slave_fd=None,
+        else:
+            proc = await create_shell_subprocess(
+                command=record.command,
+                cwd=cwd,
+                env=env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            runtime.pump_tasks.append(
-                asyncio.create_task(self._pump_master_fd(runtime))
-            )
-            return runtime
-        proc = await create_shell_subprocess(
-            command=record.command,
-            cwd=cwd,
-            env=env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+            transport = _PipeTransport(proc)
         runtime = _ExecSessionRuntime(
             record=record,
-            proc=proc,
+            transport=transport,
             log_file_path=log_file_path,
-            tty=False,
             queue=queue,
-            stream_count=2,
         )
-        stdout = proc.stdout
-        stderr = proc.stderr
-        if stdout is None or stderr is None:
-            raise RuntimeError("Failed to capture exec session streams")
-        runtime.pump_tasks.append(
-            asyncio.create_task(self._pump_stream("stdout", stdout, queue))
-        )
-        runtime.pump_tasks.append(
-            asyncio.create_task(self._pump_stream("stderr", stderr, queue))
-        )
+        runtime.pump_tasks.extend(transport.start_pumps(manager=self, runtime=runtime))
         return runtime
+
+    async def _spawn_tty_transport(
+        self,
+        *,
+        command: str,
+        cwd: Path,
+        env: dict[str, str] | None,
+    ) -> _ExecSessionTransport:
+        if _posix_pty_supported():
+            return await self._spawn_posix_pty_transport(
+                command=command,
+                cwd=cwd,
+                env=env,
+            )
+        if _windows_tty_supported():
+            return await self._spawn_windows_conpty_transport(
+                command=command,
+                cwd=cwd,
+                env=env,
+            )
+        raise ValueError(_tty_unsupported_message())
+
+    async def _spawn_posix_pty_transport(
+        self,
+        *,
+        command: str,
+        cwd: Path,
+        env: dict[str, str] | None,
+    ) -> _PosixPtyTransport:
+        assert pty is not None
+        shell = resolve_exec_shell()
+        shell_env = await build_shell_env(env, shell=shell)
+        master_fd, slave_fd = pty.openpty()
+        _set_terminal_size(
+            master_fd,
+            columns=_DEFAULT_PTY_COLUMNS,
+            rows=_DEFAULT_PTY_ROWS,
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *build_shell_command(shell=shell, command=command),
+                cwd=str(cwd),
+                env=shell_env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=_start_new_session(),
+            )
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
+            with contextlib.suppress(OSError):
+                os.close(slave_fd)
+            raise
+        with contextlib.suppress(OSError):
+            os.close(slave_fd)
+        return _PosixPtyTransport(proc=proc, master_fd=master_fd)
+
+    async def _spawn_windows_conpty_transport(
+        self,
+        *,
+        command: str,
+        cwd: Path,
+        env: dict[str, str] | None,
+    ) -> _WindowsConPtyTransport:
+        shell = resolve_exec_shell()
+        shell_env = await build_shell_env(env, shell=shell)
+        process = _spawn_windows_pty_process(
+            command=command,
+            cwd=cwd,
+            env=shell_env,
+            shell=shell,
+            columns=_DEFAULT_PTY_COLUMNS,
+            rows=_DEFAULT_PTY_ROWS,
+        )
+        return _WindowsConPtyTransport(process)
 
     async def _pump_stream(
         self,
@@ -489,10 +750,7 @@ class ExecSessionManager:
         finally:
             await queue.put(None)
 
-    async def _pump_master_fd(self, runtime: _ExecSessionRuntime) -> None:
-        if runtime.master_fd is None:
-            await runtime.queue.put(None)
-            return
+    async def _pump_master_fd(self, runtime: _ExecSessionRuntime, fd: int) -> None:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         loop = asyncio.get_running_loop()
         try:
@@ -501,7 +759,7 @@ class ExecSessionManager:
                     chunk = await loop.run_in_executor(
                         None,
                         self._read_master_fd,
-                        runtime.master_fd,
+                        fd,
                     )
                 except OSError as exc:
                     if exc.errno == errno.EIO:
@@ -515,6 +773,31 @@ class ExecSessionManager:
             final_text = decoder.decode(b"", final=True)
             if final_text:
                 await runtime.queue.put(("stdout", final_text))
+        finally:
+            await runtime.queue.put(None)
+
+    async def _pump_windows_pty_process(
+        self,
+        runtime: _ExecSessionRuntime,
+        proc: _WindowsPtyProcessProtocol,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                try:
+                    chunk = await loop.run_in_executor(
+                        None,
+                        proc.read,
+                        MAX_DELTA_BYTES,
+                    )
+                except EOFError:
+                    break
+                if not chunk:
+                    if not proc.isalive():
+                        break
+                    await asyncio.sleep(0.05)
+                    continue
+                await runtime.queue.put(("stdout", chunk))
         finally:
             await runtime.queue.put(None)
 
@@ -537,7 +820,9 @@ class ExecSessionManager:
                     break
                 if stream_eof >= runtime.stream_count:
                     try:
-                        await asyncio.wait_for(runtime.proc.wait(), timeout=remaining)
+                        await asyncio.wait_for(
+                            runtime.transport.wait(), timeout=remaining
+                        )
                     except asyncio.TimeoutError:
                         timed_out = True
                     break
@@ -558,8 +843,8 @@ class ExecSessionManager:
                     chunk=chunk,
                 )
         finally:
-            if timed_out and runtime.proc.returncode is None:
-                await _kill_process_tree(runtime.proc)
+            if timed_out and runtime.transport.returncode is None:
+                await runtime.transport.terminate()
             for task in runtime.pump_tasks:
                 if not task.done():
                     task.cancel()
@@ -604,7 +889,9 @@ class ExecSessionManager:
         timed_out: bool,
     ) -> None:
         runtime.recent_output.finalize()
-        exit_code = runtime.proc.returncode
+        exit_code = runtime.transport.returncode
+        if exit_code is None and not timed_out:
+            exit_code = await runtime.transport.wait()
         if timed_out:
             exit_code = 124
         status = self._resolve_exec_session_status(
@@ -626,14 +913,7 @@ class ExecSessionManager:
             )
         )
         self._runtimes.pop(runtime.record.exec_session_id, None)
-        if runtime.proc.stdin is not None:
-            runtime.proc.stdin.close()
-        if runtime.master_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(runtime.master_fd)
-        if runtime.slave_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(runtime.slave_fd)
+        await runtime.transport.close()
         runtime.completed.set()
         await self._mark_runtime_changed(runtime)
         self._publish_exec_session_event(
@@ -661,16 +941,7 @@ class ExecSessionManager:
         return ExecSessionStatus.FAILED
 
     async def _write_chars(self, runtime: _ExecSessionRuntime, chars: str) -> None:
-        if runtime.tty:
-            if runtime.master_fd is None:
-                raise RuntimeError("TTY exec session is not writable")
-            os.write(runtime.master_fd, chars.encode("utf-8", errors="replace"))
-            return
-        writer = runtime.proc.stdin
-        if writer is None:
-            raise RuntimeError("Exec session stdin is not available")
-        writer.write(chars.encode("utf-8", errors="replace"))
-        await writer.drain()
+        await runtime.transport.write(chars)
 
     async def _wait_for_runtime_change(
         self,
@@ -821,7 +1092,7 @@ def _normalize_poll_timeout(
 
 
 def _set_terminal_size(fd: int, *, columns: int, rows: int) -> None:
-    if not _pty_supported():
+    if not _posix_pty_supported():
         raise ValueError("TTY exec sessions are not supported on this host")
     assert fcntl is not None
     assert termios is not None
@@ -829,10 +1100,45 @@ def _set_terminal_size(fd: int, *, columns: int, rows: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsz)
 
 
-def _pty_supported() -> bool:
+def _posix_pty_supported() -> bool:
     return (
         os.name != "nt"
         and fcntl is not None
         and pty is not None
         and termios is not None
+    )
+
+
+def _windows_tty_supported() -> bool:
+    return windows_conpty_supported()
+
+
+def _tty_unsupported_message() -> str:
+    if os.name == "nt":
+        return "TTY exec sessions are not supported on this Windows host"
+    return "TTY exec sessions are only supported on POSIX hosts"
+
+
+def _spawn_windows_pty_process(
+    *,
+    command: str,
+    cwd: Path,
+    env: dict[str, str],
+    shell: ResolvedShell,
+    columns: int,
+    rows: int,
+) -> _WindowsPtyProcessProtocol:
+    if not _windows_tty_supported():
+        raise ValueError(_tty_unsupported_message())
+    module = importlib.import_module("winpty")
+    factory = cast(
+        _WindowsPtyProcessFactoryProtocol,
+        module.__dict__["PtyProcess"],
+    )
+    argv = list(build_shell_command(shell=shell, command=command))
+    return factory.spawn(
+        argv,
+        cwd=str(cwd),
+        env=env,
+        dimensions=(rows, columns),
     )

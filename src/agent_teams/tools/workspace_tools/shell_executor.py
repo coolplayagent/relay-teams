@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
+from enum import Enum
+import importlib.util
 import os
-import signal
+import platform
+from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
-from pathlib import Path
-from typing import AsyncGenerator
+import sys
+
+from pydantic import BaseModel, ConfigDict
 
 from agent_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
 from agent_teams.env.github_config_service import GitHubConfigService
@@ -37,6 +43,42 @@ _BASH_STARTUP_ENV_KEYS = frozenset(
     }
 )
 _BASH_STARTUP_ENV_PREFIXES = ("BASH_FUNC_",)
+_SIGKILL_GRACE_SECONDS = 5
+
+
+class ShellKind(str, Enum):
+    BASH = "bash"
+    POWERSHELL = "powershell"
+
+
+class ResolvedShell(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: ShellKind
+    executable: str
+    display_name: str
+
+
+class ShellRuntimeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    shell_info: str
+    shell_path: str
+
+
+COMMAND_PATH_PATTERNS = [
+    (r"^cd\s+(.+?)(?:\s|$)", "cd"),
+    (r"^rm\s+-+\s*(.+?)(?:\s|$)", "rm"),
+    (r"^cp\s+(.+?)(?:\s|$)", "cp"),
+    (r"^mv\s+(.+?)(?:\s|$)", "mv"),
+    (r"^mkdir\s+-+\s*(.+?)(?:\s|$)", "mkdir"),
+    (r"^touch\s+(.+?)(?:\s|$)", "touch"),
+    (r"^chmod\s+(.+?)(?:\s|$)", "chmod"),
+    (r"^chown\s+(.+?)(?:\s|$)", "chown"),
+    (r"^cat\s+(.+?)(?:\s|$)", "cat"),
+    (r"^ls\s+(.+?)(?:\s|$)", "ls"),
+    (r"^find\s+(.+?)(?:\s|$)", "find"),
+]
 
 
 def resolve_bash_path() -> str:
@@ -50,6 +92,83 @@ def resolve_bash_path() -> str:
     if _is_windows():
         return _resolve_windows_bash_path()
     return _resolve_posix_bash_path()
+
+
+def resolve_exec_shell() -> ResolvedShell:
+    if _is_windows():
+        try:
+            return _build_bash_shell(resolve_bash_path(), display_name="Git Bash")
+        except FileNotFoundError:
+            return _build_powershell_shell()
+    return _build_bash_shell(resolve_bash_path(), display_name="Bash")
+
+
+def describe_runtime_shell() -> ShellRuntimeSummary:
+    try:
+        shell = resolve_exec_shell()
+    except Exception:
+        return ShellRuntimeSummary(shell_info="Unknown", shell_path="Unknown")
+
+    system = platform.system()
+    if shell.kind == ShellKind.POWERSHELL:
+        return ShellRuntimeSummary(
+            shell_info="PowerShell",
+            shell_path=shell.executable,
+        )
+    if system == "Windows":
+        msystem = os.environ.get("MSYSTEM")
+        if msystem:
+            return ShellRuntimeSummary(
+                shell_info=f"Git Bash ({msystem})",
+                shell_path=shell.executable,
+            )
+        return ShellRuntimeSummary(
+            shell_info="Git Bash",
+            shell_path=shell.executable,
+        )
+    if system == "Linux":
+        release = platform.release().lower()
+        version = platform.version().lower()
+        label = (
+            "WSL (Linux Bash)"
+            if "microsoft" in release or "microsoft" in version
+            else "Native Linux Bash"
+        )
+        return ShellRuntimeSummary(shell_info=label, shell_path=shell.executable)
+    if system == "Darwin":
+        return ShellRuntimeSummary(
+            shell_info="macOS Bash",
+            shell_path=shell.executable,
+        )
+    return ShellRuntimeSummary(
+        shell_info=shell.display_name,
+        shell_path=shell.executable,
+    )
+
+
+def build_shell_command(
+    *,
+    shell: ResolvedShell,
+    command: str,
+    login: bool = False,
+) -> tuple[str, ...]:
+    if shell.kind == ShellKind.BASH:
+        return (shell.executable, "-lc", command)
+    argv = [shell.executable]
+    if not login:
+        argv.append("-NoProfile")
+    argv.extend(["-Command", _prepend_powershell_utf8_prefix(command)])
+    return tuple(argv)
+
+
+def windows_conpty_supported() -> bool:
+    build_number = _windows_build_number()
+    return (
+        _is_windows()
+        and build_number is not None
+        and build_number >= 17763
+        and importlib.util.find_spec("winpty") is not None
+    )
 
 
 def _is_windows() -> bool:
@@ -77,6 +196,49 @@ def _resolve_posix_bash_path() -> str:
     if which_bash:
         return which_bash
     raise FileNotFoundError("bash executable not found")
+
+
+def _resolve_powershell_path() -> str:
+    env_path = get_env_var("POWERSHELL_PATH")
+    if env_path:
+        resolved_env_path = Path(env_path).expanduser()
+        if resolved_env_path.is_file():
+            return str(resolved_env_path)
+    for command_name in ("pwsh", "powershell"):
+        resolved = shutil.which(command_name)
+        if resolved:
+            return resolved
+    raise FileNotFoundError(
+        "PowerShell executable not found; install PowerShell or set POWERSHELL_PATH"
+    )
+
+
+def _build_bash_shell(path: str, *, display_name: str) -> ResolvedShell:
+    return ResolvedShell(
+        kind=ShellKind.BASH,
+        executable=path,
+        display_name=display_name,
+    )
+
+
+def _build_powershell_shell() -> ResolvedShell:
+    path = _resolve_powershell_path()
+    executable_name = Path(path).name.lower()
+    display_name = "PowerShell Core" if executable_name == "pwsh.exe" else "PowerShell"
+    return ResolvedShell(
+        kind=ShellKind.POWERSHELL,
+        executable=path,
+        display_name=display_name,
+    )
+
+
+def _windows_build_number() -> int | None:
+    if not _is_windows():
+        return None
+    try:
+        return int(sys.getwindowsversion().build)
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 def _iter_windows_git_bash_candidates() -> tuple[Path, ...]:
@@ -126,21 +288,6 @@ def normalize_timeout(timeout_ms: int | None) -> int:
     return timeout_ms
 
 
-COMMAND_PATH_PATTERNS = [
-    (r"^cd\s+(.+?)(?:\s|$)", "cd"),
-    (r"^rm\s+-+\s*(.+?)(?:\s|$)", "rm"),
-    (r"^cp\s+(.+?)(?:\s|$)", "cp"),
-    (r"^mv\s+(.+?)(?:\s|$)", "mv"),
-    (r"^mkdir\s+-+\s*(.+?)(?:\s|$)", "mkdir"),
-    (r"^touch\s+(.+?)(?:\s|$)", "touch"),
-    (r"^chmod\s+(.+?)(?:\s|$)", "chmod"),
-    (r"^chown\s+(.+?)(?:\s|$)", "chown"),
-    (r"^cat\s+(.+?)(?:\s|$)", "cat"),
-    (r"^ls\s+(.+?)(?:\s|$)", "ls"),
-    (r"^find\s+(.+?)(?:\s|$)", "find"),
-]
-
-
 def extract_paths_from_command(command: str) -> list[str]:
     """Extract candidate path arguments from shell commands."""
     paths: list[str] = []
@@ -177,9 +324,6 @@ def extract_paths_from_command(command: str) -> list[str]:
     return paths
 
 
-_SIGKILL_GRACE_SECONDS = 5
-
-
 def _creation_flags() -> int:
     """Return Windows process-creation flags (0 on non-Windows)."""
     if _is_windows():
@@ -203,14 +347,28 @@ def _sanitize_bash_env(env: dict[str, str]) -> dict[str, str]:
     return sanitized
 
 
-async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """Terminate the process and its entire process tree."""
-    if proc.returncode is not None:
-        return
-    pid = proc.pid
-    if pid is None:
-        return
+def _sanitize_shell_env(
+    env: dict[str, str],
+    *,
+    shell: ResolvedShell,
+) -> dict[str, str]:
+    if shell.kind == ShellKind.BASH:
+        return _sanitize_bash_env(env)
+    return env
 
+
+def _prepend_powershell_utf8_prefix(command: str) -> str:
+    return "\n".join(
+        (
+            "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+            "$OutputEncoding = [Console]::OutputEncoding",
+            command,
+        )
+    )
+
+
+async def _kill_process_tree_by_pid(pid: int) -> None:
     if _is_windows():
         try:
             killer = await asyncio.create_subprocess_exec(
@@ -224,25 +382,47 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
             )
             await asyncio.wait_for(killer.wait(), timeout=_SIGKILL_GRACE_SECONDS)
         except (OSError, asyncio.TimeoutError):
+            return
+        return
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+
+
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Terminate the process and its entire process tree."""
+    if proc.returncode is not None:
+        return
+    pid = proc.pid
+    if pid is None:
+        return
+
+    if _is_windows():
+        try:
+            await _kill_process_tree_by_pid(pid)
+        except Exception:
             proc.kill()
         await proc.wait()
-    else:
+        return
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+    except asyncio.TimeoutError:
         try:
-            os.killpg(pid, signal.SIGTERM)
+            os.killpg(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
         try:
-            await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+            await asyncio.wait_for(proc.wait(), timeout=2)
         except asyncio.TimeoutError:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+            proc.kill()
+            await proc.wait()
 
 
 async def spawn_shell(
@@ -321,10 +501,11 @@ def run_git_bash(
 ) -> tuple[int, str, str, bool]:
     """Run command synchronously under bash for compatibility."""
     bash = resolve_bash_path()
-    shell_env = build_shell_env_sync()
+    shell = _build_bash_shell(bash, display_name="Git Bash")
+    shell_env = build_shell_env_sync(shell=shell)
     try:
         proc = subprocess.run(
-            [bash, "-lc", command],
+            list(build_shell_command(shell=shell, command=command)),
             cwd=str(workdir),
             env=shell_env,
             stdin=subprocess.DEVNULL,
@@ -372,24 +553,30 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
 
 async def build_shell_env(
     env: dict[str, str] | None = None,
+    *,
+    shell: ResolvedShell | None = None,
 ) -> dict[str, str]:
+    resolved_shell = shell or resolve_exec_shell()
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     shell_env.update(_load_github_cli_env())
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
-    return _sanitize_bash_env(shell_env)
+    return _sanitize_shell_env(shell_env, shell=resolved_shell)
 
 
 def build_shell_env_sync(
     env: dict[str, str] | None = None,
+    *,
+    shell: ResolvedShell | None = None,
 ) -> dict[str, str]:
+    resolved_shell = shell or resolve_exec_shell()
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     shell_env.update(_load_github_cli_env())
     gh_path = _resolve_gh_path_sync()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
-    return _sanitize_bash_env(shell_env)
+    return _sanitize_shell_env(shell_env, shell=resolved_shell)
 
 
 async def create_shell_subprocess(
@@ -397,16 +584,20 @@ async def create_shell_subprocess(
     command: str,
     cwd: Path,
     env: dict[str, str] | None = None,
+    shell: ResolvedShell | None = None,
+    login: bool = False,
     stdin: int | None = None,
     stdout: int | None = None,
     stderr: int | None = None,
 ) -> asyncio.subprocess.Process:
-    bash = resolve_bash_path()
-    shell_env = await build_shell_env(env)
+    resolved_shell = shell or resolve_exec_shell()
+    shell_env = await build_shell_env(env, shell=resolved_shell)
     return await asyncio.create_subprocess_exec(
-        bash,
-        "-lc",
-        command,
+        *build_shell_command(
+            shell=resolved_shell,
+            command=command,
+            login=login,
+        ),
         cwd=str(cwd),
         env=shell_env,
         stdin=stdin,

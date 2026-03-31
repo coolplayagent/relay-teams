@@ -21,6 +21,7 @@ dependencies = [
   "markdownify>=1.2.0",
   "defusedxml>=0.7.1",
   "qrcode>=8.0",
+  "pywinpty>=3.0.3; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

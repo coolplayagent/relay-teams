@@ -798,6 +798,9 @@ Stops one managed exec session and returns its final snapshot.
 Notes:
 - Exec sessions are scoped to the owning run. Cross-run access returns `404`.
 - The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
+- Runtime shell selection is internal, not part of the REST contract. Linux/macOS use the managed bash path; Windows prefers Git Bash and falls back to PowerShell when Git Bash is unavailable.
+- `tty=true` exec sessions use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY exec sessions remain available.
+- Unlike Codex's stricter unified-exec contract, Agent Teams keeps non-TTY `write_stdin` enabled for compatibility with existing pipe-style workflows.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
 

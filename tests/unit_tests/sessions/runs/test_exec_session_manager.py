@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import time
 
 import pytest
 
@@ -55,6 +57,47 @@ def _build_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
             writable_roots=(scope_root, tmp_root),
         ),
     )
+
+
+class _FakeWindowsPtyProcess:
+    def __init__(self) -> None:
+        self.pid = 43210
+        self._alive = True
+        self._exitstatus = 0
+        self._outputs: deque[str] = deque(["ready\r\n"])
+        self.writes: list[str] = []
+        self.sizes: list[tuple[int, int]] = []
+
+    def read(self, size: int = 1024) -> str:
+        _ = size
+        deadline = time.monotonic() + 1.0
+        while not self._outputs:
+            if not self._alive:
+                raise EOFError("pty closed")
+            if time.monotonic() >= deadline:
+                return ""
+            time.sleep(0.01)
+        return self._outputs.popleft()
+
+    def write(self, data: str) -> int:
+        self.writes.append(data)
+        self._outputs.append(f"echo:{data.strip()}\r\n")
+        return len(data)
+
+    def isalive(self) -> bool:
+        return self._alive
+
+    def wait(self) -> int:
+        while self._alive:
+            time.sleep(0.01)
+        return self._exitstatus
+
+    def close(self, force: bool = False) -> None:
+        _ = force
+        self._alive = False
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        self.sizes.append((rows, cols))
 
 
 @pytest.mark.asyncio
@@ -228,6 +271,144 @@ async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
         await manager.close()
 
     assert stopped.status == ExecSessionStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_exec_session_manager_windows_tty_transport_supports_write_resize_and_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.tools.workspace_tools.shell_executor import (
+        ResolvedShell,
+        ShellKind,
+    )
+
+    repo = ExecSessionRepository(tmp_path / "exec-session-winpty.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+    fake_process = _FakeWindowsPtyProcess()
+
+    async def _fake_build_shell_env(
+        env: dict[str, str] | None = None,
+        *,
+        shell: ResolvedShell | None = None,
+    ) -> dict[str, str]:
+        _ = shell
+        return dict(env or {})
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> None:
+        assert pid == fake_process.pid
+
+    monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
+    monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
+    monkeypatch.setattr(
+        manager_module,
+        "resolve_exec_shell",
+        lambda: ResolvedShell(
+            kind=ShellKind.POWERSHELL,
+            executable="powershell.exe",
+            display_name="PowerShell",
+        ),
+    )
+    monkeypatch.setattr(manager_module, "build_shell_env", _fake_build_shell_env)
+    monkeypatch.setattr(
+        manager_module,
+        "_spawn_windows_pty_process",
+        lambda **kwargs: fake_process,
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    try:
+        started = await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="powershell interactive",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env={"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+            tty=True,
+        )
+        updated, completed = await manager.interact_for_run(
+            run_id="run-1",
+            exec_session_id=started.exec_session_id,
+            chars="hello\r\n",
+            yield_time_ms=5000,
+        )
+        echoed, _ = await manager.interact_for_run(
+            run_id="run-1",
+            exec_session_id=started.exec_session_id,
+            chars="",
+            yield_time_ms=5000,
+        )
+        resized = await manager.resize_for_run(
+            run_id="run-1",
+            exec_session_id=started.exec_session_id,
+            columns=100,
+            rows=30,
+        )
+        stopped = await manager.stop_for_run(
+            run_id="run-1",
+            exec_session_id=started.exec_session_id,
+        )
+    finally:
+        await manager.close()
+
+    assert completed is False
+    assert updated.recent_output == ("ready",)
+    assert "echo:hello" in echoed.recent_output
+    assert resized.exec_session_id == started.exec_session_id
+    assert fake_process.writes == ["hello\r\n"]
+    assert fake_process.sizes == [(30, 100)]
+    assert stopped.status == ExecSessionStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_exec_session_manager_windows_tty_requires_supported_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    repo = ExecSessionRepository(tmp_path / "exec-session-winpty-unsupported.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+
+    monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
+    monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: False)
+    monkeypatch.setattr(
+        manager_module,
+        "_tty_unsupported_message",
+        lambda: "TTY exec sessions are not supported on this Windows host",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="TTY exec sessions are not supported on this Windows host",
+    ):
+        await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="powershell interactive",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=True,
+        )
 
 
 @pytest.mark.asyncio
