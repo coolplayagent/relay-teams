@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import Future as ThreadFuture
+from enum import StrEnum
 from json import dumps, loads
 from typing import Awaitable, Callable, TypeVar, cast
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import (
     BinaryContent,
     FilePart,
@@ -81,15 +82,48 @@ from agent_teams.workspace import build_conversation_id
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
-AUTO_RECOVERY_ERROR_CODE = "model_tool_args_invalid_json"
-AUTO_RECOVERY_REASON = "auto_recovery_invalid_tool_args_json"
-AUTO_RECOVERY_MAX_ATTEMPTS = 1
-AUTO_RECOVERY_PROMPT = (
+
+
+class AutoRecoveryReason(StrEnum):
+    INVALID_TOOL_ARGS_JSON = "auto_recovery_invalid_tool_args_json"
+    NETWORK_STREAM_INTERRUPTED = "auto_recovery_network_stream_interrupted"
+
+
+class AutoRecoveryPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    error_code: str
+    reason: AutoRecoveryReason
+    max_attempts: int
+    prompt: str
+
+
+INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT = (
     "The previous tool call arguments were not valid JSON. "
     "Do not repeat already successful tool calls. "
     "Continue from the latest successful tool results already in the conversation. "
     "If you call a tool again, output strict JSON only, with double-quoted property names "
     "and arguments that exactly match the tool schema."
+)
+NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT = (
+    "The previous model stream was interrupted by a transient network or transport failure. "
+    "Continue from the latest successful conversation state already persisted. "
+    "Do not repeat already successful tool calls or restate text that has already been sent. "
+    "If prior work is incomplete, continue from the last confirmed point."
+)
+AUTO_RECOVERY_POLICIES = (
+    AutoRecoveryPolicy(
+        error_code="model_tool_args_invalid_json",
+        reason=AutoRecoveryReason.INVALID_TOOL_ARGS_JSON,
+        max_attempts=1,
+        prompt=INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT,
+    ),
+    AutoRecoveryPolicy(
+        error_code="network_stream_interrupted",
+        reason=AutoRecoveryReason.NETWORK_STREAM_INTERRUPTED,
+        max_attempts=5,
+        prompt=NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT,
+    ),
 )
 
 
@@ -148,7 +182,7 @@ class RunManager:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
-        self._auto_recovery_attempts: dict[str, int] = {}
+        self._auto_recovery_attempts: dict[tuple[str, AutoRecoveryReason], int] = {}
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
     def replace_runtime_dependencies(
@@ -591,17 +625,27 @@ class RunManager:
             try:
                 return await current_runner()
             except RecoverableRunPauseError as exc:
-                attempt = self._next_auto_recovery_attempt(exc.payload)
+                policy = self._auto_recovery_policy_for(exc.payload.error_code)
+                if policy is None:
+                    raise
+                attempt = self._next_auto_recovery_attempt(
+                    exc.payload,
+                    policy=policy,
+                )
                 if attempt is None:
                     raise
-                self._record_auto_recovery_attempt(run_id=run_id, attempt=attempt)
-                self._queue_auto_recovery_prompt(payload=exc.payload)
+                self._record_auto_recovery_attempt(
+                    run_id=run_id,
+                    reason=policy.reason,
+                    attempt=attempt,
+                )
+                self._queue_auto_recovery_prompt(payload=exc.payload, policy=policy)
                 resume_payload = self._transition_run_to_resumed(
                     run_id=run_id,
                     session_id=session_id,
-                    reason=AUTO_RECOVERY_REASON,
+                    reason=policy.reason,
                     attempt=attempt,
-                    max_attempts=AUTO_RECOVERY_MAX_ATTEMPTS,
+                    max_attempts=policy.max_attempts,
                 )
                 with bind_trace_context(
                     trace_id=run_id,
@@ -612,8 +656,11 @@ class RunManager:
                         logger,
                         logging.WARNING,
                         event="run.auto_recovery.resumed",
-                        message="Run resumed automatically after invalid tool args JSON",
-                        payload=resume_payload,
+                        message="Run resumed automatically after recoverable LLM failure",
+                        payload={
+                            **resume_payload,
+                            "error_code": exc.payload.error_code,
+                        },
                     )
                 current_runner = _resume_runner
 
@@ -1065,7 +1112,11 @@ class RunManager:
         if runtime is not None and runtime.is_recoverable:
             self._remember_active_run(session_id, run_id)
             return
-        _ = self._auto_recovery_attempts.pop(run_id, None)
+        self._auto_recovery_attempts = {
+            key: value
+            for key, value in self._auto_recovery_attempts.items()
+            if key[0] != run_id
+        }
         if self._runtime_role_resolver is not None:
             self._runtime_role_resolver.cleanup_run(run_id=run_id)
         self._drop_active_run(session_id, run_id)
@@ -1762,22 +1813,45 @@ class RunManager:
             return True
         return current_intent.run_kind == RunKind.CONVERSATION
 
+    def _auto_recovery_policy_for(self, error_code: str) -> AutoRecoveryPolicy | None:
+        for policy in AUTO_RECOVERY_POLICIES:
+            if policy.error_code == error_code:
+                return policy
+        return None
+
     def _next_auto_recovery_attempt(
-        self, payload: "RecoverableRunPausePayload"
+        self,
+        payload: "RecoverableRunPausePayload",
+        *,
+        policy: AutoRecoveryPolicy,
     ) -> int | None:
-        if payload.error_code != AUTO_RECOVERY_ERROR_CODE:
-            return None
-        attempts = self._count_auto_recovery_attempts(payload.run_id)
-        if attempts >= AUTO_RECOVERY_MAX_ATTEMPTS:
+        attempts = self._count_auto_recovery_attempts(
+            payload.run_id,
+            reason=policy.reason,
+        )
+        if attempts >= policy.max_attempts:
             return None
         return attempts + 1
 
-    def _count_auto_recovery_attempts(self, run_id: str) -> int:
-        persisted_attempts = self._count_persisted_auto_recovery_attempts(run_id)
-        in_memory_attempts = self._auto_recovery_attempts.get(run_id, 0)
+    def _count_auto_recovery_attempts(
+        self,
+        run_id: str,
+        *,
+        reason: AutoRecoveryReason,
+    ) -> int:
+        persisted_attempts = self._count_persisted_auto_recovery_attempts(
+            run_id,
+            reason=reason,
+        )
+        in_memory_attempts = self._auto_recovery_attempts.get((run_id, reason), 0)
         return max(persisted_attempts, in_memory_attempts)
 
-    def _count_persisted_auto_recovery_attempts(self, run_id: str) -> int:
+    def _count_persisted_auto_recovery_attempts(
+        self,
+        run_id: str,
+        *,
+        reason: AutoRecoveryReason,
+    ) -> int:
         if self._event_log is None:
             return 0
         count = 0
@@ -1793,29 +1867,39 @@ class RunManager:
                 continue
             if not isinstance(parsed, dict):
                 continue
-            if str(parsed.get("reason") or "") == AUTO_RECOVERY_REASON:
+            if str(parsed.get("reason") or "") == reason.value:
                 count += 1
         return count
 
-    def _record_auto_recovery_attempt(self, *, run_id: str, attempt: int) -> None:
-        current = self._auto_recovery_attempts.get(run_id, 0)
-        self._auto_recovery_attempts[run_id] = max(current, attempt)
+    def _record_auto_recovery_attempt(
+        self,
+        *,
+        run_id: str,
+        reason: AutoRecoveryReason,
+        attempt: int,
+    ) -> None:
+        key = (run_id, reason)
+        current = self._auto_recovery_attempts.get(key, 0)
+        self._auto_recovery_attempts[key] = max(current, attempt)
 
     def _queue_auto_recovery_prompt(
-        self, *, payload: "RecoverableRunPausePayload"
+        self,
+        *,
+        payload: "RecoverableRunPausePayload",
+        policy: AutoRecoveryPolicy,
     ) -> None:
         if self._append_followup_to_instance(
             run_id=payload.run_id,
             instance_id=payload.instance_id,
             task_id=payload.task_id,
-            content=AUTO_RECOVERY_PROMPT,
+            content=policy.prompt,
             enqueue=False,
             source=InjectionSource.SYSTEM,
         ):
             return
         self._append_followup_to_coordinator(
             payload.run_id,
-            AUTO_RECOVERY_PROMPT,
+            policy.prompt,
             enqueue=False,
         )
 
@@ -1879,14 +1963,17 @@ class RunManager:
         self, payload: "RecoverableRunPausePayload"
     ) -> dict[str, JsonValue]:
         paused_payload: dict[str, JsonValue] = payload.model_dump(mode="json")
-        if payload.error_code != AUTO_RECOVERY_ERROR_CODE:
+        policy = self._auto_recovery_policy_for(payload.error_code)
+        if policy is None:
             return paused_payload
-        attempts = self._count_auto_recovery_attempts(payload.run_id)
-        paused_payload["auto_recovery_exhausted"] = (
-            attempts >= AUTO_RECOVERY_MAX_ATTEMPTS
+        attempts = self._count_auto_recovery_attempts(
+            payload.run_id,
+            reason=policy.reason,
         )
+        paused_payload["auto_recovery_exhausted"] = attempts >= policy.max_attempts
         paused_payload["attempt"] = attempts
-        paused_payload["max_attempts"] = AUTO_RECOVERY_MAX_ATTEMPTS
+        paused_payload["max_attempts"] = policy.max_attempts
+        paused_payload["auto_recovery_reason"] = policy.reason.value
         return paused_payload
 
     def _require_task_repo(self) -> TaskRepository:
