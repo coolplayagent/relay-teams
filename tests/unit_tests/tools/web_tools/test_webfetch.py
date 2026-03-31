@@ -362,6 +362,74 @@ async def test_fetch_url_follows_same_host_redirect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_follows_http_to_https_same_host_redirect() -> None:
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "http://example.com/start":
+            return httpx.Response(
+                301,
+                request=request,
+                headers={"location": "https://example.com/finish"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="secure ok",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="http://example.com/start",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert requested_urls == ["http://example.com/start", "https://example.com/finish"]
+    assert str(response.url) == "https://example.com/finish"
+    await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_follows_https_default_port_same_host_redirect() -> None:
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://example.com/start":
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"location": "https://example.com:443/finish"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="ok",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/start",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert requested_urls == ["https://example.com/start", "https://example.com/finish"]
+    assert str(response.url) == "https://example.com/finish"
+    await response.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

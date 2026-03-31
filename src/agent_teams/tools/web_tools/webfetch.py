@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-from urllib.parse import urljoin, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 from xml.etree.ElementTree import Element, ParseError
 
 import defusedxml.ElementTree as safe_element_tree
@@ -572,15 +572,37 @@ async def _perform_request(
 def is_permitted_redirect(original_url: str, redirect_url: str) -> bool:
     original = urlparse(original_url)
     redirect = urlparse(redirect_url)
-    if redirect.scheme != original.scheme:
-        return False
-    if redirect.port != original.port:
-        return False
     if redirect.username or redirect.password:
+        return False
+    if not _is_permitted_redirect_scheme_transition(original.scheme, redirect.scheme):
         return False
     original_host = (original.hostname or "").removeprefix("www.")
     redirect_host = (redirect.hostname or "").removeprefix("www.")
-    return bool(original_host) and original_host == redirect_host
+    if not original_host or original_host != redirect_host:
+        return False
+    if original.scheme == redirect.scheme:
+        return _normalize_default_port(original) == _normalize_default_port(redirect)
+    return _is_default_port(original) and _is_default_port(redirect)
+
+
+def _is_permitted_redirect_scheme_transition(
+    original_scheme: str, redirect_scheme: str
+) -> bool:
+    return (
+        original_scheme == redirect_scheme and original_scheme in {"http", "https"}
+    ) or (original_scheme == "http" and redirect_scheme == "https")
+
+
+def _is_default_port(parsed: ParseResult) -> bool:
+    return parsed.port is None or parsed.port == _normalize_default_port(parsed)
+
+
+def _normalize_default_port(parsed: ParseResult) -> int | None:
+    if parsed.scheme == "http":
+        return 80 if parsed.port is None else parsed.port
+    if parsed.scheme == "https":
+        return 443 if parsed.port is None else parsed.port
+    return parsed.port
 
 
 def build_redirect_required_projection(
