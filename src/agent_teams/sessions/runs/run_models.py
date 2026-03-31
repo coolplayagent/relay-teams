@@ -106,19 +106,6 @@ class IntentInput(BaseModel):
     topology: RunTopologySnapshot | None = None
     conversation_context: RuntimePromptConversationContext | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_intent(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if "input" in payload:
-            return payload
-        legacy_intent = payload.pop("intent", None)
-        if isinstance(legacy_intent, str):
-            payload["input"] = content_parts_from_text(legacy_intent)
-        return payload
-
     @property
     def intent(self) -> str:
         return content_parts_to_text(self.input)

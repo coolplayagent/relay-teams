@@ -221,7 +221,7 @@ def _build_role_registry() -> RoleRegistry:
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0",
@@ -304,7 +304,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Deliver summary",
             "shared_state": {"priority": 1},
             "tools": ["dispatch_task"],
@@ -314,7 +314,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["role_id"] == "coordinator_agent"
+    assert payload["role_id"] == "Coordinator"
     assert payload["tools"] == ["dispatch_task"]
     assert payload["skills"] == ["time"]
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
@@ -446,7 +446,7 @@ def test_prompts_preview_skill_override_replaces_role_default() -> None:
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "skills": ["planner"],
         },
     )
@@ -467,7 +467,7 @@ def test_prompts_preview_passes_orchestration_prompt_to_skill_runtime_service() 
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Deliver summary",
             "orchestration_prompt": "Delegate by capability and finalize yourself.",
         },
@@ -487,14 +487,14 @@ def test_prompts_preview_system_prompt_is_stable_across_objectives() -> None:
     first = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Deliver summary",
         },
     )
     second = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Investigate timezone drift",
         },
     )
@@ -530,7 +530,7 @@ def test_prompts_preview_returns_404_for_unknown_workspace() -> None:
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "workspace_id": "missing-workspace",
         },
     )
@@ -545,7 +545,7 @@ def test_prompts_preview_returns_400_for_unknown_tool_override() -> None:
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "tools": ["unknown_tool"],
         },
     )
@@ -560,7 +560,7 @@ def test_prompts_preview_returns_400_for_unknown_skill_override() -> None:
     response = client.post(
         "/api/prompts:preview",
         json={
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "skills": ["unknown_skill"],
         },
     )

@@ -21,7 +21,7 @@ class TaskEnvelope(BaseModel):
     session_id: RequiredIdentifierStr
     parent_task_id: OptionalIdentifierStr = None
     trace_id: RequiredIdentifierStr
-    role_id: OptionalIdentifierStr = "coordinator_agent"
+    role_id: OptionalIdentifierStr = "Coordinator"
     title: str | None = None
     objective: str = Field(min_length=1)
     verification: VerificationPlan

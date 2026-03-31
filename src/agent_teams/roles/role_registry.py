@@ -18,24 +18,17 @@ COORDINATOR_REQUIRED_TOOLS = frozenset(
     )
 )
 MAIN_AGENT_ROLE_ID = "MainAgent"
-LEGACY_COORDINATOR_IDENTIFIERS = frozenset(
-    ("coordinator", "coordinator agent", "coordinator_agent")
-)
+COORDINATOR_IDENTIFIERS = frozenset(("coordinator",))
 MAIN_AGENT_IDENTIFIERS = frozenset(("mainagent", "main agent", "main_agent"))
 
 
 def is_coordinator_role_definition(role: RoleDefinition) -> bool:
-    return COORDINATOR_REQUIRED_TOOLS.issubset(
-        set(role.tools)
-    ) or _looks_like_legacy_coordinator(role)
-
-
-def _looks_like_legacy_coordinator(role: RoleDefinition) -> bool:
     role_id = role.role_id.strip().casefold()
     name = role.name.strip().casefold()
     return (
-        role_id in LEGACY_COORDINATOR_IDENTIFIERS
-        or name in LEGACY_COORDINATOR_IDENTIFIERS
+        COORDINATOR_REQUIRED_TOOLS.issubset(set(role.tools))
+        or role_id in COORDINATOR_IDENTIFIERS
+        or name in COORDINATOR_IDENTIFIERS
     )
 
 
@@ -79,17 +72,6 @@ class RoleRegistry:
         if len(candidates) > 1:
             role_ids = ", ".join(sorted(role.role_id for role in candidates))
             raise ValueError(f"Multiple coordinator role candidates found: {role_ids}")
-
-        legacy_candidates = [
-            role for role in self._roles if _looks_like_legacy_coordinator(role)
-        ]
-        if len(legacy_candidates) == 1:
-            return legacy_candidates[0]
-        if len(legacy_candidates) > 1:
-            role_ids = ", ".join(sorted(role.role_id for role in legacy_candidates))
-            raise ValueError(
-                f"Multiple legacy coordinator role candidates found: {role_ids}"
-            )
 
         raise KeyError("Coordinator role could not be resolved from loaded roles")
 

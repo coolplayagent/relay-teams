@@ -37,7 +37,7 @@ def create_run(
         "/api/runs",
         json={
             "session_id": session_id,
-            "intent": intent,
+            "input": [{"kind": "text", "text": intent}],
             "execution_mode": execution_mode,
             "yolo": yolo,
         },

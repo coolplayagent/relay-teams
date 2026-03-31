@@ -604,7 +604,7 @@ def _build_provider(
     role_registry = RoleRegistry()
     role_registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="coordinator",
             description="Coordinates delegated work.",
             version="1",
@@ -748,7 +748,7 @@ async def test_generate_persists_current_turn_prompt_even_with_existing_history(
         task_id="task-2",
         trace_id="run-2",
         content="previous turn",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
     )
 
     monkeypatch.setattr(
@@ -764,7 +764,7 @@ async def test_generate_persists_current_turn_prompt_even_with_existing_history(
         session_id="session-2",
         workspace_id="default",
         instance_id="inst-2",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -794,9 +794,9 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
         workspace_id="default",
         conversation_id=build_conversation_id(
             "session-pending-tool",
-            "coordinator_agent",
+            "Coordinator",
         ),
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         instance_id="inst-pending-tool",
         task_id="task-pending-tool",
         trace_id="run-pending-tool",
@@ -827,7 +827,7 @@ async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
         session_id="session-pending-tool",
         workspace_id="default",
         instance_id="inst-pending-tool",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -865,7 +865,7 @@ async def test_generate_enables_continuous_stream_usage_stats(
         session_id="session-3",
         workspace_id="default",
         instance_id="inst-3",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -903,7 +903,7 @@ async def test_generate_passes_reasoning_effort_when_thinking_enabled(
         session_id="session-thinking-settings",
         workspace_id="default",
         instance_id="inst-thinking-settings",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
         thinking=RunThinkingConfig(enabled=True, effort="high"),
@@ -959,7 +959,7 @@ async def test_generate_uses_prepared_system_prompt(
         session_id="session-augment",
         workspace_id="default",
         instance_id="inst-augment",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt=(
             "## Role\nBase system prompt.\n\n"
             "## Available Skills\n"
@@ -984,7 +984,7 @@ async def test_generate_uses_prepared_system_prompt(
     assert len(prepared_events) == 1
     assert "## Role\nBase system prompt." in str(prepared_events[0].get("message", ""))
     assert prepared_events[0].get("payload") == {
-        "role_id": "coordinator_agent",
+        "role_id": "Coordinator",
         "instance_id": "inst-augment",
         "task_id": "task-augment",
         "length": len(system_prompt_obj),
@@ -1005,7 +1005,7 @@ async def test_generate_does_not_persist_duplicate_leading_user_request(
         task_id="task-dedupe",
         trace_id="run-dedupe",
         content="dedupe request",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
     )
     duplicated_request = ModelRequest(parts=[UserPromptPart(content="dedupe request")])
     scripted_agent = _SequentialAgent(
@@ -1037,7 +1037,7 @@ async def test_generate_does_not_persist_duplicate_leading_user_request(
         session_id="session-dedupe",
         workspace_id="default",
         instance_id="inst-dedupe",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt=None,
     )
@@ -1069,7 +1069,7 @@ async def test_generate_does_not_persist_duplicate_response_after_dropping_leadi
         task_id="task-dedupe",
         trace_id="run-dedupe",
         content="hello",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
     )
     duplicated_request = ModelRequest(parts=[UserPromptPart(content="hello")])
     final_response = ModelResponse(parts=[TextPart(content="ok")])
@@ -1110,7 +1110,7 @@ async def test_generate_does_not_persist_duplicate_response_after_dropping_leadi
         session_id="session-dedupe",
         workspace_id="default",
         instance_id="inst-dedupe",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt=None,
     )
@@ -1156,7 +1156,7 @@ async def test_generate_token_usage_tracks_request_level_delta(
         session_id="session-4",
         workspace_id="default",
         instance_id="inst-4",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -1204,7 +1204,7 @@ async def test_generate_token_usage_delta_works_with_mutated_usage_object(
         session_id="session-5",
         workspace_id="default",
         instance_id="inst-5",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -1284,7 +1284,7 @@ async def test_generate_streams_thinking_events_and_excludes_thinking_from_outpu
         session_id="session-thinking-stream",
         workspace_id="default",
         instance_id="inst-thinking-stream",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="show work",
         thinking=RunThinkingConfig(enabled=True, effort="medium"),
@@ -1692,7 +1692,7 @@ async def test_generate_retries_provider_coded_error_before_side_effects(
         session_id="session-retry-success",
         workspace_id="default",
         instance_id="inst-retry-success",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="retry me",
     )
@@ -1745,7 +1745,7 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
         session_id="session-retry-blocked",
         workspace_id="default",
         instance_id="inst-retry-blocked",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="retry me",
     )
@@ -1812,7 +1812,7 @@ async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_ev
         session_id="session-invalid-tool-args",
         workspace_id="default",
         instance_id="inst-invalid-tool-args",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="retry me",
     )
@@ -1879,7 +1879,7 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
         session_id="session-retry-exhausted",
         workspace_id="default",
         instance_id="inst-retry-exhausted",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="retry me",
     )

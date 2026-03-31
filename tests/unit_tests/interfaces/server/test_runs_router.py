@@ -71,7 +71,7 @@ def test_create_run_route_accepts_yolo() -> None:
         "/api/runs",
         json={
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "yolo": True,
         },
@@ -80,6 +80,7 @@ def test_create_run_route_accepts_yolo() -> None:
     assert response.status_code == 200
     assert response.json() == {"run_id": "run-1", "session_id": "session-1"}
     created = fake_service.created_run_inputs[0]
+    assert created.intent == "hello"
     assert created.yolo is True
     assert fake_service.started_run_ids == ["run-1"]
 
@@ -92,7 +93,7 @@ def test_create_run_route_rejects_none_like_session_id() -> None:
         "/api/runs",
         json={
             "session_id": "None",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
         },
     )
@@ -109,7 +110,7 @@ def test_create_run_route_accepts_thinking_config() -> None:
         "/api/runs",
         json={
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "yolo": False,
             "thinking": {"enabled": True, "effort": "high"},
@@ -131,7 +132,7 @@ def test_create_run_route_accepts_target_role_id() -> None:
         "/api/runs",
         json={
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "target_role_id": "writer",
         },
@@ -144,8 +145,26 @@ def test_create_run_route_accepts_target_role_id() -> None:
         "target_role_id": "writer",
     }
     created = fake_service.created_run_inputs[0]
+    assert created.intent == "hello"
     assert created.target_role_id == "writer"
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_create_run_route_rejects_legacy_intent_field() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "intent": "hello",
+            "execution_mode": "ai",
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_run_inputs == []
 
 
 def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:

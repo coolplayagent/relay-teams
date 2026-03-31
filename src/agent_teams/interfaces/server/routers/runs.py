@@ -7,14 +7,13 @@ from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_teams.interfaces.server.deps import get_run_service
 from agent_teams.logger import get_logger, log_event
 from agent_teams.media import (
     ContentPart,
     InlineMediaContentPart,
-    content_parts_from_text,
 )
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.enums import ExecutionMode, InjectionSource
@@ -42,19 +41,6 @@ class CreateRunRequest(BaseModel):
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_intent(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if "input" in payload:
-            return payload
-        legacy_intent = payload.pop("intent", None)
-        if isinstance(legacy_intent, str):
-            payload["input"] = content_parts_from_text(legacy_intent)
-        return payload
 
 
 class CreateRunResponse(BaseModel):

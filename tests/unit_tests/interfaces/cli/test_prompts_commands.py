@@ -27,7 +27,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
         captured["path"] = path
         captured["payload"] = payload
         return {
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Draft release note",
             "tools": ["dispatch_task"],
             "skills": ["time"],
@@ -45,7 +45,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
             "roles",
             "prompt",
             "--role-id",
-            "coordinator_agent",
+            "Coordinator",
             "--objective",
             "Draft release note",
             "--tool",
@@ -66,7 +66,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
         "method": "POST",
         "path": "/api/prompts:preview",
         "payload": {
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Draft release note",
             "shared_state": {"lang": "zh-CN"},
             "tools": ["dispatch_task"],
@@ -92,7 +92,7 @@ def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None
         _ = (base_url, method, payload, timeout_seconds)
         captured.append(path)
         return [
-            {"role_id": "coordinator_agent"},
+            {"role_id": "Coordinator"},
             {"role_id": "writer_agent"},
         ]
 
@@ -104,7 +104,7 @@ def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None
     assert result.exit_code == 2
     assert captured == ["/api/roles"]
     assert "Missing required option: --role-id" in result.output
-    assert "coordinator_agent" in result.output
+    assert "Coordinator" in result.output
     assert "Usage: agent-teams roles prompt --role-id <role_id>" in result.output
 
 
@@ -121,7 +121,7 @@ def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, method, path, payload, timeout_seconds)
         return {
-            "role_id": "coordinator_agent",
+            "role_id": "Coordinator",
             "objective": "Draft release note",
             "tools": ["dispatch_task"],
             "skills": ["time"],
@@ -139,7 +139,7 @@ def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:
             "roles",
             "prompt",
             "--role-id",
-            "coordinator_agent",
+            "Coordinator",
         ],
     )
 

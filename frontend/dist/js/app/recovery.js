@@ -1285,7 +1285,7 @@ function normalizeCount(value) {
 }
 
 function humanizeRoleLabel(value) {
-    return humanizeRoleId(value, { coordinatorLabel: t('recovery.coordinator_agent') });
+    return humanizeRoleId(value);
 }
 
 function humanizeToolName(value) {

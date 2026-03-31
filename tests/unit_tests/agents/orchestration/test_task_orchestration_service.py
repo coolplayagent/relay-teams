@@ -53,7 +53,7 @@ def _build_role_registry() -> RoleRegistry:
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
@@ -91,7 +91,7 @@ def _seed_root_task(task_repo: TaskRepository) -> None:
             session_id="session-1",
             parent_task_id=None,
             trace_id="run-1",
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             title="Coordinator root",
             objective="Handle user intent",
             verification=VerificationPlan(checklist=("non_empty_response",)),

@@ -64,7 +64,7 @@ class _RecordingTaskExecutionService:
 def _build_coordinator(
     tmp_path: Path,
     *,
-    coordinator_role_id: str = "coordinator_agent",
+    coordinator_role_id: str = "Coordinator",
 ) -> tuple[
     CoordinatorGraph,
     TaskRepository,
@@ -220,7 +220,7 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
     _ = task_repo.create(child_task)
 
     coordinator_instance = create_subagent_instance(
-        "coordinator_agent",
+        "Coordinator",
         workspace_id="workspace-1",
         conversation_id="conversation-coordinator",
     )
@@ -235,7 +235,7 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         trace_id="run-1",
         session_id="session-1",
         instance_id=coordinator_instance.instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id=coordinator_instance.workspace_id,
         conversation_id=coordinator_instance.conversation_id,
         status=InstanceStatus.IDLE,
@@ -314,7 +314,7 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
     _ = task_repo.create(child_task)
 
     coordinator_instance = create_subagent_instance(
-        "coordinator_agent",
+        "Coordinator",
         workspace_id="workspace-1",
         conversation_id="conversation-coordinator",
     )
@@ -329,7 +329,7 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
         trace_id="run-1",
         session_id="session-1",
         instance_id=coordinator_instance.instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id=coordinator_instance.workspace_id,
         conversation_id=coordinator_instance.conversation_id,
         status=InstanceStatus.IDLE,
