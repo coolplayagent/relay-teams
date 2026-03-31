@@ -33,176 +33,205 @@ _LIST_DESCRIPTION = "List managed exec sessions for the current run."
 _WRITE_DESCRIPTION = "Write stdin to a managed exec session. Pass empty text to long-poll for new output."
 _RESIZE_DESCRIPTION = "Resize a managed TTY exec session."
 _TERMINATE_DESCRIPTION = "Terminate a managed exec session."
+EXEC_SESSION_TOOL_NAMES = (
+    "exec_command",
+    "list_exec_sessions",
+    "write_stdin",
+    "resize_exec_session",
+    "terminate_exec_session",
+)
 
 
-def register(agent: Agent[ToolDeps, str]) -> None:
-    @agent.tool(description=_EXEC_COMMAND_DESCRIPTION)
-    async def exec_command(
-        ctx: ToolContext,
-        command: str,
-        yield_time_ms: int | None = None,
-        timeout_ms: int | None = None,
-        workdir: str | None = None,
-        tty: bool = False,
-    ) -> dict[str, JsonValue]:
-        cwd = _resolve_cwd(ctx, workdir, ensure_tmp_root=False)
-        approval_request = ToolApprovalRequest(
-            cache_key=_build_exec_command_cache_key(
-                command,
-                cwd=cwd,
-                tty=tty,
-            ),
-        )
+def register(
+    agent: Agent[ToolDeps, str],
+    *,
+    tool_names: tuple[str, ...] | None = None,
+) -> None:
+    allowed = frozenset(EXEC_SESSION_TOOL_NAMES if tool_names is None else tool_names)
 
-        async def _action() -> ToolResultProjection:
-            validate_shell_command(command)
-            manager = _require_exec_session_manager(ctx)
-            cwd = _resolve_cwd(ctx, workdir)
-            timeout = normalize_timeout(timeout_ms)
-            record, completed = await manager.exec_command(
-                run_id=ctx.deps.run_id,
-                session_id=ctx.deps.session_id,
-                instance_id=ctx.deps.instance_id,
-                role_id=ctx.deps.role_id,
-                tool_call_id=ctx.tool_call_id,
-                workspace=ctx.deps.workspace,
-                command=command,
-                cwd=cwd,
-                timeout_ms=timeout,
-                yield_time_ms=yield_time_ms,
-                env={CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
-                tty=tty,
+    if "exec_command" in allowed:
+
+        @agent.tool(description=_EXEC_COMMAND_DESCRIPTION)
+        async def exec_command(
+            ctx: ToolContext,
+            command: str,
+            yield_time_ms: int | None = None,
+            timeout_ms: int | None = None,
+            workdir: str | None = None,
+            tty: bool = False,
+        ) -> dict[str, JsonValue]:
+            cwd = _resolve_cwd(ctx, workdir, ensure_tmp_root=False)
+            approval_request = ToolApprovalRequest(
+                cache_key=_build_exec_command_cache_key(
+                    command,
+                    cwd=cwd,
+                    tty=tty,
+                ),
             )
-            return _project_exec_session(record, completed=completed, include_id=True)
 
-        return await execute_tool(
-            ctx,
-            tool_name="exec_command",
-            args_summary={
-                "command": command[:160],
-                "yield_time_ms": yield_time_ms,
-                "timeout_ms": timeout_ms,
-                "workdir": workdir,
-                "tty": tty,
-            },
-            action=_action,
-            approval_request=approval_request,
-        )
+            async def _action() -> ToolResultProjection:
+                validate_shell_command(command)
+                manager = _require_exec_session_manager(ctx)
+                cwd = _resolve_cwd(ctx, workdir)
+                timeout = normalize_timeout(timeout_ms)
+                record, completed = await manager.exec_command(
+                    run_id=ctx.deps.run_id,
+                    session_id=ctx.deps.session_id,
+                    instance_id=ctx.deps.instance_id,
+                    role_id=ctx.deps.role_id,
+                    tool_call_id=ctx.tool_call_id,
+                    workspace=ctx.deps.workspace,
+                    command=command,
+                    cwd=cwd,
+                    timeout_ms=timeout,
+                    yield_time_ms=yield_time_ms,
+                    env={CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
+                    tty=tty,
+                )
+                return _project_exec_session(
+                    record, completed=completed, include_id=True
+                )
 
-    @agent.tool(description=_LIST_DESCRIPTION)
-    async def list_exec_sessions(ctx: ToolContext) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
-            manager = _require_exec_session_manager(ctx)
-            items: list[JsonValue] = [
-                cast(JsonValue, _record_payload(record))
-                for record in manager.list_for_run(ctx.deps.run_id)
-            ]
-            payload = cast(JsonValue, {"items": items})
-            return ToolResultProjection(visible_data=payload, internal_data=payload)
-
-        return await execute_tool(
-            ctx,
-            tool_name="list_exec_sessions",
-            args_summary={},
-            action=_action,
-        )
-
-    @agent.tool(description=_WRITE_DESCRIPTION)
-    async def write_stdin(
-        ctx: ToolContext,
-        exec_session_id: str,
-        chars: str = "",
-        yield_time_ms: int | None = None,
-    ) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
-            manager = _require_exec_session_manager(ctx)
-            record, completed = await manager.interact_for_run(
-                run_id=ctx.deps.run_id,
-                exec_session_id=exec_session_id,
-                chars=chars,
-                yield_time_ms=yield_time_ms,
+            return await execute_tool(
+                ctx,
+                tool_name="exec_command",
+                args_summary={
+                    "command": command[:160],
+                    "yield_time_ms": yield_time_ms,
+                    "timeout_ms": timeout_ms,
+                    "workdir": workdir,
+                    "tty": tty,
+                },
+                action=_action,
+                approval_request=approval_request,
             )
-            projection = _project_exec_session(
-                record, completed=completed, include_id=True
+
+    if "list_exec_sessions" in allowed:
+
+        @agent.tool(description=_LIST_DESCRIPTION)
+        async def list_exec_sessions(ctx: ToolContext) -> dict[str, JsonValue]:
+            async def _action() -> ToolResultProjection:
+                manager = _require_exec_session_manager(ctx)
+                items: list[JsonValue] = [
+                    cast(JsonValue, _record_payload(record))
+                    for record in manager.list_for_run(ctx.deps.run_id)
+                ]
+                payload = cast(JsonValue, {"items": items})
+                return ToolResultProjection(visible_data=payload, internal_data=payload)
+
+            return await execute_tool(
+                ctx,
+                tool_name="list_exec_sessions",
+                args_summary={},
+                action=_action,
             )
-            visible = dict(_visible_dict(projection))
-            visible["wrote_chars"] = len(chars)
-            internal = dict(_internal_dict(projection))
-            internal["wrote_chars"] = len(chars)
-            return ToolResultProjection(visible_data=visible, internal_data=internal)
 
-        return await execute_tool(
-            ctx,
-            tool_name="write_stdin",
-            args_summary={
-                "exec_session_id": exec_session_id,
-                "chars_preview": _build_chars_preview(chars),
-                "chars_length": len(chars),
-                "yield_time_ms": yield_time_ms,
-            },
-            action=_action,
-            approval_request=_build_write_stdin_approval_request(
-                exec_session_id=exec_session_id,
-                chars=chars,
-            ),
-        )
+    if "write_stdin" in allowed:
 
-    @agent.tool(description=_RESIZE_DESCRIPTION)
-    async def resize_exec_session(
-        ctx: ToolContext,
-        exec_session_id: str,
-        columns: int,
-        rows: int,
-    ) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
-            manager = _require_exec_session_manager(ctx)
-            record = await manager.resize_for_run(
-                run_id=ctx.deps.run_id,
-                exec_session_id=exec_session_id,
-                columns=columns,
-                rows=rows,
+        @agent.tool(description=_WRITE_DESCRIPTION)
+        async def write_stdin(
+            ctx: ToolContext,
+            exec_session_id: str,
+            chars: str = "",
+            yield_time_ms: int | None = None,
+        ) -> dict[str, JsonValue]:
+            async def _action() -> ToolResultProjection:
+                manager = _require_exec_session_manager(ctx)
+                record, completed = await manager.interact_for_run(
+                    run_id=ctx.deps.run_id,
+                    exec_session_id=exec_session_id,
+                    chars=chars,
+                    yield_time_ms=yield_time_ms,
+                )
+                projection = _project_exec_session(
+                    record, completed=completed, include_id=True
+                )
+                visible = dict(_visible_dict(projection))
+                visible["wrote_chars"] = len(chars)
+                internal = dict(_internal_dict(projection))
+                internal["wrote_chars"] = len(chars)
+                return ToolResultProjection(
+                    visible_data=visible, internal_data=internal
+                )
+
+            return await execute_tool(
+                ctx,
+                tool_name="write_stdin",
+                args_summary={
+                    "exec_session_id": exec_session_id,
+                    "chars_preview": _build_chars_preview(chars),
+                    "chars_length": len(chars),
+                    "yield_time_ms": yield_time_ms,
+                },
+                action=_action,
+                approval_request=_build_write_stdin_approval_request(
+                    exec_session_id=exec_session_id,
+                    chars=chars,
+                ),
             )
-            projection = _project_exec_session(
-                record, completed=not record.is_active, include_id=True
+
+    if "resize_exec_session" in allowed:
+
+        @agent.tool(description=_RESIZE_DESCRIPTION)
+        async def resize_exec_session(
+            ctx: ToolContext,
+            exec_session_id: str,
+            columns: int,
+            rows: int,
+        ) -> dict[str, JsonValue]:
+            async def _action() -> ToolResultProjection:
+                manager = _require_exec_session_manager(ctx)
+                record = await manager.resize_for_run(
+                    run_id=ctx.deps.run_id,
+                    exec_session_id=exec_session_id,
+                    columns=columns,
+                    rows=rows,
+                )
+                projection = _project_exec_session(
+                    record, completed=not record.is_active, include_id=True
+                )
+                visible = dict(_visible_dict(projection))
+                visible["columns"] = columns
+                visible["rows"] = rows
+                internal = dict(_internal_dict(projection))
+                internal["columns"] = columns
+                internal["rows"] = rows
+                return ToolResultProjection(
+                    visible_data=visible, internal_data=internal
+                )
+
+            return await execute_tool(
+                ctx,
+                tool_name="resize_exec_session",
+                args_summary={
+                    "exec_session_id": exec_session_id,
+                    "columns": columns,
+                    "rows": rows,
+                },
+                action=_action,
             )
-            visible = dict(_visible_dict(projection))
-            visible["columns"] = columns
-            visible["rows"] = rows
-            internal = dict(_internal_dict(projection))
-            internal["columns"] = columns
-            internal["rows"] = rows
-            return ToolResultProjection(visible_data=visible, internal_data=internal)
 
-        return await execute_tool(
-            ctx,
-            tool_name="resize_exec_session",
-            args_summary={
-                "exec_session_id": exec_session_id,
-                "columns": columns,
-                "rows": rows,
-            },
-            action=_action,
-        )
+    if "terminate_exec_session" in allowed:
 
-    @agent.tool(description=_TERMINATE_DESCRIPTION)
-    async def terminate_exec_session(
-        ctx: ToolContext,
-        exec_session_id: str,
-    ) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
-            manager = _require_exec_session_manager(ctx)
-            record = await manager.stop_for_run(
-                run_id=ctx.deps.run_id,
-                exec_session_id=exec_session_id,
+        @agent.tool(description=_TERMINATE_DESCRIPTION)
+        async def terminate_exec_session(
+            ctx: ToolContext,
+            exec_session_id: str,
+        ) -> dict[str, JsonValue]:
+            async def _action() -> ToolResultProjection:
+                manager = _require_exec_session_manager(ctx)
+                record = await manager.stop_for_run(
+                    run_id=ctx.deps.run_id,
+                    exec_session_id=exec_session_id,
+                )
+                return _project_exec_session(record, completed=True, include_id=True)
+
+            return await execute_tool(
+                ctx,
+                tool_name="terminate_exec_session",
+                args_summary={"exec_session_id": exec_session_id},
+                action=_action,
             )
-            return _project_exec_session(record, completed=True, include_id=True)
-
-        return await execute_tool(
-            ctx,
-            tool_name="terminate_exec_session",
-            args_summary={"exec_session_id": exec_session_id},
-            action=_action,
-        )
 
 
 def _require_exec_session_manager(ctx: ToolContext):

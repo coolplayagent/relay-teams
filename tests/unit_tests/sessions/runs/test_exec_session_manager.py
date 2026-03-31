@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import time
+from typing import cast
 
 import pytest
 
@@ -98,6 +99,36 @@ class _FakeWindowsPtyProcess:
 
     def setwinsize(self, rows: int, cols: int) -> None:
         self.sizes.append((rows, cols))
+
+
+class _FakeTransport:
+    def __init__(self, *, tty: bool = False, returncode: int | None = None) -> None:
+        self.tty = tty
+        self.stream_count = 0
+        self.pid = None
+        self.returncode = returncode
+        self.terminated = False
+        self.closed = False
+
+    def start_pumps(self, **kwargs: object) -> list[asyncio.Task[None]]:
+        _ = kwargs
+        return []
+
+    async def wait(self) -> int | None:
+        return self.returncode
+
+    async def write(self, chars: str) -> None:
+        _ = chars
+
+    async def resize(self, *, columns: int, rows: int) -> None:
+        _ = (columns, rows)
+
+    async def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = 1
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -409,6 +440,133 @@ async def test_exec_session_manager_windows_tty_requires_supported_host(
             env=None,
             tty=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_start_session_serializes_admission_with_async_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    repo = ExecSessionRepository(tmp_path / "exec-session-admission.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+    in_flight = 0
+    max_in_flight = 0
+
+    async def _fake_spawn_runtime(
+        *,
+        record: ExecSessionRecord,
+        cwd: Path,
+        env: dict[str, str] | None,
+        log_file_path: Path,
+    ) -> object:
+        del cwd, env, log_file_path
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return manager_module._ExecSessionRuntime(
+            record=record,
+            transport=cast(manager_module._ExecSessionTransport, _FakeTransport()),
+            log_file_path=workspace.resolve_tmp_path("noop.log", write=True),
+            queue=asyncio.Queue(),
+        )
+
+    async def _fake_supervise(runtime: object) -> None:
+        _ = runtime
+
+    monkeypatch.setattr(manager, "_spawn_runtime", _fake_spawn_runtime)
+    monkeypatch.setattr(manager, "_supervise", _fake_supervise)
+
+    await asyncio.gather(
+        manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="sleep 1",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=False,
+        ),
+        manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-2",
+            workspace=workspace,
+            command="sleep 1",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=False,
+        ),
+    )
+
+    assert max_in_flight == 1
+
+
+@pytest.mark.asyncio
+async def test_start_session_rolls_back_runtime_when_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    repo = ExecSessionRepository(tmp_path / "exec-session-rollback.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+    fake_transport = _FakeTransport()
+
+    async def _fake_spawn_runtime(
+        *,
+        record: ExecSessionRecord,
+        cwd: Path,
+        env: dict[str, str] | None,
+        log_file_path: Path,
+    ) -> object:
+        del cwd, env, log_file_path
+        return manager_module._ExecSessionRuntime(
+            record=record,
+            transport=cast(manager_module._ExecSessionTransport, fake_transport),
+            log_file_path=workspace.resolve_tmp_path("rollback.log", write=True),
+            queue=asyncio.Queue(),
+        )
+
+    monkeypatch.setattr(manager, "_spawn_runtime", _fake_spawn_runtime)
+    monkeypatch.setattr(
+        repo,
+        "upsert",
+        lambda record: (_ for _ in ()).throw(RuntimeError("db write failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="db write failed"):
+        await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="sleep 1",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=False,
+        )
+
+    assert fake_transport.terminated is True
+    assert fake_transport.closed is True
+    assert manager._runtimes == {}
 
 
 @pytest.mark.asyncio

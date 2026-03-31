@@ -19,7 +19,10 @@ from agent_teams.tools.runtime import (
     ToolDeps,
     ToolResultProjection,
 )
-from agent_teams.tools.workspace_tools import register_exec_session
+from agent_teams.tools.workspace_tools import (
+    register_exec_session,
+    register_list_exec_sessions,
+)
 from agent_teams.tools.workspace_tools import exec_session as exec_session_module
 
 
@@ -155,7 +158,12 @@ def test_register_exec_session_is_idempotent_per_agent(
 ) -> None:
     calls: list[object] = []
 
-    def _fake_register(agent: object) -> None:
+    def _fake_register(
+        agent: object,
+        *,
+        tool_names: tuple[str, ...] | None = None,
+    ) -> None:
+        _ = tool_names
         calls.append(agent)
 
     monkeypatch.setattr(exec_session_module, "register", _fake_register)
@@ -165,6 +173,27 @@ def test_register_exec_session_is_idempotent_per_agent(
     register_exec_session(cast(Agent[ToolDeps, str], fake_agent))
 
     assert calls == [fake_agent]
+
+
+def test_register_list_exec_sessions_only_registers_requested_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, ...] | None] = []
+
+    def _fake_register(
+        agent: object,
+        *,
+        tool_names: tuple[str, ...] | None = None,
+    ) -> None:
+        _ = agent
+        captured.append(tool_names)
+
+    monkeypatch.setattr(exec_session_module, "register", _fake_register)
+    fake_agent = _FakeAgent()
+
+    register_list_exec_sessions(cast(Agent[ToolDeps, str], fake_agent))
+
+    assert captured == [("list_exec_sessions",)]
 
 
 @pytest.mark.asyncio

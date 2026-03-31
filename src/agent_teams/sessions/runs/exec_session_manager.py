@@ -394,6 +394,7 @@ class ExecSessionManager:
         self._repository = repository
         self._run_event_hub = run_event_hub
         self._runtimes: dict[str, _ExecSessionRuntime] = {}
+        self._admission_lock = asyncio.Lock()
 
     async def start_session(
         self,
@@ -410,41 +411,51 @@ class ExecSessionManager:
         env: dict[str, str] | None,
         tty: bool,
     ) -> ExecSessionRecord:
-        await self._prune_sessions_if_needed()
-        effective_timeout_ms = timeout_ms or DEFAULT_EXEC_SESSION_TIMEOUT_MS
-        exec_session_id = f"exec_{uuid4().hex[:12]}"
-        log_dir = workspace.resolve_tmp_path("exec_sessions", write=True)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file_path = log_dir / f"{exec_session_id}.log"
-        log_file_path.touch(exist_ok=True)
-        logical_log_path = workspace.logical_tmp_path(log_file_path)
-        record = ExecSessionRecord(
-            exec_session_id=exec_session_id,
-            run_id=run_id,
-            session_id=session_id,
-            instance_id=instance_id,
-            role_id=role_id,
-            tool_call_id=tool_call_id,
-            command=command,
-            cwd=str(cwd),
-            tty=tty,
-            timeout_ms=effective_timeout_ms,
-            log_path=logical_log_path,
-        )
-        runtime = await self._spawn_runtime(
-            record=record,
-            cwd=cwd,
-            env=env,
-            log_file_path=log_file_path,
-        )
-        self._runtimes[exec_session_id] = runtime
-        runtime.record = self._repository.upsert(record)
-        self._publish_exec_session_event(
-            event_type=RunEventType.EXEC_SESSION_STARTED,
-            record=runtime.record,
-        )
-        runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
-        return runtime.record
+        async with self._admission_lock:
+            await self._prune_sessions_if_needed()
+            effective_timeout_ms = timeout_ms or DEFAULT_EXEC_SESSION_TIMEOUT_MS
+            exec_session_id = f"exec_{uuid4().hex[:12]}"
+            log_dir = workspace.resolve_tmp_path("exec_sessions", write=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file_path = log_dir / f"{exec_session_id}.log"
+            log_file_path.touch(exist_ok=True)
+            logical_log_path = workspace.logical_tmp_path(log_file_path)
+            record = ExecSessionRecord(
+                exec_session_id=exec_session_id,
+                run_id=run_id,
+                session_id=session_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                tool_call_id=tool_call_id,
+                command=command,
+                cwd=str(cwd),
+                tty=tty,
+                timeout_ms=effective_timeout_ms,
+                log_path=logical_log_path,
+            )
+            runtime = await self._spawn_runtime(
+                record=record,
+                cwd=cwd,
+                env=env,
+                log_file_path=log_file_path,
+            )
+            self._runtimes[exec_session_id] = runtime
+            persisted = False
+            try:
+                runtime.record = self._repository.upsert(record)
+                persisted = True
+                self._publish_exec_session_event(
+                    event_type=RunEventType.EXEC_SESSION_STARTED,
+                    record=runtime.record,
+                )
+            except Exception:
+                self._runtimes.pop(exec_session_id, None)
+                if persisted:
+                    self._repository.delete(exec_session_id)
+                await self._rollback_runtime(runtime)
+                raise
+            runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
+            return runtime.record
 
     async def exec_command(
         self,
@@ -942,6 +953,18 @@ class ExecSessionManager:
 
     async def _write_chars(self, runtime: _ExecSessionRuntime, chars: str) -> None:
         await runtime.transport.write(chars)
+
+    async def _rollback_runtime(self, runtime: _ExecSessionRuntime) -> None:
+        with contextlib.suppress(Exception):
+            if runtime.transport.returncode is None:
+                await runtime.transport.terminate()
+        for task in runtime.pump_tasks:
+            if not task.done():
+                task.cancel()
+        with contextlib.suppress(Exception):
+            await asyncio.gather(*runtime.pump_tasks, return_exceptions=True)
+        with contextlib.suppress(Exception):
+            await runtime.transport.close()
 
     async def _wait_for_runtime_change(
         self,

@@ -654,7 +654,7 @@ class SessionService:
             else None
         )
         exec_sessions = [
-            record.model_dump(mode="json")
+            record.model_dump(mode="json", exclude={"output_excerpt"})
             for record in (
                 self._exec_session_repo.list_by_run(run_id)
                 if self._exec_session_repo is not None

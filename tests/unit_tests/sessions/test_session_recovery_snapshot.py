@@ -497,6 +497,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
     assert isinstance(exec_sessions, list)
     assert len(exec_sessions) == 1
     assert exec_sessions[0]["exec_session_id"] == "exec-1"
+    assert "output_excerpt" not in exec_sessions[0]
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("exec_session_count") == 1
