@@ -25,6 +25,18 @@ import { t, translateDocument } from '../../utils/i18n.js';
 let settingsModal = null;
 let currentTab = 'appearance';
 let initialized = false;
+let settingsOverlayPointerDown = false;
+let settingsModalContent = null;
+let settingsModalPointerStartedInside = false;
+let settingsModalPointerEndedInside = false;
+let settingsSuppressOverlayClose = false;
+let settingsPointerTrackingAttached = false;
+let settingsPointerInsideListener = null;
+let settingsPointerOutsideListener = null;
+let settingsDocumentPointerUpListener = null;
+let settingsDocumentPointerCancelListener = null;
+let settingsDocumentMouseUpListener = null;
+let settingsDocumentTouchEndListener = null;
 
 const TAB_METADATA = {
     appearance: {
@@ -847,6 +859,7 @@ function createModal() {
         </div>
     `;
     document.body.appendChild(settingsModal);
+    settingsModalContent = document.querySelector('.settings-modal-content');
     translateDocument(settingsModal);
 }
 
@@ -856,8 +869,17 @@ function setupEventListeners() {
         closeBtn.onclick = closeSettings;
     }
 
+    attachSettingsPointerTracking();
+
     settingsModal.onclick = (e) => {
-        if (e.target === settingsModal) {
+        if (e.target !== settingsModal) {
+            return;
+        }
+        if (settingsSuppressOverlayClose) {
+            settingsSuppressOverlayClose = false;
+            return;
+        }
+        if (settingsOverlayPointerDown && !settingsModalPointerStartedInside) {
             closeSettings();
         }
     };
@@ -949,6 +971,66 @@ function updatePanelHeading(tab) {
     const meta = TAB_METADATA[tab] || TAB_METADATA.model;
     document.getElementById('settings-panel-title').textContent = t(meta.titleKey);
     document.getElementById('settings-panel-description').textContent = t(meta.descriptionKey);
+}
+
+function attachSettingsPointerTracking() {
+    if (settingsPointerTrackingAttached) {
+        return;
+    }
+    settingsPointerTrackingAttached = true;
+
+    settingsPointerInsideListener = () => {
+        settingsModalPointerEndedInside = true;
+    };
+    settingsPointerOutsideListener = () => {
+        settingsModalPointerEndedInside = false;
+    };
+    settingsDocumentPointerUpListener = () => {
+        finalizeSettingsPointerInteraction();
+    };
+    settingsDocumentPointerCancelListener = () => {
+        finalizeSettingsPointerInteraction();
+    };
+    settingsDocumentMouseUpListener = () => {
+        finalizeSettingsPointerInteraction();
+    };
+    settingsDocumentTouchEndListener = () => {
+        finalizeSettingsPointerInteraction();
+    };
+
+    if (settingsModal && typeof settingsModal.addEventListener === 'function') {
+        settingsModal.addEventListener('pointerdown', event => {
+            settingsOverlayPointerDown = event.target === settingsModal;
+            settingsModalPointerStartedInside = false;
+            settingsModalPointerEndedInside = false;
+            settingsSuppressOverlayClose = false;
+        });
+    }
+
+    if (settingsModalContent && typeof settingsModalContent.addEventListener === 'function') {
+        settingsModalContent.addEventListener('pointerdown', () => {
+            settingsOverlayPointerDown = false;
+            settingsModalPointerStartedInside = true;
+            settingsModalPointerEndedInside = true;
+            settingsSuppressOverlayClose = false;
+        });
+        settingsModalContent.addEventListener('pointerenter', settingsPointerInsideListener);
+        settingsModalContent.addEventListener('pointerleave', settingsPointerOutsideListener);
+    }
+
+    if (typeof document?.addEventListener === 'function') {
+        document.addEventListener('pointerup', settingsDocumentPointerUpListener);
+        document.addEventListener('pointercancel', settingsDocumentPointerCancelListener);
+        document.addEventListener('mouseup', settingsDocumentMouseUpListener);
+        document.addEventListener('touchend', settingsDocumentTouchEndListener);
+    }
+}
+
+function finalizeSettingsPointerInteraction() {
+    settingsSuppressOverlayClose = settingsModalPointerStartedInside && !settingsModalPointerEndedInside;
+    settingsOverlayPointerDown = false;
+    settingsModalPointerStartedInside = false;
+    settingsModalPointerEndedInside = false;
 }
 
 function renderPanelActions(tab) {

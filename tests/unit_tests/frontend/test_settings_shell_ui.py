@@ -627,6 +627,7 @@ function createClassList(element) {{
 }}
 
 function createElement(tagName = "div") {{
+    const listeners = new Map();
     const element = {{
         tagName,
         id: "",
@@ -639,6 +640,18 @@ function createElement(tagName = "div") {{
         appendChild(child) {{
             child.parentNode = this;
             this.children.push(child);
+        }},
+        addEventListener(type, listener) {{
+            const existing = listeners.get(type) || [];
+            existing.push(listener);
+            listeners.set(type, existing);
+        }},
+        dispatchEvent(event) {{
+            const handlers = listeners.get(event.type) || [];
+            for (const handler of handlers) {{
+                handler.call(this, event);
+            }}
+            return true;
         }},
         querySelectorAll(selector) {{
             if (selector !== ".settings-action") {{
@@ -678,9 +691,12 @@ function createElement(tagName = "div") {{
 
 function createDocument() {{
     const elements = new Map();
+    const documentListeners = new Map();
     const tabs = [];
     const panels = [];
     const body = createElement("body");
+    const modalContent = createElement("div");
+    modalContent.classList.resetFromString("modal-content settings-modal-content");
 
     function registerElement(id, element) {{
         if (!id) {{
@@ -697,8 +713,12 @@ function createDocument() {{
         panels.length = 0;
 
         const html = target.innerHTML;
+        if (html.includes('class="modal-content settings-modal-content"') && !body.children.includes(modalContent)) {{
+            body.children.push(modalContent);
+        }}
 
         for (const match of html.matchAll(/id="([^"]+)"/g)) {{
+
             registerElement(match[1], createElement());
         }}
 
@@ -725,12 +745,24 @@ function createDocument() {{
         parseInnerHtml(child);
     }};
 
-        return {{
-            body,
-            createElement,
-            getElementById(id) {{
-                return elements.get(id) || null;
-            }},
+            return {{
+        body,
+        createElement,
+        addEventListener(type, listener) {{
+            const existing = documentListeners.get(type) || [];
+            existing.push(listener);
+            documentListeners.set(type, existing);
+        }},
+        dispatchEvent(event) {{
+            const handlers = documentListeners.get(event.type) || [];
+            for (const handler of handlers) {{
+                handler.call(this, event);
+            }}
+            return true;
+        }},
+        getElementById(id) {{
+            return elements.get(id) || null;
+        }},
         querySelectorAll(selector) {{
             if (selector === ".settings-tab") {{
                 return tabs;
@@ -738,7 +770,14 @@ function createDocument() {{
             if (selector === ".settings-panel") {{
                 return panels;
             }}
+            if (selector === ".settings-modal-content") {{
+                return body.children.includes(modalContent) ? [modalContent] : [];
+            }}
             return [];
+        }},
+        querySelector(selector) {{
+            const matches = this.querySelectorAll(selector);
+            return matches[0] || null;
         }},
     }};
 }}
@@ -796,6 +835,35 @@ globalThis.window = {{}};
         )
 
     return json.loads(completed.stdout)
+
+
+def test_settings_modal_does_not_close_when_pointer_starts_inside_and_ends_on_overlay(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings();
+
+const modal = document.getElementById("settings-modal");
+const content = document.querySelector(".settings-modal-content");
+content.dispatchEvent({ type: "pointerdown", target: content });
+content.dispatchEvent({ type: "pointerleave", target: content });
+document.dispatchEvent({ type: "pointerup", target: modal });
+modal.onclick({ target: modal });
+
+console.log(JSON.stringify({
+    modalDisplay: modal.style.display,
+    modalClassName: modal.className,
+}));
+""".strip(),
+    )
+
+    assert payload["modalDisplay"] == "flex"
+    assert "settings-modal-visible" in str(payload["modalClassName"])
 
 
 def test_environment_settings_tab_uses_add_variable_action(
