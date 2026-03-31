@@ -79,6 +79,39 @@ def test_streaming_tool_calls_keep_indexed_dom_targets_and_message_metadata() ->
     assert "wrapper.dataset.streamKey = streamKey;" in block_script
 
 
+def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    history_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "history.js"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "if (shouldCollapseIntermediateMessages(streamOverlayEntry, options)) {"
+        in history_script
+    )
+    assert (
+        "function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {"
+        in history_script
+    )
+    assert (
+        "const runStatus = String(options.runStatus || '').trim().toLowerCase();"
+        in history_script
+    )
+    assert "const isLatestRound = options.isLatestRound === true;" in history_script
+    assert "if (isLatestRound && runStatus !== 'completed') {" in history_script
+    assert "if (streamOverlayEntry.textStreaming === true) {" in history_script
+    assert "status === 'pending'" in history_script
+    assert "status === 'running'" in history_script
+    assert "approvalStatus === 'requested'" in history_script
+    assert "approvalStatus === 'approve'" in history_script
+
+
 def test_tool_blocks_extract_effective_inputs_instead_of_footer_status() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     tool_blocks_script = (

@@ -105,6 +105,83 @@ console.log(JSON.stringify({
     assert payload["sortedFirstProjectTitle"] == "Alpha Project"
 
 
+def test_projects_sidebar_new_session_keeps_session_visibility_collapsed_and_declares_animations(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+
+firstProject.querySelector(".project-session-visibility-btn").onclick();
+await flushTasks();
+const expandedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+expandedProject.querySelector(".project-session-visibility-btn").onclick();
+await flushTasks();
+const recollapsedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const beforeCount = recollapsedProject.querySelectorAll(".session-item").length;
+const beforeVisibilityLabel = recollapsedProject.querySelector(".project-session-visibility-btn").textContent;
+
+recollapsedProject.querySelectorAll(".project-new-session-btn")[0].onclick();
+await flushTasks();
+await flushTasks();
+
+const refreshedProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const afterCount = refreshedProject.querySelectorAll(".session-item").length;
+const afterVisibilityLabel = refreshedProject.querySelector(".project-session-visibility-btn").textContent;
+
+console.log(JSON.stringify({
+    beforeCount,
+    beforeVisibilityLabel,
+    afterCount,
+    afterVisibilityLabel,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+}));
+""".strip(),
+    )
+
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+    components_base_css = (
+        repo_root / "frontend" / "dist" / "css" / "components" / "base.css"
+    ).read_text(encoding="utf-8")
+
+    assert payload["beforeCount"] == 10
+    assert payload["beforeVisibilityLabel"] == "Show all (11)"
+    assert payload["afterCount"] == 10
+    assert payload["afterVisibilityLabel"] == "Show all (12)"
+    assert payload["selectedSessionIds"] == ["session-new-1"]
+    assert (
+        "expandedProjectSessionIds.add(groupKey('workspace', targetWorkspaceId));"
+        not in sidebar_script
+    )
+    assert "let pendingSessionAnimation = null;" in sidebar_script
+    assert "function animateSessionItem(item, animation) {" in sidebar_script
+    assert "setPendingSessionAnimation(data.session_id, 'entering');" in sidebar_script
+    assert "animateSessionItem(sessionItem, 'removing');" in sidebar_script
+    assert "animateSessionItem(button, 'activating');" in sidebar_script
+    assert ".session-item-entering {" in components_base_css
+    assert ".session-item-removing {" in components_base_css
+    assert ".session-item-activating {" in components_base_css
+    assert "@keyframes sessionItemEnter {" in components_base_css
+    assert "@keyframes sessionItemRemove {" in components_base_css
+    assert "@keyframes sessionItemActivate {" in components_base_css
+
+
 def test_projects_sidebar_renames_session_from_sidebar_action(tmp_path: Path) -> None:
     payload = _run_sidebar_script(
         tmp_path=tmp_path,
@@ -1575,7 +1652,7 @@ installGlobals(createDomEnvironment());
         check=False,
         cwd=str(repo_root),
         text=True,
-        timeout=30,
+        timeout=3,
     )
 
     if completed.returncode != 0:

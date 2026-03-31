@@ -255,8 +255,8 @@ export function handleRunCompleted(eventMeta) {
     sysLog('Run completed.');
     markLlmRetrySucceeded();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
-    if (state.activeRunId) {
-        markRunTerminalState(state.activeRunId, {
+    if (runId) {
+        markRunTerminalState(runId, {
             status: 'completed',
             phase: 'terminal',
             recoverable: false,
@@ -285,8 +285,8 @@ export function handleRunStopped(eventMeta, payload) {
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'stopped');
     }
-    if (state.activeRunId) {
-        markRunTerminalState(state.activeRunId, {
+    if (runId) {
+        markRunTerminalState(runId, {
             status: 'stopped',
             phase: 'stopped',
             recoverable: true,
@@ -316,8 +316,8 @@ export function handleRunFailed(eventMeta, payload) {
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'failed');
     }
-    if (state.activeRunId) {
-        markRunTerminalState(state.activeRunId, {
+    if (runId) {
+        markRunTerminalState(runId, {
             status: 'failed',
             phase: 'terminal',
             recoverable: false,

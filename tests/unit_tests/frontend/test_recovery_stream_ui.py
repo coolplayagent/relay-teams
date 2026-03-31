@@ -92,6 +92,15 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "isPrimaryOrReservedRoleId(roleId)" in recovery_script
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
+    assert "await reconcileMissingActiveRun(normalized, {" in recovery_script
+    assert "const previousActiveRunId = String(" in recovery_script
+    assert (
+        "endStream({ preserveRunStreamState: true, focusPrompt: false });"
+        in recovery_script
+    )
+    assert "await loadSessionRounds(safeSessionId);" in recovery_script
+    assert "clearRunStreamState(safePreviousActiveRunId);" in recovery_script
+    assert "clearRunPrimaryRole(safePreviousActiveRunId);" in recovery_script
     assert (
         "const lastEventId = Number(activeRun.last_event_id || 0);" in recovery_script
     )
@@ -112,6 +121,8 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert (
         "detachActiveStreamForSessionSwitch({ focusPrompt: false });" in session_script
     )
+    assert "autoConnectRunningStream(sessionId);" not in session_script
+    assert "function autoConnectRunningStream(sessionId) {" not in session_script
     assert "clearAllStreamState({ preserveOverlay: true });" in session_script
     assert "clearAllStreamState({ preserveOverlay: true });" in prompt_script
     assert "clearAllStreamState({ preserveOverlay: true });" in timeline_script
@@ -184,6 +195,25 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "const overlayEntry = resolveOverlayEntry(runId, instanceId, roleId, label);"
         in renderer_stream_script
     )
+    assert "getRunPrimaryRoleId," in renderer_stream_script
+    assert (
+        "const runPrimaryRoleId = safeRunId ? String(getRunPrimaryRoleId(safeRunId) || '').trim() : '';"
+        in renderer_stream_script
+    )
+    assert (
+        "const isPrimaryForRun = !!(safeRoleId && runPrimaryRoleId && safeRoleId === runPrimaryRoleId);"
+        in renderer_stream_script
+    )
+    assert (
+        "syncStreamingCursor(activeTextEl, overlayEntry?.textStreaming === true);"
+        in renderer_stream_script
+    )
+    assert "textStreaming: false," in renderer_stream_script
+    assert "entry.textStreaming = true;" in renderer_stream_script
+    assert (
+        "function setOverlayTextStreaming(runId, instanceId, roleId, label, isStreaming) {"
+        in renderer_stream_script
+    )
     assert "function findReusableMessageWrapper({" in renderer_stream_script
     assert (
         "function resolveOverlayEntry(runId, instanceId, roleId, label) {"
@@ -209,7 +239,14 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         in history_script
     )
     assert (
-        "const streamKey = resolveStreamKey(instanceId, roleId);"
+        "const isLatestRound = index === roundsState.currentRounds.length - 1;"
+        in timeline_script
+    )
+    assert "runStatus: round.run_status," in timeline_script
+    assert "runPhase: round.run_phase," in timeline_script
+    assert "isLatestRound," in timeline_script
+    assert (
+        "const streamKey = resolveStreamKey(instanceId, roleId, runId);"
         in renderer_stream_script
     )
     assert "wrapper.dataset.streamKey = streamKey;" in (

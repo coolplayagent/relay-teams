@@ -3152,7 +3152,7 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     fake_hub = _FakeRunEventHub()
     provider, message_repo = _build_provider(tmp_path / "retry_exhausted.db", fake_hub)
     provider._session._retry_config.jitter = False
-    provider._session._retry_config.initial_delay_ms = 2000
+    provider._session._retry_config.initial_delay_ms = 10
     provider._session._retry_config.max_retries = 2
     request_error = APIStatusError(
         "timeout",

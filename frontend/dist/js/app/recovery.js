@@ -4,6 +4,7 @@
  */
 import { refreshSubagentRail } from '../components/subagentRail.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
+import { clearRunStreamState } from '../components/messageRenderer.js';
 import {
     loadSessionRounds,
     overlayRoundRecoveryState,
@@ -16,13 +17,14 @@ import {
     stopBackgroundTask,
 } from '../core/api.js';
 import {
+    clearRunPrimaryRole,
     humanizeRoleId,
     isPrimaryRoleId,
     isReservedSystemRoleId,
     setRunPrimaryRole,
     state,
 } from '../core/state.js';
-import { resumeRunStream } from '../core/stream.js';
+import { endStream, resumeRunStream } from '../core/stream.js';
 import { els } from '../utils/dom.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
@@ -228,9 +230,16 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
     }
 
     try {
+        const previousActiveRunId = String(
+            state.currentRecoverySnapshot?.activeRun?.run_id || state.activeRunId || '',
+        ).trim();
         const snapshot = await fetchSessionRecovery(safeSessionId);
         if (state.currentSessionId !== safeSessionId) return null;
         const normalized = applyRecoverySnapshot(snapshot);
+        await reconcileMissingActiveRun(normalized, {
+            sessionId: safeSessionId,
+            previousActiveRunId,
+        });
         syncSessionContinuity();
         refreshVisibleContextIndicators({ immediate: true });
         return normalized;
@@ -794,6 +803,37 @@ function shouldAutoAttachRecoveryStream(activeRun) {
         && state.activeRunId === activeRun.run_id
         && state.isGenerating
     );
+}
+
+async function reconcileMissingActiveRun(
+    snapshot,
+    {
+        sessionId,
+        previousActiveRunId = '',
+    } = {},
+) {
+    const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const safePreviousActiveRunId = String(previousActiveRunId || '').trim();
+    if (!safeSessionId || !safePreviousActiveRunId) return false;
+    if (state.currentSessionId !== safeSessionId) return false;
+
+    const nextActiveRunId = String(snapshot?.activeRun?.run_id || '').trim();
+    if (nextActiveRunId === safePreviousActiveRunId) return false;
+    if (!state.activeEventSource || !state.isGenerating) return false;
+    if (String(state.activeRunId || '').trim() !== safePreviousActiveRunId) return false;
+
+    endStream({ preserveRunStreamState: true, focusPrompt: false });
+    await loadSessionRounds(safeSessionId);
+    if (state.currentSessionId !== safeSessionId) return false;
+
+    clearRunStreamState(safePreviousActiveRunId);
+    clearRunPrimaryRole(safePreviousActiveRunId);
+    if (!nextActiveRunId) {
+        state.activeRunId = null;
+    }
+    scheduleSessionsRefresh();
+    renderRecoveryBanner();
+    return true;
 }
 
 function resolveRecoveryAfterEventId(activeRun) {

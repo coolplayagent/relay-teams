@@ -5128,9 +5128,60 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     border-left: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);
 }
 
+.session-item-entering {
+    animation: sessionItemEnter 0.22s ease;
+}
+
+.session-item-removing {
+    pointer-events: none;
+    animation: sessionItemRemove 0.18s ease forwards;
+}
+
+.session-item-activating {
+    animation: sessionItemActivate 0.24s ease;
+}
+
 .session-id,
 .round-item-text {
     font-weight: 500;
+}
+
+@keyframes sessionItemEnter {
+    0% {
+        opacity: 0.72;
+        transform: translateY(4px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes sessionItemRemove {
+    0% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translateY(-3px);
+    }
+}
+
+@keyframes sessionItemActivate {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+
+    50% {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
 }
 
 .session-status-pill,
