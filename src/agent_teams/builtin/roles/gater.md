@@ -10,6 +10,10 @@ tools:
   - read
   - write
   - exec_command
+  - list_exec_sessions
+  - write_stdin
+  - resize_exec_session
+  - terminate_exec_session
 ---
 
 ## 角色：Gater (质量审计员) 

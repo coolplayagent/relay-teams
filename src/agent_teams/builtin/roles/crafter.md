@@ -11,6 +11,10 @@ tools:
   - edit
   - write
   - exec_command
+  - list_exec_sessions
+  - write_stdin
+  - resize_exec_session
+  - terminate_exec_session
   - webfetch
   - websearch
 ---

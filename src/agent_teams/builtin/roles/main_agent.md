@@ -15,6 +15,10 @@ tools:
   - edit
   - write
   - exec_command
+  - list_exec_sessions
+  - write_stdin
+  - resize_exec_session
+  - terminate_exec_session
   - webfetch
   - websearch
 ---
@@ -120,5 +124,4 @@ When referencing specific functions or pieces of code include the pattern `file_
 user: Where are errors from the client handled?
 assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
 </example>
-
 
