@@ -336,7 +336,7 @@ const translations = {
     "subagent.status_idle": "Idle",
     "subagent.no_tasks": "No delegated tasks yet.",
     "subagent.inject_placeholder": "Inject message to this agent...",
-    "composer.context_title": "Latest provider context usage",
+    "composer.context_title": "Prompt / context window",
     "composer.send_title": "Send (Enter)",
     "subagent.delete_reflection_confirm": "Delete reflection memory for this subagent role?",
     "subagent.reflection_placeholder": "Write long-term notes for this subagent role...",

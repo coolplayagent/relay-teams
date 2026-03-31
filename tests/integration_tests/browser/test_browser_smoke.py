@@ -152,9 +152,9 @@ def test_browser_webfetch_approval_reuses_host_scoped_ticket(
     assert approvals[0]["tool_name"] == "webfetch"
     assert "https://localhost/one" in approvals[0]["args_preview"]
 
-    approval_items = page.locator(".recovery-approval-item")
+    approval_items = page.locator(".recovery-approval-card")
     expect(approval_items).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
-    expect(page.locator("#recovery-banner-host")).to_be_visible(
+    expect(page.locator("#recovery-approval-host")).to_be_visible(
         timeout=_WAIT_TIMEOUT_MS
     )
 

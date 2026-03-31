@@ -243,6 +243,14 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
     if (!container) return;
 
     const oldScroll = container.scrollTop;
+
+    // Hide container during render to prevent flash of content at wrong
+    // scroll position before we reposition.
+    const shouldHideDuringRender = !opts.preserveScroll;
+    if (shouldHideDuringRender) {
+        container.style.visibility = 'hidden';
+    }
+
     container.innerHTML = '';
 
     clearAllStreamState({ preserveOverlay: true });
@@ -260,6 +268,9 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         setRoundPendingApprovals('', [], {});
         renderRoundNavigator([], selectRound);
         syncRetryTimelineTimer();
+        if (shouldHideDuringRender) {
+            container.style.visibility = '';
+        }
         return;
     }
 
@@ -305,6 +316,11 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         container.scrollTop = container.scrollHeight;
         activateLatestRound(rounds);
     }
+
+    if (shouldHideDuringRender) {
+        container.style.visibility = '';
+    }
+
     schedulePostLayoutRoundSync(container);
     syncRetryTimelineTimer();
 }
@@ -386,6 +402,7 @@ function renderRoundSection(round, index) {
     section.className = 'session-round-section';
     section.dataset.runId = round.run_id;
     section.id = roundSectionId(round.run_id);
+    if (round.created_at) section.dataset.roundCreatedAt = round.created_at;
 
     const time = new Date(round.created_at).toLocaleString();
     const stateLabel = roundStateLabel(round);
@@ -722,9 +739,11 @@ async function loadOlderRounds() {
         }
         applyRoundPage(page, { prepend: true });
         syncExportedState();
+        container.style.visibility = 'hidden';
         renderSessionTimeline(roundsState.currentRounds, { preserveScroll: true });
         const newHeight = container.scrollHeight;
         container.scrollTop = newHeight - oldHeight + oldTop;
+        container.style.visibility = '';
     } catch (e) {
         logError(
             'frontend.rounds.load_older_failed',
