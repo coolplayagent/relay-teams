@@ -14,6 +14,7 @@ IM_TOOLS = {
 HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send",)
 LEGACY_TOOL_ALIASES = {
     "shell": "exec_command",
+    "write_tmp": "write",
 }
 
 

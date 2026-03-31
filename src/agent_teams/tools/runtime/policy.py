@@ -15,7 +15,6 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "exec_command",
         "edit",
         "write",
-        "write_tmp",
         "webfetch",
         "websearch",
     }

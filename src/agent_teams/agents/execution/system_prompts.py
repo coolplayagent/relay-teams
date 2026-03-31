@@ -117,7 +117,7 @@ class SystemPromptSectionsInput(BaseModel):
 
 def build_environment_info_prompt(*, working_directory: Path | None = None) -> str:
     """Gather current runtime environment information for the system prompt.
-    Linked with shell tool implementation to ensure consistency.
+    Linked with the workspace command runtime to ensure consistency.
     """
     system = platform.system()
     release = platform.release()

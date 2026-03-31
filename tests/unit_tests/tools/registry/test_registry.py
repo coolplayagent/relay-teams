@@ -16,7 +16,7 @@ def _register_beta(_: object) -> None:
 
 def _register_unavailable(_: object) -> None:
     raise ModuleNotFoundError(
-        "No module named 'agent_teams.tools.workspace_tools.write_tmp'"
+        "No module named 'agent_teams.tools.workspace_tools.legacy_tool'"
     )
 
 
@@ -118,22 +118,22 @@ def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resoluti
     registry = ToolRegistry(
         {
             "alpha": _register_alpha,
-            "write_tmp": _register_unavailable,
+            "legacy": _register_unavailable,
         }
     )
 
     assert registry.list_names() == ("alpha",)
     unavailable_tools = registry.list_unavailable_tools()
     assert len(unavailable_tools) == 1
-    assert unavailable_tools[0].name == "write_tmp"
+    assert unavailable_tools[0].name == "legacy"
     assert unavailable_tools[0].error_type == "ModuleNotFoundError"
-    assert "write_tmp" in unavailable_tools[0].message
+    assert "legacy_tool" in unavailable_tools[0].message
 
     with pytest.raises(ValueError, match="Unavailable tools"):
-        registry.validate_known(("write_tmp",))
+        registry.validate_known(("legacy",))
 
     resolved = registry.resolve_known(
-        ("write_tmp", "alpha"),
+        ("legacy", "alpha"),
         strict=False,
         consumer="tests.unit_tests.tools.registry.test_registry",
     )

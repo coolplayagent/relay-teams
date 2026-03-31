@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+
+import pytest
+from pydantic_ai import Agent
+
+from agent_teams.tools.runtime import ToolDeps, ToolResultProjection
+from agent_teams.tools.workspace_tools import register_write
+
 
 class TestAtomicWrite:
     def test_atomic_write_creates_file(self, tmp_path):
@@ -162,3 +173,72 @@ def test_project_write_result_keeps_only_output_visible() -> None:
         "path": "demo.txt",
         "created": True,
     }
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self, *, description: str
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
+
+
+class _FakeWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.execution_root = root
+        self.tmp_root = root / "tmp"
+
+    def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
+        del write
+        if relative_path == "tmp" or relative_path.startswith("tmp/"):
+            suffix = relative_path.removeprefix("tmp").lstrip("/\\")
+            return (self.tmp_root / suffix).resolve()
+        return (self.execution_root / relative_path).resolve()
+
+
+@pytest.mark.asyncio
+async def test_write_tool_supports_managed_tmp_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools import write as write_module
+
+    fake_agent = _FakeAgent()
+    register_write(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, path="tmp/reports/spec.md", content="hello tmp\n")
+
+    assert result["path"] == "tmp/reports/spec.md"
+    assert (tmp_path / "tmp" / "reports" / "spec.md").read_text(encoding="utf-8") == (
+        "hello tmp\n"
+    )

@@ -50,19 +50,12 @@ def register_write(agent: Agent[ToolDeps, str]) -> None:
     register_impl(agent)
 
 
-def register_write_tmp(agent: Agent[ToolDeps, str]) -> None:
-    from agent_teams.tools.workspace_tools.write_tmp import register as register_impl
-
-    register_impl(agent)
-
-
 TOOLS = {
     "edit": register_edit,
     "glob": register_glob,
     "grep": register_grep,
     "read": register_read,
     "write": register_write,
-    "write_tmp": register_write_tmp,
     "exec_command": register_exec_session,
     "list_exec_sessions": register_exec_session,
     "write_stdin": register_exec_session,
@@ -78,5 +71,4 @@ __all__ = [
     "register_read",
     "register_exec_session",
     "register_write",
-    "register_write_tmp",
 ]

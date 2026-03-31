@@ -18,9 +18,10 @@ from agent_teams.tools.runtime import (
 from agent_teams.tools.workspace_tools.command_canonicalization import (
     canonicalize_shell_command,
 )
-from agent_teams.tools.workspace_tools.shell import CURRENT_ROLE_ENV_KEY
 from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
 from agent_teams.tools.workspace_tools.shell_policy import validate_shell_command
+
+CURRENT_ROLE_ENV_KEY = "AGENT_TEAMS_CURRENT_ROLE_ID"
 
 _EXEC_COMMAND_DESCRIPTION = (
     "Run a command through the managed exec-session runtime. "

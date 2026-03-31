@@ -185,6 +185,37 @@ def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> N
     assert record.skills == ("app:time",)
 
 
+def test_get_role_document_canonicalizes_legacy_tool_names(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "legacy.md",
+        role_id="legacy",
+        name="Legacy",
+        description="Uses historical tool names.",
+        version="1.0.0",
+        tools=("write_tmp", "shell", "missing_tool"),
+        system_prompt="Keep working.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    record = service.get_role_document("legacy")
+
+    assert record.tools == ("write", "exec_command", "missing_tool")
+
+
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
     tmp_path: Path,
 ) -> None:

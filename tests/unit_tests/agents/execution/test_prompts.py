@@ -266,7 +266,7 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
             name="Tmp Writer",
             description="Handles a run-specific writing format.",
             system_prompt="You are a temporary writer.",
-            tools=("read", "write_tmp"),
+            tools=("read", "write"),
         ),
     )
 
@@ -296,7 +296,7 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
     assert "### tmp_writer" in prompt
     assert "- Source: temporary" in prompt
     assert "- Description: Handles a run-specific writing format." in prompt
-    assert "- Tools: read, write_tmp" in prompt
+    assert "- Tools: read, write" in prompt
 
 
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:

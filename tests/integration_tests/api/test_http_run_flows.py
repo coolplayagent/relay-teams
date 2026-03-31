@@ -35,7 +35,8 @@ def test_health_endpoint(api_client: httpx.Client) -> None:
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
     tool_registry_sanity = body["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
-    assert tool_registry_sanity["has_write_tmp"] is True
+    assert "write" in tool_registry_sanity["available_tool_names"]
+    assert "write_tmp" not in tool_registry_sanity["available_tool_names"]
 
 
 def test_manual_run_stream_reaches_terminal(api_client: httpx.Client) -> None:

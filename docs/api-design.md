@@ -72,7 +72,6 @@ Response fields:
     - `name`
     - `error_type`
     - `message`
-  - `has_write_tmp`
 
 Notes:
 - Health stays `200 ok` for a reachable server even when builtin roles or local

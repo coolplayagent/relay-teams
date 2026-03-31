@@ -45,7 +45,6 @@ def test_registry_contains_registered_local_tools() -> None:
         "websearch",
         "write",
         "write_stdin",
-        "write_tmp",
     )
 
 
@@ -53,3 +52,19 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
     registry = build_default_registry()
 
     assert "im_send" not in registry.list_configurable_names()
+
+
+def test_default_registry_maps_legacy_tool_aliases_for_runtime_resolution() -> None:
+    registry = build_default_registry()
+
+    assert registry.resolve_known(("shell",), strict=False) == ("exec_command",)
+    assert registry.resolve_known(("write_tmp",), strict=False) == ("write",)
+
+
+def test_default_registry_rejects_legacy_tool_aliases_for_explicit_validation() -> None:
+    registry = build_default_registry()
+
+    with pytest.raises(ValueError, match="Unknown tools"):
+        registry.validate_known(("shell",))
+    with pytest.raises(ValueError, match="Unknown tools"):
+        registry.validate_known(("write_tmp",))
