@@ -5,6 +5,7 @@ import asyncio
 import os
 from pathlib import Path
 import subprocess
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -273,6 +274,30 @@ class _FakeProcess:
         await self._wait_event.wait()
         assert self.returncode is not None
         return self.returncode
+
+
+@pytest.mark.asyncio
+async def test_kill_process_tree_windows_falls_back_to_proc_kill_when_taskkill_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    proc = _FakeProcess()
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        assert pid == proc.pid
+        return False
+
+    monkeypatch.setattr(
+        shell_executor,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    await shell_executor._kill_process_tree(cast(asyncio.subprocess.Process, proc))
+
+    assert proc.returncode == -9
 
 
 def _make_fake_factory(

@@ -368,7 +368,7 @@ def _prepend_powershell_utf8_prefix(command: str) -> str:
     )
 
 
-async def _kill_process_tree_by_pid(pid: int) -> None:
+async def _kill_process_tree_by_pid(pid: int) -> bool:
     if _is_windows():
         try:
             killer = await asyncio.create_subprocess_exec(
@@ -380,15 +380,18 @@ async def _kill_process_tree_by_pid(pid: int) -> None:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await asyncio.wait_for(killer.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+            exit_code = await asyncio.wait_for(
+                killer.wait(), timeout=_SIGKILL_GRACE_SECONDS
+            )
         except (OSError, asyncio.TimeoutError):
-            return
-        return
+            return False
+        return exit_code == 0
 
     try:
         os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
-        return
+        return False
+    return True
 
 
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
@@ -401,10 +404,16 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
 
     if _is_windows():
         try:
-            await _kill_process_tree_by_pid(pid)
+            killed = await _kill_process_tree_by_pid(pid)
         except Exception:
+            killed = False
+        if not killed:
             proc.kill()
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await asyncio.wait_for(proc.wait(), timeout=2)
         return
 
     try:
