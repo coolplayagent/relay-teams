@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic_ai import Agent
 
-from agent_teams.tools.runtime import ToolDeps
+if TYPE_CHECKING:
+    from agent_teams.tools.runtime import ToolDeps
 
 _REGISTERED_AGENT_IDS: set[int] = set()
 

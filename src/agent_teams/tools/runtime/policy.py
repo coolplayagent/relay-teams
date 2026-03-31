@@ -13,6 +13,8 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "dispatch_task",
         "update_task",
         "shell",
+        "shell_background_start",
+        "shell_background_write",
         "edit",
         "write",
         "write_tmp",

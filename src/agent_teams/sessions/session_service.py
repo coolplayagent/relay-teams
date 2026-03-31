@@ -4,24 +4,11 @@ from __future__ import annotations
 import shutil
 import uuid
 from collections.abc import Callable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from agent_teams.agents.instances.models import AgentRuntimeRecord
-from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from agent_teams.agents.orchestration.settings_service import (
-    OrchestrationSettingsService,
-)
-from agent_teams.media import MediaAssetService
-from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.metrics import SqliteMetricAggregateStore
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType
-from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.roles.role_registry import (
-    LEGACY_COORDINATOR_IDENTIFIERS,
-    MAIN_AGENT_IDENTIFIERS,
-    SystemRolesUnavailableError,
-)
 from agent_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_MANUAL,
@@ -36,11 +23,13 @@ from agent_teams.sessions.session_rounds_projection import (
     paginate_rounds,
 )
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
+from agent_teams.sessions.runs.background_terminal_repo import (
+    BackgroundTerminalRepository,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -74,11 +63,44 @@ from agent_teams.workspace import (
     build_instance_session_scope_id,
 )
 
+if TYPE_CHECKING:
+    from agent_teams.agents.execution.subagent_reflection import (
+        SubagentReflectionService,
+    )
+    from agent_teams.agents.orchestration.settings_service import (
+        OrchestrationSettingsService,
+    )
+    from agent_teams.media import MediaAssetService
+    from agent_teams.mcp.mcp_registry import McpRegistry
+    from agent_teams.roles.memory_service import RoleMemoryService
+    from agent_teams.roles.role_registry import RoleRegistry
+    from agent_teams.skills.skill_registry import SkillRegistry
+
 
 AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
 ACTIVE_RUN_REBIND_ERROR = (
     "Cannot rebind workspace while session has active or recoverable run"
 )
+_LEGACY_COORDINATOR_IDENTIFIERS = (
+    "coordinator",
+    "coordinator agent",
+    "coordinator_agent",
+)
+_MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
+
+
+def _legacy_coordinator_identifiers() -> tuple[str, ...]:
+    return _LEGACY_COORDINATOR_IDENTIFIERS
+
+
+def _main_agent_identifiers() -> tuple[str, ...]:
+    return _MAIN_AGENT_IDENTIFIERS
+
+
+def _system_roles_unavailable_error_type() -> type[Exception]:
+    from agent_teams.roles.role_registry import SystemRolesUnavailableError
+
+    return SystemRolesUnavailableError
 
 
 class SessionService:
@@ -94,6 +116,7 @@ class SessionService:
         token_usage_repo: TokenUsageRepository,
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
+        background_terminal_repo: BackgroundTerminalRepository | None = None,
         run_event_hub: RunEventHub | None = None,
         active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
@@ -120,6 +143,7 @@ class SessionService:
         self._token_usage_repo = token_usage_repo
         self._session_history_marker_repo = session_history_marker_repo
         self._run_state_repo = run_state_repo
+        self._background_terminal_repo = background_terminal_repo
         self._run_event_hub = run_event_hub
         self._active_run_registry = active_run_registry
         self._event_log = event_log
@@ -296,14 +320,15 @@ class SessionService:
         return self._role_registry.resolve_normal_mode_role_id(role_id)
 
     def _require_main_agent_role_id(self) -> str:
+        error_type = _system_roles_unavailable_error_type()
         if self._role_registry is None:
-            raise SystemRolesUnavailableError(
+            raise error_type(
                 "Required system roles are unavailable: main_agent: role registry is not configured"
             )
         try:
             return self._role_registry.get_main_agent_role_id()
         except (KeyError, ValueError) as exc:
-            raise SystemRolesUnavailableError(
+            raise error_type(
                 f"Required system roles are unavailable: main_agent: {exc}"
             ) from exc
 
@@ -600,6 +625,7 @@ class SessionService:
         if selected is None:
             return {
                 "active_run": None,
+                "background_terminals": [],
                 "pending_tool_approvals": [],
                 "paused_subagent": None,
                 "round_snapshot": None,
@@ -629,6 +655,14 @@ class SessionService:
             if self._run_state_repo is not None
             else None
         )
+        background_terminals = [
+            record.model_dump(mode="json")
+            for record in (
+                self._background_terminal_repo.list_by_run(run_id)
+                if self._background_terminal_repo is not None
+                else ()
+            )
+        ]
         active_run = {
             "run_id": run_id,
             "status": runtime.status.value,
@@ -641,6 +675,7 @@ class SessionService:
                 int(run_state.checkpoint_event_id) if run_state is not None else 0
             ),
             "pending_tool_approval_count": len(approvals),
+            "background_terminal_count": len(background_terminals),
             "stream_connected": stream_connected,
             "should_show_recover": self._is_runtime_publicly_recoverable(runtime)
             and not stream_connected,
@@ -652,8 +687,10 @@ class SessionService:
             round_snapshot = None
         if isinstance(round_snapshot, dict):
             active_run["primary_role_id"] = round_snapshot.get("primary_role_id")
+            round_snapshot["background_terminal_count"] = len(background_terminals)
         return {
             "active_run": active_run,
+            "background_terminals": background_terminals,
             "pending_tool_approvals": approvals,
             "paused_subagent": paused_subagent,
             "round_snapshot": round_snapshot,
@@ -851,8 +888,8 @@ class SessionService:
             return True
         normalized = safe_role_id.casefold()
         return (
-            normalized in LEGACY_COORDINATOR_IDENTIFIERS
-            or normalized in MAIN_AGENT_IDENTIFIERS
+            normalized in _legacy_coordinator_identifiers()
+            or normalized in _main_agent_identifiers()
         )
 
     def _require_session_agent(

@@ -15,6 +15,14 @@ class _FakeRunService:
         self.started_run_ids: list[str] = []
         self.raise_on_tool_approval = False
         self.created_run_inputs: list[IntentInput] = []
+        self.background_terminals: dict[str, dict[str, object]] = {
+            "term-1": {
+                "terminal_id": "term-1",
+                "run_id": "run-1",
+                "status": "running",
+                "command": "sleep 30",
+            }
+        }
 
     def create_run(self, intent_input) -> tuple[str, str]:
         self.created_run_inputs.append(intent_input)
@@ -38,6 +46,32 @@ class _FakeRunService:
 
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    def list_background_terminals(self, run_id: str) -> tuple[dict[str, object], ...]:
+        _ = run_id
+        return tuple(self.background_terminals.values())
+
+    def get_background_terminal(
+        self,
+        *,
+        run_id: str,
+        terminal_id: str,
+    ) -> dict[str, object]:
+        _ = run_id
+        if terminal_id not in self.background_terminals:
+            raise KeyError(terminal_id)
+        return self.background_terminals[terminal_id]
+
+    async def stop_background_terminal(
+        self,
+        *,
+        run_id: str,
+        terminal_id: str,
+    ) -> dict[str, object]:
+        _ = run_id
+        terminal = self.get_background_terminal(run_id=run_id, terminal_id=terminal_id)
+        terminal["status"] = "stopped"
+        return terminal
 
 
 def _create_client(fake_service: _FakeRunService) -> TestClient:
@@ -172,3 +206,40 @@ def test_resume_route_rejects_none_like_run_id() -> None:
 
     assert response.status_code == 422
     assert fake_service.resumed_run_ids == []
+
+
+def test_list_background_terminals_route_returns_items() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/runs/run-1/background-terminals")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [fake_service.background_terminals["term-1"]]}
+
+
+def test_get_background_terminal_route_returns_single_terminal() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/runs/run-1/background-terminals/term-1")
+
+    assert response.status_code == 200
+    assert response.json() == {"terminal": fake_service.background_terminals["term-1"]}
+
+
+def test_stop_background_terminal_route_returns_updated_terminal() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/runs/run-1/background-terminals/term-1:stop")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "terminal": {
+            "terminal_id": "term-1",
+            "run_id": "run-1",
+            "status": "stopped",
+            "command": "sleep 30",
+        }
+    }

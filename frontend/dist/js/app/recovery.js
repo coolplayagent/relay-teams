@@ -10,7 +10,12 @@ import {
     selectRound,
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
-import { fetchSessionRecovery, resolveToolApproval, resumeRun } from '../core/api.js';
+import {
+    fetchSessionRecovery,
+    resolveToolApproval,
+    resumeRun,
+    stopBackgroundTerminal,
+} from '../core/api.js';
 import {
     humanizeRoleId,
     isPrimaryRoleId,
@@ -26,6 +31,8 @@ import { sysLog } from '../utils/logger.js';
 let recoveryActionBusy = false;
 const approvalActionBusyIds = new Set();
 const approvalActionErrors = new Map();
+const backgroundTerminalActionBusyIds = new Set();
+const backgroundTerminalActionErrors = new Map();
 let recoveryBannerRenderSignature = '';
 const CONTINUITY_POLL_ACTIVE_MS = 1500;
 const CONTINUITY_POLL_IDLE_MS = 4000;
@@ -133,6 +140,8 @@ export function clearSessionRecovery() {
     state.pausedSubagent = null;
     approvalActionBusyIds.clear();
     approvalActionErrors.clear();
+    backgroundTerminalActionBusyIds.clear();
+    backgroundTerminalActionErrors.clear();
     recoveryBannerRenderSignature = '';
     if (!state.isGenerating) {
         state.activeRunId = null;
@@ -169,6 +178,7 @@ export function applyRecoverySnapshot(snapshot) {
     }
 
     reconcileApprovalActionState(normalized.pendingToolApprovals);
+    reconcileBackgroundTerminalActionState(normalized.backgroundTerminals);
     state.currentRecoverySnapshot = normalized;
     state.pausedSubagent = normalized.pausedSubagent;
     if (normalized.activeRun?.run_id) {
@@ -368,6 +378,7 @@ export function markPausedSubagent(payload = {}) {
             }
             : null,
         pendingToolApprovals: [],
+        backgroundTerminals: [],
         pausedSubagent: null,
         roundSnapshot: null,
     };
@@ -423,6 +434,7 @@ export function markToolApprovalRequested(payload = {}) {
             }
             : null,
         pendingToolApprovals: [],
+        backgroundTerminals: [],
         pausedSubagent: null,
         roundSnapshot: null,
     };
@@ -497,14 +509,66 @@ function normalizeRecoverySnapshot(snapshot) {
         ? snapshot.pending_tool_approvals.map(item => ({ ...item }))
         : [];
     const pausedSubagent = normalizePausedSubagent(snapshot?.paused_subagent, activeRun?.run_id || null);
+    const backgroundTerminals = Array.isArray(snapshot?.background_terminals)
+        ? snapshot.background_terminals
+            .map(item => normalizeBackgroundTerminal(item, activeRun?.run_id || null))
+            .filter(Boolean)
+        : Array.isArray(snapshot?.backgroundTerminals)
+            ? snapshot.backgroundTerminals
+                .map(item => normalizeBackgroundTerminal(item, activeRun?.run_id || null))
+                .filter(Boolean)
+            : [];
     const roundSnapshot = snapshot?.round_snapshot && typeof snapshot.round_snapshot === 'object'
         ? { ...snapshot.round_snapshot }
         : null;
     return {
         activeRun,
         pendingToolApprovals,
+        backgroundTerminals,
         pausedSubagent,
         roundSnapshot,
+    };
+}
+
+function normalizeBackgroundTerminal(raw, runId = null) {
+    if (!raw || typeof raw !== 'object') return null;
+    const terminalId = typeof raw.terminal_id === 'string'
+        ? raw.terminal_id
+        : typeof raw.terminalId === 'string'
+            ? raw.terminalId
+            : '';
+    if (!terminalId) return null;
+    const recentOutput = Array.isArray(raw.recent_output)
+        ? raw.recent_output.map(line => String(line || '')).filter(Boolean)
+        : Array.isArray(raw.recentOutput)
+            ? raw.recentOutput.map(line => String(line || '')).filter(Boolean)
+            : [];
+    const stdoutTail = Array.isArray(raw.stdout_tail)
+        ? raw.stdout_tail.map(line => String(line || '')).filter(Boolean)
+        : Array.isArray(raw.stdoutTail)
+            ? raw.stdoutTail.map(line => String(line || '')).filter(Boolean)
+            : [];
+    const stderrTail = Array.isArray(raw.stderr_tail)
+        ? raw.stderr_tail.map(line => String(line || '')).filter(Boolean)
+        : Array.isArray(raw.stderrTail)
+            ? raw.stderrTail.map(line => String(line || '')).filter(Boolean)
+            : [];
+    const rawExitCode = raw.exit_code ?? raw.exitCode;
+    return {
+        terminalId,
+        runId: String(raw.run_id || raw.runId || runId || ''),
+        command: String(raw.command || '').trim(),
+        cwd: String(raw.cwd || '').trim(),
+        status: String(raw.status || '').trim(),
+        tty: raw.tty === true,
+        timeoutMs: Number(raw.timeout_ms || raw.timeoutMs || 0),
+        exitCode: rawExitCode === null || rawExitCode === undefined ? null : Number(rawExitCode),
+        recentOutput,
+        stdoutTail,
+        stderrTail,
+        logPath: String(raw.log_path || raw.logPath || '').trim(),
+        completedAt: raw.completed_at ? String(raw.completed_at) : raw.completedAt ? String(raw.completedAt) : '',
+        updatedAt: raw.updated_at ? String(raw.updated_at) : raw.updatedAt ? String(raw.updatedAt) : '',
     };
 }
 
@@ -622,11 +686,13 @@ function shouldPollContinuity() {
 
     const activeRun = getActiveRecoveryRun();
     const hasApprovals = (state.currentRecoverySnapshot?.pendingToolApprovals || []).length > 0;
+    const hasBackgroundTerminals = (state.currentRecoverySnapshot?.backgroundTerminals || []).length > 0;
     const hasPausedSubagent = !!(state.pausedSubagent || state.currentRecoverySnapshot?.pausedSubagent);
     return !!(
         state.isGenerating
         || state.activeEventSource
         || hasApprovals
+        || hasBackgroundTerminals
         || hasPausedSubagent
         || activeRun?.is_recoverable
     );
@@ -748,6 +814,26 @@ function reconcileApprovalActionState(approvals) {
     });
 }
 
+function reconcileBackgroundTerminalActionState(terminals) {
+    const pendingIds = new Set(
+        Array.isArray(terminals)
+            ? terminals
+                .map(item => String(item?.terminalId || '').trim())
+                .filter(Boolean)
+            : [],
+    );
+    Array.from(backgroundTerminalActionBusyIds).forEach(terminalId => {
+        if (!pendingIds.has(terminalId)) {
+            backgroundTerminalActionBusyIds.delete(terminalId);
+        }
+    });
+    Array.from(backgroundTerminalActionErrors.keys()).forEach(terminalId => {
+        if (!pendingIds.has(terminalId)) {
+            backgroundTerminalActionErrors.delete(terminalId);
+        }
+    });
+}
+
 function areRecoverySnapshotsEquivalent(left, right) {
     return recoverySnapshotSignature(left) === recoverySnapshotSignature(right);
 }
@@ -758,6 +844,9 @@ function recoverySnapshotSignature(snapshot) {
         activeRun: signatureActiveRun(snapshot.activeRun),
         pendingToolApprovals: Array.isArray(snapshot.pendingToolApprovals)
             ? snapshot.pendingToolApprovals.map(signatureApproval)
+            : [],
+        backgroundTerminals: Array.isArray(snapshot.backgroundTerminals)
+            ? snapshot.backgroundTerminals.map(signatureBackgroundTerminal)
             : [],
         pausedSubagent: signaturePausedSubagent(snapshot.pausedSubagent),
         roundSnapshotRunId: String(snapshot.roundSnapshot?.run_id || ''),
@@ -774,6 +863,7 @@ function signatureActiveRun(activeRun) {
         checkpoint_event_id: Number(activeRun.checkpoint_event_id || 0),
         last_event_id: Number(activeRun.last_event_id || 0),
         pending_tool_approval_count: Number(activeRun.pending_tool_approval_count || 0),
+        background_terminal_count: Number(activeRun.background_terminal_count || 0),
         stream_connected: !!activeRun.stream_connected,
         should_show_recover: !!activeRun.should_show_recover,
     };
@@ -800,6 +890,22 @@ function signaturePausedSubagent(pausedSubagent) {
     };
 }
 
+function signatureBackgroundTerminal(terminal) {
+    if (!terminal || typeof terminal !== 'object') return null;
+    return {
+        terminalId: String(terminal.terminalId || ''),
+        runId: String(terminal.runId || ''),
+        status: String(terminal.status || ''),
+        exitCode: terminal.exitCode === null || terminal.exitCode === undefined
+            ? null
+            : Number(terminal.exitCode),
+        updatedAt: String(terminal.updatedAt || ''),
+        recentOutput: Array.isArray(terminal.recentOutput)
+            ? terminal.recentOutput.map(line => String(line || ''))
+            : [],
+    };
+}
+
 function isLocallyStreaming(runId) {
     return !!(
         runId &&
@@ -817,14 +923,21 @@ function renderRecoveryBanner() {
     const activeRun = getActiveRecoveryRun();
     const pausedSubagent = state.pausedSubagent || snapshot?.pausedSubagent || null;
     const approvals = snapshot?.pendingToolApprovals || [];
+    const backgroundTerminals = snapshot?.backgroundTerminals || [];
     const hideBanner = (
         !activeRun
-        || (isLocallyStreaming(activeRun.run_id) && approvals.length === 0 && !pausedSubagent)
+        || (
+            isLocallyStreaming(activeRun.run_id)
+            && approvals.length === 0
+            && backgroundTerminals.length === 0
+            && !pausedSubagent
+        )
     );
     const nextSignature = recoveryBannerSignature({
         hideBanner,
         activeRun,
         approvals,
+        backgroundTerminals,
         pausedSubagent,
     });
     if (nextSignature === recoveryBannerRenderSignature) {
@@ -835,12 +948,12 @@ function renderRecoveryBanner() {
     if (hideBanner) {
         host.style.display = 'none';
         host.innerHTML = '';
-        syncRecoveryRailMode({ approvals: [], pausedSubagent: null });
+        syncRecoveryRailMode({ approvals: [], backgroundTerminals: [], pausedSubagent: null });
         return;
     }
 
     const footerActions = getFooterActions(activeRun, approvals, pausedSubagent);
-    const hasBody = approvals.length > 0 || !!pausedSubagent;
+    const hasBody = approvals.length > 0 || backgroundTerminals.length > 0 || !!pausedSubagent;
     const pillTone = stateTone(activeRun);
     host.style.display = 'block';
     host.innerHTML = `
@@ -853,11 +966,12 @@ function renderRecoveryBanner() {
                         ${stateLabel(activeRun)}
                     </span>
                 </div>
-                <div class="recovery-banner-text">${describeRecoveryState(activeRun, approvals, pausedSubagent)}</div>
+                <div class="recovery-banner-text">${describeRecoveryState(activeRun, approvals, backgroundTerminals, pausedSubagent)}</div>
             </div>
             ${hasBody
         ? `<div class="recovery-banner-body">
                     ${approvals.length > 0 ? renderApprovalList(activeRun, approvals) : ''}
+                    ${backgroundTerminals.length > 0 ? renderBackgroundTerminalList(activeRun, backgroundTerminals) : ''}
                     ${pausedSubagent ? renderPausedSubagentCallout(pausedSubagent) : ''}
                 </div>`
         : ''
@@ -901,22 +1015,42 @@ function renderRecoveryBanner() {
         };
     });
 
-    syncRecoveryRailMode({ approvals, pausedSubagent });
+    host.querySelectorAll('[data-background-terminal-action]').forEach(button => {
+        const terminalId = String(button.dataset.terminalId || '');
+        const action = String(button.dataset.backgroundTerminalAction || '');
+        if (!terminalId || !action) return;
+        const terminal = backgroundTerminals.find(item => item.terminalId === terminalId);
+        if (!terminal) return;
+        button.onclick = () => {
+            void handleBackgroundTerminalAction(activeRun.run_id, terminal, action);
+        };
+    });
+
+    syncRecoveryRailMode({ approvals, backgroundTerminals, pausedSubagent });
 }
 
-function recoveryBannerSignature({ hideBanner, activeRun, approvals, pausedSubagent }) {
+function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundTerminals, pausedSubagent }) {
     const busyIds = Array.from(approvalActionBusyIds).sort();
     const errorEntries = Array.from(approvalActionErrors.entries())
         .map(([toolCallId, message]) => [String(toolCallId), String(message || '')])
+        .sort((left, right) => left[0].localeCompare(right[0]));
+    const terminalBusyIds = Array.from(backgroundTerminalActionBusyIds).sort();
+    const terminalErrorEntries = Array.from(backgroundTerminalActionErrors.entries())
+        .map(([terminalId, message]) => [String(terminalId), String(message || '')])
         .sort((left, right) => left[0].localeCompare(right[0]));
     return JSON.stringify({
         hidden: !!hideBanner,
         activeRun: signatureActiveRun(activeRun),
         approvals: Array.isArray(approvals) ? approvals.map(signatureApproval) : [],
+        backgroundTerminals: Array.isArray(backgroundTerminals)
+            ? backgroundTerminals.map(signatureBackgroundTerminal)
+            : [],
         pausedSubagent: signaturePausedSubagent(pausedSubagent),
         recoveryActionBusy: !!recoveryActionBusy,
         approvalBusyIds: busyIds,
         approvalErrors: errorEntries,
+        backgroundTerminalBusyIds: terminalBusyIds,
+        backgroundTerminalErrors: terminalErrorEntries,
         localStreamingRunId: activeRun && isLocallyStreaming(activeRun.run_id)
             ? String(activeRun.run_id || '')
             : '',
@@ -936,14 +1070,18 @@ function ensureRecoveryBannerHost() {
     return host;
 }
 
-function syncRecoveryRailMode({ approvals = [], pausedSubagent = null } = {}) {
+function syncRecoveryRailMode({ approvals = [], backgroundTerminals = [], pausedSubagent = null } = {}) {
     const rightRail = els.rightRail || document.getElementById('right-rail');
     if (!rightRail) return;
     const hasPendingApprovals = Array.isArray(approvals) && approvals.length > 0;
+    const hasBackgroundTerminals = Array.isArray(backgroundTerminals) && backgroundTerminals.length > 0;
     const hasPausedSubagent = !!pausedSubagent;
 
     rightRail.classList.toggle('right-rail-recovery-priority', hasPendingApprovals);
-    rightRail.classList.toggle('right-rail-followup-priority', !hasPendingApprovals && hasPausedSubagent);
+    rightRail.classList.toggle(
+        'right-rail-followup-priority',
+        !hasPendingApprovals && !hasBackgroundTerminals && hasPausedSubagent,
+    );
 }
 
 function getFooterActions(activeRun, approvals, pausedSubagent) {
@@ -1060,6 +1198,63 @@ async function handleApprovalAction(runId, approval, action) {
     }
 }
 
+async function handleBackgroundTerminalAction(runId, terminal, action) {
+    const safeRunId = String(runId || '').trim();
+    const safeTerminalId = String(terminal?.terminalId || '').trim();
+    const safeAction = String(action || '').trim().toLowerCase();
+    if (!safeRunId || !safeTerminalId || !safeAction) return;
+    if (backgroundTerminalActionBusyIds.has(safeTerminalId)) return;
+
+    backgroundTerminalActionBusyIds.add(safeTerminalId);
+    backgroundTerminalActionErrors.delete(safeTerminalId);
+    renderRecoveryBanner();
+
+    try {
+        if (safeAction !== 'stop') return;
+        const response = await stopBackgroundTerminal(safeRunId, safeTerminalId);
+        const updated = normalizeBackgroundTerminal(response?.terminal, safeRunId);
+        if (updated) {
+            applyBackgroundTerminalUpdate(updated);
+        }
+        scheduleRecoveryContinuityRefresh({
+            sessionId: state.currentSessionId,
+            delayMs: 0,
+            includeRounds: false,
+            quiet: true,
+            reason: 'background-terminal-stop',
+        });
+    } catch (e) {
+        backgroundTerminalActionErrors.set(
+            safeTerminalId,
+            e?.message || t('recovery.background_terminal.stop_failed'),
+        );
+        sysLog(e?.message || t('recovery.background_terminal.stop_failed'), 'log-error');
+    } finally {
+        backgroundTerminalActionBusyIds.delete(safeTerminalId);
+        renderRecoveryBanner();
+    }
+}
+
+function applyBackgroundTerminalUpdate(terminal) {
+    const snapshot = state.currentRecoverySnapshot;
+    if (!snapshot) return;
+    const existing = snapshot.backgroundTerminals || [];
+    const found = existing.some(item => item.terminalId === terminal.terminalId);
+    const nextBackgroundTerminals = found
+        ? existing.map(item => (item.terminalId === terminal.terminalId ? terminal : item))
+        : [terminal, ...existing];
+    state.currentRecoverySnapshot = {
+        ...snapshot,
+        activeRun: snapshot.activeRun
+            ? {
+                ...snapshot.activeRun,
+                background_terminal_count: nextBackgroundTerminals.length,
+            }
+            : snapshot.activeRun,
+        backgroundTerminals: nextBackgroundTerminals,
+    };
+}
+
 async function waitForFreshApprovalRequest(runId, toolCallId, timeoutMs = 3000) {
     const safeRunId = String(runId || '').trim();
     const safeToolCallId = String(toolCallId || '').trim();
@@ -1092,7 +1287,7 @@ function snapshotRoundFor(runId) {
     return null;
 }
 
-function describeRecoveryState(activeRun, approvals, pausedSubagent) {
+function describeRecoveryState(activeRun, approvals, backgroundTerminals, pausedSubagent) {
     if (pausedSubagent) {
         return formatMessage('recovery.paused_state', {
             actor: pausedSubagent.roleId || pausedSubagent.instanceId,
@@ -1105,6 +1300,14 @@ function describeRecoveryState(activeRun, approvals, pausedSubagent) {
         return approvals.length === 1
             ? t('recovery.waiting_approval_one')
             : formatMessage('recovery.waiting_approval_many', { count: approvals.length });
+    }
+    const activeBackgroundTerminals = backgroundTerminals.filter(terminal => isBackgroundTerminalActive(terminal));
+    if (activeBackgroundTerminals.length > 0) {
+        return activeBackgroundTerminals.length === 1
+            ? t('recovery.background_terminal.active_one')
+            : formatMessage('recovery.background_terminal.active_many', {
+                count: activeBackgroundTerminals.length,
+            });
     }
     if (activeRun.status === 'running' || activeRun.status === 'queued') {
         return isLocallyStreaming(activeRun.run_id)
@@ -1178,6 +1381,89 @@ function stateTone(activeRun) {
 function shortRunId(runId) {
     const safe = String(runId || '');
     return safe.length > 16 ? `${safe.slice(0, 8)}...${safe.slice(-4)}` : safe;
+}
+
+function renderBackgroundTerminalList(activeRun, terminals) {
+    return `
+        <div class="recovery-approval-list">
+            ${terminals.map(item => renderBackgroundTerminalItem(activeRun, item)).join('')}
+        </div>
+    `;
+}
+
+function renderBackgroundTerminalItem(activeRun, terminal) {
+    const terminalId = String(terminal?.terminalId || '');
+    const busy = backgroundTerminalActionBusyIds.has(terminalId);
+    const error = backgroundTerminalActionErrors.get(terminalId) || '';
+    const statusClass = error ? 'is-error' : busy ? 'is-busy' : '';
+    const statusText = error
+        || (busy ? t('recovery.applying') : backgroundTerminalStatusLabel(terminal));
+    const subtitle = [
+        terminal.cwd ? `cwd ${terminal.cwd}` : '',
+        terminal.logPath ? `log ${terminal.logPath}` : '',
+        terminal.exitCode === null ? '' : `exit ${terminal.exitCode}`,
+    ].filter(Boolean).join(' · ');
+
+    return `
+        <section class="recovery-approval-item">
+            <div class="recovery-approval-copy">
+                <div class="recovery-approval-title">${escapeHtml(terminal.command || shortRunId(terminalId))}</div>
+                <div class="recovery-approval-text">${escapeHtml(subtitle || shortRunId(terminalId))}</div>
+                <div class="recovery-approval-text">${escapeHtml(terminalOutputLines(terminal))}</div>
+            </div>
+            <div class="recovery-approval-actions">
+                <span class="recovery-approval-status ${statusClass}">${escapeHtml(statusText)}</span>
+                <div class="recovery-approval-buttons">
+                    ${isBackgroundTerminalActive(terminal)
+        ? `<button
+                            type="button"
+                            class="recovery-choice-btn recovery-choice-deny"
+                            data-background-terminal-action="stop"
+                            data-terminal-id="${escapeAttribute(terminalId)}"
+                            ${busy || recoveryActionBusy ? 'disabled' : ''}
+                        >
+                            ${escapeHtml(t('recovery.background_terminal.stop'))}
+                        </button>`
+        : ''
+    }
+                </div>
+            </div>
+        </section>
+    `;
+}
+
+function terminalOutputLines(terminal) {
+    const lines = Array.isArray(terminal?.recentOutput) && terminal.recentOutput.length > 0
+        ? terminal.recentOutput
+        : Array.isArray(terminal?.stdoutTail) && terminal.stdoutTail.length > 0
+            ? terminal.stdoutTail
+            : Array.isArray(terminal?.stderrTail) && terminal.stderrTail.length > 0
+                ? terminal.stderrTail
+                : [];
+    return lines.length > 0
+        ? lines.join('\n')
+        : t('recovery.background_terminal.no_output');
+}
+
+function isBackgroundTerminalActive(terminal) {
+    return terminal?.status === 'running' || terminal?.status === 'blocked';
+}
+
+function backgroundTerminalStatusLabel(terminal) {
+    switch (terminal?.status) {
+        case 'running':
+            return t('recovery.state.running');
+        case 'blocked':
+            return t('recovery.state.paused');
+        case 'stopped':
+            return t('recovery.state.stopped');
+        case 'completed':
+            return t('recovery.state.completed');
+        case 'failed':
+            return t('recovery.state.failed');
+        default:
+            return t('recovery.state.unknown');
+    }
 }
 
 function renderApprovalList(activeRun, approvals) {

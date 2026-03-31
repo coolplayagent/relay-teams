@@ -69,6 +69,9 @@ from agent_teams.agents.execution.conversation_compaction import (
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.background_terminal_manager import (
+    BackgroundTerminalManager,
+)
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
@@ -192,6 +195,7 @@ class AgentLlmSession:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        background_terminal_manager: BackgroundTerminalManager | None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
         role_memory_service: RoleMemoryService | None,
@@ -227,6 +231,7 @@ class AgentLlmSession:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
+        self._background_terminal_manager = background_terminal_manager
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -345,6 +350,7 @@ class AgentLlmSession:
             role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
+            background_terminal_manager=self._background_terminal_manager,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

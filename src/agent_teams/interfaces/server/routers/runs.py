@@ -92,6 +92,12 @@ class InjectSubagentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class StopBackgroundTerminalResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    terminal: dict[str, object]
+
+
 @router.post(
     "",
     response_model=CreateRunResponse,
@@ -260,6 +266,53 @@ def list_tool_approvals(
             payload={"count": len(result)},
         )
         return result
+
+
+@router.get("/{run_id}/background-terminals")
+def list_background_terminals(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {"items": list(service.list_background_terminals(run_id))}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{run_id}/background-terminals/{terminal_id}")
+def get_background_terminal(
+    run_id: RequiredIdentifierStr,
+    terminal_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {
+            "terminal": service.get_background_terminal(
+                run_id=run_id,
+                terminal_id=terminal_id,
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{run_id}/background-terminals/{terminal_id}:stop",
+    response_model=StopBackgroundTerminalResponse,
+)
+async def stop_background_terminal(
+    run_id: RequiredIdentifierStr,
+    terminal_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> StopBackgroundTerminalResponse:
+    try:
+        result = await service.stop_background_terminal(
+            run_id=run_id,
+            terminal_id=terminal_id,
+        )
+        return StopBackgroundTerminalResponse(terminal=result)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")

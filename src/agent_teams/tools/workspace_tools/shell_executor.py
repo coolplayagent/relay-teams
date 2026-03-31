@@ -257,26 +257,13 @@ async def spawn_shell(
     arrives, followed by a final ``("exit_code", "<code>")`` sentinel once the
     process exits.
     """
-    bash = resolve_bash_path()
-
-    shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
-    shell_env.update(_load_github_cli_env())
-    gh_path = await _resolve_gh_path()
-    if gh_path is not None:
-        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
-    shell_env = _sanitize_bash_env(shell_env)
-
-    proc = await asyncio.create_subprocess_exec(
-        bash,
-        "-lc",
-        command,
-        cwd=str(cwd),
-        env=shell_env,
+    proc = await create_shell_subprocess(
+        command=command,
+        cwd=cwd,
+        env=env,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        start_new_session=_start_new_session(),
-        creationflags=_creation_flags(),
     )
     stdout = proc.stdout
     stderr = proc.stderr
@@ -334,12 +321,7 @@ def run_git_bash(
 ) -> tuple[int, str, str, bool]:
     """Run command synchronously under bash for compatibility."""
     bash = resolve_bash_path()
-    shell_env = build_subprocess_env(base_env=os.environ)
-    shell_env.update(_load_github_cli_env())
-    gh_path = _resolve_gh_path_sync()
-    if gh_path is not None:
-        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
-    shell_env = _sanitize_bash_env(shell_env)
+    shell_env = build_shell_env_sync()
     try:
         proc = subprocess.run(
             [bash, "-lc", command],
@@ -386,3 +368,50 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     if existing_path:
         path_parts.append(existing_path)
     return os.pathsep.join(path_parts)
+
+
+async def build_shell_env(
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
+    shell_env.update(_load_github_cli_env())
+    gh_path = await _resolve_gh_path()
+    if gh_path is not None:
+        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    return _sanitize_bash_env(shell_env)
+
+
+def build_shell_env_sync(
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
+    shell_env.update(_load_github_cli_env())
+    gh_path = _resolve_gh_path_sync()
+    if gh_path is not None:
+        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    return _sanitize_bash_env(shell_env)
+
+
+async def create_shell_subprocess(
+    *,
+    command: str,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    stdin: int | None = None,
+    stdout: int | None = None,
+    stderr: int | None = None,
+) -> asyncio.subprocess.Process:
+    bash = resolve_bash_path()
+    shell_env = await build_shell_env(env)
+    return await asyncio.create_subprocess_exec(
+        bash,
+        "-lc",
+        command,
+        cwd=str(cwd),
+        env=shell_env,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        start_new_session=_start_new_session(),
+        creationflags=_creation_flags(),
+    )

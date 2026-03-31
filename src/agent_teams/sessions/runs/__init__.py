@@ -5,6 +5,16 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.sessions.runs.background_terminal_manager import (
+        BackgroundTerminalManager,
+    )
+    from agent_teams.sessions.runs.background_terminal_models import (
+        BackgroundTerminalRecord,
+        BackgroundTerminalStatus,
+    )
+    from agent_teams.sessions.runs.background_terminal_repo import (
+        BackgroundTerminalRepository,
+    )
     from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
     from agent_teams.sessions.runs.recoverable_pause import (
@@ -51,6 +61,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActiveSessionRunRegistry",
+    "BackgroundTerminalManager",
+    "BackgroundTerminalRecord",
+    "BackgroundTerminalRepository",
+    "BackgroundTerminalStatus",
     "ExecutionMode",
     "EventLog",
     "InjectionMessage",
@@ -88,6 +102,22 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActiveSessionRunRegistry": (
         "agent_teams.sessions.runs.active_run_registry",
         "ActiveSessionRunRegistry",
+    ),
+    "BackgroundTerminalManager": (
+        "agent_teams.sessions.runs.background_terminal_manager",
+        "BackgroundTerminalManager",
+    ),
+    "BackgroundTerminalRecord": (
+        "agent_teams.sessions.runs.background_terminal_models",
+        "BackgroundTerminalRecord",
+    ),
+    "BackgroundTerminalRepository": (
+        "agent_teams.sessions.runs.background_terminal_repo",
+        "BackgroundTerminalRepository",
+    ),
+    "BackgroundTerminalStatus": (
+        "agent_teams.sessions.runs.background_terminal_models",
+        "BackgroundTerminalStatus",
     ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),
     "EventLog": ("agent_teams.sessions.runs.event_log", "EventLog"),

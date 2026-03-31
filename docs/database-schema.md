@@ -11,7 +11,7 @@
 
 - SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
 - Optional identifier fields still allow real `NULL` at the API and model layer.
-- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_terminals`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
 - When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
 
 ---
@@ -608,8 +608,8 @@ Notes:
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`.
-- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`.
+- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`, `background_terminals`.
+- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`, `background_terminals`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
@@ -629,7 +629,7 @@ Primary query keys used by repositories:
 - `agent_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
 - `agent_teams.external_agents`: `external_agent_sessions`.
 - `agent_teams.workspace`: `workspaces`.
-- `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`.
+- `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_terminals`.
 - `agent_teams.agents`: `agent_instances`.
 - `agent_teams.agents.tasks`: `tasks`.
 - `agent_teams.agents.execution`: `messages`.
@@ -683,7 +683,49 @@ Notes:
 
 ---
 
-### 2.9.1 `media_assets`
+### 2.9.1 `background_terminals`
+
+```sql
+CREATE TABLE IF NOT EXISTS background_terminals (
+    terminal_id         TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL,
+    session_id          TEXT NOT NULL,
+    instance_id         TEXT,
+    role_id             TEXT,
+    tool_call_id        TEXT,
+    command             TEXT NOT NULL,
+    cwd                 TEXT NOT NULL,
+    execution_mode      TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    tty                 INTEGER NOT NULL,
+    timeout_ms          INTEGER,
+    exit_code           INTEGER,
+    recent_output_json  TEXT NOT NULL,
+    stdout_tail_json    TEXT NOT NULL,
+    stderr_tail_json    TEXT NOT NULL,
+    log_path            TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    completed_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_background_terminals_run
+    ON background_terminals(run_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_terminals_status
+    ON background_terminals(status, updated_at DESC);
+```
+
+Purpose: durable metadata for managed background shell terminals bound to one run.
+
+Notes:
+- `execution_mode` is currently fixed to `background`.
+- `status` is one of `running`, `blocked`, `stopped`, `failed`, or `completed`.
+- `recent_output_json`, `stdout_tail_json`, and `stderr_tail_json` store only short recovery/UI tails; the full stream is persisted to the workspace-scoped file at `log_path`.
+- Startup recovery marks non-terminal rows as interrupted/stopped rather than attempting to reattach to old OS processes.
+
+---
+
+### 2.9.2 `media_assets`
 
 ```sql
 CREATE TABLE IF NOT EXISTS media_assets (

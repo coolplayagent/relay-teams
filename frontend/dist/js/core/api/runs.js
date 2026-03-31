@@ -103,6 +103,30 @@ export async function resumeRun(runId) {
     );
 }
 
+export async function fetchRunBackgroundTerminals(runId) {
+    return requestJson(
+        `/api/runs/${runId}/background-terminals`,
+        undefined,
+        'Failed to fetch background terminals',
+    );
+}
+
+export async function fetchRunBackgroundTerminal(runId, terminalId) {
+    return requestJson(
+        `/api/runs/${runId}/background-terminals/${terminalId}`,
+        undefined,
+        'Failed to fetch background terminal',
+    );
+}
+
+export async function stopBackgroundTerminal(runId, terminalId) {
+    return requestJson(
+        `/api/runs/${runId}/background-terminals/${terminalId}:stop`,
+        { method: 'POST' },
+        'Failed to stop background terminal',
+    );
+}
+
 export async function injectSubagentMessage(runId, instanceId, content) {
     return requestJson(
         `/api/runs/${runId}/subagents/${instanceId}/inject`,
