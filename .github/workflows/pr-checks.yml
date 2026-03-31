@@ -53,6 +53,9 @@ jobs:
       - name: Unit tests
         run: uv run --extra dev pytest -q tests/unit_tests
 
+      - name: Install Playwright Chromium
+        run: uv run --extra dev python -m playwright install --with-deps chromium
+
       - name: Integration tests
         run: uv run --extra dev pytest -q tests/integration_tests
 
