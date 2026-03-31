@@ -757,10 +757,10 @@
 }
 
 .thinking-block {
-    margin: 0 0 0.95rem;
+    margin: 0 0 0.45rem;
     border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--bg-surface-muted) 86%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-muted) 72%, transparent);
     overflow: hidden;
 }
 
@@ -769,10 +769,10 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    padding: 0.65rem 0.85rem;
+    padding: 0.34rem 0.65rem;
     cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 0.76rem;
+    color: color-mix(in srgb, var(--text-secondary) 85%, var(--primary) 15%);
+    font-size: 0.7rem;
     font-weight: 600;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -804,21 +804,85 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    min-width: 2.5rem;
-    padding: 0.14rem 0.46rem;
+    min-width: 2.2rem;
+    padding: 0.1rem 0.38rem;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--primary) 18%, transparent);
-    color: var(--primary);
-    font-size: 0.66rem;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: color-mix(in srgb, var(--primary) 86%, var(--text-secondary) 14%);
+    font-size: 0.62rem;
     letter-spacing: 0.04em;
 }
 
 .thinking-body {
-    padding: 0 0.85rem 0.85rem;
+    padding: 0 0.65rem 0.45rem;
 }
 
 .thinking-text {
     color: color-mix(in srgb, var(--text-msg-content) 88%, var(--text-secondary) 12%);
+}
+
+.user-prompt-block {
+    margin: 0 0 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg-surface-muted) 44%, transparent);
+    overflow: hidden;
+}
+
+.user-prompt-summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.6rem;
+    row-gap: 0.15rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    list-style: none;
+}
+
+.user-prompt-summary::-webkit-details-marker {
+    display: none;
+}
+
+.user-prompt-summary::before {
+    content: '>';
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+    grid-row: 1 / span 2;
+    margin-top: 0.1rem;
+}
+
+.user-prompt-block[open] > .user-prompt-summary::before {
+    transform: rotate(90deg);
+}
+
+.user-prompt-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-prompt-preview {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.user-prompt-body {
+    padding: 0 0.75rem 0.75rem 2rem;
+}
+
+.user-prompt-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-msg-content);
 }
 
 .streaming-cursor {
@@ -1672,6 +1736,70 @@
 .round-detail-intent {
     font-size: 0.875rem;
     color: var(--text-primary);
+}
+
+.round-detail-intent-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 0.75rem;
+    align-items: end;
+    padding-top: 0.15rem;
+    cursor: pointer;
+    list-style: none;
+}
+
+.round-detail-intent-summary::-webkit-details-marker {
+    display: none;
+}
+
+.round-detail-intent-preview {
+    font-size: 0.875rem;
+    line-height: 1.58;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.round-detail-intent-toggle {
+    color: var(--primary);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.round-detail-intent-body {
+    padding: 0.5rem 0 0;
+}
+
+.round-detail-intent[open] > .round-detail-intent-summary .round-detail-intent-preview {
+    display: none;
+}
+
+.round-detail-intent[open] > .round-detail-intent-summary {
+    display: none;
+}
+
+.round-detail-intent-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+}
+
+.round-detail-intent-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.35rem;
+}
+
+.round-detail-intent-collapse {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 0.78rem;
+    cursor: pointer;
 }
 
 .session-round-section {

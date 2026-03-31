@@ -195,10 +195,7 @@ async def test_resolve_read_instruction_sections_injects_nested_agents_once(
     deps = SimpleNamespace(
         shared_store=shared_store,
         task_id="task-1",
-        workspace=SimpleNamespace(
-            root_path=workspace_root,
-            locations=SimpleNamespace(worktree_root=workspace_root),
-        ),
+        workspace=SimpleNamespace(scope_root=workspace_root),
     )
 
     first = await resolve_read_instruction_sections(
@@ -244,10 +241,7 @@ async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     deps = SimpleNamespace(
         shared_store=shared_store,
         task_id="task-1",
-        workspace=SimpleNamespace(
-            root_path=workspace_root,
-            locations=SimpleNamespace(worktree_root=workspace_root),
-        ),
+        workspace=SimpleNamespace(scope_root=workspace_root),
     )
 
     sections = await resolve_read_instruction_sections(

@@ -52,7 +52,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             return _project_write_result(
                 output=output,
                 diff_summary=diff_summary,
-                path=file_path.relative_to(ctx.deps.workspace.root_path).as_posix(),
+                path=ctx.deps.workspace.logical_tmp_path(file_path),
                 created=created,
             )
 

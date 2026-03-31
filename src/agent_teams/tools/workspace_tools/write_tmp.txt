@@ -1,8 +1,8 @@
-Write full file contents to the workspace `tmp/` directory only.
+Write full file contents to the managed workspace `tmp/` directory only.
 
 Usage:
-- `path` is resolved relative to the workspace `tmp/` directory.
-- This tool creates a file or fully replaces an existing file under `tmp/`.
+- `path` is resolved relative to the managed workspace `tmp/` directory.
+- This tool creates a file or fully replaces an existing file under managed `tmp/`.
 - Absolute paths and paths that escape `tmp/` are rejected.
 - Prefer this tool for temporary reports, logs, and intermediate artifacts.
 - If the target path is a directory, the tool fails.

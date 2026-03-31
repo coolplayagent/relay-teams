@@ -26,7 +26,7 @@ def resolve_im_file_path(*, file_path: str, workspace: WorkspaceHandle) -> Path:
     if cwd_candidate.exists():
         return cwd_candidate
 
-    workspace_candidate = (workspace.root_path / candidate).resolve()
+    workspace_candidate = (workspace.execution_root / candidate).resolve()
     if workspace_candidate.exists():
         return workspace_candidate
 
