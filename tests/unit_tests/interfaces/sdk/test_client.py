@@ -328,7 +328,7 @@ def test_create_run_includes_target_role_id(monkeypatch) -> None:
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     handle = client.create_run(
-        intent="hello",
+        input="hello",
         session_id="session-1",
         target_role_id="writer",
     )
@@ -340,7 +340,7 @@ def test_create_run_includes_target_role_id(monkeypatch) -> None:
         "path": "/api/runs",
         "payload": {
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "yolo": False,
             "target_role_id": "writer",

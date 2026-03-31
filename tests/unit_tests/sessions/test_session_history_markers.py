@@ -66,7 +66,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
             session_id="session-1",
             parent_task_id=None,
             trace_id="run-old",
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="before clear",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -75,7 +75,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
         session_id="session-1",
         workspace_id="default",
         conversation_id="conv-1",
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         instance_id="inst-1",
         task_id="task-old",
         trace_id="run-old",
@@ -88,7 +88,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
         session_id="session-1",
         run_id="run-old",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         input_tokens=11,
         output_tokens=5,
     )
@@ -101,7 +101,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
             session_id="session-1",
             parent_task_id=None,
             trace_id="run-new",
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="after clear",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -110,7 +110,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
         session_id="session-1",
         workspace_id="default",
         conversation_id="conv-1",
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         instance_id="inst-1",
         task_id="task-new",
         trace_id="run-new",
@@ -123,7 +123,7 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
         session_id="session-1",
         run_id="run-new",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         input_tokens=7,
         output_tokens=3,
     )

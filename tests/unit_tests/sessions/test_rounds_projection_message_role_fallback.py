@@ -63,7 +63,7 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
         trace_id=old_run_id,
         session_id=session_id,
         instance_id=coordinator_instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
@@ -105,7 +105,7 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
         list[dict[str, object]], round_new["coordinator_messages"]
     )
     assert len(coordinator_messages) == 1
-    assert coordinator_messages[0].get("role_id") == "coordinator_agent"
+    assert coordinator_messages[0].get("role_id") == "Coordinator"
 
 
 def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
@@ -127,7 +127,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
             session_id=session_id,
             parent_task_id=None,
             trace_id=run_id,
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="recover tool outcomes",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -137,7 +137,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
         trace_id=run_id,
         session_id=session_id,
         instance_id=coordinator_instance_id,
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
@@ -153,7 +153,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
         instance_id=coordinator_instance_id,
         task_id="task-root",
         trace_id=run_id,
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         messages=[
             ModelRequest(parts=[UserPromptPart(content="what roles are available")]),
             ModelResponse(
@@ -239,7 +239,7 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
             session_id=session_id,
             parent_task_id=None,
             trace_id=run_old_id,
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="old objective",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -250,7 +250,7 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
             session_id=session_id,
             parent_task_id=None,
             trace_id=run_new_id,
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="new objective",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -273,7 +273,7 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
         instance_id="inst-coordinator",
         task_id="task-root-old",
         trace_id=run_old_id,
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         messages=[
             ModelRequest(parts=[UserPromptPart(content="show old result")]),
             ModelResponse(parts=[TextPart(content="historical output")]),
@@ -328,7 +328,7 @@ def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boun
         "created_at": clear_marker_created_at,
         "label": "History cleared",
     }
-    assert round_new["primary_role_id"] == "coordinator_agent"
+    assert round_new["primary_role_id"] == "Coordinator"
     assert coordinator_messages[0]["reconstructed"] is True
     assert parts[0]["content"] == "reconstructed final output"
 
@@ -351,7 +351,7 @@ def test_build_session_rounds_reconstructs_structured_completed_output(
             session_id=session_id,
             parent_task_id=None,
             trace_id=run_id,
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="new objective",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -400,7 +400,7 @@ def test_build_session_rounds_marks_compaction_boundary_for_matching_conversatio
     db_path = tmp_path / "rounds_projection_compaction_marker.db"
     session_id = "session-1"
     run_id = "run-1"
-    coordinator_role_id = "coordinator_agent"
+    coordinator_role_id = "Coordinator"
     conversation_id = build_conversation_id(session_id, coordinator_role_id)
 
     task_repo = TaskRepository(db_path)

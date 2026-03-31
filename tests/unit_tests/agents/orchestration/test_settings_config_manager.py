@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent_teams.agents.orchestration.settings_config_manager import (
     OrchestrationSettingsConfigManager,
 )
 
 
-def test_get_orchestration_settings_ignores_legacy_main_agent_prompt(
+def test_get_orchestration_settings_rejects_legacy_main_agent_prompt(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
@@ -32,9 +34,7 @@ def test_get_orchestration_settings_ignores_legacy_main_agent_prompt(
         encoding="utf-8",
     )
 
-    settings = OrchestrationSettingsConfigManager(
-        config_dir=config_dir
-    ).get_orchestration_settings()
-
-    assert settings.default_orchestration_preset_id == "default"
-    assert settings.presets[0].preset_id == "default"
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _ = OrchestrationSettingsConfigManager(
+            config_dir=config_dir
+        ).get_orchestration_settings()

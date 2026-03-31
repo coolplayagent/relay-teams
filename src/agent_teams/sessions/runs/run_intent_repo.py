@@ -71,16 +71,6 @@ class RunIntentRepository(SharedSqliteRepository):
                     ALTER TABLE run_intents ADD COLUMN yolo TEXT NOT NULL DEFAULT 'false'
                     """
                 )
-                if "approval_mode" in columns:
-                    self._conn.execute(
-                        """
-                        UPDATE run_intents
-                        SET yolo = CASE
-                            WHEN approval_mode = 'yolo' THEN 'true'
-                            ELSE 'false'
-                        END
-                        """
-                    )
             if "thinking_enabled" not in columns:
                 self._conn.execute(
                     "ALTER TABLE run_intents ADD COLUMN thinking_enabled TEXT NOT NULL DEFAULT 'false'"

@@ -4,13 +4,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agent_teams.interfaces.sdk.client import AgentTeamsApp, AgentTeamsClient
+    from agent_teams.interfaces.sdk.client import AgentTeamsClient
 
-__all__ = ["AgentTeamsApp", "AgentTeamsClient"]
+__all__ = ["AgentTeamsClient"]
 _SDK_IMPORT_ERROR: ModuleNotFoundError | None = None
 
 try:
-    from agent_teams.interfaces.sdk.client import AgentTeamsApp, AgentTeamsClient
+    from agent_teams.interfaces.sdk.client import AgentTeamsClient
 except ModuleNotFoundError as exc:
     if exc.name is not None and exc.name.startswith("agent_teams"):
         raise

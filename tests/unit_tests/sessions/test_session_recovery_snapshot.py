@@ -57,7 +57,7 @@ def _seed_root_task(
     *,
     run_id: str,
     session_id: str,
-    role_id: str = "coordinator_agent",
+    role_id: str = "Coordinator",
 ) -> None:
     task_repo = TaskRepository(db_path)
     _ = task_repo.create(
@@ -140,7 +140,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     assert active_run.get("should_show_recover") is True
     assert active_run.get("phase") == "awaiting_subagent_followup"
     assert active_run.get("pending_tool_approval_count") == 0
-    assert active_run.get("primary_role_id") == "coordinator_agent"
+    assert active_run.get("primary_role_id") == "Coordinator"
 
     paused_subagent = snapshot.get("paused_subagent")
     assert isinstance(paused_subagent, dict)
@@ -150,7 +150,7 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("run_id") == "run-active"
-    assert round_snapshot.get("primary_role_id") == "coordinator_agent"
+    assert round_snapshot.get("primary_role_id") == "Coordinator"
 
 
 def test_get_recovery_snapshot_exposes_awaiting_recovery_phase(
@@ -386,7 +386,7 @@ def test_get_recovery_snapshot_prefers_approval_phase(tmp_path: Path) -> None:
         session_id="session-1",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
@@ -431,7 +431,7 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
         session_id="session-1",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
@@ -557,7 +557,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
             session_id="session-1",
             parent_task_id=None,
             trace_id="run-active",
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             objective="recover tool results",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -568,7 +568,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
         trace_id="run-active",
         session_id="session-1",
         instance_id="inst-coordinator",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id="default",
         status=InstanceStatus.COMPLETED,
     )
@@ -586,7 +586,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
         instance_id="inst-coordinator",
         task_id="task-root-1",
         trace_id="run-active",
-        agent_role_id="coordinator_agent",
+        agent_role_id="Coordinator",
         messages=[
             ModelResponse(
                 parts=[

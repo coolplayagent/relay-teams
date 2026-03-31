@@ -18,7 +18,7 @@ from agent_teams.persistence.scope_models import ScopeRef, ScopeType
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.roles.role_registry import (
-    LEGACY_COORDINATOR_IDENTIFIERS,
+    COORDINATOR_IDENTIFIERS,
     MAIN_AGENT_IDENTIFIERS,
     SystemRolesUnavailableError,
 )
@@ -851,7 +851,7 @@ class SessionService:
             return True
         normalized = safe_role_id.casefold()
         return (
-            normalized in LEGACY_COORDINATOR_IDENTIFIERS
+            normalized in COORDINATOR_IDENTIFIERS
             or normalized in MAIN_AGENT_IDENTIFIERS
         )
 

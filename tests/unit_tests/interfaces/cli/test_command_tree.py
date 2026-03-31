@@ -57,7 +57,7 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
             "/api/runs",
             {
                 "session_id": "session-1",
-                "intent": "hello",
+                "input": [{"kind": "text", "text": "hello"}],
                 "execution_mode": "ai",
                 "yolo": True,
             },
@@ -128,7 +128,7 @@ def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
             "/api/runs",
             {
                 "session_id": "session-1",
-                "intent": "hello",
+                "input": [{"kind": "text", "text": "hello"}],
                 "execution_mode": "ai",
                 "yolo": True,
             },
@@ -200,7 +200,7 @@ def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
             "/api/runs",
             {
                 "session_id": "session-1",
-                "intent": "hello",
+                "input": [{"kind": "text", "text": "hello"}],
                 "execution_mode": "ai",
                 "yolo": True,
             },
@@ -247,7 +247,7 @@ def test_root_message_allows_no_yolo_override(monkeypatch) -> None:
         "/api/runs",
         {
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "yolo": False,
         },

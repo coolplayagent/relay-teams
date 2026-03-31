@@ -42,12 +42,12 @@ class _FakeClient:
     def create_run(
         self,
         *,
-        intent: str,
+        input: str,
         session_id: str,
         execution_mode: str,
         yolo: bool,
     ) -> object:
-        assert intent == "demo intent"
+        assert input == "demo intent"
         assert session_id == "session-1"
         assert execution_mode == "ai"
         assert yolo is True

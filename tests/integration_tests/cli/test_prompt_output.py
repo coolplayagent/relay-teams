@@ -64,7 +64,7 @@ def test_root_message_uses_yolo_by_default(monkeypatch) -> None:
         "/api/runs",
         {
             "session_id": "session-1",
-            "intent": "hello",
+            "input": [{"kind": "text", "text": "hello"}],
             "execution_mode": "ai",
             "yolo": True,
         },

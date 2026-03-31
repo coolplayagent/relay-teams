@@ -71,7 +71,7 @@ def test_list_sessions_includes_active_run_overlay(tmp_path: Path) -> None:
         session_id="session-active",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
@@ -187,7 +187,7 @@ def test_list_sessions_skips_invalid_persisted_approval_ticket_rows(
         session_id="session-active",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
@@ -286,7 +286,7 @@ def _insert_invalid_approval_ticket_row(
             session_id,
             "task-root-1",
             "inst-1",
-            "coordinator_agent",
+            "Coordinator",
             "dispatch_task",
             "{}",
             "requested",

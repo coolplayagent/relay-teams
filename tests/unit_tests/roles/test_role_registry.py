@@ -68,6 +68,23 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
     assert registry.is_coordinator_role("Crafter") is False
 
 
+def test_role_registry_does_not_treat_legacy_coordinator_id_as_system_role() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="coordinator_agent",
+            name="Coordinator Agent",
+            description="Legacy coordinator shape.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Legacy prompt.",
+        )
+    )
+
+    with pytest.raises(KeyError, match="Coordinator role could not be resolved"):
+        _ = registry.get_coordinator()
+
+
 def test_role_registry_lists_normal_mode_roles_with_main_agent_first() -> None:
     registry = RoleRegistry()
     registry.register(

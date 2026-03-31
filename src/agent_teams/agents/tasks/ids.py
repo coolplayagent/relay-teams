@@ -11,11 +11,5 @@ class TaskId(BaseModel):
     value: str
 
 
-class WorkflowId(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    value: str
-
-
 def new_task_id() -> TaskId:
     return TaskId(value=str(uuid4()))

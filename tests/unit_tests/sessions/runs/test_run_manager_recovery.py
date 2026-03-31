@@ -127,7 +127,7 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
         trace_id="run-existing",
         session_id="session-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         workspace_id="default",
         status=InstanceStatus.RUNNING,
     )
@@ -136,7 +136,7 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
 def _create_root_task(
     task_repo: TaskRepository,
     *,
-    role_id: str = "coordinator_agent",
+    role_id: str = "Coordinator",
 ) -> None:
     _ = task_repo.create(
         TaskEnvelope(
@@ -315,7 +315,7 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         session_id="session-1",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="create_tasks",
         args_preview="{}",
     )
@@ -480,7 +480,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         session_id="session-1",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="create_tasks",
         args_preview="{}",
     )
@@ -492,7 +492,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         run_id="run-existing",
         tool_call_id="call-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="create_tasks",
         args_preview="{}",
     )
@@ -528,7 +528,7 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
         session_id="session-1",
         task_id="task-root-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         tool_name="create_tasks",
         args_preview="{}",
     )
@@ -793,7 +793,7 @@ async def test_worker_marks_recoverable_pause_without_run_failed(
         task_id="task-root-1",
         session_id="session-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         error_code="network_stream_interrupted",
         error_message="stream interrupted",
         retries_used=1,
@@ -865,7 +865,7 @@ async def test_worker_auto_recovers_invalid_tool_args_json_once(
         task_id="task-root-1",
         session_id="session-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         error_code="model_tool_args_invalid_json",
         error_message="Expecting property name enclosed in double quotes",
         retries_used=0,
@@ -942,7 +942,7 @@ async def test_worker_pauses_after_invalid_tool_args_auto_recovery_budget_exhaus
         task_id="task-root-1",
         session_id="session-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         error_code="model_tool_args_invalid_json",
         error_message="Expecting property name enclosed in double quotes",
         retries_used=0,
@@ -1099,7 +1099,7 @@ async def test_worker_caps_invalid_tool_args_auto_recovery_without_event_log(
         task_id="task-root-1",
         session_id="session-1",
         instance_id="inst-1",
-        role_id="coordinator_agent",
+        role_id="Coordinator",
         error_code="model_tool_args_invalid_json",
         error_message="Expecting property name enclosed in double quotes",
         retries_used=0,

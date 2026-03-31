@@ -46,7 +46,7 @@ def _suppress_host_github_prompt_line(
 
 def _role(role_id: str) -> RoleDefinition:
     tools = ()
-    if role_id.casefold() in {"coordinator_agent", "coordinator"}:
+    if role_id.casefold() == "coordinator":
         tools = (
             "create_tasks",
             "create_temporary_role",
@@ -101,7 +101,7 @@ def _coordinator_registry() -> RoleRegistry:
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1",
@@ -139,13 +139,13 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
-                role=_role("coordinator_agent"),
+                role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     normal_root_role_id="MainAgent",
-                    coordinator_role_id="coordinator_agent",
+                    coordinator_role_id="Coordinator",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -201,7 +201,7 @@ def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() 
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
-            role_id="coordinator_agent",
+            role_id="Coordinator",
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1",
@@ -229,13 +229,13 @@ def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() 
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
-                role=_role("coordinator_agent"),
+                role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     normal_root_role_id="MainAgent",
-                    coordinator_role_id="coordinator_agent",
+                    coordinator_role_id="Coordinator",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -273,13 +273,13 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
-                role=_role("coordinator_agent"),
+                role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     normal_root_role_id="MainAgent",
-                    coordinator_role_id="coordinator_agent",
+                    coordinator_role_id="Coordinator",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -359,13 +359,13 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     result = asyncio.run(
         build_runtime_system_prompt_result(
             RuntimePromptBuildInput(
-                role=_role("coordinator_agent"),
+                role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     normal_root_role_id="MainAgent",
-                    coordinator_role_id="coordinator_agent",
+                    coordinator_role_id="Coordinator",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
@@ -463,13 +463,13 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     prompt = asyncio.run(
         build_runtime_system_prompt(
             RuntimePromptBuildInput(
-                role=_role("coordinator_agent"),
+                role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.ORCHESTRATION,
                     main_agent_role_id="MainAgent",
                     normal_root_role_id="MainAgent",
-                    coordinator_role_id="coordinator_agent",
+                    coordinator_role_id="Coordinator",
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),

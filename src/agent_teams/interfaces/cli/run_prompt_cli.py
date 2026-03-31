@@ -154,7 +154,7 @@ def execute_prompt(
         "/api/runs",
         {
             "session_id": resolved_session_id,
-            "intent": message,
+            "input": [{"kind": "text", "text": message}],
             "execution_mode": execution_mode,
             "yolo": yolo,
         },
