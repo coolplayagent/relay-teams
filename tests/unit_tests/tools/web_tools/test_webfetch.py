@@ -430,6 +430,51 @@ async def test_fetch_url_follows_https_default_port_same_host_redirect() -> None
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_rejects_http_to_https_non_default_ports() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "http://example.com:8080/start":
+            return httpx.Response(
+                301,
+                request=request,
+                headers={"location": "https://example.com:8443/finish"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="unexpected",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="http://example.com:8080/start",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "redirect_required"
+    assert exc_info.value.details == {
+        "original_url": "http://example.com:8080/start",
+        "redirect_url": "https://example.com:8443/finish",
+        "status_code": 301,
+    }
+
+
+def test_is_permitted_redirect_rejects_malformed_redirect_port() -> None:
+    assert (
+        webfetch.is_permitted_redirect(
+            "https://example.com/start",
+            "https://example.com:99999/finish",
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

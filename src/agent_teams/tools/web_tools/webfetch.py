@@ -580,9 +580,18 @@ def is_permitted_redirect(original_url: str, redirect_url: str) -> bool:
     redirect_host = (redirect.hostname or "").removeprefix("www.")
     if not original_host or original_host != redirect_host:
         return False
+
+    try:
+        original_port = _normalize_default_port(original)
+        redirect_port = _normalize_default_port(redirect)
+    except ValueError:
+        return False
+
     if original.scheme == redirect.scheme:
-        return _normalize_default_port(original) == _normalize_default_port(redirect)
-    return _is_default_port(original) and _is_default_port(redirect)
+        return original_port == redirect_port
+    return _is_default_port(original_port, original.scheme) and _is_default_port(
+        redirect_port, redirect.scheme
+    )
 
 
 def _is_permitted_redirect_scheme_transition(
@@ -593,16 +602,25 @@ def _is_permitted_redirect_scheme_transition(
     ) or (original_scheme == "http" and redirect_scheme == "https")
 
 
-def _is_default_port(parsed: ParseResult) -> bool:
-    return parsed.port is None or parsed.port == _normalize_default_port(parsed)
+def _is_default_port(port: int | None, scheme: str) -> bool:
+    default_port = _default_port_for_scheme(scheme)
+    return default_port is not None and port == default_port
 
 
 def _normalize_default_port(parsed: ParseResult) -> int | None:
-    if parsed.scheme == "http":
-        return 80 if parsed.port is None else parsed.port
-    if parsed.scheme == "https":
-        return 443 if parsed.port is None else parsed.port
-    return parsed.port
+    port = parsed.port
+    default_port = _default_port_for_scheme(parsed.scheme)
+    if default_port is None:
+        return port
+    return default_port if port is None else port
+
+
+def _default_port_for_scheme(scheme: str) -> int | None:
+    if scheme == "http":
+        return 80
+    if scheme == "https":
+        return 443
+    return None
 
 
 def build_redirect_required_projection(
