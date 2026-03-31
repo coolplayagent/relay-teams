@@ -7,9 +7,11 @@ from typing import cast
 import httpx
 import pytest
 
+from agent_teams.computer import ComputerActionRisk
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.tools.runtime import ToolExecutionError
+from agent_teams.tools.runtime import ToolApprovalPolicy, ToolExecutionError
 from agent_teams.tools.web_tools import common, webfetch
+from agent_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 
 
 def _dict_list(value: object) -> list[dict[str, object]]:
@@ -232,6 +234,24 @@ def test_validate_web_url_rejects_non_http_scheme() -> None:
         webfetch.validate_web_url("file:///tmp/demo")
 
 
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("https://user:pass@example.com", "username or password"),
+        ("https://localhost/app", "publicly reachable"),
+        ("https://printer/dashboard", "fully qualified domain name"),
+        ("https://10.0.0.5/config", "private or local address"),
+        ("https://169.254.169.254/latest/meta-data", "private or local address"),
+    ],
+)
+def test_validate_web_url_rejects_local_or_credentialed_targets(
+    url: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        webfetch.validate_web_url(url)
+
+
 def test_normalize_timeout_seconds_caps_at_maximum() -> None:
     assert webfetch.normalize_timeout_seconds(None) == 30
     assert webfetch.normalize_timeout_seconds(999) == 120
@@ -253,6 +273,24 @@ def test_is_textual_content_type_supports_feed_media_types() -> None:
     assert webfetch.is_textual_content_type("application/atom+xml") is True
     assert webfetch.is_textual_content_type("application/opml+xml") is True
     assert webfetch.is_binary_response("application/rss+xml") is False
+
+
+def test_preapproved_webfetch_url_honors_path_boundaries() -> None:
+    assert is_preapproved_webfetch_url("https://docs.python.org/3/library/pathlib.html")
+    assert is_preapproved_webfetch_url("https://github.com/anthropics/claude-code")
+    assert not is_preapproved_webfetch_url(
+        "https://github.com/anthropics-evil/claude-code"
+    )
+
+
+def test_build_webfetch_approval_request_marks_preapproved_hosts_safe() -> None:
+    request = webfetch.build_webfetch_approval_request("https://docs.python.org/3/")
+    decision = ToolApprovalPolicy().evaluate("webfetch", request)
+
+    assert request.risk_level == ComputerActionRisk.SAFE
+    assert request.target_summary == "docs.python.org"
+    assert request.source == "https://docs.python.org/3/"
+    assert decision.required is False
 
 
 @pytest.mark.asyncio
@@ -290,6 +328,40 @@ async def test_fetch_url_retries_cloudflare_challenge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_follows_same_host_redirect() -> None:
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://example.com/start":
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"location": "/finish"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="ok",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/start",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert requested_urls == ["https://example.com/start", "https://example.com/finish"]
+    assert str(response.url) == "https://example.com/finish"
+    await response.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -319,6 +391,35 @@ async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_classifies_egress_blocked_proxy_errors() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            request=request,
+            headers={"x-proxy-error": "blocked-by-allowlist"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "egress_blocked"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "status_code": 403,
+        "proxy_error": "blocked-by-allowlist",
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_classifies_upstream_status_errors() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, request=request, text="unavailable")
@@ -340,6 +441,47 @@ async def test_fetch_url_classifies_upstream_status_errors() -> None:
         "url_host": "example.com",
         "status_code": 503,
     }
+
+
+@pytest.mark.asyncio
+async def test_fetch_webfetch_projection_returns_redirect_result_for_cross_host_redirect(
+    tmp_path: Path,
+) -> None:
+    request_log: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        request_log.append(str(request.url))
+        return httpx.Response(
+            302,
+            request=request,
+            headers={"location": "https://docs.python.org/3/tutorial/"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        projection = await webfetch.fetch_webfetch_projection(
+            client=client,
+            requested_url="https://example.com/start",
+            response_format="markdown",
+            extract=webfetch.WebFetchExtractMode.NONE,
+            item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            tool_call_id="webfetch",
+            cancel_check=lambda: None,
+        )
+    finally:
+        await client.aclose()
+
+    assert projection.visible_data is not None
+    data = cast(dict[str, object], projection.visible_data)
+    assert data["redirect_required"] is True
+    assert data["original_url"] == "https://example.com/start"
+    assert data["redirect_url"] == "https://docs.python.org/3/tutorial/"
+    assert data["status_code"] == 302
+    assert request_log == ["https://example.com/start"]
 
 
 @pytest.mark.asyncio

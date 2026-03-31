@@ -131,6 +131,7 @@ class ApprovalTicketRepository:
         role_id: str,
         tool_name: str,
         args_preview: str,
+        signature_args_preview: str | None = None,
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         signature_key = approval_signature_key(
@@ -139,7 +140,11 @@ class ApprovalTicketRepository:
             instance_id=instance_id,
             role_id=role_id,
             tool_name=tool_name,
-            args_preview=args_preview,
+            args_preview=(
+                args_preview
+                if signature_args_preview is None
+                else signature_args_preview
+            ),
         )
 
         def operation() -> None:
@@ -279,6 +284,7 @@ class ApprovalTicketRepository:
         role_id: str,
         tool_name: str,
         args_preview: str,
+        signature_args_preview: str | None = None,
     ) -> ApprovalTicketRecord | None:
         signature_key = approval_signature_key(
             run_id=run_id,
@@ -286,7 +292,11 @@ class ApprovalTicketRepository:
             instance_id=instance_id,
             role_id=role_id,
             tool_name=tool_name,
-            args_preview=args_preview,
+            args_preview=(
+                args_preview
+                if signature_args_preview is None
+                else signature_args_preview
+            ),
         )
         with self._lock:
             rows = self._conn.execute(

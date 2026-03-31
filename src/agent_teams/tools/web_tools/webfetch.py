@@ -5,6 +5,7 @@ from collections.abc import Callable
 from enum import StrEnum
 import asyncio
 import hashlib
+import ipaddress
 import math
 from pathlib import Path
 import re
@@ -18,6 +19,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Agent
 
+from agent_teams.computer import ComputerActionRisk
 from agent_teams.net.clients import create_async_http_client
 from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
@@ -25,10 +27,12 @@ from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
+    ToolApprovalRequest,
     ToolExecutionError,
     ToolResultProjection,
     execute_tool,
 )
+from agent_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 from agent_teams.tools.web_tools.common import (
     MAX_TEXT_OUTPUT_CHARS,
     extract_text_from_html,
@@ -53,6 +57,9 @@ STATE_FLUSH_INTERVAL_BYTES = 1 * 1024 * 1024
 RANGE_PROBE_HEADER_VALUE = "bytes=0-0"
 WEBFETCH_DOWNLOAD_PREFIX = "webfetch_download"
 RANGE_RESET_ERROR_TYPES = {"range_response_invalid", "range_resume_mismatch"}
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+REDIRECT_REQUIRED_ERROR_TYPE = "redirect_required"
+MAX_REDIRECTS = 10
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
@@ -165,6 +172,31 @@ class BinaryDownloadFullResponseFallback(Exception):
         self.response = response
 
 
+def normalize_webfetch_host(url: str) -> str:
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if hostname is not None:
+        return hostname.rstrip(".").lower()
+    if parsed.netloc:
+        return parsed.netloc.strip().lower()
+    return url.strip()
+
+
+def build_webfetch_approval_request(url: str) -> ToolApprovalRequest:
+    host = normalize_webfetch_host(url)
+    return ToolApprovalRequest(
+        risk_level=(
+            ComputerActionRisk.SAFE if is_preapproved_webfetch_url(url) else None
+        ),
+        target_summary=host,
+        source=url,
+    )
+
+
+def build_webfetch_approval_args_summary(url: str) -> dict[str, JsonValue]:
+    return {"host": normalize_webfetch_host(url)}
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def webfetch(
@@ -177,6 +209,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Fetch web content and return text, a saved file path, or structured feed data."""
 
+        approval_request = build_webfetch_approval_request(url)
+        approval_args_summary = build_webfetch_approval_args_summary(url)
+
         async def _action() -> ToolResultProjection:
             validate_web_url(url)
             resolved_timeout = normalize_timeout_seconds(timeout)
@@ -184,7 +219,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             resolved_item_limit = normalize_item_limit(item_limit)
             async with create_async_http_client(
                 timeout_seconds=float(resolved_timeout),
-                follow_redirects=True,
+                follow_redirects=False,
             ) as client:
                 return await fetch_webfetch_projection(
                     client=client,
@@ -215,6 +250,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "item_limit": item_limit,
             },
             action=_action,
+            approval_request=approval_request,
+            approval_args_summary=approval_args_summary,
+            keep_approval_ticket_reusable=True,
         )
 
 
@@ -239,7 +277,9 @@ async def fetch_webfetch_projection(
                 url=requested_url,
                 response_format=response_format,
             )
-        except ToolExecutionError:
+        except ToolExecutionError as exc:
+            if exc.error_type == REDIRECT_REQUIRED_ERROR_TYPE:
+                return build_redirect_required_projection(exc)
             probe = None
         else:
             try:
@@ -268,11 +308,16 @@ async def fetch_webfetch_projection(
                 if probe_response is not None:
                     await probe_response.aclose()
 
-    response = await fetch_url(
-        client=client,
-        url=requested_url,
-        response_format=response_format,
-    )
+    try:
+        response = await fetch_url(
+            client=client,
+            url=requested_url,
+            response_format=response_format,
+        )
+    except ToolExecutionError as exc:
+        if exc.error_type == REDIRECT_REQUIRED_ERROR_TYPE:
+            return build_redirect_required_projection(exc)
+        raise
     try:
         content_type = normalize_content_type(response.headers.get("content-type", ""))
         if extract is WebFetchExtractMode.NONE and is_binary_response(content_type):
@@ -305,8 +350,35 @@ def validate_web_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("URL must start with http:// or https://")
-    if not parsed.netloc:
+    if not parsed.netloc or parsed.hostname is None:
         raise ValueError("URL must include a host")
+    if parsed.username or parsed.password:
+        raise ValueError("URL must not include a username or password")
+    host = parsed.hostname.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".local"):
+        raise ValueError("URL host must be publicly reachable")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if "." not in host:
+            raise ValueError("URL host must be a fully qualified domain name") from None
+        return
+    if _is_disallowed_webfetch_ip(address):
+        raise ValueError("URL host must not be a private or local address")
+
+
+def _is_disallowed_webfetch_ip(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    return (
+        str(address) == "169.254.169.254"
+        or address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
 
 
 def normalize_timeout_seconds(timeout: int | None) -> int:
@@ -364,7 +436,52 @@ async def fetch_url(
     }
     if extra_headers is not None:
         headers.update(extra_headers)
-    response = await _perform_request(client=client, url=url, headers=headers)
+    current_url = url
+    redirect_count = 0
+    response = await _perform_request(client=client, url=current_url, headers=headers)
+    while response.status_code in REDIRECT_STATUS_CODES:
+        location = response.headers.get("location")
+        if not location:
+            await response.aclose()
+            raise ToolExecutionError(
+                error_type="upstream_error",
+                message=f"Web fetch failed for {url_host or url} with HTTP {response.status_code}",
+                retryable=False,
+                details={
+                    "url_host": url_host,
+                    "status_code": response.status_code,
+                    "missing_location": True,
+                },
+            )
+        redirect_url = urljoin(current_url, location)
+        status_code = response.status_code
+        await response.aclose()
+        if not is_permitted_redirect(current_url, redirect_url):
+            raise ToolExecutionError(
+                error_type=REDIRECT_REQUIRED_ERROR_TYPE,
+                message="Web fetch requires an explicit follow-up for a cross-host redirect.",
+                retryable=False,
+                details={
+                    "original_url": current_url,
+                    "redirect_url": redirect_url,
+                    "status_code": status_code,
+                },
+            )
+        redirect_count += 1
+        if redirect_count > MAX_REDIRECTS:
+            raise ToolExecutionError(
+                error_type="redirect_loop",
+                message=f"Web fetch exceeded the redirect limit for {url_host or url}",
+                retryable=True,
+                details={
+                    "url_host": url_host,
+                    "redirect_count": redirect_count,
+                },
+            )
+        current_url = redirect_url
+        response = await _perform_request(
+            client=client, url=current_url, headers=headers
+        )
     if (
         response.status_code == 403
         and response.headers.get("cf-mitigated") == "challenge"
@@ -372,7 +489,11 @@ async def fetch_url(
         await response.aclose()
         retry_headers = dict(headers)
         retry_headers["User-Agent"] = FALLBACK_USER_AGENT
-        response = await _perform_request(client=client, url=url, headers=retry_headers)
+        response = await _perform_request(
+            client=client,
+            url=current_url,
+            headers=retry_headers,
+        )
     if (
         response.status_code == 403
         and response.headers.get("cf-mitigated") == "challenge"
@@ -386,6 +507,21 @@ async def fetch_url(
                 "url_host": url_host,
                 "status_code": response.status_code,
                 "mitigation": "cloudflare_challenge",
+            },
+        )
+    if (
+        response.status_code == 403
+        and response.headers.get("x-proxy-error") == "blocked-by-allowlist"
+    ):
+        await response.aclose()
+        raise ToolExecutionError(
+            error_type="egress_blocked",
+            message=f"Web fetch was blocked by the network egress policy for {url_host or url}",
+            retryable=False,
+            details={
+                "url_host": url_host,
+                "status_code": response.status_code,
+                "proxy_error": "blocked-by-allowlist",
             },
         )
     if response.status_code >= 400 and (
@@ -431,6 +567,47 @@ async def _perform_request(
             retryable=True,
             details={"url_host": url_host},
         ) from exc
+
+
+def is_permitted_redirect(original_url: str, redirect_url: str) -> bool:
+    original = urlparse(original_url)
+    redirect = urlparse(redirect_url)
+    if redirect.scheme != original.scheme:
+        return False
+    if redirect.port != original.port:
+        return False
+    if redirect.username or redirect.password:
+        return False
+    original_host = (original.hostname or "").removeprefix("www.")
+    redirect_host = (redirect.hostname or "").removeprefix("www.")
+    return bool(original_host) and original_host == redirect_host
+
+
+def build_redirect_required_projection(
+    error: ToolExecutionError,
+) -> ToolResultProjection:
+    original_url = str(error.details.get("original_url") or "")
+    redirect_url = str(error.details.get("redirect_url") or "")
+    status_code_raw = error.details.get("status_code")
+    status_code = status_code_raw if isinstance(status_code_raw, int) else 0
+    output = (
+        "Redirect required: the requested URL redirected to a different host.\n\n"
+        f"Original URL: {original_url}\n"
+        f"Redirect URL: {redirect_url}\n"
+        f"Status: {status_code}\n\n"
+        "Run webfetch again with the redirect URL if you want to continue."
+    )
+    visible_data: dict[str, JsonValue] = {
+        "output": output,
+        "redirect_required": True,
+        "original_url": original_url,
+        "redirect_url": redirect_url,
+        "status_code": status_code,
+    }
+    return ToolResultProjection(
+        visible_data=visible_data,
+        internal_data=visible_data,
+    )
 
 
 def _parse_content_length(response: httpx.Response) -> int | None:

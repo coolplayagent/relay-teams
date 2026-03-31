@@ -89,6 +89,97 @@ def test_browser_run_flow_uses_canonical_input_payload(
     expect(page.locator("#stop-btn")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
 
 
+def test_browser_webfetch_approval_reuses_host_scoped_ticket(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+
+    session_id = _create_session_via_sidebar(page)
+    _set_checkbox(page, "#yolo-toggle", False)
+    prompt = (
+        "[webfetch-approval-validation] 连续两次调用同一个 host 的 webfetch，"
+        "只在第一次审批。"
+    )
+
+    with (
+        page.expect_request(
+            lambda request: (
+                request.method == "POST"
+                and request.url == f"{integration_env.api_base_url}/api/runs"
+            )
+        ) as run_request_info,
+        page.expect_response(
+            lambda response: (
+                response.request.method == "POST"
+                and response.url == f"{integration_env.api_base_url}/api/runs"
+                and response.ok
+            )
+        ) as run_response_info,
+    ):
+        page.locator("#prompt-input").fill(prompt)
+        page.locator("#send-btn").click()
+
+    run_request_payload = json.loads(run_request_info.value.post_data or "{}")
+    assert run_request_payload["session_id"] == session_id
+    assert run_request_payload["yolo"] is False
+    assert run_request_payload["input"] == [{"kind": "text", "text": prompt}]
+
+    run_payload = run_response_info.value.json()
+    run_id = str(run_payload["run_id"])
+    assert run_payload["session_id"] == session_id
+
+    approvals = _wait_for_open_tool_approvals(
+        api_client,
+        run_id=run_id,
+        expected_count=1,
+    )
+    assert approvals[0]["tool_call_id"] == "call-webfetch-1"
+    assert approvals[0]["tool_name"] == "webfetch"
+    assert "https://localhost/one" in approvals[0]["args_preview"]
+
+    approval_items = page.locator(".recovery-approval-item")
+    expect(approval_items).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator("#recovery-banner-host")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
+
+    with page.expect_request(
+        lambda request: (
+            request.method == "POST"
+            and request.url
+            == (
+                f"{integration_env.api_base_url}/api/runs/{run_id}/tool-approvals/"
+                "call-webfetch-1/resolve"
+            )
+        )
+    ) as resolve_request_info:
+        page.locator('[data-approval-action="approve"]').click()
+
+    resolve_payload = json.loads(resolve_request_info.value.post_data or "{}")
+    assert resolve_payload == {"action": "approve", "feedback": ""}
+
+    round_section = page.locator(f'.session-round-section[data-run-id="{run_id}"]')
+    expect(round_section).to_contain_text(prompt, timeout=_WAIT_TIMEOUT_MS)
+    expect(round_section).to_contain_text(
+        "[fake-llm] Webfetch approval validation completed after one "
+        "host-scoped approval.",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(approval_items).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
+
+    remaining_approvals = _wait_for_open_tool_approvals(
+        api_client,
+        run_id=run_id,
+        expected_count=0,
+    )
+    assert remaining_approvals == []
+    expect(page.locator("#send-btn")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator("#stop-btn")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+
+
 def test_browser_shell_settings_and_session_management(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
@@ -965,6 +1056,28 @@ def _wait_for_new_session_id(page: Page, existing_session_ids: set[str]) -> str:
             return new_session_ids[0]
         page.wait_for_timeout(200)
     raise AssertionError("Timed out waiting for a new session to appear in the UI.")
+
+
+def _wait_for_open_tool_approvals(
+    client: httpx.Client,
+    *,
+    run_id: str,
+    expected_count: int,
+    timeout_seconds: float = 15.0,
+) -> list[dict[str, str]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/runs/{run_id}/tool-approvals")
+        response.raise_for_status()
+        approvals = response.json()
+        if not isinstance(approvals, list):
+            raise AssertionError(f"Invalid tool approvals response: {approvals}")
+        if len(approvals) == expected_count:
+            return approvals
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Timed out waiting for {expected_count} tool approvals for run {run_id}."
+    )
 
 
 def _set_checkbox(page: Page, selector: str, checked: bool) -> None:
