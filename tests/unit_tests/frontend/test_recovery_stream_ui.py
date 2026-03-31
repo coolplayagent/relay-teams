@@ -45,6 +45,11 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
 
     assert "Connect Stream" not in recovery_script
     assert "t('recovery.recoverable_run_active')" in recovery_script
+    assert "t('recovery.exec_session.panel_label')" in recovery_script
+    assert "t('recovery.exec_session.collapse')" in recovery_script
+    assert "t('recovery.exec_session.expand')" in recovery_script
+    assert "const host = ensureExecSessionHost();" in recovery_script
+    assert "isExecSessionPanelCollapsed(activeRun.run_id)" in recovery_script
     assert "t('recovery.run_still_stopping')" in recovery_script
     assert "activeRun.status === 'paused'" in recovery_script
     assert "activeRun.phase === 'awaiting_recovery'" in recovery_script

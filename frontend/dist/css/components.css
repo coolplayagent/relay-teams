@@ -2151,6 +2151,13 @@
     gap: 0.35rem;
 }
 
+.recovery-banner-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
 .recovery-banner-label {
     font-size: 0.72rem;
     font-weight: 700;
@@ -2180,6 +2187,10 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+}
+
+.recovery-banner-body.is-collapsed {
+    display: none;
 }
 
 .recovery-approval-list {
@@ -2275,6 +2286,27 @@
     transform: none;
 }
 
+.recovery-panel-toggle-btn {
+    flex: 0 0 auto;
+    min-width: 5.5rem;
+    height: 2rem;
+    padding: 0 0.8rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: rgba(148, 163, 184, 0.08);
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.recovery-panel-toggle-btn:hover {
+    background: rgba(148, 163, 184, 0.14);
+    border-color: rgba(148, 163, 184, 0.34);
+    color: var(--text-primary);
+}
+
 .recovery-choice-approve {
     color: var(--text-on-primary);
     background: var(--primary);
@@ -2363,6 +2395,12 @@
         flex-direction: column;
     }
 
+    .recovery-banner-head {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
     .recovery-approval-head,
     .recovery-subagent-callout {
         flex-direction: column;
@@ -2387,6 +2425,10 @@
     }
 
     .recovery-action-btn {
+        width: 100%;
+    }
+
+    .recovery-panel-toggle-btn {
         width: 100%;
     }
 }

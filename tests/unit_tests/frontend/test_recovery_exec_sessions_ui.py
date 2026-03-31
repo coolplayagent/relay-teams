@@ -18,8 +18,15 @@ def test_recovery_ui_tracks_exec_sessions_in_banner_and_events() -> None:
 
     assert "stopExecSession" in recovery_script
     assert "backgroundTerminals" in recovery_script
+    assert "renderExecSessionPanel" in recovery_script
+    assert "ensureExecSessionHost" in recovery_script
     assert "renderExecSessionList" in recovery_script
     assert "handleExecSessionAction" in recovery_script
+    assert "handleExecSessionPanelToggle" in recovery_script
+    assert "data-exec-session-panel-toggle" in recovery_script
+    assert "recovery.exec_session.panel_label" in i18n_script
+    assert "recovery.exec_session.collapse" in i18n_script
+    assert "recovery.exec_session.expand" in i18n_script
     assert "exec_session_started" in event_router_script
     assert "exec_session_completed" in event_router_script
     assert "recovery.exec_session.stop" in i18n_script
