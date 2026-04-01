@@ -483,7 +483,7 @@ class AcpGatewayServer:
                 recoverable=recoverable,
                 error_message=terminal_error,
                 clear_active_run=clear_active_run,
-        )
+            )
         raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
 
     def _recoverable_run_id(self, internal_session_id: str) -> str | None:
