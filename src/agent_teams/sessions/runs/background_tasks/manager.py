@@ -952,8 +952,15 @@ class BackgroundTaskManager:
             )
         )
         self._runtimes.pop(runtime.record.background_task_id, None)
-        await runtime.transport.close()
         runtime.completed.set()
+        try:
+            await runtime.transport.close()
+        except Exception:
+            LOGGER.warning(
+                "Failed to close background task transport",
+                extra={"background_task_id": runtime.record.background_task_id},
+                exc_info=True,
+            )
         await self._mark_runtime_changed(runtime)
         self._publish_background_task_event(
             event_type=(

@@ -146,6 +146,16 @@ class _WaitableTransport(_FakeTransport):
         self._terminated.set()
 
 
+class _CloseFailingWaitableTransport(_WaitableTransport):
+    def __init__(self, *, tty: bool = False) -> None:
+        super().__init__(tty=tty)
+        self.close_attempted = False
+
+    async def close(self) -> None:
+        self.close_attempted = True
+        raise RuntimeError("close failed")
+
+
 @pytest.mark.asyncio
 async def test_background_task_manager_completes_and_publishes_events(
     tmp_path: Path,
@@ -342,6 +352,64 @@ async def test_background_task_manager_stop_marks_terminal_stopped(
         await manager.close()
 
     assert stopped.status == BackgroundTaskStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_stop_completes_when_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop-close.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+    fake_transport = _CloseFailingWaitableTransport()
+
+    async def _fake_spawn_runtime(
+        *,
+        record: BackgroundTaskRecord,
+        cwd: Path,
+        env: dict[str, str] | None,
+        log_file_path: Path,
+    ) -> object:
+        del cwd, env, log_file_path
+        return manager_module._BackgroundTaskRuntime(
+            record=record,
+            transport=cast(manager_module._BackgroundTaskTransport, fake_transport),
+            log_file_path=workspace.resolve_tmp_path("close-failed.log", write=True),
+            queue=asyncio.Queue(),
+        )
+
+    monkeypatch.setattr(manager, "_spawn_runtime", _fake_spawn_runtime)
+
+    try:
+        started = await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="sleep 30",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env=None,
+            tty=False,
+        )
+        stopped = await asyncio.wait_for(
+            manager.stop_for_run(
+                run_id="run-1",
+                background_task_id=started.background_task_id,
+            ),
+            timeout=1,
+        )
+    finally:
+        await manager.close()
+
+    assert stopped.status == BackgroundTaskStatus.STOPPED
+    assert fake_transport.close_attempted is True
 
 
 @pytest.mark.asyncio

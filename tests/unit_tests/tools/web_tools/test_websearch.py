@@ -160,6 +160,22 @@ def test_extract_search_response_falls_back_to_legacy_text_blocks() -> None:
     assert extracted.hits[1].author is None
 
 
+def test_extract_search_response_scans_later_sse_frames_for_real_results() -> None:
+    response_text = (
+        "event: message\n"
+        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":"}]}}\n'
+        "event: message\n"
+        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":[{\\"title\\":\\"Python Docs\\",\\"url\\":\\"https://docs.python.org\\"}],\\"searchTime\\":1.25}","_meta":{"searchTime":1.25}}]}}\n'
+    )
+
+    extracted = websearch.extract_search_response(response_text)
+
+    assert extracted.upstream_search_time == 1.25
+    assert len(extracted.hits) == 1
+    assert extracted.hits[0].title == "Python Docs"
+    assert extracted.hits[0].url == "https://docs.python.org"
+
+
 @pytest.mark.asyncio
 async def test_fetch_exa_search_response_classifies_http_errors() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:

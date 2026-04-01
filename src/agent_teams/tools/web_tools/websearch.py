@@ -417,6 +417,7 @@ def _search_status_error_message(response: httpx.Response) -> str:
 
 
 def extract_search_response(response_text: str) -> ExtractedSearchResponse:
+    latest_candidate: ExtractedSearchResponse | None = None
     for raw_line in response_text.splitlines():
         line = raw_line.strip()
         if not line.startswith("data:"):
@@ -442,12 +443,15 @@ def extract_search_response(response_text: str) -> ExtractedSearchResponse:
                 if parsed.upstream_search_time is None and isinstance(
                     search_time, (int, float)
                 ):
-                    return parsed.model_copy(
+                    parsed = parsed.model_copy(
                         update={
                             "upstream_search_time": float(search_time),
                         }
                     )
-                return parsed
+                if parsed.hits or parsed.upstream_search_time is not None:
+                    latest_candidate = parsed
+    if latest_candidate is not None:
+        return latest_candidate
     return ExtractedSearchResponse()
 
 
