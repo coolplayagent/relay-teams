@@ -457,6 +457,8 @@ class BackgroundTaskManager:
                 log_file_path=log_file_path,
             )
             self._runtimes[background_task_id] = runtime
+            record = record.model_copy(update={"pid": runtime.transport.pid})
+            runtime.record = record
             persisted = False
             try:
                 runtime.record = self._repository.upsert(record)
@@ -984,6 +986,7 @@ class BackgroundTaskManager:
                     update={
                         "status": status,
                         "exit_code": exit_code,
+                        "pid": None,
                         "recent_output": runtime.recent_output.snapshot(),
                         "output_excerpt": runtime.output_buffer.render(),
                         "updated_at": completed_at,

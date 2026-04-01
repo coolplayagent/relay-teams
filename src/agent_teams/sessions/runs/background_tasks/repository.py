@@ -45,6 +45,7 @@ class BackgroundTaskRepository:
                     status           TEXT NOT NULL,
                     tty              INTEGER NOT NULL,
                     timeout_ms       INTEGER,
+                    pid              INTEGER,
                     exit_code        INTEGER,
                     recent_output_json TEXT NOT NULL,
                     output_excerpt   TEXT NOT NULL,
@@ -62,6 +63,10 @@ class BackgroundTaskRepository:
                     "PRAGMA table_info(background_tasks)"
                 ).fetchall()
             }
+            if "pid" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN pid INTEGER"
+                )
             if "completion_notified_at" not in columns:
                 self._conn.execute(
                     "ALTER TABLE background_tasks ADD COLUMN completion_notified_at TEXT"
@@ -105,6 +110,7 @@ class BackgroundTaskRepository:
                     status,
                     tty,
                     timeout_ms,
+                    pid,
                     exit_code,
                     recent_output_json,
                     output_excerpt,
@@ -114,7 +120,7 @@ class BackgroundTaskRepository:
                     completed_at,
                     completion_notified_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(background_task_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -128,6 +134,7 @@ class BackgroundTaskRepository:
                     status=excluded.status,
                     tty=excluded.tty,
                     timeout_ms=excluded.timeout_ms,
+                    pid=excluded.pid,
                     exit_code=excluded.exit_code,
                     recent_output_json=excluded.recent_output_json,
                     output_excerpt=excluded.output_excerpt,
@@ -206,6 +213,22 @@ class BackgroundTaskRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    def list_interruptible(self) -> tuple[BackgroundTaskRecord, ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM background_tasks
+                WHERE status IN (?, ?)
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (
+                    BackgroundTaskStatus.RUNNING.value,
+                    BackgroundTaskStatus.BLOCKED.value,
+                ),
+            ).fetchall()
+        return tuple(_row_to_record(row) for row in rows)
+
     def delete(self, background_task_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -241,7 +264,7 @@ class BackgroundTaskRepository:
             cursor = self._conn.execute(
                 """
                 UPDATE background_tasks
-                SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?)
+                SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
                 WHERE status IN (?, ?)
                 """,
                 (
@@ -279,6 +302,7 @@ def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
         record.status.value,
         1 if record.tty else 0,
         record.timeout_ms,
+        record.pid,
         record.exit_code,
         json.dumps(record.recent_output, ensure_ascii=False),
         record.output_excerpt,
@@ -316,6 +340,7 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
         status=BackgroundTaskStatus(str(row["status"])),
         tty=bool(int(row["tty"])),
         timeout_ms=int(row["timeout_ms"]) if row["timeout_ms"] is not None else None,
+        pid=int(row["pid"]) if row["pid"] is not None else None,
         exit_code=int(row["exit_code"]) if row["exit_code"] is not None else None,
         recent_output=_decode_lines(row["recent_output_json"]),
         output_excerpt=str(row["output_excerpt"]),

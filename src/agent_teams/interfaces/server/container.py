@@ -68,6 +68,7 @@ from agent_teams.gateway.im import (
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
+from agent_teams.logger import get_logger
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
@@ -137,6 +138,9 @@ from agent_teams.agents.execution.subagent_reflection import SubagentReflectionS
 from agent_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
 )
+from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    kill_process_tree_by_pid,
+)
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
@@ -169,6 +173,9 @@ from agent_teams.workspace import (
     WorkspaceRepository,
     WorkspaceService,
 )
+
+
+LOGGER = get_logger(__name__)
 
 
 class ServerContainer:
@@ -372,7 +379,7 @@ class ServerContainer:
         if manage_runtime_state:
             self.agent_repo.mark_running_instances_failed()
             _ = self.run_runtime_repo.mark_transient_runs_interrupted()
-            _ = self.background_task_repository.mark_transient_background_tasks_interrupted()
+            self._interrupt_transient_background_tasks()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
@@ -984,6 +991,26 @@ class ServerContainer:
             workspace_id="default",
             root_path=Path.cwd(),
         )
+
+    def _interrupt_transient_background_tasks(self) -> int:
+        interrupted = self.background_task_repository.list_interruptible()
+        for record in interrupted:
+            if record.pid is None:
+                LOGGER.warning(
+                    "Persisted background task lost pid before interruption cleanup",
+                    extra={"background_task_id": record.background_task_id},
+                )
+                continue
+            killed = kill_process_tree_by_pid(record.pid)
+            if not killed:
+                LOGGER.warning(
+                    "Failed to terminate interrupted background task process",
+                    extra={
+                        "background_task_id": record.background_task_id,
+                        "pid": record.pid,
+                    },
+                )
+        return self.background_task_repository.mark_transient_background_tasks_interrupted()
 
     def _build_skill_runtime_service(
         self,

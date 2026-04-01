@@ -340,30 +340,31 @@ def _prepend_powershell_utf8_prefix(command: str) -> str:
     )
 
 
-async def _kill_process_tree_by_pid(pid: int) -> bool:
+def kill_process_tree_by_pid(pid: int) -> bool:
     if _is_windows():
         try:
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/f",
-                "/t",
-                "/pid",
-                str(pid),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            completed = subprocess.run(
+                ["taskkill", "/f", "/t", "/pid", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_SIGKILL_GRACE_SECONDS,
+                check=False,
             )
-            exit_code = await asyncio.wait_for(
-                killer.wait(), timeout=_SIGKILL_GRACE_SECONDS
-            )
-        except (OSError, asyncio.TimeoutError):
+        except (OSError, subprocess.TimeoutExpired):
             return False
-        return exit_code == 0
+        return completed.returncode == 0
 
     try:
         os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+async def _kill_process_tree_by_pid(pid: int) -> bool:
+    if _is_windows():
+        return await asyncio.to_thread(kill_process_tree_by_pid, pid)
+    return kill_process_tree_by_pid(pid)
 
 
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:

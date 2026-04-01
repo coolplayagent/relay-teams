@@ -13,6 +13,10 @@ from agent_teams.env.environment_variable_models import (
 )
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.roles import RoleLoader
+from agent_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
+)
 
 
 def _clear_proxy_env(monkeypatch) -> None:
@@ -306,3 +310,56 @@ def test_container_wires_automation_bound_session_queue_runtime(
         container.automation_bound_session_queue_worker._queue_service
         is container.automation_bound_session_queue_service
     )
+
+
+def test_container_interrupts_persisted_background_processes_before_marking_stopped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    lifecycle: list[str] = []
+    interruptible = (
+        BackgroundTaskRecord(
+            background_task_id="exec-running",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-running.log",
+        ),
+        BackgroundTaskRecord(
+            background_task_id="exec-missing-pid",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 60",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.BLOCKED,
+            log_path="tmp/background_tasks/exec-missing-pid.log",
+        ),
+    )
+
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "list_interruptible",
+        lambda self: interruptible,
+    )
+    monkeypatch.setattr(
+        container_module,
+        "kill_process_tree_by_pid",
+        lambda pid: lifecycle.append(f"kill:{pid}") or True,
+    )
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "mark_transient_background_tasks_interrupted",
+        lambda self: lifecycle.append("mark") or len(interruptible),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert lifecycle == ["kill:3210", "mark"]

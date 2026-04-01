@@ -29,6 +29,7 @@ def test_background_task_repository_roundtrips_records(tmp_path: Path) -> None:
         status=BackgroundTaskStatus.RUNNING,
         recent_output=("booting",),
         output_excerpt="booting",
+        pid=12345,
         log_path="tmp/background_tasks/exec-1.log",
         completion_notified_at=datetime.now(tz=timezone.utc),
     )
@@ -41,6 +42,7 @@ def test_background_task_repository_roundtrips_records(tmp_path: Path) -> None:
     assert loaded.run_id == "run-1"
     assert loaded.execution_mode == "foreground"
     assert loaded.output_excerpt == "booting"
+    assert loaded.pid == 12345
     assert loaded.completion_notified_at is not None
     assert repo.list_by_run("run-1")[0].background_task_id == "exec-1"
 
@@ -78,6 +80,7 @@ def test_background_task_repository_marks_transient_terminals_interrupted(
     assert affected == 1
     assert interrupted is not None
     assert interrupted.status == BackgroundTaskStatus.STOPPED
+    assert interrupted.pid is None
     assert interrupted.completed_at is not None
     assert finished is not None
     assert finished.status == BackgroundTaskStatus.COMPLETED
@@ -103,3 +106,48 @@ def test_background_task_repository_can_delete_records_by_session(
 
     assert repo.get("exec-1") is None
     assert repo.list_by_session("session-1") == ()
+
+
+def test_background_task_repository_lists_interruptible_records(tmp_path: Path) -> None:
+    db_path = tmp_path / "background-terminals-list-interruptible.db"
+    repo = BackgroundTaskRepository(db_path)
+    running = BackgroundTaskRecord(
+        background_task_id="exec-running",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        pid=111,
+        log_path="tmp/background_tasks/exec-running.log",
+    )
+    blocked = BackgroundTaskRecord(
+        background_task_id="exec-blocked",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 60",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.BLOCKED,
+        pid=222,
+        log_path="tmp/background_tasks/exec-blocked.log",
+    )
+    completed = BackgroundTaskRecord(
+        background_task_id="exec-completed",
+        run_id="run-1",
+        session_id="session-1",
+        command="echo done",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.COMPLETED,
+        pid=333,
+        log_path="tmp/background_tasks/exec-completed.log",
+    )
+    repo.upsert(running)
+    repo.upsert(blocked)
+    repo.upsert(completed)
+
+    interruptible = repo.list_interruptible()
+
+    assert tuple(record.background_task_id for record in interruptible) == (
+        "exec-blocked",
+        "exec-running",
+    )

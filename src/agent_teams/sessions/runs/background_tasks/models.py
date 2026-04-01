@@ -33,6 +33,7 @@ class BackgroundTaskRecord(BaseModel):
     status: BackgroundTaskStatus = BackgroundTaskStatus.RUNNING
     tty: bool = False
     timeout_ms: int | None = Field(default=None, ge=1)
+    pid: int | None = Field(default=None, ge=1)
     exit_code: int | None = None
     recent_output: tuple[str, ...] = ()
     output_excerpt: str = ""
