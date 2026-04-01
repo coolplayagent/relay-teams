@@ -301,6 +301,164 @@ async def test_background_task_manager_write_finishes_shell_prompt(
 
 
 @pytest.mark.asyncio
+async def test_background_task_manager_wait_and_poll_keep_active_record_unresolved_without_runtime(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-orphan-wait.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-orphan",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            execution_mode="background",
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-orphan.log",
+        )
+    )
+
+    try:
+        waited, completed = await manager.wait_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+            wait_ms=250,
+        )
+        polled, poll_completed = await manager.interact_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+            chars="",
+            yield_time_ms=250,
+        )
+    finally:
+        await manager.close()
+
+    assert completed is False
+    assert waited.status == BackgroundTaskStatus.RUNNING
+    assert poll_completed is False
+    assert polled.status == BackgroundTaskStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_stop_falls_back_to_pid_without_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-orphan-stop.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    queue = hub.subscribe("run-1")
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-orphan",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            execution_mode="background",
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-orphan.log",
+        )
+    )
+    killed_pids: list[int] = []
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        killed_pids.append(pid)
+        return True
+
+    monkeypatch.setattr(
+        manager_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    try:
+        stopped = await manager.stop_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+        )
+    finally:
+        await manager.close()
+
+    persisted = repo.get(record.background_task_id)
+    assert killed_pids == [3210]
+    assert stopped.status == BackgroundTaskStatus.STOPPED
+    assert stopped.pid is None
+    assert stopped.completed_at is not None
+    assert persisted is not None
+    assert persisted.status == BackgroundTaskStatus.STOPPED
+    event = queue.get_nowait()
+    assert event.event_type == RunEventType.BACKGROUND_TASK_STOPPED
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_stop_preserves_active_record_when_pid_fallback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-terminal-orphan-stop-fail.db"
+    )
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-orphan",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            execution_mode="background",
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-orphan.log",
+        )
+    )
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        _ = pid
+        return False
+
+    monkeypatch.setattr(
+        manager_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    try:
+        unchanged = await manager.stop_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+        )
+    finally:
+        await manager.close()
+
+    persisted = repo.get(record.background_task_id)
+    assert unchanged.status == BackgroundTaskStatus.RUNNING
+    assert unchanged.pid == 3210
+    assert persisted is not None
+    assert persisted.status == BackgroundTaskStatus.RUNNING
+    assert persisted.pid == 3210
+
+
+@pytest.mark.asyncio
 async def test_background_task_manager_stop_marks_terminal_stopped(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

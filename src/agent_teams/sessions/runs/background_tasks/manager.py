@@ -547,8 +547,10 @@ class BackgroundTaskManager:
     ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         runtime = self._runtimes.get(background_task_id)
-        if runtime is None or not record.is_active:
+        if not record.is_active:
             return record, True
+        if runtime is None:
+            return record, False
         if wait_ms < 1:
             raise ValueError("wait_ms must be >= 1")
         try:
@@ -568,8 +570,10 @@ class BackgroundTaskManager:
     ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         runtime = self._runtimes.get(background_task_id)
-        if runtime is None or not record.is_active:
+        if not record.is_active:
             return record, True
+        if runtime is None:
+            return record, False
         before_version = runtime.change_version
         if chars:
             await self._write_chars(runtime, chars)
@@ -615,8 +619,10 @@ class BackgroundTaskManager:
         _ = reason
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         runtime = self._runtimes.get(background_task_id)
-        if runtime is None or not record.is_active:
+        if not record.is_active:
             return record
+        if runtime is None:
+            return await self._stop_persisted_record_without_runtime(record)
         runtime.stop_requested = True
         if runtime.transport.returncode is None:
             await runtime.transport.terminate()
@@ -648,6 +654,43 @@ class BackgroundTaskManager:
                 wait_for_exit=False,
             )
         return self._get_record(background_task_id)
+
+    async def _stop_persisted_record_without_runtime(
+        self,
+        record: BackgroundTaskRecord,
+    ) -> BackgroundTaskRecord:
+        if record.pid is None:
+            LOGGER.warning(
+                "Cannot stop persisted active background task without runtime or pid",
+                extra={"background_task_id": record.background_task_id},
+            )
+            return record
+        killed = await _kill_process_tree_by_pid(record.pid)
+        if not killed:
+            LOGGER.warning(
+                "Failed to stop persisted background task without runtime",
+                extra={
+                    "background_task_id": record.background_task_id,
+                    "pid": record.pid,
+                },
+            )
+            return self._get_record(record.background_task_id)
+        completed_at = datetime.now(tz=timezone.utc)
+        updated = self._repository.upsert(
+            record.model_copy(
+                update={
+                    "status": BackgroundTaskStatus.STOPPED,
+                    "pid": None,
+                    "updated_at": completed_at,
+                    "completed_at": completed_at,
+                }
+            )
+        )
+        self._publish_background_task_event(
+            event_type=RunEventType.BACKGROUND_TASK_STOPPED,
+            record=updated,
+        )
+        return updated
 
     async def stop_all_for_run(
         self,
