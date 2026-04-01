@@ -579,9 +579,6 @@ async def _extract_redirect_location_from_response_body(
     content_type = normalize_content_type(response.headers.get("content-type", ""))
     if content_type and content_type not in {"text/html", "application/xhtml+xml"}:
         return None
-    content_length = _parse_content_length(response)
-    if content_length is not None and content_length > MAX_REDIRECT_BODY_BYTES:
-        return None
     body = bytearray()
     try:
         async for chunk in response.aiter_bytes():
@@ -589,10 +586,10 @@ async def _extract_redirect_location_from_response_body(
                 continue
             remaining = MAX_REDIRECT_BODY_BYTES - len(body)
             if remaining <= 0:
-                return None
+                break
             body.extend(chunk[:remaining])
             if len(body) >= MAX_REDIRECT_BODY_BYTES:
-                return None
+                break
     except httpx.TimeoutException as exc:
         raise ToolExecutionError(
             error_type="network_timeout",

@@ -542,6 +542,51 @@ async def test_fetch_url_wraps_redirect_body_read_errors_as_tool_errors() -> Non
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_parses_redirect_from_buffered_prefix_at_size_cap() -> None:
+    requested_urls: list[str] = []
+    redirect_prefix = (
+        "<!DOCTYPE html>"
+        '<html><head><meta http-equiv="refresh" '
+        'content="0; url=https://example.com/finish">'
+        "</head><body>"
+    )
+    redirect_body = (
+        redirect_prefix
+        + ("x" * (webfetch.MAX_REDIRECT_BODY_BYTES - len(redirect_prefix)))
+    ).encode("utf-8")
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://example.com/start":
+            return httpx.Response(
+                301,
+                request=request,
+                headers={"content-type": "text/html;charset=utf-8"},
+                content=redirect_body,
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="ok",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/start",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert requested_urls == ["https://example.com/start", "https://example.com/finish"]
+    assert str(response.url) == "https://example.com/finish"
+    await response.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_rejects_http_to_https_non_default_ports() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == "http://example.com:8080/start":
