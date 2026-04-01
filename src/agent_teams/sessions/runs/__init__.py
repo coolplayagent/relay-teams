@@ -9,9 +9,9 @@ if TYPE_CHECKING:
     from agent_teams.sessions.runs.exec_session_manager import (
         ExecSessionManager,
     )
-    from agent_teams.sessions.runs.exec_session_models import (
-        ExecSessionRecord,
-        ExecSessionStatus,
+    from agent_teams.sessions.runs.background_task_models import (
+        BackgroundTaskRecord,
+        BackgroundTaskStatus,
     )
     from agent_teams.sessions.runs.exec_session_repo import (
         ExecSessionRepository,
@@ -62,11 +62,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActiveSessionRunRegistry",
+    "BackgroundTaskRecord",
     "BackgroundTaskService",
+    "BackgroundTaskStatus",
     "ExecSessionManager",
-    "ExecSessionRecord",
     "ExecSessionRepository",
-    "ExecSessionStatus",
     "ExecutionMode",
     "EventLog",
     "InjectionMessage",
@@ -113,17 +113,17 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.sessions.runs.exec_session_manager",
         "ExecSessionManager",
     ),
-    "ExecSessionRecord": (
-        "agent_teams.sessions.runs.exec_session_models",
-        "ExecSessionRecord",
+    "BackgroundTaskRecord": (
+        "agent_teams.sessions.runs.background_task_models",
+        "BackgroundTaskRecord",
     ),
     "ExecSessionRepository": (
         "agent_teams.sessions.runs.exec_session_repo",
         "ExecSessionRepository",
     ),
-    "ExecSessionStatus": (
-        "agent_teams.sessions.runs.exec_session_models",
-        "ExecSessionStatus",
+    "BackgroundTaskStatus": (
+        "agent_teams.sessions.runs.background_task_models",
+        "BackgroundTaskStatus",
     ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),
     "EventLog": ("agent_teams.sessions.runs.event_log", "EventLog"),

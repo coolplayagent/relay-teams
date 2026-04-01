@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 
-class ExecSessionStatus(str, Enum):
+class BackgroundTaskStatus(str, Enum):
     RUNNING = "running"
     BLOCKED = "blocked"
     STOPPED = "stopped"
@@ -18,7 +18,7 @@ class ExecSessionStatus(str, Enum):
     COMPLETED = "completed"
 
 
-class ExecSessionRecord(BaseModel):
+class BackgroundTaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     exec_session_id: RequiredIdentifierStr
@@ -30,7 +30,7 @@ class ExecSessionRecord(BaseModel):
     command: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
     execution_mode: Literal["foreground", "background"] = "background"
-    status: ExecSessionStatus = ExecSessionStatus.RUNNING
+    status: BackgroundTaskStatus = BackgroundTaskStatus.RUNNING
     tty: bool = False
     timeout_ms: int | None = Field(default=None, ge=1)
     exit_code: int | None = None
@@ -45,9 +45,13 @@ class ExecSessionRecord(BaseModel):
     @property
     def is_active(self) -> bool:
         return self.status in {
-            ExecSessionStatus.RUNNING,
-            ExecSessionStatus.BLOCKED,
+            BackgroundTaskStatus.RUNNING,
+            BackgroundTaskStatus.BLOCKED,
         }
+
+    @property
+    def background_task_id(self) -> str:
+        return self.exec_session_id
 
     @property
     def terminal_id(self) -> str:

@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 
 from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -198,7 +198,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "artifact.txt").write_text("artifact", encoding="utf-8")
     exec_record = exec_session_repo.upsert(
-        ExecSessionRecord(
+        BackgroundTaskRecord(
             exec_session_id="exec-1",
             run_id="run-1",
             session_id="session-1",
@@ -207,7 +207,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
             tool_call_id="call-1",
             command="sleep 30",
             cwd=str(project_root),
-            status=ExecSessionStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
             log_path="tmp/exec_sessions/exec-1.log",
         )
     )

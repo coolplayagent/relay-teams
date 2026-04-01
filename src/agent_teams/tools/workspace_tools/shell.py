@@ -7,7 +7,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.exec_session_models import ExecSessionRecord
+from agent_teams.sessions.runs.background_task_models import BackgroundTaskRecord
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolApprovalRequest,
@@ -131,7 +131,7 @@ def resolve_cwd(
 
 
 def project_background_task(
-    record: ExecSessionRecord,
+    record: BackgroundTaskRecord,
     *,
     completed: bool,
     include_task_id: bool,
@@ -144,7 +144,7 @@ def project_background_task(
     return ToolResultProjection(visible_data=payload, internal_data=payload)
 
 
-def background_task_payload(record: ExecSessionRecord) -> dict[str, JsonValue]:
+def background_task_payload(record: BackgroundTaskRecord) -> dict[str, JsonValue]:
     return {
         "background_task_id": record.exec_session_id,
         "run_id": record.run_id,

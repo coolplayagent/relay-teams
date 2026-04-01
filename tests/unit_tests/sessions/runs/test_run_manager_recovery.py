@@ -16,9 +16,9 @@ from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
@@ -182,8 +182,8 @@ def _build_background_record(
     *,
     instance_id: str = "inst-worker",
     role_id: str = "writer",
-) -> ExecSessionRecord:
-    return ExecSessionRecord(
+) -> BackgroundTaskRecord:
+    return BackgroundTaskRecord(
         exec_session_id="exec-1",
         run_id="run-existing",
         session_id="session-1",
@@ -193,7 +193,7 @@ def _build_background_record(
         command="python worker.py",
         cwd="C:/workspace",
         execution_mode="background",
-        status=ExecSessionStatus.COMPLETED,
+        status=BackgroundTaskStatus.COMPLETED,
         exit_code=0,
         recent_output=("done",),
         output_excerpt="done",

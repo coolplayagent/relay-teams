@@ -10,9 +10,9 @@ import pytest
 from pydantic_ai import Agent
 
 import agent_teams.tools.workspace_tools as workspace_tools_module
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.tools.runtime import ToolDeps, ToolResultProjection
 from agent_teams.tools.workspace_tools import (
@@ -55,7 +55,7 @@ class _CapturingBackgroundTaskService:
 
     async def run_shell(self, **kwargs: object):
         self.calls.append(dict(kwargs))
-        record = ExecSessionRecord(
+        record = BackgroundTaskRecord(
             exec_session_id="exec_123",
             run_id="run-1",
             session_id="session-1",
@@ -67,7 +67,7 @@ class _CapturingBackgroundTaskService:
             execution_mode=(
                 "background" if bool(kwargs.get("background")) else "foreground"
             ),
-            status=ExecSessionStatus.COMPLETED,
+            status=BackgroundTaskStatus.COMPLETED,
             output_excerpt="/workspace\n",
         )
         return record, True

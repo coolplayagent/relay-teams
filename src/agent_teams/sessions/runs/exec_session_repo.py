@@ -9,9 +9,9 @@ from threading import RLock
 from typing import Literal
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.validation import (
     normalize_persisted_text,
@@ -88,7 +88,7 @@ class ExecSessionRepository:
             operation_name="init_tables",
         )
 
-    def upsert(self, record: ExecSessionRecord) -> ExecSessionRecord:
+    def upsert(self, record: BackgroundTaskRecord) -> BackgroundTaskRecord:
         def operation() -> None:
             self._conn.execute(
                 """
@@ -155,7 +155,7 @@ class ExecSessionRepository:
             )
         return persisted
 
-    def get(self, exec_session_id: str) -> ExecSessionRecord | None:
+    def get(self, exec_session_id: str) -> BackgroundTaskRecord | None:
         with self._lock:
             row = self._conn.execute(
                 """
@@ -169,7 +169,7 @@ class ExecSessionRepository:
             return None
         return _row_to_record(row)
 
-    def list_by_run(self, run_id: str) -> tuple[ExecSessionRecord, ...]:
+    def list_by_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -182,7 +182,7 @@ class ExecSessionRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
-    def list_by_session(self, session_id: str) -> tuple[ExecSessionRecord, ...]:
+    def list_by_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -195,7 +195,7 @@ class ExecSessionRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
-    def list_all(self) -> tuple[ExecSessionRecord, ...]:
+    def list_all(self) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -245,11 +245,11 @@ class ExecSessionRepository:
                 WHERE status IN (?, ?)
                 """,
                 (
-                    ExecSessionStatus.STOPPED.value,
+                    BackgroundTaskStatus.STOPPED.value,
                     now,
                     now,
-                    ExecSessionStatus.RUNNING.value,
-                    ExecSessionStatus.BLOCKED.value,
+                    BackgroundTaskStatus.RUNNING.value,
+                    BackgroundTaskStatus.BLOCKED.value,
                 ),
             )
             affected = int(cursor.rowcount or 0)
@@ -265,7 +265,7 @@ class ExecSessionRepository:
         return affected
 
 
-def _record_params(record: ExecSessionRecord) -> tuple[object, ...]:
+def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
     return (
         record.exec_session_id,
         record.run_id,
@@ -294,12 +294,12 @@ def _record_params(record: ExecSessionRecord) -> tuple[object, ...]:
     )
 
 
-def _row_to_record(row: sqlite3.Row) -> ExecSessionRecord:
+def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
     created_at = parse_persisted_datetime_or_none(row["created_at"])
     updated_at = parse_persisted_datetime_or_none(row["updated_at"])
     if created_at is None or updated_at is None:
         raise ValueError("Invalid persisted exec session timestamps")
-    return ExecSessionRecord(
+    return BackgroundTaskRecord(
         exec_session_id=require_persisted_identifier(
             row["exec_session_id"], field_name="exec_session_id"
         ),
@@ -313,7 +313,7 @@ def _row_to_record(row: sqlite3.Row) -> ExecSessionRecord:
         command=str(row["command"]),
         cwd=str(row["cwd"]),
         execution_mode=_decode_execution_mode(row["execution_mode"]),
-        status=ExecSessionStatus(str(row["status"])),
+        status=BackgroundTaskStatus(str(row["status"])),
         tty=bool(int(row["tty"])),
         timeout_ms=int(row["timeout_ms"]) if row["timeout_ms"] is not None else None,
         exit_code=int(row["exit_code"]) if row["exit_code"] is not None else None,

@@ -31,9 +31,9 @@ from pydantic import JsonValue
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 from agent_teams.sessions.runs.run_models import RunEvent
@@ -153,7 +153,7 @@ class _WindowsPtyProcessFactoryProtocol(Protocol):
 
 
 class _ExecSessionCompletionListener(Protocol):
-    async def __call__(self, record: ExecSessionRecord) -> None: ...
+    async def __call__(self, record: BackgroundTaskRecord) -> None: ...
 
 
 class _ExecSessionTransport(ABC):
@@ -367,7 +367,7 @@ class _ExecSessionRuntime:
     def __init__(
         self,
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         transport: _ExecSessionTransport,
         log_file_path: Path,
         queue: asyncio.Queue[tuple[str, str] | None],
@@ -422,7 +422,7 @@ class ExecSessionManager:
         env: dict[str, str] | None,
         tty: bool,
         execution_mode: Literal["foreground", "background"] = "background",
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         async with self._admission_lock:
             await self._prune_sessions_if_needed()
             effective_timeout_ms = timeout_ms or DEFAULT_EXEC_SESSION_TIMEOUT_MS
@@ -432,7 +432,7 @@ class ExecSessionManager:
             log_file_path = log_dir / f"{exec_session_id}.log"
             log_file_path.touch(exist_ok=True)
             logical_log_path = workspace.logical_tmp_path(log_file_path)
-            record = ExecSessionRecord(
+            record = BackgroundTaskRecord(
                 exec_session_id=exec_session_id,
                 run_id=run_id,
                 session_id=session_id,
@@ -485,7 +485,7 @@ class ExecSessionManager:
         yield_time_ms: int | None,
         env: dict[str, str] | None,
         tty: bool,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         record = await self.start_session(
             run_id=run_id,
             session_id=session_id,
@@ -516,7 +516,7 @@ class ExecSessionManager:
             return follow_up, completed
         return updated, True
 
-    def list_for_run(self, run_id: str) -> tuple[ExecSessionRecord, ...]:
+    def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return self._repository.list_by_run(run_id)
 
     def get_for_run(
@@ -524,7 +524,7 @@ class ExecSessionManager:
         *,
         run_id: str,
         exec_session_id: str,
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         record = self._get_record(exec_session_id)
         if record.run_id != run_id:
             raise KeyError(
@@ -538,7 +538,7 @@ class ExecSessionManager:
         run_id: str,
         exec_session_id: str,
         wait_ms: int,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
         runtime = self._runtimes.get(exec_session_id)
         if runtime is None or not record.is_active:
@@ -559,7 +559,7 @@ class ExecSessionManager:
         chars: str,
         yield_time_ms: int | None,
         is_initial_poll: bool = False,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
         runtime = self._runtimes.get(exec_session_id)
         if runtime is None or not record.is_active:
@@ -587,7 +587,7 @@ class ExecSessionManager:
         exec_session_id: str,
         columns: int,
         rows: int,
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         if columns < 1 or rows < 1:
             raise ValueError("columns and rows must both be >= 1")
         record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
@@ -605,7 +605,7 @@ class ExecSessionManager:
         run_id: str,
         exec_session_id: str,
         reason: str = "stopped_by_user",
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         _ = reason
         record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
         runtime = self._runtimes.get(exec_session_id)
@@ -654,7 +654,7 @@ class ExecSessionManager:
     async def _spawn_runtime(
         self,
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -956,7 +956,7 @@ class ExecSessionManager:
         self._publish_exec_session_event(
             event_type=(
                 RunEventType.EXEC_SESSION_STOPPED
-                if status == ExecSessionStatus.STOPPED
+                if status == BackgroundTaskStatus.STOPPED
                 else RunEventType.EXEC_SESSION_COMPLETED
             ),
             record=runtime.record,
@@ -970,14 +970,14 @@ class ExecSessionManager:
         runtime: _ExecSessionRuntime,
         exit_code: int | None,
         timed_out: bool,
-    ) -> ExecSessionStatus:
+    ) -> BackgroundTaskStatus:
         if runtime.stop_requested:
-            return ExecSessionStatus.STOPPED
+            return BackgroundTaskStatus.STOPPED
         if timed_out:
-            return ExecSessionStatus.FAILED
+            return BackgroundTaskStatus.FAILED
         if exit_code == 0:
-            return ExecSessionStatus.COMPLETED
-        return ExecSessionStatus.FAILED
+            return BackgroundTaskStatus.COMPLETED
+        return BackgroundTaskStatus.FAILED
 
     async def _write_chars(self, runtime: _ExecSessionRuntime, chars: str) -> None:
         await runtime.transport.write(chars)
@@ -1063,7 +1063,7 @@ class ExecSessionManager:
         self,
         *,
         event_type: RunEventType,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         payload: dict[str, JsonValue] | None = None,
     ) -> None:
         self._run_event_hub.publish(
@@ -1097,7 +1097,7 @@ class ExecSessionManager:
     def _build_exec_session_update_payload(
         self,
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         stream_name: str,
         chunk: str,
     ) -> dict[str, JsonValue]:
@@ -1106,7 +1106,7 @@ class ExecSessionManager:
         payload["delta"] = chunk
         return payload
 
-    def _get_record(self, exec_session_id: str) -> ExecSessionRecord:
+    def _get_record(self, exec_session_id: str) -> BackgroundTaskRecord:
         record = self._repository.get(exec_session_id)
         if record is None:
             raise KeyError(f"Unknown exec session: {exec_session_id}")

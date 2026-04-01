@@ -9,9 +9,9 @@ from typing import Protocol
 
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.exec_session_manager import ExecSessionManager
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
@@ -27,7 +27,7 @@ class BackgroundTaskCompletionSink(Protocol):
     def handle_background_task_completion(
         self,
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         message: str,
     ) -> None: ...
 
@@ -69,7 +69,7 @@ class BackgroundTaskService:
         env: dict[str, str] | None,
         tty: bool,
         background: bool,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         manager = self._require_manager()
         timeout = normalize_timeout(timeout_ms)
         if background:
@@ -120,7 +120,7 @@ class BackgroundTaskService:
             if completed:
                 return updated, True
 
-    def list_for_run(self, run_id: str) -> tuple[ExecSessionRecord, ...]:
+    def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         manager = self._require_manager()
         return tuple(
             record
@@ -133,7 +133,7 @@ class BackgroundTaskService:
         *,
         run_id: str,
         background_task_id: str,
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         record = self._require_manager().get_for_run(
             run_id=run_id,
             exec_session_id=background_task_id,
@@ -148,7 +148,7 @@ class BackgroundTaskService:
         run_id: str,
         background_task_id: str,
         wait_ms: int,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         if not record.is_active:
             return self._mark_completion_consumed(record), True
@@ -166,20 +166,22 @@ class BackgroundTaskService:
         *,
         run_id: str,
         background_task_id: str,
-    ) -> ExecSessionRecord:
+    ) -> BackgroundTaskRecord:
         _ = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         return await self._require_manager().stop_for_run(
             run_id=run_id,
             exec_session_id=background_task_id,
         )
 
-    async def _handle_exec_session_completion(self, record: ExecSessionRecord) -> None:
+    async def _handle_exec_session_completion(
+        self, record: BackgroundTaskRecord
+    ) -> None:
         await asyncio.sleep(0)
         latest = self._repository.get(record.exec_session_id)
         current = latest or record
         if current.execution_mode != "background":
             return
-        if current.status == ExecSessionStatus.STOPPED:
+        if current.status == BackgroundTaskStatus.STOPPED:
             return
         if current.completion_notified_at is not None:
             return
@@ -203,11 +205,13 @@ class BackgroundTaskService:
             return
         _ = self._mark_completion_consumed(current)
 
-    def _mark_completion_consumed(self, record: ExecSessionRecord) -> ExecSessionRecord:
+    def _mark_completion_consumed(
+        self, record: BackgroundTaskRecord
+    ) -> BackgroundTaskRecord:
         if (
             record.execution_mode != "background"
             or record.is_active
-            or record.status == ExecSessionStatus.STOPPED
+            or record.status == BackgroundTaskStatus.STOPPED
             or record.completion_notified_at is not None
         ):
             return record
@@ -235,7 +239,7 @@ def _normalize_sync_wait_ms(wait_ms: int | None) -> int:
     return max(_MIN_SYNC_WAIT_MS, wait_ms)
 
 
-def _build_completion_message(record: ExecSessionRecord) -> str:
+def _build_completion_message(record: BackgroundTaskRecord) -> str:
     exit_code = "" if record.exit_code is None else str(record.exit_code)
     tool_call_id = record.tool_call_id or ""
     summary = _notification_summary(record)
@@ -252,7 +256,7 @@ def _build_completion_message(record: ExecSessionRecord) -> str:
     )
 
 
-def _notification_summary(record: ExecSessionRecord) -> str:
+def _notification_summary(record: BackgroundTaskRecord) -> str:
     if record.recent_output:
         summary = "\n".join(record.recent_output)
     else:

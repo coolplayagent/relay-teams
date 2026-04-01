@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
 
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import (
     ExecSessionRepository,
@@ -16,7 +16,7 @@ from agent_teams.sessions.runs.exec_session_repo import (
 def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
     db_path = tmp_path / "background-terminals.db"
     repo = ExecSessionRepository(db_path)
-    record = ExecSessionRecord(
+    record = BackgroundTaskRecord(
         exec_session_id="exec-1",
         run_id="run-1",
         session_id="session-1",
@@ -26,7 +26,7 @@ def test_exec_session_repo_roundtrips_records(tmp_path: Path) -> None:
         command="sleep 30",
         cwd="/tmp/project",
         execution_mode="foreground",
-        status=ExecSessionStatus.RUNNING,
+        status=BackgroundTaskStatus.RUNNING,
         recent_output=("booting",),
         output_excerpt="booting",
         log_path="tmp/exec_sessions/exec-1.log",
@@ -50,22 +50,22 @@ def test_exec_session_repo_marks_transient_terminals_interrupted(
 ) -> None:
     db_path = tmp_path / "background-terminals-interrupted.db"
     repo = ExecSessionRepository(db_path)
-    running = ExecSessionRecord(
+    running = BackgroundTaskRecord(
         exec_session_id="exec-running",
         run_id="run-1",
         session_id="session-1",
         command="sleep 30",
         cwd="/tmp/project",
-        status=ExecSessionStatus.RUNNING,
+        status=BackgroundTaskStatus.RUNNING,
         log_path="tmp/exec_sessions/exec-running.log",
     )
-    completed = ExecSessionRecord(
+    completed = BackgroundTaskRecord(
         exec_session_id="exec-completed",
         run_id="run-1",
         session_id="session-1",
         command="echo done",
         cwd="/tmp/project",
-        status=ExecSessionStatus.COMPLETED,
+        status=BackgroundTaskStatus.COMPLETED,
         log_path="tmp/exec_sessions/exec-completed.log",
     )
     repo.upsert(running)
@@ -77,22 +77,22 @@ def test_exec_session_repo_marks_transient_terminals_interrupted(
     finished = repo.get("exec-completed")
     assert affected == 1
     assert interrupted is not None
-    assert interrupted.status == ExecSessionStatus.STOPPED
+    assert interrupted.status == BackgroundTaskStatus.STOPPED
     assert interrupted.completed_at is not None
     assert finished is not None
-    assert finished.status == ExecSessionStatus.COMPLETED
+    assert finished.status == BackgroundTaskStatus.COMPLETED
 
 
 def test_exec_session_repo_can_delete_records_by_session(tmp_path: Path) -> None:
     db_path = tmp_path / "background-terminals-delete-session.db"
     repo = ExecSessionRepository(db_path)
-    record = ExecSessionRecord(
+    record = BackgroundTaskRecord(
         exec_session_id="exec-1",
         run_id="run-1",
         session_id="session-1",
         command="sleep 30",
         cwd="/tmp/project",
-        status=ExecSessionStatus.RUNNING,
+        status=BackgroundTaskStatus.RUNNING,
         log_path="tmp/exec_sessions/exec-1.log",
     )
     repo.upsert(record)

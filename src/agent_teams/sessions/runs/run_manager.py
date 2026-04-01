@@ -50,7 +50,7 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
 )
-from agent_teams.sessions.runs.exec_session_models import ExecSessionRecord
+from agent_teams.sessions.runs.background_task_models import BackgroundTaskRecord
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
     RunEvent,
@@ -1268,7 +1268,7 @@ class RunManager:
     def handle_background_task_completion(
         self,
         *,
-        record: "ExecSessionRecord",
+        record: "BackgroundTaskRecord",
         message: str,
     ) -> None:
         if self._should_delegate_to_bound_loop():
@@ -1355,7 +1355,7 @@ class RunManager:
     def _handle_background_task_completion_local(
         self,
         *,
-        record: "ExecSessionRecord",
+        record: "BackgroundTaskRecord",
         message: str,
     ) -> None:
         task_id = self._find_task_for_instance(

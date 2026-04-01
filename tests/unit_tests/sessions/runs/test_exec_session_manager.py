@@ -16,9 +16,9 @@ from agent_teams.sessions.runs.exec_session_manager import (
     MAX_EXEC_SESSIONS,
     PROTECTED_RECENT_EXEC_SESSIONS,
 )
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import (
     ExecSessionRepository,
@@ -176,7 +176,7 @@ async def test_exec_session_manager_completes_and_publishes_events(
         await manager.close()
 
     assert completed is True
-    assert started.status == ExecSessionStatus.COMPLETED
+    assert started.status == BackgroundTaskStatus.COMPLETED
     assert "hello" in started.recent_output
     log_path = workspace.resolve_read_path(started.log_path)
     assert log_path.read_text(encoding="utf-8") == "hello\n"
@@ -210,13 +210,13 @@ async def test_exec_session_manager_writes_logs_via_to_thread(
     hub = RunEventHub()
     manager = ExecSessionManager(repository=repo, run_event_hub=hub)
     record = repo.upsert(
-        ExecSessionRecord(
+        BackgroundTaskRecord(
             exec_session_id="exec-1",
             run_id="run-1",
             session_id="session-1",
             command="printf ready",
             cwd=str(tmp_path),
-            status=ExecSessionStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
             log_path=str(tmp_path / "exec-1.log"),
         )
     )
@@ -286,7 +286,7 @@ async def test_exec_session_manager_write_finishes_shell_prompt(
         await manager.close()
 
     assert completed is True
-    assert completed_record.status == ExecSessionStatus.COMPLETED
+    assert completed_record.status == BackgroundTaskStatus.COMPLETED
     assert "line:hello" in completed_record.recent_output
 
 
@@ -305,7 +305,7 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
 
     async def _fake_spawn_runtime(
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -341,7 +341,7 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
     finally:
         await manager.close()
 
-    assert stopped.status == ExecSessionStatus.STOPPED
+    assert stopped.status == BackgroundTaskStatus.STOPPED
 
 
 @pytest.mark.asyncio
@@ -393,7 +393,7 @@ async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
     finally:
         await manager.close()
 
-    assert stopped.status == ExecSessionStatus.STOPPED
+    assert stopped.status == BackgroundTaskStatus.STOPPED
 
 
 @pytest.mark.asyncio
@@ -407,7 +407,7 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
     manager = ExecSessionManager(repository=repo, run_event_hub=hub)
 
     foreground = repo.upsert(
-        ExecSessionRecord(
+        BackgroundTaskRecord(
             exec_session_id="exec-foreground",
             run_id="run-1",
             session_id="session-1",
@@ -417,11 +417,11 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
             command="printf ready",
             cwd=str(tmp_path),
             execution_mode="foreground",
-            status=ExecSessionStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
         )
     )
     background = repo.upsert(
-        ExecSessionRecord(
+        BackgroundTaskRecord(
             exec_session_id="exec-background",
             run_id="run-1",
             session_id="session-1",
@@ -431,7 +431,7 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
             command="sleep 30",
             cwd=str(tmp_path),
             execution_mode="background",
-            status=ExecSessionStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
         )
     )
 
@@ -456,8 +456,8 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
         persisted_background = repo.get("exec-background")
         assert persisted_foreground is not None
         assert persisted_background is not None
-        assert persisted_foreground.status == ExecSessionStatus.STOPPED
-        assert persisted_background.status == ExecSessionStatus.RUNNING
+        assert persisted_foreground.status == BackgroundTaskStatus.STOPPED
+        assert persisted_background.status == BackgroundTaskStatus.RUNNING
         assert "exec-foreground" not in manager._runtimes
         assert "exec-background" in manager._runtimes
     finally:
@@ -560,7 +560,7 @@ async def test_exec_session_manager_windows_tty_transport_supports_write_resize_
     assert resized.exec_session_id == started.exec_session_id
     assert fake_process.writes == ["hello\r\n"]
     assert fake_process.sizes == [(30, 100)]
-    assert stopped.status == ExecSessionStatus.STOPPED
+    assert stopped.status == BackgroundTaskStatus.STOPPED
 
 
 @pytest.mark.asyncio
@@ -618,7 +618,7 @@ async def test_start_session_serializes_admission_with_async_lock(
 
     async def _fake_spawn_runtime(
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -689,7 +689,7 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
 
     async def _fake_spawn_runtime(
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -739,7 +739,7 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
 
     for index in range(MAX_EXEC_SESSIONS + 2):
-        record = ExecSessionRecord(
+        record = BackgroundTaskRecord(
             exec_session_id=f"exec_{index:03d}",
             run_id="run-1",
             session_id="session-1",
@@ -748,7 +748,7 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
             tool_call_id=f"call-{index}",
             command="printf 'done\\n'",
             cwd=str(tmp_path),
-            status=ExecSessionStatus.COMPLETED,
+            status=BackgroundTaskStatus.COMPLETED,
             created_at=created_at + timedelta(minutes=index),
             updated_at=created_at + timedelta(minutes=index),
             completed_at=created_at + timedelta(minutes=index),
@@ -786,7 +786,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
 
     for index in range(MAX_EXEC_SESSIONS):
-        record = ExecSessionRecord(
+        record = BackgroundTaskRecord(
             exec_session_id=f"exec_{index:03d}",
             run_id="run-1",
             session_id="session-1",
@@ -795,7 +795,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
             tool_call_id=f"call-{index}",
             command="sleep 30",
             cwd=str(tmp_path),
-            status=ExecSessionStatus.RUNNING,
+            status=BackgroundTaskStatus.RUNNING,
             created_at=created_at + timedelta(minutes=index),
             updated_at=created_at + timedelta(minutes=index),
         )

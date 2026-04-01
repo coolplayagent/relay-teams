@@ -11,29 +11,29 @@ from agent_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
 )
 from agent_teams.sessions.runs.exec_session_manager import ExecSessionManager
-from agent_teams.sessions.runs.exec_session_models import (
-    ExecSessionRecord,
-    ExecSessionStatus,
+from agent_teams.sessions.runs.background_task_models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 
 
 class _FakeExecSessionManager:
     def __init__(self) -> None:
-        self._listener: Callable[[ExecSessionRecord], Awaitable[None]] | None = None
-        self.records: tuple[ExecSessionRecord, ...] = ()
-        self.wait_result: tuple[ExecSessionRecord, bool] | None = None
+        self._listener: Callable[[BackgroundTaskRecord], Awaitable[None]] | None = None
+        self.records: tuple[BackgroundTaskRecord, ...] = ()
+        self.wait_result: tuple[BackgroundTaskRecord, bool] | None = None
 
     def set_completion_listener(
         self,
-        listener: Callable[[ExecSessionRecord], Awaitable[None]] | None,
+        listener: Callable[[BackgroundTaskRecord], Awaitable[None]] | None,
     ) -> None:
         self._listener = listener
 
-    def list_for_run(self, run_id: str) -> tuple[ExecSessionRecord, ...]:
+    def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return tuple(record for record in self.records if record.run_id == run_id)
 
-    def get_for_run(self, *, run_id: str, exec_session_id: str) -> ExecSessionRecord:
+    def get_for_run(self, *, run_id: str, exec_session_id: str) -> BackgroundTaskRecord:
         for record in self.records:
             if record.run_id == run_id and record.exec_session_id == exec_session_id:
                 return record
@@ -45,7 +45,7 @@ class _FakeExecSessionManager:
         run_id: str,
         exec_session_id: str,
         wait_ms: int,
-    ) -> tuple[ExecSessionRecord, bool]:
+    ) -> tuple[BackgroundTaskRecord, bool]:
         _ = (run_id, exec_session_id, wait_ms)
         if self.wait_result is None:
             raise AssertionError("wait_result not configured")
@@ -54,12 +54,12 @@ class _FakeExecSessionManager:
 
 class _CapturingCompletionSink:
     def __init__(self) -> None:
-        self.calls: list[tuple[ExecSessionRecord, str]] = []
+        self.calls: list[tuple[BackgroundTaskRecord, str]] = []
 
     def handle_background_task_completion(
         self,
         *,
-        record: ExecSessionRecord,
+        record: BackgroundTaskRecord,
         message: str,
     ) -> None:
         self.calls.append((record, message))
@@ -69,11 +69,11 @@ def _build_record(
     *,
     exec_session_id: str = "exec-1",
     execution_mode: Literal["foreground", "background"] = "background",
-    status: ExecSessionStatus = ExecSessionStatus.COMPLETED,
+    status: BackgroundTaskStatus = BackgroundTaskStatus.COMPLETED,
     recent_output: tuple[str, ...] = (),
     output_excerpt: str = "",
-) -> ExecSessionRecord:
-    return ExecSessionRecord(
+) -> BackgroundTaskRecord:
+    return BackgroundTaskRecord(
         exec_session_id=exec_session_id,
         run_id="run-1",
         session_id="session-1",
