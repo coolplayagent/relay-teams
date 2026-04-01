@@ -627,6 +627,86 @@ console.log(JSON.stringify({
     assert payload["savedRecordSkills"] == ["builtin:diff", "builtin:time"]
 
 
+def test_role_settings_removes_unavailable_skill_after_unchecking(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const staleSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+const invalidSkillOption = Array.from(
+    document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.optionValue === "builtin:diff");
+invalidSkillOption.checked = false;
+await invalidSkillOption.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    staleSkillsHtml,
+    refreshedSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    assert "builtin:diff <em>Unavailable</em>" in cast(str, payload["staleSkillsHtml"])
+    assert "Unavailable" not in cast(str, payload["refreshedSkillsHtml"])
+    assert cast(dict[str, JsonValue], payload["savePayload"])["skills"] == []
+
+
+def test_role_settings_removes_unavailable_tool_after_unchecking(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    tools: ["shell"],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const staleToolsHtml = document.getElementById("role-tools-picker").innerHTML;
+const invalidToolOption = Array.from(
+    document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.optionValue === "read_file");
+invalidToolOption.checked = false;
+await invalidToolOption.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    staleToolsHtml,
+    refreshedToolsHtml: document.getElementById("role-tools-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    assert "read_file <em>Unavailable</em>" in cast(str, payload["staleToolsHtml"])
+    assert "Unavailable" not in cast(str, payload["refreshedToolsHtml"])
+    assert cast(dict[str, JsonValue], payload["savePayload"])["tools"] == []
+
+
 def test_role_settings_marks_main_agent_and_keeps_reserved_prompt_editable(
     tmp_path: Path,
 ) -> None:

@@ -570,9 +570,25 @@ function renderSkillsShellAdvisory() {
     container.insertAdjacentHTML('beforeend', advisoryHtml);
 }
 
+function pickerHasInvalidOptions(container) {
+    return typeof container?.innerHTML === 'string'
+        && container.innerHTML.includes('role-option-item-invalid');
+}
+
+function refreshOptionPicker(containerId) {
+    if (containerId === 'role-tools-picker') {
+        renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+        return;
+    }
+    if (containerId === 'role-skills-picker') {
+        renderSkillOptionPicker(currentSelections.skills, t('settings.roles.no_skills'));
+    }
+}
+
 function syncOptionSelection(containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
+    const shouldRefreshPicker = pickerHasInvalidOptions(container);
     const nextValues = [];
     container.querySelectorAll('input[type="checkbox"]').forEach(input => {
         if (input.checked) {
@@ -585,6 +601,9 @@ function syncOptionSelection(containerId) {
         currentSelections.mcp_servers = nextValues;
     } else if (containerId === 'role-skills-picker') {
         currentSelections.skills = nextValues;
+    }
+    if (shouldRefreshPicker) {
+        refreshOptionPicker(containerId);
     }
     if (containerId === 'role-tools-picker' || containerId === 'role-skills-picker') {
         renderSkillsShellAdvisory();
