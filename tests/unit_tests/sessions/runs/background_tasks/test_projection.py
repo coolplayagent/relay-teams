@@ -6,6 +6,7 @@ from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskStatus,
 )
 from agent_teams.sessions.runs.background_tasks.projection import (
+    build_background_task_completion_message,
     build_background_task_payload,
     build_background_task_result_payload,
 )
@@ -50,3 +51,17 @@ def test_build_background_task_result_payload_reuses_truncated_visible_output() 
     assert payload["output_truncated"] is True
     assert payload["background_task_id"] is None
     assert payload["output"] == payload["output_excerpt"]
+
+
+def test_build_background_task_completion_message_starts_with_followup_instruction() -> (
+    None
+):
+    record = _build_record(output_excerpt="done")
+
+    message = build_background_task_completion_message(record)
+
+    assert message.startswith(
+        "A managed background task finished. Respond to the user with one short status update"
+    )
+    assert "<background-task-notification>" in message
+    assert "<status>completed</status>" in message

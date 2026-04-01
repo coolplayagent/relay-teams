@@ -8,6 +8,10 @@ from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskReco
 _MAX_SUMMARY_LENGTH = 500
 _MAX_VISIBLE_OUTPUT_CHARS = 32_000
 _OUTPUT_TRUNCATED_SUFFIX = "\n\n... output truncated; see log_path for full output ..."
+_COMPLETION_FOLLOWUP_PREFIX = (
+    "A managed background task finished. "
+    "Respond to the user with one short status update based on the notification below.\n\n"
+)
 
 
 def build_background_task_payload(
@@ -63,6 +67,7 @@ def build_background_task_completion_message(record: BackgroundTaskRecord) -> st
     tool_call_id = record.tool_call_id or ""
     summary = _notification_summary(record)
     return (
+        f"{_COMPLETION_FOLLOWUP_PREFIX}"
         "<background-task-notification>\n"
         f"<background-task-id>{_xml_escape(record.background_task_id)}</background-task-id>\n"
         f"<tool-call-id>{_xml_escape(tool_call_id)}</tool-call-id>\n"

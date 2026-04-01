@@ -122,6 +122,9 @@ async def test_background_task_service_notifies_sink_and_persists_completion_mar
     assert persisted.completion_notified_at is not None
     assert len(sink.calls) == 1
     _, message = sink.calls[0]
+    assert message.startswith(
+        "A managed background task finished. Respond to the user with one short status update"
+    )
     assert "<background-task-id>exec-1</background-task-id>" in message
     assert "<status>completed</status>" in message
     assert "done &amp; &lt;ok&gt;" in message
