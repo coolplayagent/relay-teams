@@ -430,6 +430,89 @@ async def test_fetch_url_follows_https_default_port_same_host_redirect() -> None
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_follows_same_host_html_redirect_without_location_header() -> (
+    None
+):
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://www.huawei.com/en/annual-report/2020":
+            return httpx.Response(
+                301,
+                request=request,
+                content=(
+                    "<!DOCTYPE html>"
+                    '<html><head><meta http-equiv="refresh" '
+                    'content="0; url=https://www.huawei.com/en/annual-report">'
+                    "<script>window.location.href = "
+                    '"https://www.huawei.com/en/annual-report"</script>'
+                    "</head></html>"
+                ),
+                headers={"content-type": "text/html;charset=utf-8"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="annual report",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://www.huawei.com/en/annual-report/2020",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert requested_urls == [
+        "https://www.huawei.com/en/annual-report/2020",
+        "https://www.huawei.com/en/annual-report",
+    ]
+    assert str(response.url) == "https://www.huawei.com/en/annual-report"
+    await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_requires_explicit_follow_up_for_cross_host_html_redirect_without_location_header() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            301,
+            request=request,
+            content=(
+                "<!DOCTYPE html>"
+                '<html><head><meta http-equiv="refresh" '
+                'content="0; url=https://docs.python.org/3/tutorial/">'
+                "</head></html>"
+            ),
+            headers={"content-type": "text/html;charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/start",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "redirect_required"
+    assert exc_info.value.details == {
+        "original_url": "https://example.com/start",
+        "redirect_url": "https://docs.python.org/3/tutorial/",
+        "status_code": 301,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_rejects_http_to_https_non_default_ports() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == "http://example.com:8080/start":
