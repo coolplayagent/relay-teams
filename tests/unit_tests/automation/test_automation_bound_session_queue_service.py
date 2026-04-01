@@ -651,7 +651,7 @@ def test_materialize_execution_rebinds_bound_session_workspace_before_start(
 
     assert handle is not None
     assert session_lookup.rebind_calls == [("session-1", "fresh-worktree")]
-    assert run_service.created_intents[0].reuse_root_instance is False
+    assert run_service.created_intents[0].reuse_root_instance is True
 
 
 def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
