@@ -551,12 +551,17 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     workspace = _build_workspace_handle(tmp_path)
     fake_process = _FakeWindowsPtyProcess()
 
+    resolved_commands: list[str | None] = []
+    env_commands: list[str | None] = []
+
     async def _fake_build_command_env(
         env: dict[str, str] | None = None,
         *,
         runtime: ResolvedCommandRuntime | None = None,
+        command: str | None = None,
     ) -> dict[str, str]:
         _ = runtime
+        env_commands.append(command)
         return dict(env or {})
 
     async def _fake_kill_process_tree_by_pid(pid: int) -> None:
@@ -567,11 +572,14 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     monkeypatch.setattr(
         manager_module,
         "resolve_command_runtime",
-        lambda: ResolvedCommandRuntime(
-            kind=CommandRuntimeKind.POWERSHELL,
-            executable="powershell.exe",
-            display_name="PowerShell",
-        ),
+        lambda *, command=None: (
+            resolved_commands.append(command),
+            ResolvedCommandRuntime(
+                kind=CommandRuntimeKind.POWERSHELL,
+                executable="powershell.exe",
+                display_name="PowerShell",
+            ),
+        )[1],
     )
     monkeypatch.setattr(manager_module, "build_command_env", _fake_build_command_env)
     monkeypatch.setattr(
@@ -630,6 +638,8 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     assert resized.background_task_id == started.background_task_id
     assert fake_process.writes == ["hello\r\n"]
     assert fake_process.sizes == [(30, 100)]
+    assert resolved_commands == ["powershell interactive"]
+    assert env_commands == ["powershell interactive"]
     assert stopped.status == BackgroundTaskStatus.STOPPED
 
 

@@ -744,8 +744,12 @@ class BackgroundTaskManager:
         env: dict[str, str] | None,
     ) -> _PosixPtyTransport:
         assert pty is not None
-        runtime = resolve_command_runtime()
-        command_env = await build_command_env(env, runtime=runtime)
+        runtime = resolve_command_runtime(command=command)
+        command_env = await build_command_env(
+            env,
+            runtime=runtime,
+            command=command,
+        )
         master_fd, slave_fd = pty.openpty()
         _set_terminal_size(
             master_fd,
@@ -779,8 +783,12 @@ class BackgroundTaskManager:
         cwd: Path,
         env: dict[str, str] | None,
     ) -> _WindowsConPtyTransport:
-        runtime = resolve_command_runtime()
-        command_env = await build_command_env(env, runtime=runtime)
+        runtime = resolve_command_runtime(command=command)
+        command_env = await build_command_env(
+            env,
+            runtime=runtime,
+            command=command,
+        )
         process = _spawn_windows_pty_process(
             command=command,
             cwd=cwd,

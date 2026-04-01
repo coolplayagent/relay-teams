@@ -6,6 +6,7 @@ import contextlib
 from enum import Enum
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -40,6 +41,66 @@ _BASH_STARTUP_ENV_PREFIXES = ("BASH_FUNC_",)
 _SIGKILL_GRACE_SECONDS = 5
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 1_200_000
+_WINDOWS_POWERSHELL_CMDLET_PREFIXES = frozenset(
+    {
+        "Add",
+        "Clear",
+        "Convert",
+        "Copy",
+        "Disable",
+        "Enable",
+        "Export",
+        "ForEach",
+        "Get",
+        "Import",
+        "Invoke",
+        "Join",
+        "Measure",
+        "Move",
+        "New",
+        "Out",
+        "Read",
+        "Remove",
+        "Rename",
+        "Restart",
+        "Resume",
+        "Select",
+        "Set",
+        "Sort",
+        "Split",
+        "Start",
+        "Stop",
+        "Suspend",
+        "Test",
+        "Wait",
+        "Where",
+        "Write",
+    }
+)
+_EXPLICIT_WINDOWS_SHELL_NAMES = frozenset(
+    {
+        "bash",
+        "bash.exe",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "sh",
+        "sh.exe",
+    }
+)
+_POWERSHELL_STATEMENT_PREFIX = r"(?:^|[;|&]\s*)"
+_POWERSHELL_CMDLET_PATTERN = re.compile(
+    _POWERSHELL_STATEMENT_PREFIX + r"(?P<cmdlet>[A-Za-z]+-[A-Za-z][\w-]*)\b"
+)
+_POWERSHELL_ENV_PATTERN = re.compile(
+    _POWERSHELL_STATEMENT_PREFIX + r"\$env:[A-Za-z_][\w]*"
+)
+_POWERSHELL_MEMBER_PATTERN = re.compile(
+    _POWERSHELL_STATEMENT_PREFIX + r"\[[A-Za-z_][A-Za-z0-9_\.\[\]]*\]::"
+)
 
 
 class CommandRuntimeKind(str, Enum):
@@ -67,8 +128,10 @@ def resolve_bash_path() -> str:
     return _resolve_posix_bash_path()
 
 
-def resolve_command_runtime() -> ResolvedCommandRuntime:
+def resolve_command_runtime(*, command: str | None = None) -> ResolvedCommandRuntime:
     if _is_windows():
+        if _command_prefers_powershell(command):
+            return _build_powershell_runtime()
         try:
             return _build_bash_runtime(resolve_bash_path(), display_name="Git Bash")
         except FileNotFoundError:
@@ -113,6 +176,28 @@ def normalize_timeout(timeout_ms: int | None) -> int:
 
 def _is_windows() -> bool:
     return os.name == "nt"
+
+
+def _command_prefers_powershell(command: str | None) -> bool:
+    if not _is_windows() or command is None:
+        return False
+    normalized = command.strip()
+    if not normalized:
+        return False
+    first_token = normalized.split(maxsplit=1)[0].strip().strip("\"'")
+    command_name = Path(first_token).name.lower()
+    if command_name in _EXPLICIT_WINDOWS_SHELL_NAMES:
+        return False
+    if _POWERSHELL_ENV_PATTERN.search(normalized) is not None:
+        return True
+    if _POWERSHELL_MEMBER_PATTERN.search(normalized) is not None:
+        return True
+    for match in _POWERSHELL_CMDLET_PATTERN.finditer(normalized):
+        cmdlet = match.group("cmdlet")
+        prefix = cmdlet.split("-", 1)[0]
+        if prefix in _WINDOWS_POWERSHELL_CMDLET_PREFIXES:
+            return True
+    return False
 
 
 def _resolve_windows_bash_path() -> str:
@@ -346,8 +431,9 @@ async def build_command_env(
     env: dict[str, str] | None = None,
     *,
     runtime: ResolvedCommandRuntime | None = None,
+    command: str | None = None,
 ) -> dict[str, str]:
-    resolved_runtime = runtime or resolve_command_runtime()
+    resolved_runtime = runtime or resolve_command_runtime(command=command)
     command_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     command_env.update(_load_github_cli_env())
     gh_path = await _resolve_gh_path()
@@ -367,8 +453,12 @@ async def create_command_subprocess(
     stdout: int | None = None,
     stderr: int | None = None,
 ) -> asyncio.subprocess.Process:
-    resolved_runtime = runtime or resolve_command_runtime()
-    command_env = await build_command_env(env, runtime=resolved_runtime)
+    resolved_runtime = runtime or resolve_command_runtime(command=command)
+    command_env = await build_command_env(
+        env,
+        runtime=resolved_runtime,
+        command=command,
+    )
     return await asyncio.create_subprocess_exec(
         *build_command_argv(
             runtime=resolved_runtime,

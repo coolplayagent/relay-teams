@@ -128,6 +128,53 @@ async def test_background_task_manager_stop_unblocks_windows_pipe_runtime(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only background process coverage")
+async def test_background_task_manager_auto_detects_powershell_commands(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-terminal-win-powershell-auto.db"
+    )
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+
+    try:
+        started = await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="Write-Output 'PS_AUTO_READY'; Start-Sleep -Seconds 90",
+            cwd=workspace.execution_root,
+            timeout_ms=30_000,
+            env=None,
+            tty=False,
+        )
+        updated = await _wait_for_expected_output(
+            manager,
+            run_id="run-1",
+            background_task_id=started.background_task_id,
+            expected_output="PS_AUTO_READY",
+        )
+        stopped = await asyncio.wait_for(
+            manager.stop_for_run(
+                run_id="run-1",
+                background_task_id=started.background_task_id,
+            ),
+            timeout=10,
+        )
+    finally:
+        await manager.close()
+
+    assert updated.status == BackgroundTaskStatus.RUNNING
+    assert any("PS_AUTO_READY" in line for line in stopped.recent_output)
+    assert stopped.status == BackgroundTaskStatus.STOPPED
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only background process coverage")
 @pytest.mark.parametrize(
     ("runtime", "command", "expected_output"),
     [
