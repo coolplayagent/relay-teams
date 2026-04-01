@@ -182,3 +182,13 @@ def api_client(integration_env: IntegrationEnvironment) -> Iterator[httpx.Client
         trust_env=False,
     ) as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_llm_state(integration_env: IntegrationEnvironment) -> None:
+    response = httpx.post(
+        f"{integration_env.fake_llm_admin_url}/admin/reset",
+        timeout=5.0,
+        trust_env=False,
+    )
+    response.raise_for_status()
