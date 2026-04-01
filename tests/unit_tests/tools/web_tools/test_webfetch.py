@@ -513,6 +513,35 @@ async def test_fetch_url_requires_explicit_follow_up_for_cross_host_html_redirec
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_wraps_redirect_body_read_errors_as_tool_errors() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            301,
+            request=request,
+            headers={"content-type": "text/html;charset=utf-8"},
+            stream=_InterruptingStream(
+                data=b"<!DOCTYPE html>",
+                error=httpx.ReadError("stream interrupted", request=request),
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/start",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "network_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {"url_host": "example.com"}
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_rejects_http_to_https_non_default_ports() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == "http://example.com:8080/start":
