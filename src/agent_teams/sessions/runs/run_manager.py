@@ -47,10 +47,10 @@ from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.exec_session_manager import (
-    ExecSessionManager,
+from agent_teams.sessions.runs.background_tasks.manager import (
+    BackgroundTaskManager,
 )
-from agent_teams.sessions.runs.background_task_models import BackgroundTaskRecord
+from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
     RunEvent,
@@ -153,7 +153,7 @@ class RunManager:
         run_runtime_repo: RunRuntimeRepository | None = None,
         run_intent_repo: RunIntentRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
-        exec_session_manager: ExecSessionManager | None = None,
+        background_task_manager: BackgroundTaskManager | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
@@ -180,7 +180,7 @@ class RunManager:
         self._run_runtime_repo: RunRuntimeRepository | None = run_runtime_repo
         self._run_intent_repo: RunIntentRepository | None = run_intent_repo
         self._run_state_repo: RunStateRepository | None = run_state_repo
-        self._exec_session_manager = exec_session_manager
+        self._background_task_manager = background_task_manager
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
@@ -1119,9 +1119,9 @@ class RunManager:
                 body=f"Run {run_id} failed: {exc}",
             )
         finally:
-            if self._exec_session_manager is not None:
+            if self._background_task_manager is not None:
                 try:
-                    await self._exec_session_manager.stop_all_for_run(
+                    await self._background_task_manager.stop_all_for_run(
                         run_id=run_id,
                         reason="run_finalized",
                         execution_mode="foreground",
@@ -1136,7 +1136,7 @@ class RunManager:
                             logger,
                             logging.ERROR,
                             event="exec_session.cleanup_failed",
-                            message="Failed to clean up exec sessions",
+                            message="Failed to clean up background tasks",
                             exc_info=exc,
                         )
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
@@ -1520,11 +1520,11 @@ class RunManager:
         )
 
     def list_exec_sessions(self, run_id: str) -> tuple[dict[str, object], ...]:
-        if self._exec_session_manager is None:
+        if self._background_task_manager is None:
             return ()
         return tuple(
             record.model_dump(mode="json")
-            for record in self._exec_session_manager.list_for_run(run_id)
+            for record in self._background_task_manager.list_for_run(run_id)
         )
 
     def get_exec_session(
@@ -1533,9 +1533,9 @@ class RunManager:
         run_id: str,
         exec_session_id: str,
     ) -> dict[str, object]:
-        if self._exec_session_manager is None:
-            raise KeyError(f"Exec session {exec_session_id} not found")
-        return self._exec_session_manager.get_for_run(
+        if self._background_task_manager is None:
+            raise KeyError(f"Background task {exec_session_id} not found")
+        return self._background_task_manager.get_for_run(
             run_id=run_id,
             exec_session_id=exec_session_id,
         ).model_dump(mode="json")
@@ -1546,9 +1546,9 @@ class RunManager:
         run_id: str,
         exec_session_id: str,
     ) -> dict[str, object]:
-        if self._exec_session_manager is None:
-            raise KeyError(f"Exec session {exec_session_id} not found")
-        record = await self._exec_session_manager.stop_for_run(
+        if self._background_task_manager is None:
+            raise KeyError(f"Background task {exec_session_id} not found")
+        record = await self._background_task_manager.stop_for_run(
             run_id=run_id,
             exec_session_id=exec_session_id,
         )

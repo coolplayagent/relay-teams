@@ -7,7 +7,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.background_task_models import BackgroundTaskRecord
+from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolApprovalRequest,

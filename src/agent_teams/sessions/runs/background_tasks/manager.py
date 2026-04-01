@@ -31,11 +31,13 @@ from pydantic import JsonValue
 from agent_teams.logger import get_logger, log_event
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.tools.workspace_tools.shell_executor import (
     ResolvedShell,
@@ -52,13 +54,13 @@ from agent_teams.workspace import WorkspaceHandle
 
 LOGGER = get_logger(__name__)
 
-DEFAULT_EXEC_SESSION_TIMEOUT_MS = 30 * 60 * 1000
+DEFAULT_BACKGROUND_TASK_TIMEOUT_MS = 30 * 60 * 1000
 MIN_EXEC_COMMAND_YIELD_MS = 250
 MIN_EMPTY_POLL_YIELD_MS = 5000
 MAX_WRITE_WAIT_MS = 30000
 MAX_BACKGROUND_POLL_MS = 300000
-MAX_EXEC_SESSIONS = 64
-PROTECTED_RECENT_EXEC_SESSIONS = 8
+MAX_BACKGROUND_TASKS = 64
+PROTECTED_RECENT_BACKGROUND_TASKS = 8
 MAX_RECENT_OUTPUT_LINES = 3
 MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 MAX_DELTA_BYTES = 8192
@@ -152,11 +154,11 @@ class _WindowsPtyProcessFactoryProtocol(Protocol):
     ) -> _WindowsPtyProcessProtocol: ...
 
 
-class _ExecSessionCompletionListener(Protocol):
+class _BackgroundTaskCompletionListener(Protocol):
     async def __call__(self, record: BackgroundTaskRecord) -> None: ...
 
 
-class _ExecSessionTransport(ABC):
+class _BackgroundTaskTransport(ABC):
     @property
     @abstractmethod
     def tty(self) -> bool: ...
@@ -177,8 +179,8 @@ class _ExecSessionTransport(ABC):
     def start_pumps(
         self,
         *,
-        manager: ExecSessionManager,
-        runtime: _ExecSessionRuntime,
+        manager: BackgroundTaskManager,
+        runtime: _BackgroundTaskRuntime,
     ) -> list[asyncio.Task[None]]: ...
 
     @abstractmethod
@@ -197,7 +199,7 @@ class _ExecSessionTransport(ABC):
     async def close(self) -> None: ...
 
 
-class _PipeTransport(_ExecSessionTransport):
+class _PipeTransport(_BackgroundTaskTransport):
     def __init__(self, proc: asyncio.subprocess.Process) -> None:
         self._proc = proc
 
@@ -220,13 +222,13 @@ class _PipeTransport(_ExecSessionTransport):
     def start_pumps(
         self,
         *,
-        manager: ExecSessionManager,
-        runtime: _ExecSessionRuntime,
+        manager: BackgroundTaskManager,
+        runtime: _BackgroundTaskRuntime,
     ) -> list[asyncio.Task[None]]:
         stdout = self._proc.stdout
         stderr = self._proc.stderr
         if stdout is None or stderr is None:
-            raise RuntimeError("Failed to capture exec session streams")
+            raise RuntimeError("Failed to capture background task streams")
         return [
             asyncio.create_task(manager._pump_stream("stdout", stdout, runtime.queue)),
             asyncio.create_task(manager._pump_stream("stderr", stderr, runtime.queue)),
@@ -238,13 +240,13 @@ class _PipeTransport(_ExecSessionTransport):
     async def write(self, chars: str) -> None:
         writer = self._proc.stdin
         if writer is None:
-            raise RuntimeError("Exec session stdin is not available")
+            raise RuntimeError("Background task stdin is not available")
         writer.write(chars.encode("utf-8", errors="replace"))
         await writer.drain()
 
     async def resize(self, *, columns: int, rows: int) -> None:
         _ = (columns, rows)
-        raise ValueError("resize is only supported for active TTY exec sessions")
+        raise ValueError("resize is only supported for active TTY background tasks")
 
     async def terminate(self) -> None:
         await _kill_process_tree(self._proc)
@@ -254,7 +256,7 @@ class _PipeTransport(_ExecSessionTransport):
             self._proc.stdin.close()
 
 
-class _PosixPtyTransport(_ExecSessionTransport):
+class _PosixPtyTransport(_BackgroundTaskTransport):
     def __init__(
         self,
         *,
@@ -283,8 +285,8 @@ class _PosixPtyTransport(_ExecSessionTransport):
     def start_pumps(
         self,
         *,
-        manager: ExecSessionManager,
-        runtime: _ExecSessionRuntime,
+        manager: BackgroundTaskManager,
+        runtime: _BackgroundTaskRuntime,
     ) -> list[asyncio.Task[None]]:
         return [asyncio.create_task(manager._pump_master_fd(runtime, self._master_fd))]
 
@@ -305,7 +307,7 @@ class _PosixPtyTransport(_ExecSessionTransport):
             os.close(self._master_fd)
 
 
-class _WindowsConPtyTransport(_ExecSessionTransport):
+class _WindowsConPtyTransport(_BackgroundTaskTransport):
     def __init__(self, proc: _WindowsPtyProcessProtocol) -> None:
         self._proc = proc
         self._cached_returncode: int | None = None
@@ -329,8 +331,8 @@ class _WindowsConPtyTransport(_ExecSessionTransport):
     def start_pumps(
         self,
         *,
-        manager: ExecSessionManager,
-        runtime: _ExecSessionRuntime,
+        manager: BackgroundTaskManager,
+        runtime: _BackgroundTaskRuntime,
     ) -> list[asyncio.Task[None]]:
         return [
             asyncio.create_task(manager._pump_windows_pty_process(runtime, self._proc))
@@ -363,12 +365,12 @@ class _WindowsConPtyTransport(_ExecSessionTransport):
         await loop.run_in_executor(None, self._proc.close)
 
 
-class _ExecSessionRuntime:
+class _BackgroundTaskRuntime:
     def __init__(
         self,
         *,
         record: BackgroundTaskRecord,
-        transport: _ExecSessionTransport,
+        transport: _BackgroundTaskTransport,
         log_file_path: Path,
         queue: asyncio.Queue[tuple[str, str] | None],
     ) -> None:
@@ -388,22 +390,22 @@ class _ExecSessionRuntime:
         self.stop_requested = False
 
 
-class ExecSessionManager:
+class BackgroundTaskManager:
     def __init__(
         self,
         *,
-        repository: ExecSessionRepository,
+        repository: BackgroundTaskRepository,
         run_event_hub: RunEventHub,
     ) -> None:
         self._repository = repository
         self._run_event_hub = run_event_hub
-        self._runtimes: dict[str, _ExecSessionRuntime] = {}
+        self._runtimes: dict[str, _BackgroundTaskRuntime] = {}
         self._admission_lock = asyncio.Lock()
-        self._completion_listener: _ExecSessionCompletionListener | None = None
+        self._completion_listener: _BackgroundTaskCompletionListener | None = None
 
     def set_completion_listener(
         self,
-        listener: _ExecSessionCompletionListener | None,
+        listener: _BackgroundTaskCompletionListener | None,
     ) -> None:
         self._completion_listener = listener
 
@@ -425,9 +427,9 @@ class ExecSessionManager:
     ) -> BackgroundTaskRecord:
         async with self._admission_lock:
             await self._prune_sessions_if_needed()
-            effective_timeout_ms = timeout_ms or DEFAULT_EXEC_SESSION_TIMEOUT_MS
+            effective_timeout_ms = timeout_ms or DEFAULT_BACKGROUND_TASK_TIMEOUT_MS
             exec_session_id = f"exec_{uuid4().hex[:12]}"
-            log_dir = workspace.resolve_tmp_path("exec_sessions", write=True)
+            log_dir = workspace.resolve_tmp_path("background_tasks", write=True)
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file_path = log_dir / f"{exec_session_id}.log"
             log_file_path.touch(exist_ok=True)
@@ -457,7 +459,7 @@ class ExecSessionManager:
             try:
                 runtime.record = self._repository.upsert(record)
                 persisted = True
-                self._publish_exec_session_event(
+                self._publish_background_task_event(
                     event_type=RunEventType.EXEC_SESSION_STARTED,
                     record=runtime.record,
                 )
@@ -528,7 +530,7 @@ class ExecSessionManager:
         record = self._get_record(exec_session_id)
         if record.run_id != run_id:
             raise KeyError(
-                f"Exec session {exec_session_id} does not belong to run {run_id}"
+                f"Background task {exec_session_id} does not belong to run {run_id}"
             )
         return record
 
@@ -595,7 +597,7 @@ class ExecSessionManager:
         if runtime is None or not record.is_active:
             return record
         if not runtime.tty:
-            raise ValueError("resize is only supported for active TTY exec sessions")
+            raise ValueError("resize is only supported for active TTY background tasks")
         await runtime.transport.resize(columns=columns, rows=rows)
         return self._get_record(exec_session_id)
 
@@ -658,7 +660,7 @@ class ExecSessionManager:
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
-    ) -> _ExecSessionRuntime:
+    ) -> _BackgroundTaskRuntime:
         queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
         if record.tty:
             transport = await self._spawn_tty_transport(
@@ -676,7 +678,7 @@ class ExecSessionManager:
                 stderr=asyncio.subprocess.PIPE,
             )
             transport = _PipeTransport(proc)
-        runtime = _ExecSessionRuntime(
+        runtime = _BackgroundTaskRuntime(
             record=record,
             transport=transport,
             log_file_path=log_file_path,
@@ -691,7 +693,7 @@ class ExecSessionManager:
         command: str,
         cwd: Path,
         env: dict[str, str] | None,
-    ) -> _ExecSessionTransport:
+    ) -> _BackgroundTaskTransport:
         if _posix_pty_supported():
             return await self._spawn_posix_pty_transport(
                 command=command,
@@ -782,7 +784,7 @@ class ExecSessionManager:
         finally:
             await queue.put(None)
 
-    async def _pump_master_fd(self, runtime: _ExecSessionRuntime, fd: int) -> None:
+    async def _pump_master_fd(self, runtime: _BackgroundTaskRuntime, fd: int) -> None:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         loop = asyncio.get_running_loop()
         try:
@@ -810,7 +812,7 @@ class ExecSessionManager:
 
     async def _pump_windows_pty_process(
         self,
-        runtime: _ExecSessionRuntime,
+        runtime: _BackgroundTaskRuntime,
         proc: _WindowsPtyProcessProtocol,
     ) -> None:
         loop = asyncio.get_running_loop()
@@ -837,9 +839,9 @@ class ExecSessionManager:
     def _read_master_fd(fd: int) -> bytes:
         return os.read(fd, MAX_DELTA_BYTES)
 
-    async def _supervise(self, runtime: _ExecSessionRuntime) -> None:
+    async def _supervise(self, runtime: _BackgroundTaskRuntime) -> None:
         record = runtime.record
-        timeout_ms = record.timeout_ms or DEFAULT_EXEC_SESSION_TIMEOUT_MS
+        timeout_ms = record.timeout_ms or DEFAULT_BACKGROUND_TASK_TIMEOUT_MS
         timeout_seconds = max(0.001, timeout_ms / 1000.0)
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         stream_eof = 0
@@ -886,7 +888,7 @@ class ExecSessionManager:
 
     async def _handle_output_chunk(
         self,
-        runtime: _ExecSessionRuntime,
+        runtime: _BackgroundTaskRuntime,
         *,
         stream_name: str,
         chunk: str,
@@ -909,10 +911,10 @@ class ExecSessionManager:
             )
         )
         await self._mark_runtime_changed(runtime)
-        self._publish_exec_session_event(
+        self._publish_background_task_event(
             event_type=RunEventType.EXEC_SESSION_UPDATED,
             record=runtime.record,
-            payload=self._build_exec_session_update_payload(
+            payload=self._build_background_task_update_payload(
                 record=runtime.record,
                 stream_name=stream_name,
                 chunk=chunk,
@@ -921,7 +923,7 @@ class ExecSessionManager:
 
     async def _finalize_runtime(
         self,
-        runtime: _ExecSessionRuntime,
+        runtime: _BackgroundTaskRuntime,
         *,
         timed_out: bool,
     ) -> None:
@@ -931,7 +933,7 @@ class ExecSessionManager:
             exit_code = await runtime.transport.wait()
         if timed_out:
             exit_code = 124
-        status = self._resolve_exec_session_status(
+        status = self._resolve_background_task_status(
             runtime=runtime,
             exit_code=exit_code,
             timed_out=timed_out,
@@ -953,7 +955,7 @@ class ExecSessionManager:
         await runtime.transport.close()
         runtime.completed.set()
         await self._mark_runtime_changed(runtime)
-        self._publish_exec_session_event(
+        self._publish_background_task_event(
             event_type=(
                 RunEventType.EXEC_SESSION_STOPPED
                 if status == BackgroundTaskStatus.STOPPED
@@ -964,10 +966,10 @@ class ExecSessionManager:
         if self._completion_listener is not None:
             await self._completion_listener(runtime.record)
 
-    def _resolve_exec_session_status(
+    def _resolve_background_task_status(
         self,
         *,
-        runtime: _ExecSessionRuntime,
+        runtime: _BackgroundTaskRuntime,
         exit_code: int | None,
         timed_out: bool,
     ) -> BackgroundTaskStatus:
@@ -979,10 +981,10 @@ class ExecSessionManager:
             return BackgroundTaskStatus.COMPLETED
         return BackgroundTaskStatus.FAILED
 
-    async def _write_chars(self, runtime: _ExecSessionRuntime, chars: str) -> None:
+    async def _write_chars(self, runtime: _BackgroundTaskRuntime, chars: str) -> None:
         await runtime.transport.write(chars)
 
-    async def _rollback_runtime(self, runtime: _ExecSessionRuntime) -> None:
+    async def _rollback_runtime(self, runtime: _BackgroundTaskRuntime) -> None:
         with contextlib.suppress(Exception):
             if runtime.transport.returncode is None:
                 await runtime.transport.terminate()
@@ -997,7 +999,7 @@ class ExecSessionManager:
     async def _wait_for_runtime_change(
         self,
         *,
-        runtime: _ExecSessionRuntime,
+        runtime: _BackgroundTaskRuntime,
         before_version: int,
         timeout_ms: int,
     ) -> bool:
@@ -1019,21 +1021,21 @@ class ExecSessionManager:
             except asyncio.TimeoutError:
                 return False
 
-    async def _mark_runtime_changed(self, runtime: _ExecSessionRuntime) -> None:
+    async def _mark_runtime_changed(self, runtime: _BackgroundTaskRuntime) -> None:
         async with runtime.change_condition:
             runtime.change_version += 1
             runtime.change_condition.notify_all()
 
     async def _prune_sessions_if_needed(self) -> None:
         records = list(self._repository.list_all())
-        if len(records) < MAX_EXEC_SESSIONS:
+        if len(records) < MAX_BACKGROUND_TASKS:
             return
-        required_slots = len(records) - MAX_EXEC_SESSIONS + 1
+        required_slots = len(records) - MAX_BACKGROUND_TASKS + 1
         protected = {
             record.exec_session_id
             for record in sorted(
                 records, key=lambda item: item.updated_at, reverse=True
-            )[:PROTECTED_RECENT_EXEC_SESSIONS]
+            )[:PROTECTED_RECENT_BACKGROUND_TASKS]
         }
         reclaimable = [
             record
@@ -1059,7 +1061,7 @@ class ExecSessionManager:
                 )
             self._repository.delete(record.exec_session_id)
 
-    def _publish_exec_session_event(
+    def _publish_background_task_event(
         self,
         *,
         event_type: RunEventType,
@@ -1086,7 +1088,7 @@ class ExecSessionManager:
                 LOGGER,
                 logging.INFO,
                 event=f"exec_session.{event_type.value}",
-                message="Exec session state updated",
+                message="Background task state updated",
                 payload={
                     "exec_session_id": record.exec_session_id,
                     "run_id": record.run_id,
@@ -1094,7 +1096,7 @@ class ExecSessionManager:
                 },
             )
 
-    def _build_exec_session_update_payload(
+    def _build_background_task_update_payload(
         self,
         *,
         record: BackgroundTaskRecord,
@@ -1109,7 +1111,7 @@ class ExecSessionManager:
     def _get_record(self, exec_session_id: str) -> BackgroundTaskRecord:
         record = self._repository.get(exec_session_id)
         if record is None:
-            raise KeyError(f"Unknown exec session: {exec_session_id}")
+            raise KeyError(f"Unknown background task: {exec_session_id}")
         return record
 
     @staticmethod
@@ -1144,7 +1146,7 @@ def _normalize_poll_timeout(
 
 def _set_terminal_size(fd: int, *, columns: int, rows: int) -> None:
     if not _posix_pty_supported():
-        raise ValueError("TTY exec sessions are not supported on this host")
+        raise ValueError("TTY background tasks are not supported on this host")
     assert fcntl is not None
     assert termios is not None
     winsz = struct.pack("HHHH", rows, columns, 0, 0)
@@ -1166,8 +1168,8 @@ def _windows_tty_supported() -> bool:
 
 def _tty_unsupported_message() -> str:
     if os.name == "nt":
-        return "TTY exec sessions are not supported on this Windows host"
-    return "TTY exec sessions are only supported on POSIX hosts"
+        return "TTY background tasks are not supported on this Windows host"
+    return "TTY background tasks are only supported on POSIX hosts"
 
 
 def _spawn_windows_pty_process(

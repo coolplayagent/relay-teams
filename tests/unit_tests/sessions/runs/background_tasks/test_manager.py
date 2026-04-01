@@ -11,17 +11,17 @@ from typing import Callable, cast
 
 import pytest
 
-from agent_teams.sessions.runs.exec_session_manager import (
-    ExecSessionManager,
-    MAX_EXEC_SESSIONS,
-    PROTECTED_RECENT_EXEC_SESSIONS,
+from agent_teams.sessions.runs.background_tasks.manager import (
+    BackgroundTaskManager,
+    MAX_BACKGROUND_TASKS,
+    PROTECTED_RECENT_BACKGROUND_TASKS,
 )
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.exec_session_repo import (
-    ExecSessionRepository,
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
 )
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -147,12 +147,12 @@ class _WaitableTransport(_FakeTransport):
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_completes_and_publishes_events(
+async def test_background_task_manager_completes_and_publishes_events(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-terminal-manager.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-manager.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
     queue = hub.subscribe("run-1")
 
@@ -200,15 +200,15 @@ async def test_exec_session_manager_completes_and_publishes_events(
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_writes_logs_via_to_thread(
+async def test_background_task_manager_writes_logs_via_to_thread(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "background-terminal-log-thread.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-log-thread.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     record = repo.upsert(
         BackgroundTaskRecord(
             exec_session_id="exec-1",
@@ -220,9 +220,9 @@ async def test_exec_session_manager_writes_logs_via_to_thread(
             log_path=str(tmp_path / "exec-1.log"),
         )
     )
-    runtime = manager_module._ExecSessionRuntime(
+    runtime = manager_module._BackgroundTaskRuntime(
         record=record,
-        transport=cast(manager_module._ExecSessionTransport, _FakeTransport()),
+        transport=cast(manager_module._BackgroundTaskTransport, _FakeTransport()),
         log_file_path=tmp_path / "exec-1.log",
         queue=asyncio.Queue(),
     )
@@ -249,12 +249,12 @@ async def test_exec_session_manager_writes_logs_via_to_thread(
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_write_finishes_shell_prompt(
+async def test_background_task_manager_write_finishes_shell_prompt(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-terminal-write.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-write.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
 
     try:
@@ -291,15 +291,15 @@ async def test_exec_session_manager_write_finishes_shell_prompt(
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_stop_marks_terminal_stopped(
+async def test_background_task_manager_stop_marks_terminal_stopped(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "background-terminal-stop.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
     fake_transport = _WaitableTransport()
 
@@ -311,9 +311,9 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
         log_file_path: Path,
     ) -> object:
         del cwd, env, log_file_path
-        return manager_module._ExecSessionRuntime(
+        return manager_module._BackgroundTaskRuntime(
             record=record,
-            transport=cast(manager_module._ExecSessionTransport, fake_transport),
+            transport=cast(manager_module._BackgroundTaskTransport, fake_transport),
             log_file_path=workspace.resolve_tmp_path("stopped.log", write=True),
             queue=asyncio.Queue(),
         )
@@ -345,19 +345,19 @@ async def test_exec_session_manager_stop_marks_terminal_stopped(
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
+async def test_background_task_manager_stop_marks_tty_terminal_stopped(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
     if not (
         manager_module._posix_pty_supported() or manager_module._windows_tty_supported()
     ):
-        pytest.skip("TTY exec sessions are not supported on this host")
+        pytest.skip("TTY background tasks are not supported on this host")
 
-    repo = ExecSessionRepository(tmp_path / "background-terminal-stop-tty.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop-tty.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
 
     try:
@@ -400,11 +400,11 @@ async def test_exec_session_manager_stop_marks_tty_terminal_stopped(
 async def test_stop_all_for_run_can_leave_background_sessions_running(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "background-terminal-stop-filtered.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop-filtered.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
 
     foreground = repo.upsert(
         BackgroundTaskRecord(
@@ -436,9 +436,11 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
     )
 
     for record in (foreground, background):
-        runtime = manager_module._ExecSessionRuntime(
+        runtime = manager_module._BackgroundTaskRuntime(
             record=record,
-            transport=cast(manager_module._ExecSessionTransport, _WaitableTransport()),
+            transport=cast(
+                manager_module._BackgroundTaskTransport, _WaitableTransport()
+            ),
             log_file_path=tmp_path / f"{record.exec_session_id}.log",
             queue=asyncio.Queue(),
         )
@@ -465,19 +467,19 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_windows_tty_transport_supports_write_resize_and_stop(
+async def test_background_task_manager_windows_tty_transport_supports_write_resize_and_stop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
     from agent_teams.tools.workspace_tools.shell_executor import (
         ResolvedShell,
         ShellKind,
     )
 
-    repo = ExecSessionRepository(tmp_path / "exec-session-winpty.db")
+    repo = BackgroundTaskRepository(tmp_path / "exec-session-winpty.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
     fake_process = _FakeWindowsPtyProcess()
 
@@ -564,15 +566,15 @@ async def test_exec_session_manager_windows_tty_transport_supports_write_resize_
 
 
 @pytest.mark.asyncio
-async def test_exec_session_manager_windows_tty_requires_supported_host(
+async def test_background_task_manager_windows_tty_requires_supported_host(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "exec-session-winpty-unsupported.db")
+    repo = BackgroundTaskRepository(tmp_path / "exec-session-winpty-unsupported.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
 
     monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
@@ -580,12 +582,12 @@ async def test_exec_session_manager_windows_tty_requires_supported_host(
     monkeypatch.setattr(
         manager_module,
         "_tty_unsupported_message",
-        lambda: "TTY exec sessions are not supported on this Windows host",
+        lambda: "TTY background tasks are not supported on this Windows host",
     )
 
     with pytest.raises(
         ValueError,
-        match="TTY exec sessions are not supported on this Windows host",
+        match="TTY background tasks are not supported on this Windows host",
     ):
         await manager.start_session(
             run_id="run-1",
@@ -607,11 +609,11 @@ async def test_start_session_serializes_admission_with_async_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "exec-session-admission.db")
+    repo = BackgroundTaskRepository(tmp_path / "exec-session-admission.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
     in_flight = 0
     max_in_flight = 0
@@ -629,9 +631,9 @@ async def test_start_session_serializes_admission_with_async_lock(
         max_in_flight = max(max_in_flight, in_flight)
         await asyncio.sleep(0.05)
         in_flight -= 1
-        return manager_module._ExecSessionRuntime(
+        return manager_module._BackgroundTaskRuntime(
             record=record,
-            transport=cast(manager_module._ExecSessionTransport, _FakeTransport()),
+            transport=cast(manager_module._BackgroundTaskTransport, _FakeTransport()),
             log_file_path=workspace.resolve_tmp_path("noop.log", write=True),
             queue=asyncio.Queue(),
         )
@@ -679,11 +681,11 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs import exec_session_manager as manager_module
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
 
-    repo = ExecSessionRepository(tmp_path / "exec-session-rollback.db")
+    repo = BackgroundTaskRepository(tmp_path / "exec-session-rollback.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
     fake_transport = _FakeTransport()
 
@@ -695,9 +697,9 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
         log_file_path: Path,
     ) -> object:
         del cwd, env, log_file_path
-        return manager_module._ExecSessionRuntime(
+        return manager_module._BackgroundTaskRuntime(
             record=record,
-            transport=cast(manager_module._ExecSessionTransport, fake_transport),
+            transport=cast(manager_module._BackgroundTaskTransport, fake_transport),
             log_file_path=workspace.resolve_tmp_path("rollback.log", write=True),
             queue=asyncio.Queue(),
         )
@@ -733,12 +735,12 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
 async def test_prune_sessions_if_needed_reclaims_until_below_cap(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-terminal-prune.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-prune.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
 
-    for index in range(MAX_EXEC_SESSIONS + 2):
+    for index in range(MAX_BACKGROUND_TASKS + 2):
         record = BackgroundTaskRecord(
             exec_session_id=f"exec_{index:03d}",
             run_id="run-1",
@@ -764,12 +766,12 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
     protected_ids = {
         f"exec_{index:03d}"
         for index in range(
-            MAX_EXEC_SESSIONS + 2 - PROTECTED_RECENT_EXEC_SESSIONS,
-            MAX_EXEC_SESSIONS + 2,
+            MAX_BACKGROUND_TASKS + 2 - PROTECTED_RECENT_BACKGROUND_TASKS,
+            MAX_BACKGROUND_TASKS + 2,
         )
     }
 
-    assert len(remaining_ids) == MAX_EXEC_SESSIONS - 1
+    assert len(remaining_ids) == MAX_BACKGROUND_TASKS - 1
     assert "exec_000" not in remaining_ids
     assert "exec_001" not in remaining_ids
     assert "exec_002" not in remaining_ids
@@ -780,12 +782,12 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
 async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-terminal-prune-active.db")
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-prune-active.db")
     hub = RunEventHub()
-    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
 
-    for index in range(MAX_EXEC_SESSIONS):
+    for index in range(MAX_BACKGROUND_TASKS):
         record = BackgroundTaskRecord(
             exec_session_id=f"exec_{index:03d}",
             run_id="run-1",
@@ -808,5 +810,5 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
 
     remaining_ids = {record.exec_session_id for record in repo.list_all()}
 
-    assert len(remaining_ids) == MAX_EXEC_SESSIONS - 1
+    assert len(remaining_ids) == MAX_BACKGROUND_TASKS - 1
     assert "exec_000" not in remaining_ids

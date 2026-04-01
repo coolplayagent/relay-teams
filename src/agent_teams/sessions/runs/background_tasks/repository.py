@@ -9,7 +9,7 @@ from threading import RLock
 from typing import Literal
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -20,7 +20,7 @@ from agent_teams.validation import (
 )
 
 
-class ExecSessionRepository:
+class BackgroundTaskRepository:
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._conn = open_sqlite(db_path)
@@ -32,7 +32,7 @@ class ExecSessionRepository:
         def operation() -> None:
             self._conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS exec_sessions (
+                CREATE TABLE IF NOT EXISTS background_tasks (
                     exec_session_id  TEXT PRIMARY KEY,
                     run_id           TEXT NOT NULL,
                     session_id       TEXT NOT NULL,
@@ -59,23 +59,23 @@ class ExecSessionRepository:
             columns = {
                 str(row["name"])
                 for row in self._conn.execute(
-                    "PRAGMA table_info(exec_sessions)"
+                    "PRAGMA table_info(background_tasks)"
                 ).fetchall()
             }
             if "completion_notified_at" not in columns:
                 self._conn.execute(
-                    "ALTER TABLE exec_sessions ADD COLUMN completion_notified_at TEXT"
+                    "ALTER TABLE background_tasks ADD COLUMN completion_notified_at TEXT"
                 )
             self._conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_exec_sessions_run
-                ON exec_sessions(run_id, updated_at DESC)
+                CREATE INDEX IF NOT EXISTS idx_background_tasks_run
+                ON background_tasks(run_id, updated_at DESC)
                 """
             )
             self._conn.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_exec_sessions_status
-                ON exec_sessions(status, updated_at DESC)
+                CREATE INDEX IF NOT EXISTS idx_background_tasks_status
+                ON background_tasks(status, updated_at DESC)
                 """
             )
 
@@ -84,7 +84,7 @@ class ExecSessionRepository:
             db_path=self._db_path,
             operation=operation,
             lock=self._lock,
-            repository_name="ExecSessionRepository",
+            repository_name="BackgroundTaskRepository",
             operation_name="init_tables",
         )
 
@@ -92,7 +92,7 @@ class ExecSessionRepository:
         def operation() -> None:
             self._conn.execute(
                 """
-                INSERT INTO exec_sessions(
+                INSERT INTO background_tasks(
                     exec_session_id,
                     run_id,
                     session_id,
@@ -145,13 +145,13 @@ class ExecSessionRepository:
             db_path=self._db_path,
             operation=operation,
             lock=self._lock,
-            repository_name="ExecSessionRepository",
+            repository_name="BackgroundTaskRepository",
             operation_name="upsert",
         )
         persisted = self.get(record.exec_session_id)
         if persisted is None:
             raise RuntimeError(
-                f"Failed to persist exec session {record.exec_session_id}"
+                f"Failed to persist background task {record.exec_session_id}"
             )
         return persisted
 
@@ -160,7 +160,7 @@ class ExecSessionRepository:
             row = self._conn.execute(
                 """
                 SELECT *
-                FROM exec_sessions
+                FROM background_tasks
                 WHERE exec_session_id=?
                 """,
                 (exec_session_id,),
@@ -174,7 +174,7 @@ class ExecSessionRepository:
             rows = self._conn.execute(
                 """
                 SELECT *
-                FROM exec_sessions
+                FROM background_tasks
                 WHERE run_id=?
                 ORDER BY updated_at DESC, created_at DESC
                 """,
@@ -187,7 +187,7 @@ class ExecSessionRepository:
             rows = self._conn.execute(
                 """
                 SELECT *
-                FROM exec_sessions
+                FROM background_tasks
                 WHERE session_id=?
                 ORDER BY updated_at DESC, created_at DESC
                 """,
@@ -200,7 +200,7 @@ class ExecSessionRepository:
             rows = self._conn.execute(
                 """
                 SELECT *
-                FROM exec_sessions
+                FROM background_tasks
                 ORDER BY updated_at DESC, created_at DESC
                 """
             ).fetchall()
@@ -211,11 +211,11 @@ class ExecSessionRepository:
             conn=self._conn,
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
-                "DELETE FROM exec_sessions WHERE exec_session_id=?",
+                "DELETE FROM background_tasks WHERE exec_session_id=?",
                 (exec_session_id,),
             ),
             lock=self._lock,
-            repository_name="ExecSessionRepository",
+            repository_name="BackgroundTaskRepository",
             operation_name="delete",
         )
 
@@ -224,15 +224,15 @@ class ExecSessionRepository:
             conn=self._conn,
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
-                "DELETE FROM exec_sessions WHERE session_id=?",
+                "DELETE FROM background_tasks WHERE session_id=?",
                 (session_id,),
             ),
             lock=self._lock,
-            repository_name="ExecSessionRepository",
+            repository_name="BackgroundTaskRepository",
             operation_name="delete_by_session",
         )
 
-    def mark_transient_exec_sessions_interrupted(self) -> int:
+    def mark_transient_background_tasks_interrupted(self) -> int:
         affected = 0
 
         def operation() -> None:
@@ -240,7 +240,7 @@ class ExecSessionRepository:
             now = datetime.now(tz=timezone.utc).isoformat()
             cursor = self._conn.execute(
                 """
-                UPDATE exec_sessions
+                UPDATE background_tasks
                 SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?)
                 WHERE status IN (?, ?)
                 """,
@@ -259,8 +259,8 @@ class ExecSessionRepository:
             db_path=self._db_path,
             operation=operation,
             lock=self._lock,
-            repository_name="ExecSessionRepository",
-            operation_name="mark_transient_exec_sessions_interrupted",
+            repository_name="BackgroundTaskRepository",
+            operation_name="mark_transient_background_tasks_interrupted",
         )
         return affected
 
@@ -298,7 +298,7 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
     created_at = parse_persisted_datetime_or_none(row["created_at"])
     updated_at = parse_persisted_datetime_or_none(row["updated_at"])
     if created_at is None or updated_at is None:
-        raise ValueError("Invalid persisted exec session timestamps")
+        raise ValueError("Invalid persisted background task timestamps")
     return BackgroundTaskRecord(
         exec_session_id=require_persisted_identifier(
             row["exec_session_id"], field_name="exec_session_id"

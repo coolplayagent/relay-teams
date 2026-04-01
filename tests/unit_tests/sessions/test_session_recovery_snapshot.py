@@ -19,12 +19,12 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.exec_session_repo import (
-    ExecSessionRepository,
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
 )
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -53,7 +53,7 @@ def _build_service(
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_state_repo=RunStateRepository(db_path),
-        exec_session_repo=ExecSessionRepository(db_path),
+        background_task_repository=BackgroundTaskRepository(db_path),
         run_event_hub=run_event_hub,
         active_run_registry=active_run_registry,
         event_log=EventLog(db_path),
@@ -470,7 +470,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
         status=RunRuntimeStatus.RUNNING,
         phase=RunRuntimePhase.COORDINATOR_RUNNING,
     )
-    terminal_repo = ExecSessionRepository(db_path)
+    terminal_repo = BackgroundTaskRepository(db_path)
     terminal_repo.upsert(
         BackgroundTaskRecord(
             exec_session_id="exec-1",
@@ -484,7 +484,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
             status=BackgroundTaskStatus.RUNNING,
             recent_output=("booting",),
             output_excerpt="booting",
-            log_path="tmp/exec_sessions/exec-1.log",
+            log_path="tmp/background_tasks/exec-1.log",
         )
     )
     terminal_repo.upsert(
@@ -501,7 +501,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
             status=BackgroundTaskStatus.COMPLETED,
             recent_output=("done",),
             output_excerpt="done",
-            log_path="tmp/exec_sessions/exec-2.log",
+            log_path="tmp/background_tasks/exec-2.log",
         )
     )
     terminal_repo.upsert(
@@ -518,7 +518,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
             status=BackgroundTaskStatus.RUNNING,
             recent_output=("busy",),
             output_excerpt="busy",
-            log_path="tmp/exec_sessions/exec-3.log",
+            log_path="tmp/background_tasks/exec-3.log",
         )
     )
 
@@ -553,7 +553,7 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
         status=RunRuntimeStatus.COMPLETED,
         phase=RunRuntimePhase.TERMINAL,
     )
-    ExecSessionRepository(db_path).upsert(
+    BackgroundTaskRepository(db_path).upsert(
         BackgroundTaskRecord(
             exec_session_id="exec-1",
             run_id="run-completed",
@@ -567,7 +567,7 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
             status=BackgroundTaskStatus.COMPLETED,
             recent_output=("done",),
             output_excerpt="done",
-            log_path="tmp/exec_sessions/exec-1.log",
+            log_path="tmp/background_tasks/exec-1.log",
         )
     )
 

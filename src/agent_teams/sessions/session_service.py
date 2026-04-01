@@ -27,7 +27,9 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
-from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
@@ -114,7 +116,7 @@ class SessionService:
         token_usage_repo: TokenUsageRepository,
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
-        exec_session_repo: ExecSessionRepository | None = None,
+        background_task_repository: BackgroundTaskRepository | None = None,
         run_event_hub: RunEventHub | None = None,
         active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
@@ -141,7 +143,7 @@ class SessionService:
         self._token_usage_repo = token_usage_repo
         self._session_history_marker_repo = session_history_marker_repo
         self._run_state_repo = run_state_repo
-        self._exec_session_repo = exec_session_repo
+        self._background_task_repository = background_task_repository
         self._run_event_hub = run_event_hub
         self._active_run_registry = active_run_registry
         self._event_log = event_log
@@ -384,8 +386,8 @@ class SessionService:
                 workspace_ids=[],
             )
         self._approval_ticket_repo.delete_by_session(session_id)
-        if self._exec_session_repo is not None:
-            self._exec_session_repo.delete_by_session(session_id)
+        if self._background_task_repository is not None:
+            self._background_task_repository.delete_by_session(session_id)
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
@@ -660,8 +662,8 @@ class SessionService:
             for record in (
                 exec_record
                 for exec_record in (
-                    self._exec_session_repo.list_by_run(run_id)
-                    if self._exec_session_repo is not None
+                    self._background_task_repository.list_by_run(run_id)
+                    if self._background_task_repository is not None
                     else ()
                 )
                 if exec_record.execution_mode == "background"
@@ -859,11 +861,11 @@ class SessionService:
         return None
 
     def _has_background_exec_sessions(self, run_id: str) -> bool:
-        if self._exec_session_repo is None:
+        if self._background_task_repository is None:
             return False
         return any(
             record.execution_mode == "background"
-            for record in self._exec_session_repo.list_by_run(run_id)
+            for record in self._background_task_repository.list_by_run(run_id)
         )
 
     def _paused_subagent_snapshot(

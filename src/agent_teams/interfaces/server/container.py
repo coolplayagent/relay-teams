@@ -134,12 +134,12 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from agent_teams.sessions.runs.exec_session_manager import (
-    ExecSessionManager,
+from agent_teams.sessions.runs.background_tasks.manager import (
+    BackgroundTaskManager,
 )
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.exec_session_repo import (
-    ExecSessionRepository,
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
 )
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
@@ -286,8 +286,8 @@ class ServerContainer:
         self.run_intent_repo: RunIntentRepository = RunIntentRepository(
             runtime.paths.db_path
         )
-        self.exec_session_repo: ExecSessionRepository = ExecSessionRepository(
-            runtime.paths.db_path
+        self.background_task_repository: BackgroundTaskRepository = (
+            BackgroundTaskRepository(runtime.paths.db_path)
         )
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
@@ -372,7 +372,7 @@ class ServerContainer:
         if manage_runtime_state:
             self.agent_repo.mark_running_instances_failed()
             _ = self.run_runtime_repo.mark_transient_runs_interrupted()
-            _ = self.exec_session_repo.mark_transient_exec_sessions_interrupted()
+            _ = self.background_task_repository.mark_transient_background_tasks_interrupted()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
@@ -382,13 +382,13 @@ class ServerContainer:
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
         )
-        self.exec_session_manager = ExecSessionManager(
-            repository=self.exec_session_repo,
+        self.background_task_manager = BackgroundTaskManager(
+            repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
         )
         self.background_task_service = BackgroundTaskService(
-            exec_session_manager=self.exec_session_manager,
-            repository=self.exec_session_repo,
+            background_task_manager=self.background_task_manager,
+            repository=self.background_task_repository,
         )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
@@ -529,7 +529,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             run_state_repo=self.run_state_repo,
-            exec_session_manager=self.exec_session_manager,
+            background_task_manager=self.background_task_manager,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
@@ -544,7 +544,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
-            exec_session_repo=self.exec_session_repo,
+            background_task_repository=self.background_task_repository,
             run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
             active_run_registry=self.active_run_registry,
@@ -862,7 +862,7 @@ class ServerContainer:
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()
         await self.external_acp_session_manager.close()
-        await self.exec_session_manager.close()
+        await self.background_task_manager.close()
         return None
 
     def _sanitize_role_registry(self, role_registry: RoleRegistry) -> RoleRegistry:

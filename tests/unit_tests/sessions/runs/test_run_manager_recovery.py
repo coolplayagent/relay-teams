@@ -16,7 +16,7 @@ from agent_teams.sessions.runs.run_control_manager import RunControlManager
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -197,7 +197,7 @@ def _build_background_record(
         exit_code=0,
         recent_output=("done",),
         output_excerpt="done",
-        log_path="tmp/exec_sessions/exec-1.log",
+        log_path="tmp/background_tasks/exec-1.log",
     )
 
 

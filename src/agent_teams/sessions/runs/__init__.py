@@ -6,15 +6,15 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-    from agent_teams.sessions.runs.exec_session_manager import (
-        ExecSessionManager,
+    from agent_teams.sessions.runs.background_tasks.manager import (
+        BackgroundTaskManager,
     )
-    from agent_teams.sessions.runs.background_task_models import (
+    from agent_teams.sessions.runs.background_tasks.models import (
         BackgroundTaskRecord,
         BackgroundTaskStatus,
     )
-    from agent_teams.sessions.runs.exec_session_repo import (
-        ExecSessionRepository,
+    from agent_teams.sessions.runs.background_tasks.repository import (
+        BackgroundTaskRepository,
     )
     from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -65,8 +65,8 @@ __all__ = [
     "BackgroundTaskRecord",
     "BackgroundTaskService",
     "BackgroundTaskStatus",
-    "ExecSessionManager",
-    "ExecSessionRepository",
+    "BackgroundTaskManager",
+    "BackgroundTaskRepository",
     "ExecutionMode",
     "EventLog",
     "InjectionMessage",
@@ -109,20 +109,20 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.sessions.runs.background_tasks",
         "BackgroundTaskService",
     ),
-    "ExecSessionManager": (
-        "agent_teams.sessions.runs.exec_session_manager",
-        "ExecSessionManager",
+    "BackgroundTaskManager": (
+        "agent_teams.sessions.runs.background_tasks.manager",
+        "BackgroundTaskManager",
     ),
     "BackgroundTaskRecord": (
-        "agent_teams.sessions.runs.background_task_models",
+        "agent_teams.sessions.runs.background_tasks.models",
         "BackgroundTaskRecord",
     ),
-    "ExecSessionRepository": (
-        "agent_teams.sessions.runs.exec_session_repo",
-        "ExecSessionRepository",
+    "BackgroundTaskRepository": (
+        "agent_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
     ),
     "BackgroundTaskStatus": (
-        "agent_teams.sessions.runs.background_task_models",
+        "agent_teams.sessions.runs.background_tasks.models",
         "BackgroundTaskStatus",
     ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),

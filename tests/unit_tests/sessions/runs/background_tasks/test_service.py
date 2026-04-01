@@ -10,15 +10,17 @@ import pytest
 from agent_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
 )
-from agent_teams.sessions.runs.exec_session_manager import ExecSessionManager
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 
 
-class _FakeExecSessionManager:
+class _FakeBackgroundTaskManager:
     def __init__(self) -> None:
         self._listener: Callable[[BackgroundTaskRecord], Awaitable[None]] | None = None
         self.records: tuple[BackgroundTaskRecord, ...] = ()
@@ -87,7 +89,7 @@ def _build_record(
         exit_code=0,
         recent_output=recent_output,
         output_excerpt=output_excerpt,
-        log_path="tmp/exec_sessions/exec-1.log",
+        log_path="tmp/background_tasks/exec-1.log",
     )
 
 
@@ -95,10 +97,10 @@ def _build_record(
 async def test_background_task_service_notifies_sink_and_persists_completion_marker(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     sink = _CapturingCompletionSink()
@@ -124,10 +126,10 @@ async def test_background_task_service_notifies_sink_and_persists_completion_mar
 async def test_background_task_service_skips_non_background_notifications(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service-foreground.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-foreground.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     sink = _CapturingCompletionSink()
@@ -144,10 +146,10 @@ async def test_background_task_service_skips_non_background_notifications(
 
 
 def test_background_task_service_lists_only_background_records(tmp_path: Path) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service-list.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-list.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     foreground = _build_record(
@@ -165,10 +167,10 @@ def test_background_task_service_lists_only_background_records(tmp_path: Path) -
 def test_background_task_service_get_for_run_rejects_foreground_records(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service-get.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-get.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     manager.records = (_build_record(execution_mode="foreground"),)
@@ -178,17 +180,17 @@ def test_background_task_service_get_for_run_rejects_foreground_records(
     except KeyError as exc:
         assert "Unknown background task" in str(exc)
     else:
-        raise AssertionError("Expected foreground exec session lookup to fail")
+        raise AssertionError("Expected foreground background task lookup to fail")
 
 
 @pytest.mark.asyncio
 async def test_wait_for_run_marks_completed_background_task_as_consumed(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service-wait.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-wait.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     completed = repo.upsert(_build_record())
@@ -211,10 +213,10 @@ async def test_wait_for_run_marks_completed_background_task_as_consumed(
 async def test_background_task_service_skips_notification_when_wait_already_consumed_completion(
     tmp_path: Path,
 ) -> None:
-    repo = ExecSessionRepository(tmp_path / "background-task-service-consumed.db")
-    manager = _FakeExecSessionManager()
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-consumed.db")
+    manager = _FakeBackgroundTaskManager()
     service = BackgroundTaskService(
-        exec_session_manager=cast(ExecSessionManager, manager),
+        background_task_manager=cast(BackgroundTaskManager, manager),
         repository=repo,
     )
     sink = _CapturingCompletionSink()

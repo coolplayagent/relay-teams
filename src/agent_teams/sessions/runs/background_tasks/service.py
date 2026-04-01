@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Protocol
 
 from agent_teams.logger import get_logger, log_event
-from agent_teams.sessions.runs.exec_session_manager import ExecSessionManager
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
 from agent_teams.workspace import WorkspaceHandle
 
@@ -36,15 +38,15 @@ class BackgroundTaskService:
     def __init__(
         self,
         *,
-        exec_session_manager: ExecSessionManager | None,
-        repository: ExecSessionRepository,
+        background_task_manager: BackgroundTaskManager | None,
+        repository: BackgroundTaskRepository,
     ) -> None:
-        self._exec_session_manager = exec_session_manager
+        self._background_task_manager = background_task_manager
         self._repository = repository
         self._completion_sink: BackgroundTaskCompletionSink | None = None
-        if self._exec_session_manager is not None:
-            self._exec_session_manager.set_completion_listener(
-                self._handle_exec_session_completion
+        if self._background_task_manager is not None:
+            self._background_task_manager.set_completion_listener(
+                self._handle_background_task_completion
             )
 
     def bind_completion_sink(
@@ -173,7 +175,7 @@ class BackgroundTaskService:
             exec_session_id=background_task_id,
         )
 
-    async def _handle_exec_session_completion(
+    async def _handle_background_task_completion(
         self, record: BackgroundTaskRecord
     ) -> None:
         await asyncio.sleep(0)
@@ -225,10 +227,10 @@ class BackgroundTaskService:
             )
         )
 
-    def _require_manager(self) -> ExecSessionManager:
-        if self._exec_session_manager is None:
+    def _require_manager(self) -> BackgroundTaskManager:
+        if self._background_task_manager is None:
             raise RuntimeError("Background task service is not configured")
-        return self._exec_session_manager
+        return self._background_task_manager
 
 
 def _normalize_sync_wait_ms(wait_ms: int | None) -> int:

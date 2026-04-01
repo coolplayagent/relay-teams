@@ -10,7 +10,7 @@ import pytest
 from pydantic_ai import Agent
 
 import agent_teams.tools.workspace_tools as workspace_tools_module
-from agent_teams.sessions.runs.background_task_models import (
+from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )

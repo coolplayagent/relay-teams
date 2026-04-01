@@ -12,7 +12,7 @@ from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.exec_session_manager import ExecSessionManager
+from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunResult
 from agent_teams.notifications import (
@@ -79,7 +79,7 @@ class _EventBus:
         return None
 
 
-class _CapturingExecSessionManager:
+class _CapturingBackgroundTaskManager:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
 
@@ -142,7 +142,7 @@ class _SessionRepo:
 def _make_run_manager(
     control: RunControlManager,
     *,
-    exec_session_manager: object | None = None,
+    background_task_manager: object | None = None,
 ) -> RunManager:
     hub = RunEventHub()
     injection = RunInjectionManager()
@@ -163,9 +163,9 @@ def _make_run_manager(
         tool_approval_manager=ToolApprovalManager(),
         session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
         active_run_registry=ActiveSessionRunRegistry(),
-        exec_session_manager=(
-            cast(ExecSessionManager, cast(object, exec_session_manager))
-            if exec_session_manager is not None
+        background_task_manager=(
+            cast(BackgroundTaskManager, cast(object, background_task_manager))
+            if background_task_manager is not None
             else None
         ),
     )
@@ -271,10 +271,10 @@ def test_worker_swallows_cleanup_failures_after_runner_exception() -> None:
 
 def test_worker_finalization_only_stops_foreground_exec_sessions() -> None:
     control = RunControlManager()
-    exec_session_manager = _CapturingExecSessionManager()
+    background_task_manager = _CapturingBackgroundTaskManager()
     manager = _make_run_manager(
         control,
-        exec_session_manager=exec_session_manager,
+        background_task_manager=background_task_manager,
     )
     manager._running_run_ids.add("run-1")
 
@@ -294,7 +294,7 @@ def test_worker_finalization_only_stops_foreground_exec_sessions() -> None:
         )
     )
 
-    assert exec_session_manager.calls == [("run-1", "run_finalized", "foreground")]
+    assert background_task_manager.calls == [("run-1", "run_finalized", "foreground")]
 
 
 def test_completed_notification_uses_final_run_output() -> None:
