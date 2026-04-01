@@ -13,6 +13,7 @@ from agent_teams.tools.runtime import (
     ToolResultProjection,
     execute_tool,
 )
+from agent_teams.tools.workspace_tools.path_utils import resolve_workspace_tmp_path
 from agent_teams.tools.workspace_tools.write import (
     atomic_write,
     format_diff_summary,
@@ -60,8 +61,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         async def _action() -> ToolResultProjection:
             relative_tmp_path = _normalize_tmp_relative_path(path)
-            file_path = ctx.deps.workspace.resolve_tmp_path(
-                relative_tmp_path, write=True
+            file_path = resolve_workspace_tmp_path(
+                ctx.deps.workspace,
+                relative_tmp_path,
             )
 
             old_content = ""

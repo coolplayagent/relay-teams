@@ -297,6 +297,60 @@ async def test_write_tmp_tool_is_confined_to_workspace_tmp_directory(
 
 
 @pytest.mark.asyncio
+async def test_write_tmp_tool_uses_shared_tmp_path_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools import write_tmp as write_tmp_module
+
+    fake_agent = _FakeAgent()
+    register_write_tmp(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write_tmp"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+        )
+    )
+    resolved_paths: list[str] = []
+
+    def _fake_resolve_workspace_tmp_path(workspace, relative_path: str) -> Path:
+        del workspace
+        resolved_paths.append(relative_path)
+        target = tmp_path / "tmp" / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(
+        write_tmp_module,
+        "resolve_workspace_tmp_path",
+        _fake_resolve_workspace_tmp_path,
+    )
+    monkeypatch.setattr(write_tmp_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, path="tmp/reports/spec.md", content="resolved once\n")
+
+    assert resolved_paths == ["reports/spec.md"]
+    assert result["path"] == "tmp/reports/spec.md"
+    assert (tmp_path / "tmp" / "reports" / "spec.md").read_text(
+        encoding="utf-8"
+    ) == "resolved once\n"
+
+
+@pytest.mark.asyncio
 async def test_write_tmp_tool_rejects_paths_outside_workspace_tmp_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
