@@ -39,7 +39,7 @@ from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
 from agent_teams.sessions.runs.run_models import RunEvent
-from agent_teams.tools.workspace_tools.shell_executor import (
+from agent_teams.sessions.runs.background_tasks.shell_runtime import (
     ResolvedShell,
     _kill_process_tree,
     _kill_process_tree_by_pid,

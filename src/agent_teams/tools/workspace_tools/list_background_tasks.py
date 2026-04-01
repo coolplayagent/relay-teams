@@ -4,6 +4,9 @@ from __future__ import annotations
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
+from agent_teams.sessions.runs.background_tasks.projection import (
+    build_background_task_payload,
+)
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -11,8 +14,7 @@ from agent_teams.tools.runtime import (
     ToolResultProjection,
     execute_tool,
 )
-from agent_teams.tools.workspace_tools.shell import (
-    background_task_payload,
+from agent_teams.tools.workspace_tools.background_task_tool_support import (
     require_background_task_service,
 )
 
@@ -25,7 +27,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         def _action() -> ToolResultProjection:
             service = require_background_task_service(ctx)
             items: list[JsonValue] = [
-                background_task_payload(record)
+                build_background_task_payload(record)
                 for record in service.list_for_run(ctx.deps.run_id)
             ]
             payload: dict[str, JsonValue] = {"items": items}

@@ -16,13 +16,15 @@ from agent_teams.sessions.runs.background_tasks.models import (
 from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
-from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+from agent_teams.sessions.runs.background_tasks.projection import (
+    build_background_task_completion_message,
+)
+from agent_teams.sessions.runs.background_tasks.shell_runtime import normalize_timeout
 from agent_teams.workspace import WorkspaceHandle
 
 LOGGER = get_logger(__name__)
 _DEFAULT_SYNC_WAIT_MS = 1000
 _MIN_SYNC_WAIT_MS = 200
-_MAX_SUMMARY_LENGTH = 500
 
 
 class BackgroundTaskCompletionSink(Protocol):
@@ -189,7 +191,7 @@ class BackgroundTaskService:
             return
         if self._completion_sink is None:
             return
-        message = _build_completion_message(current)
+        message = build_background_task_completion_message(current)
         try:
             self._completion_sink.handle_background_task_completion(
                 record=current,
@@ -239,35 +241,3 @@ def _normalize_sync_wait_ms(wait_ms: int | None) -> int:
     if wait_ms < 1:
         raise ValueError("yield_time_ms must be >= 1")
     return max(_MIN_SYNC_WAIT_MS, wait_ms)
-
-
-def _build_completion_message(record: BackgroundTaskRecord) -> str:
-    exit_code = "" if record.exit_code is None else str(record.exit_code)
-    tool_call_id = record.tool_call_id or ""
-    summary = _notification_summary(record)
-    return (
-        "<background-task-notification>\n"
-        f"<background-task-id>{_xml_escape(record.background_task_id)}</background-task-id>\n"
-        f"<tool-call-id>{_xml_escape(tool_call_id)}</tool-call-id>\n"
-        f"<status>{_xml_escape(record.status.value)}</status>\n"
-        f"<command>{_xml_escape(record.command)}</command>\n"
-        f"<exit-code>{_xml_escape(exit_code)}</exit-code>\n"
-        f"<log-path>{_xml_escape(record.log_path)}</log-path>\n"
-        f"<summary>{_xml_escape(summary)}</summary>\n"
-        "</background-task-notification>"
-    )
-
-
-def _notification_summary(record: BackgroundTaskRecord) -> str:
-    if record.recent_output:
-        summary = "\n".join(record.recent_output)
-    else:
-        summary = record.output_excerpt
-    summary = summary.strip()
-    if len(summary) <= _MAX_SUMMARY_LENGTH:
-        return summary
-    return summary[: _MAX_SUMMARY_LENGTH - 3] + "..."
-
-
-def _xml_escape(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

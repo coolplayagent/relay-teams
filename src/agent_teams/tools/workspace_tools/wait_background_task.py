@@ -6,8 +6,8 @@ from pydantic_ai import Agent
 
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
-from agent_teams.tools.workspace_tools.shell import (
-    project_background_task,
+from agent_teams.tools.workspace_tools.background_task_tool_support import (
+    project_background_task_tool_result,
     require_background_task_service,
 )
 
@@ -29,7 +29,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 background_task_id=background_task_id,
                 wait_ms=wait_ms,
             )
-            return project_background_task(
+            return project_background_task_tool_result(
                 record,
                 completed=completed,
                 include_task_id=True,
