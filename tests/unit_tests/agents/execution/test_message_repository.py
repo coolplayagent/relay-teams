@@ -5,7 +5,13 @@ import json
 from pathlib import Path
 from typing import cast
 
-from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.session_history_marker_repository import (
@@ -24,6 +30,15 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
         task_id="task-1",
         trace_id="run-1",
         messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="dispatch_task",
+                        args={"task": "ask_time"},
+                        tool_call_id="dispatch_task:1",
+                    )
+                ]
+            ),
             ModelRequest(
                 parts=[
                     ToolReturnPart(
@@ -32,11 +47,13 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
                         content={"ok": True},
                     )
                 ]
-            )
+            ),
         ],
     )
 
-    row = repo._conn.execute("SELECT id, message_json FROM messages").fetchone()
+    row = repo._conn.execute(
+        "SELECT id, message_json FROM messages WHERE role='user'"
+    ).fetchone()
     assert row is not None
     payload = json.loads(str(row["message_json"]))
     tool_return = payload[0]["parts"][0]["content"]
@@ -60,7 +77,7 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
     repo._conn.commit()
 
     messages = repo.get_messages_by_session("session-1")
-    message = cast(dict[str, object], messages[0]["message"])
+    message = cast(dict[str, object], messages[1]["message"])
     parts = cast(list[object], message["parts"])
     part = cast(dict[str, object], parts[0])
     content = cast(dict[str, object], part["content"])
@@ -72,7 +89,7 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
     assert "error" not in task_status
 
     history = repo.get_history("inst-1")
-    history_part = history[0].parts[0]
+    history_part = history[1].parts[0]
     assert isinstance(history_part, ToolReturnPart)
     assert isinstance(history_part.content, dict)
     history_task_status = history_part.content["data"]["task_status"]["ask_time"]
@@ -168,6 +185,113 @@ def test_conversation_history_can_span_multiple_instances(tmp_path: Path) -> Non
     assert isinstance(history[1], ModelRequest)
     assert history[0].parts[0].content == "first turn"
     assert history[1].parts[0].content == "second turn"
+
+
+def test_message_repo_drops_duplicate_late_tool_return_but_keeps_user_prompt(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_duplicate_tool_return.db"
+    repo = MessageRepository(db_path)
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="write",
+                        args={"content": "hello"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="write",
+                        tool_call_id="call-1",
+                        content={"ok": True},
+                    )
+                ]
+            ),
+        ],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="write",
+                        tool_call_id="call-1",
+                        content={"ok": True},
+                    ),
+                    UserPromptPart(content="optimize it"),
+                ]
+            )
+        ],
+    )
+
+    history = repo.get_history_for_conversation(conversation_id)
+
+    assert len(history) == 3
+    assert isinstance(history[0], ModelResponse)
+    assert isinstance(history[1], ModelRequest)
+    assert isinstance(history[1].parts[0], ToolReturnPart)
+    assert isinstance(history[2], ModelRequest)
+    assert len(history[2].parts) == 1
+    assert isinstance(history[2].parts[0], UserPromptPart)
+    assert history[2].parts[0].content == "optimize it"
+
+
+def test_message_repo_drops_orphan_tool_return_request_from_history(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_orphan_tool_return.db"
+    repo = MessageRepository(db_path)
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="write",
+                        tool_call_id="call-missing",
+                        content={"ok": False},
+                    )
+                ]
+            ),
+            ModelRequest(parts=[UserPromptPart(content="continue")]),
+        ],
+    )
+
+    history = repo.get_history_for_conversation(conversation_id)
+
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    assert isinstance(history[0].parts[0], UserPromptPart)
+    assert history[0].parts[0].content == "continue"
 
 
 def test_message_repo_append_is_thread_safe_under_parallel_writes(
