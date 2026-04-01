@@ -382,7 +382,6 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
     assert "write" in tool_registry_sanity["available_tool_names"]
-    assert "write_tmp" not in tool_registry_sanity["available_tool_names"]
 
 
 def test_get_notification_config() -> None:

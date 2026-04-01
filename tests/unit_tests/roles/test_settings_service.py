@@ -196,7 +196,7 @@ def test_get_role_document_preserves_unknown_tool_names_without_aliases(
         name="Legacy",
         description="Uses historical tool names.",
         version="1.0.0",
-        tools=("write_tmp", "shell", "missing_tool"),
+        tools=("deprecated_writer", "shell", "missing_tool"),
         system_prompt="Keep working.",
     )
     skills_dir = tmp_path / "skills"
@@ -215,7 +215,7 @@ def test_get_role_document_preserves_unknown_tool_names_without_aliases(
 
     record = service.get_role_document("legacy")
 
-    assert record.tools == ("write_tmp", "shell", "missing_tool")
+    assert record.tools == ("deprecated_writer", "shell", "missing_tool")
 
 
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
