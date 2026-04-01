@@ -464,7 +464,13 @@ async def fetch_url(
         while response.status_code in REDIRECT_STATUS_CODES:
             location = response.headers.get("location")
             if not location:
-                location = await _extract_redirect_location_from_response_body(response)
+                try:
+                    location = await _extract_redirect_location_from_response_body(
+                        response
+                    )
+                except ToolExecutionError:
+                    await response.aclose()
+                    raise
             if not location:
                 await response.aclose()
                 raise ToolExecutionError(
@@ -569,6 +575,7 @@ async def fetch_url(
 async def _extract_redirect_location_from_response_body(
     response: httpx.Response,
 ) -> str | None:
+    url_host = urlparse(str(response.request.url)).netloc
     content_type = normalize_content_type(response.headers.get("content-type", ""))
     if content_type and content_type not in {"text/html", "application/xhtml+xml"}:
         return None
@@ -576,15 +583,30 @@ async def _extract_redirect_location_from_response_body(
     if content_length is not None and content_length > MAX_REDIRECT_BODY_BYTES:
         return None
     body = bytearray()
-    async for chunk in response.aiter_bytes():
-        if not chunk:
-            continue
-        remaining = MAX_REDIRECT_BODY_BYTES - len(body)
-        if remaining <= 0:
-            return None
-        body.extend(chunk[:remaining])
-        if len(body) >= MAX_REDIRECT_BODY_BYTES:
-            return None
+    try:
+        async for chunk in response.aiter_bytes():
+            if not chunk:
+                continue
+            remaining = MAX_REDIRECT_BODY_BYTES - len(body)
+            if remaining <= 0:
+                return None
+            body.extend(chunk[:remaining])
+            if len(body) >= MAX_REDIRECT_BODY_BYTES:
+                return None
+    except httpx.TimeoutException as exc:
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"Web fetch timed out for {url_host or response.request.url}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Web fetch request failed for {url_host or response.request.url}: {exc}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
     if not body:
         return None
     text = body.decode("utf-8", errors="replace")
