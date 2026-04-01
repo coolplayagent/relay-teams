@@ -464,14 +464,33 @@ async def test_fetch_url_rejects_http_to_https_non_default_ports() -> None:
     }
 
 
-def test_is_permitted_redirect_rejects_malformed_redirect_port() -> None:
-    assert (
-        webfetch.is_permitted_redirect(
-            "https://example.com/start",
-            "https://example.com:99999/finish",
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_invalid_redirect_port_as_upstream_error() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            request=request,
+            headers={"location": "https://example.com:99999/finish"},
         )
-        is False
-    )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/start",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "upstream_error"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "redirect_url": "https://example.com:99999/finish",
+        "invalid_port": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -501,6 +520,58 @@ async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
         "status_code": 403,
         "mitigation": "cloudflare_challenge",
     }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_rechecks_redirects_after_cloudflare_retry() -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        request_url = str(request.url)
+        user_agent = request.headers["User-Agent"]
+        calls.append((request_url, user_agent))
+        if (
+            request_url == "https://example.com/start"
+            and user_agent == webfetch.BROWSER_USER_AGENT
+        ):
+            return httpx.Response(
+                403,
+                request=request,
+                headers={"cf-mitigated": "challenge"},
+            )
+        if (
+            request_url == "https://example.com/start"
+            and user_agent == webfetch.FALLBACK_USER_AGENT
+        ):
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"location": "/finish"},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="ok",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/start",
+            response_format="text",
+        )
+    finally:
+        await client.aclose()
+
+    assert calls == [
+        ("https://example.com/start", webfetch.BROWSER_USER_AGENT),
+        ("https://example.com/start", webfetch.FALLBACK_USER_AGENT),
+        ("https://example.com/finish", webfetch.FALLBACK_USER_AGENT),
+    ]
+    assert str(response.url) == "https://example.com/finish"
+    await response.aclose()
 
 
 @pytest.mark.asyncio

@@ -438,62 +438,65 @@ async def fetch_url(
         headers.update(extra_headers)
     current_url = url
     redirect_count = 0
-    response = await _perform_request(client=client, url=current_url, headers=headers)
-    while response.status_code in REDIRECT_STATUS_CODES:
-        location = response.headers.get("location")
-        if not location:
-            await response.aclose()
-            raise ToolExecutionError(
-                error_type="upstream_error",
-                message=f"Web fetch failed for {url_host or url} with HTTP {response.status_code}",
-                retryable=False,
-                details={
-                    "url_host": url_host,
-                    "status_code": response.status_code,
-                    "missing_location": True,
-                },
-            )
-        redirect_url = urljoin(current_url, location)
-        status_code = response.status_code
-        await response.aclose()
-        if not is_permitted_redirect(current_url, redirect_url):
-            raise ToolExecutionError(
-                error_type=REDIRECT_REQUIRED_ERROR_TYPE,
-                message="Web fetch requires an explicit follow-up for a cross-host redirect.",
-                retryable=False,
-                details={
-                    "original_url": current_url,
-                    "redirect_url": redirect_url,
-                    "status_code": status_code,
-                },
-            )
-        redirect_count += 1
-        if redirect_count > MAX_REDIRECTS:
-            raise ToolExecutionError(
-                error_type="redirect_loop",
-                message=f"Web fetch exceeded the redirect limit for {url_host or url}",
-                retryable=True,
-                details={
-                    "url_host": url_host,
-                    "redirect_count": redirect_count,
-                },
-            )
-        current_url = redirect_url
+    used_fallback_user_agent = False
+    while True:
         response = await _perform_request(
             client=client, url=current_url, headers=headers
         )
-    if (
-        response.status_code == 403
-        and response.headers.get("cf-mitigated") == "challenge"
-    ):
-        await response.aclose()
-        retry_headers = dict(headers)
-        retry_headers["User-Agent"] = FALLBACK_USER_AGENT
-        response = await _perform_request(
-            client=client,
-            url=current_url,
-            headers=retry_headers,
-        )
+        while response.status_code in REDIRECT_STATUS_CODES:
+            location = response.headers.get("location")
+            if not location:
+                await response.aclose()
+                raise ToolExecutionError(
+                    error_type="upstream_error",
+                    message=f"Web fetch failed for {url_host or url} with HTTP {response.status_code}",
+                    retryable=False,
+                    details={
+                        "url_host": url_host,
+                        "status_code": response.status_code,
+                        "missing_location": True,
+                    },
+                )
+            redirect_url = urljoin(current_url, location)
+            status_code = response.status_code
+            await response.aclose()
+            if not is_permitted_redirect(current_url, redirect_url):
+                raise ToolExecutionError(
+                    error_type=REDIRECT_REQUIRED_ERROR_TYPE,
+                    message="Web fetch requires an explicit follow-up for a cross-host redirect.",
+                    retryable=False,
+                    details={
+                        "original_url": current_url,
+                        "redirect_url": redirect_url,
+                        "status_code": status_code,
+                    },
+                )
+            redirect_count += 1
+            if redirect_count > MAX_REDIRECTS:
+                raise ToolExecutionError(
+                    error_type="redirect_loop",
+                    message=f"Web fetch exceeded the redirect limit for {url_host or url}",
+                    retryable=True,
+                    details={
+                        "url_host": url_host,
+                        "redirect_count": redirect_count,
+                    },
+                )
+            current_url = redirect_url
+            response = await _perform_request(
+                client=client, url=current_url, headers=headers
+            )
+        if (
+            response.status_code == 403
+            and response.headers.get("cf-mitigated") == "challenge"
+            and not used_fallback_user_agent
+        ):
+            await response.aclose()
+            headers = dict(headers)
+            headers["User-Agent"] = FALLBACK_USER_AGENT
+            used_fallback_user_agent = True
+            continue
+        break
     if (
         response.status_code == 403
         and response.headers.get("cf-mitigated") == "challenge"
@@ -580,12 +583,8 @@ def is_permitted_redirect(original_url: str, redirect_url: str) -> bool:
     redirect_host = (redirect.hostname or "").removeprefix("www.")
     if not original_host or original_host != redirect_host:
         return False
-
-    try:
-        original_port = _normalize_default_port(original)
-        redirect_port = _normalize_default_port(redirect)
-    except ValueError:
-        return False
+    original_port = _normalize_default_port(original, redirect_url=original_url)
+    redirect_port = _normalize_default_port(redirect, redirect_url=redirect_url)
 
     if original.scheme == redirect.scheme:
         return original_port == redirect_port
@@ -607,8 +606,24 @@ def _is_default_port(port: int | None, scheme: str) -> bool:
     return default_port is not None and port == default_port
 
 
-def _normalize_default_port(parsed: ParseResult) -> int | None:
-    port = parsed.port
+def _normalize_default_port(
+    parsed: ParseResult,
+    *,
+    redirect_url: str,
+) -> int | None:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ToolExecutionError(
+            error_type="upstream_error",
+            message="Web fetch received an invalid redirect URL.",
+            retryable=False,
+            details={
+                "url_host": parsed.hostname or "",
+                "redirect_url": redirect_url,
+                "invalid_port": True,
+            },
+        ) from exc
     default_port = _default_port_for_scheme(parsed.scheme)
     if default_port is None:
         return port
