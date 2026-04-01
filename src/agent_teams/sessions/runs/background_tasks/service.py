@@ -82,7 +82,9 @@ class BackgroundTaskService:
         background: bool,
     ) -> tuple[BackgroundTaskRecord, bool]:
         manager = self._require_manager()
-        timeout = normalize_timeout(timeout_ms)
+        timeout = (
+            None if background and timeout_ms is None else normalize_timeout(timeout_ms)
+        )
         if background:
             record = await manager.start_session(
                 run_id=run_id,

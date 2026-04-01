@@ -7,6 +7,9 @@ from typing import Literal, cast
 
 import pytest
 
+from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    normalize_timeout,
+)
 from agent_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
 )
@@ -18,12 +21,15 @@ from agent_teams.sessions.runs.background_tasks.models import (
 from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
+from agent_teams.workspace import WorkspaceHandle
 
 
 class _FakeBackgroundTaskManager:
     def __init__(self) -> None:
         self._listener: Callable[[BackgroundTaskRecord], Awaitable[None]] | None = None
         self.records: tuple[BackgroundTaskRecord, ...] = ()
+        self.start_calls: list[dict[str, object]] = []
+        self.interact_result: tuple[BackgroundTaskRecord, bool] | None = None
         self.wait_result: tuple[BackgroundTaskRecord, bool] | None = None
 
     def set_completion_listener(
@@ -45,6 +51,75 @@ class _FakeBackgroundTaskManager:
             ):
                 return record
         raise KeyError(background_task_id)
+
+    async def start_session(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        tool_call_id: str | None,
+        workspace: object,
+        command: str,
+        cwd: Path,
+        timeout_ms: int | None,
+        env: dict[str, str] | None,
+        tty: bool,
+        execution_mode: Literal["foreground", "background"] = "background",
+    ) -> BackgroundTaskRecord:
+        _ = (workspace, env)
+        self.start_calls.append(
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "tool_call_id": tool_call_id,
+                "command": command,
+                "cwd": cwd,
+                "timeout_ms": timeout_ms,
+                "tty": tty,
+                "execution_mode": execution_mode,
+            }
+        )
+        record = _build_record(
+            background_task_id="exec-started",
+            execution_mode=execution_mode,
+            status=(
+                BackgroundTaskStatus.RUNNING
+                if execution_mode == "background"
+                else BackgroundTaskStatus.COMPLETED
+            ),
+        ).model_copy(
+            update={
+                "run_id": run_id,
+                "session_id": session_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "tool_call_id": tool_call_id,
+                "command": command,
+                "cwd": str(cwd),
+                "timeout_ms": timeout_ms,
+                "tty": tty,
+            }
+        )
+        self.records = self.records + (record,)
+        return record
+
+    async def interact_for_run(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+        chars: str,
+        yield_time_ms: int | None,
+        is_initial_poll: bool,
+    ) -> tuple[BackgroundTaskRecord, bool]:
+        _ = (run_id, background_task_id, chars, yield_time_ms, is_initial_poll)
+        if self.interact_result is None:
+            raise AssertionError("interact_result not configured")
+        return self.interact_result
 
     async def wait_for_run(
         self,
@@ -190,6 +265,84 @@ def test_background_task_service_lists_only_background_records(tmp_path: Path) -
     assert tuple(record.background_task_id for record in records) == (
         "exec-background",
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_command_preserves_background_timeout_default_when_omitted(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-execute-bg.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    manager.interact_result = (
+        _build_record(
+            background_task_id="exec-started",
+            status=BackgroundTaskStatus.RUNNING,
+        ),
+        False,
+    )
+
+    updated, completed = await service.execute_command(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_call_id="call-1",
+        workspace=cast(WorkspaceHandle, object()),
+        command="python worker.py",
+        cwd=Path("C:/workspace"),
+        yield_time_ms=1_000,
+        timeout_ms=None,
+        env=None,
+        tty=False,
+        background=True,
+    )
+
+    assert manager.start_calls[0]["timeout_ms"] is None
+    assert completed is False
+    assert updated.background_task_id == "exec-started"
+
+
+@pytest.mark.asyncio
+async def test_execute_command_keeps_foreground_timeout_normalization_when_omitted(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-execute-fg.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    manager.wait_result = (
+        _build_record(
+            background_task_id="exec-started",
+            execution_mode="foreground",
+        ),
+        True,
+    )
+
+    updated, completed = await service.execute_command(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_call_id="call-1",
+        workspace=cast(WorkspaceHandle, object()),
+        command="python worker.py",
+        cwd=Path("C:/workspace"),
+        yield_time_ms=1_000,
+        timeout_ms=None,
+        env=None,
+        tty=False,
+        background=False,
+    )
+
+    assert manager.start_calls[0]["timeout_ms"] == normalize_timeout(None)
+    assert completed is True
+    assert updated.background_task_id == "exec-started"
 
 
 def test_background_task_service_get_for_run_rejects_foreground_records(
