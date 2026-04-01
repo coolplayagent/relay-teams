@@ -77,14 +77,13 @@ def collect_safe_row_ids(
     candidate_ids: set[int] = set()
     safe_ids: set[int] = set()
     for row_id, messages in rows:
-        normalized_messages = normalize_replayed_messages_against_pending(
+        normalize_replayed_messages_against_pending(
             messages,
             pending_tool_call_ids=pending_tool_call_ids,
             seen_tool_call_ids=seen_tool_call_ids,
             on_drop=on_drop,
         )
-        if normalized_messages:
-            candidate_ids.add(row_id)
+        candidate_ids.add(row_id)
         if not pending_tool_call_ids:
             safe_ids = candidate_ids.copy()
     return safe_ids
