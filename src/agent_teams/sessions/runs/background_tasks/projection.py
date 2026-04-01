@@ -6,11 +6,14 @@ from pydantic import JsonValue
 from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 
 _MAX_SUMMARY_LENGTH = 500
+_MAX_VISIBLE_OUTPUT_CHARS = 32_000
+_OUTPUT_TRUNCATED_SUFFIX = "\n\n... output truncated; see log_path for full output ..."
 
 
 def build_background_task_payload(
     record: BackgroundTaskRecord,
 ) -> dict[str, JsonValue]:
+    visible_output, output_truncated = _build_visible_output_excerpt(record)
     return {
         "background_task_id": record.background_task_id,
         "run_id": record.run_id,
@@ -25,7 +28,8 @@ def build_background_task_payload(
         "timeout_ms": record.timeout_ms,
         "exit_code": record.exit_code,
         "recent_output": list(record.recent_output),
-        "output_excerpt": record.output_excerpt,
+        "output_excerpt": visible_output,
+        "output_truncated": output_truncated,
         "log_path": record.log_path,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
@@ -48,7 +52,7 @@ def build_background_task_result_payload(
 ) -> dict[str, JsonValue]:
     payload = build_background_task_payload(record)
     payload["completed"] = completed
-    payload["output"] = record.output_excerpt
+    payload["output"] = payload["output_excerpt"]
     if not include_task_id:
         payload["background_task_id"] = None
     return payload
@@ -84,3 +88,16 @@ def _notification_summary(record: BackgroundTaskRecord) -> str:
 
 def _xml_escape(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _build_visible_output_excerpt(record: BackgroundTaskRecord) -> tuple[str, bool]:
+    return _truncate_visible_output(record.output_excerpt)
+
+
+def _truncate_visible_output(value: str) -> tuple[str, bool]:
+    if len(value) <= _MAX_VISIBLE_OUTPUT_CHARS:
+        return value, False
+    available_chars = _MAX_VISIBLE_OUTPUT_CHARS - len(_OUTPUT_TRUNCATED_SUFFIX)
+    if available_chars <= 0:
+        return value[:_MAX_VISIBLE_OUTPUT_CHARS], True
+    return value[:available_chars] + _OUTPUT_TRUNCATED_SUFFIX, True

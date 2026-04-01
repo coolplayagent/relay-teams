@@ -106,7 +106,7 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
 def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
     cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
-        cwd=Path("/workspace"),
+        workdir=".",
         tty=False,
         background=False,
     )
@@ -137,7 +137,7 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cache_key.db")
     cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
-        cwd=Path("/workspace"),
+        workdir=".",
         tty=False,
         background=False,
     )
@@ -176,13 +176,13 @@ def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) ->
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_exec_context.db")
     approved_cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
-        cwd=Path("/workspace/one"),
+        workdir="one",
         tty=False,
         background=False,
     )
     mismatched_cache_key = build_shell_cache_key(
         "pwd",
-        cwd=Path("/workspace/two"),
+        workdir="two",
         tty=True,
         background=False,
     )

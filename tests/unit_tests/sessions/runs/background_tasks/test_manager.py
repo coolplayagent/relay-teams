@@ -472,9 +472,9 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     tmp_path: Path,
 ) -> None:
     from agent_teams.sessions.runs.background_tasks import manager as manager_module
-    from agent_teams.tools.workspace_tools.shell_executor import (
-        ResolvedShell,
-        ShellKind,
+    from agent_teams.sessions.runs.background_tasks.command_runtime import (
+        CommandRuntimeKind,
+        ResolvedCommandRuntime,
     )
 
     repo = BackgroundTaskRepository(tmp_path / "exec-session-winpty.db")
@@ -483,12 +483,12 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     workspace = _build_workspace_handle(tmp_path)
     fake_process = _FakeWindowsPtyProcess()
 
-    async def _fake_build_shell_env(
+    async def _fake_build_command_env(
         env: dict[str, str] | None = None,
         *,
-        shell: ResolvedShell | None = None,
+        runtime: ResolvedCommandRuntime | None = None,
     ) -> dict[str, str]:
-        _ = shell
+        _ = runtime
         return dict(env or {})
 
     async def _fake_kill_process_tree_by_pid(pid: int) -> None:
@@ -498,14 +498,14 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
     monkeypatch.setattr(
         manager_module,
-        "resolve_exec_shell",
-        lambda: ResolvedShell(
-            kind=ShellKind.POWERSHELL,
+        "resolve_command_runtime",
+        lambda: ResolvedCommandRuntime(
+            kind=CommandRuntimeKind.POWERSHELL,
             executable="powershell.exe",
             display_name="PowerShell",
         ),
     )
-    monkeypatch.setattr(manager_module, "build_shell_env", _fake_build_shell_env)
+    monkeypatch.setattr(manager_module, "build_command_env", _fake_build_command_env)
     monkeypatch.setattr(
         manager_module,
         "_spawn_windows_pty_process",

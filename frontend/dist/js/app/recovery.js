@@ -697,13 +697,14 @@ function shouldPollContinuity() {
 
     const activeRun = getActiveRecoveryRun();
     const hasApprovals = (state.currentRecoverySnapshot?.pendingToolApprovals || []).length > 0;
-    const hasBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || []).length > 0;
+    const hasActiveBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || [])
+        .filter(task => isBackgroundTaskActive(task)).length > 0;
     const hasPausedSubagent = !!(state.pausedSubagent || state.currentRecoverySnapshot?.pausedSubagent);
     return !!(
         state.isGenerating
         || state.activeEventSource
         || hasApprovals
-        || hasBackgroundTasks
+        || hasActiveBackgroundTasks
         || hasPausedSubagent
         || activeRun?.is_recoverable
     );

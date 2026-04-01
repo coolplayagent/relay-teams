@@ -37,11 +37,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         workdir: str | None = None,
         tty: bool = False,
     ) -> dict[str, JsonValue]:
-        cwd = resolve_cwd(ctx, workdir, ensure_tmp_root=False)
         approval_request = ToolApprovalRequest(
             cache_key=build_shell_cache_key(
                 command,
-                cwd=cwd,
+                workdir=workdir,
                 tty=tty,
                 background=background,
             )
@@ -51,7 +50,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             validate_shell_command(command)
             service = require_background_task_service(ctx)
             cwd = resolve_cwd(ctx, workdir)
-            record, completed = await service.run_shell(
+            record, completed = await service.execute_command(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
                 instance_id=ctx.deps.instance_id,
@@ -91,18 +90,20 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 def build_shell_cache_key(
     command: str,
     *,
-    cwd: Path,
+    workdir: str | None,
     tty: bool,
     background: bool,
 ) -> str:
     canonical = canonicalize_shell_command(command)
-    normalized_cwd = str(cwd.resolve()).strip()
+    normalized_workdir = str(workdir).strip() if workdir is not None else "<default>"
+    if not normalized_workdir:
+        normalized_workdir = "<default>"
     tty_marker = "1" if tty else "0"
     background_marker = "1" if background else "0"
     return "\n".join(
         [
             f"command={canonical}",
-            f"cwd={normalized_cwd}",
+            f"workdir={normalized_workdir}",
             f"tty={tty_marker}",
             f"background={background_marker}",
         ]

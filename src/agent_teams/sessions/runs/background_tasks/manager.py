@@ -39,15 +39,15 @@ from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
 from agent_teams.sessions.runs.run_models import RunEvent
-from agent_teams.sessions.runs.background_tasks.shell_runtime import (
-    ResolvedShell,
+from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    ResolvedCommandRuntime,
     _kill_process_tree,
     _kill_process_tree_by_pid,
     _start_new_session,
-    build_shell_env,
-    build_shell_command,
-    create_shell_subprocess,
-    resolve_exec_shell,
+    build_command_argv,
+    build_command_env,
+    create_command_subprocess,
+    resolve_command_runtime,
     windows_conpty_supported,
 )
 from agent_teams.workspace import WorkspaceHandle
@@ -669,7 +669,7 @@ class BackgroundTaskManager:
                 env=env,
             )
         else:
-            proc = await create_shell_subprocess(
+            proc = await create_command_subprocess(
                 command=record.command,
                 cwd=cwd,
                 env=env,
@@ -716,8 +716,8 @@ class BackgroundTaskManager:
         env: dict[str, str] | None,
     ) -> _PosixPtyTransport:
         assert pty is not None
-        shell = resolve_exec_shell()
-        shell_env = await build_shell_env(env, shell=shell)
+        runtime = resolve_command_runtime()
+        command_env = await build_command_env(env, runtime=runtime)
         master_fd, slave_fd = pty.openpty()
         _set_terminal_size(
             master_fd,
@@ -726,9 +726,9 @@ class BackgroundTaskManager:
         )
         try:
             proc = await asyncio.create_subprocess_exec(
-                *build_shell_command(shell=shell, command=command),
+                *build_command_argv(runtime=runtime, command=command),
                 cwd=str(cwd),
-                env=shell_env,
+                env=command_env,
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -751,13 +751,13 @@ class BackgroundTaskManager:
         cwd: Path,
         env: dict[str, str] | None,
     ) -> _WindowsConPtyTransport:
-        shell = resolve_exec_shell()
-        shell_env = await build_shell_env(env, shell=shell)
+        runtime = resolve_command_runtime()
+        command_env = await build_command_env(env, runtime=runtime)
         process = _spawn_windows_pty_process(
             command=command,
             cwd=cwd,
-            env=shell_env,
-            shell=shell,
+            env=command_env,
+            runtime=runtime,
             columns=_DEFAULT_PTY_COLUMNS,
             rows=_DEFAULT_PTY_ROWS,
         )
@@ -1177,7 +1177,7 @@ def _spawn_windows_pty_process(
     command: str,
     cwd: Path,
     env: dict[str, str],
-    shell: ResolvedShell,
+    runtime: ResolvedCommandRuntime,
     columns: int,
     rows: int,
 ) -> _WindowsPtyProcessProtocol:
@@ -1188,7 +1188,7 @@ def _spawn_windows_pty_process(
         _WindowsPtyProcessFactoryProtocol,
         module.__dict__["PtyProcess"],
     )
-    argv = list(build_shell_command(shell=shell, command=command))
+    argv = list(build_command_argv(runtime=runtime, command=command))
     return factory.spawn(
         argv,
         cwd=str(cwd),

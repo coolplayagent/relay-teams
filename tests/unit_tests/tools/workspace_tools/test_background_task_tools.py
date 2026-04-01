@@ -53,7 +53,7 @@ class _CapturingBackgroundTaskService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    async def run_shell(self, **kwargs: object):
+    async def execute_command(self, **kwargs: object):
         self.calls.append(dict(kwargs))
         record = BackgroundTaskRecord(
             background_task_id="exec_123",
@@ -121,25 +121,25 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
 def test_build_shell_cache_key_includes_cwd_background_and_tty() -> None:
     running_key = shell_module.build_shell_cache_key(
         "bash -lc 'pwd'",
-        cwd=Path("/workspace/one"),
+        workdir="one",
         tty=False,
         background=False,
     )
     different_cwd_key = shell_module.build_shell_cache_key(
         "pwd",
-        cwd=Path("/workspace/two"),
+        workdir="two",
         tty=False,
         background=False,
     )
     different_tty_key = shell_module.build_shell_cache_key(
         "pwd",
-        cwd=Path("/workspace/one"),
+        workdir="one",
         tty=True,
         background=False,
     )
     different_mode_key = shell_module.build_shell_cache_key(
         "pwd",
-        cwd=Path("/workspace/one"),
+        workdir="one",
         tty=False,
         background=True,
     )
@@ -147,6 +147,46 @@ def test_build_shell_cache_key_includes_cwd_background_and_tty() -> None:
     assert running_key != different_cwd_key
     assert running_key != different_tty_key
     assert running_key != different_mode_key
+
+
+@pytest.mark.asyncio
+async def test_shell_defers_workdir_resolution_until_execute_tool_runs_action(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["shell"],
+    )
+
+    class _ExplodingWorkspace(_FakeWorkspace):
+        def resolve_workdir(self, relative_path: str | None = None) -> Path:
+            raise AssertionError(f"unexpected workdir resolution: {relative_path}")
+
+    workspace = _ExplodingWorkspace(tmp_path)
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            workspace=workspace,
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+        ),
+    )
+
+    async def _fake_execute_tool(_ctx: object, **kwargs: object) -> dict[str, object]:
+        del _ctx
+        assert kwargs["approval_request"] is not None
+        return {"delegated": True}
+
+    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, command="pwd", workdir="../outside")
+
+    assert result == {"delegated": True}
 
 
 def test_register_background_tasks_is_idempotent_per_agent(

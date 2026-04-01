@@ -19,7 +19,9 @@ from agent_teams.sessions.runs.background_tasks.repository import (
 from agent_teams.sessions.runs.background_tasks.projection import (
     build_background_task_completion_message,
 )
-from agent_teams.sessions.runs.background_tasks.shell_runtime import normalize_timeout
+from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    normalize_timeout,
+)
 from agent_teams.workspace import WorkspaceHandle
 
 LOGGER = get_logger(__name__)
@@ -57,7 +59,7 @@ class BackgroundTaskService:
     ) -> None:
         self._completion_sink = sink
 
-    async def run_shell(
+    async def execute_command(
         self,
         *,
         run_id: str,

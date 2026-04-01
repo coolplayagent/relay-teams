@@ -6,7 +6,7 @@ import logging
 from concurrent.futures import Future as ThreadFuture
 from enum import StrEnum
 from json import dumps, loads
-from typing import Awaitable, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import (
@@ -84,6 +84,9 @@ from agent_teams.agents.tasks.ids import new_task_id
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import build_conversation_id
 
+if TYPE_CHECKING:
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
+
 logger = get_logger(__name__)
 _T = TypeVar("_T")
 
@@ -154,6 +157,7 @@ class RunManager:
         run_intent_repo: RunIntentRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
         background_task_manager: BackgroundTaskManager | None = None,
+        background_task_service: BackgroundTaskService | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
@@ -181,6 +185,7 @@ class RunManager:
         self._run_intent_repo: RunIntentRepository | None = run_intent_repo
         self._run_state_repo: RunStateRepository | None = run_state_repo
         self._background_task_manager = background_task_manager
+        self._background_task_service = background_task_service
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
@@ -442,7 +447,12 @@ class RunManager:
                         payload={"mode": "active_enqueue"},
                     )
                 return active_run_id, session_id
-            if runtime is not None and runtime.is_recoverable:
+            if (
+                runtime is not None
+                and runtime.is_recoverable
+                and runtime.status
+                in {RunRuntimeStatus.PAUSED, RunRuntimeStatus.STOPPED}
+            ):
                 self._append_followup_to_coordinator(
                     active_run_id, intent.intent, enqueue=False
                 )
@@ -1420,10 +1430,7 @@ class RunManager:
             session_id=session_id,
             input=(TextContentPart(text=message),),
         )
-        new_run_id, _ = self._queue_new_run(
-            session_id=session_id,
-            intent=self._prepare_intent(intent),
-        )
+        new_run_id, _ = self.create_run(intent)
         self.ensure_run_started(new_run_id)
         with bind_trace_context(
             trace_id=new_run_id,
@@ -1434,10 +1441,11 @@ class RunManager:
                 logger,
                 logging.INFO,
                 event="background_task.notification.spawned",
-                message="Background task notification started a new run",
+                message="Background task notification routed through create_run",
                 payload={
                     "background_task_id": record.background_task_id,
                     "source_run_id": record.run_id,
+                    "target_run_id": new_run_id,
                 },
             )
 
@@ -1520,11 +1528,17 @@ class RunManager:
         )
 
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
+        if self._background_task_service is not None:
+            return tuple(
+                record.model_dump(mode="json")
+                for record in self._background_task_service.list_for_run(run_id)
+            )
         if self._background_task_manager is None:
             return ()
         return tuple(
             record.model_dump(mode="json")
             for record in self._background_task_manager.list_for_run(run_id)
+            if record.execution_mode == "background"
         )
 
     def get_background_task(
@@ -1533,12 +1547,20 @@ class RunManager:
         run_id: str,
         background_task_id: str,
     ) -> dict[str, object]:
+        if self._background_task_service is not None:
+            return self._background_task_service.get_for_run(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            ).model_dump(mode="json")
         if self._background_task_manager is None:
             raise KeyError(f"Background task {background_task_id} not found")
-        return self._background_task_manager.get_for_run(
+        record = self._background_task_manager.get_for_run(
             run_id=run_id,
             background_task_id=background_task_id,
-        ).model_dump(mode="json")
+        )
+        if record.execution_mode != "background":
+            raise KeyError(f"Background task {background_task_id} not found")
+        return record.model_dump(mode="json")
 
     async def stop_background_task(
         self,
@@ -1546,7 +1568,19 @@ class RunManager:
         run_id: str,
         background_task_id: str,
     ) -> dict[str, object]:
+        if self._background_task_service is not None:
+            record = await self._background_task_service.stop_for_run(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            )
+            return record.model_dump(mode="json")
         if self._background_task_manager is None:
+            raise KeyError(f"Background task {background_task_id} not found")
+        record = self._background_task_manager.get_for_run(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        if record.execution_mode != "background":
             raise KeyError(f"Background task {background_task_id} not found")
         record = await self._background_task_manager.stop_for_run(
             run_id=run_id,

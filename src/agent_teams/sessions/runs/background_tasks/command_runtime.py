@@ -41,15 +41,15 @@ DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 1_200_000
 
 
-class ShellKind(str, Enum):
+class CommandRuntimeKind(str, Enum):
     BASH = "bash"
     POWERSHELL = "powershell"
 
 
-class ResolvedShell(BaseModel):
+class ResolvedCommandRuntime(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: ShellKind
+    kind: CommandRuntimeKind
     executable: str
     display_name: str
 
@@ -66,24 +66,24 @@ def resolve_bash_path() -> str:
     return _resolve_posix_bash_path()
 
 
-def resolve_exec_shell() -> ResolvedShell:
+def resolve_command_runtime() -> ResolvedCommandRuntime:
     if _is_windows():
         try:
-            return _build_bash_shell(resolve_bash_path(), display_name="Git Bash")
+            return _build_bash_runtime(resolve_bash_path(), display_name="Git Bash")
         except FileNotFoundError:
-            return _build_powershell_shell()
-    return _build_bash_shell(resolve_bash_path(), display_name="Bash")
+            return _build_powershell_runtime()
+    return _build_bash_runtime(resolve_bash_path(), display_name="Bash")
 
 
-def build_shell_command(
+def build_command_argv(
     *,
-    shell: ResolvedShell,
+    runtime: ResolvedCommandRuntime,
     command: str,
     login: bool = False,
 ) -> tuple[str, ...]:
-    if shell.kind == ShellKind.BASH:
-        return (shell.executable, "-lc", command)
-    argv = [shell.executable]
+    if runtime.kind == CommandRuntimeKind.BASH:
+        return (runtime.executable, "-lc", command)
+    argv = [runtime.executable]
     if not login:
         argv.append("-NoProfile")
     argv.extend(["-Command", _prepend_powershell_utf8_prefix(command)])
@@ -152,20 +152,20 @@ def _resolve_powershell_path() -> str:
     )
 
 
-def _build_bash_shell(path: str, *, display_name: str) -> ResolvedShell:
-    return ResolvedShell(
-        kind=ShellKind.BASH,
+def _build_bash_runtime(path: str, *, display_name: str) -> ResolvedCommandRuntime:
+    return ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
         executable=path,
         display_name=display_name,
     )
 
 
-def _build_powershell_shell() -> ResolvedShell:
+def _build_powershell_runtime() -> ResolvedCommandRuntime:
     path = _resolve_powershell_path()
     executable_name = Path(path).name.lower()
     display_name = "PowerShell Core" if executable_name == "pwsh.exe" else "PowerShell"
-    return ResolvedShell(
-        kind=ShellKind.POWERSHELL,
+    return ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.POWERSHELL,
         executable=path,
         display_name=display_name,
     )
@@ -233,12 +233,12 @@ def _sanitize_bash_env(env: dict[str, str]) -> dict[str, str]:
     return sanitized
 
 
-def _sanitize_shell_env(
+def _sanitize_command_env(
     env: dict[str, str],
     *,
-    shell: ResolvedShell,
+    runtime: ResolvedCommandRuntime,
 ) -> dict[str, str]:
-    if shell.kind == ShellKind.BASH:
+    if runtime.kind == CommandRuntimeKind.BASH:
         return _sanitize_bash_env(env)
     return env
 
@@ -338,41 +338,41 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     return os.pathsep.join(path_parts)
 
 
-async def build_shell_env(
+async def build_command_env(
     env: dict[str, str] | None = None,
     *,
-    shell: ResolvedShell | None = None,
+    runtime: ResolvedCommandRuntime | None = None,
 ) -> dict[str, str]:
-    resolved_shell = shell or resolve_exec_shell()
-    shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
-    shell_env.update(_load_github_cli_env())
+    resolved_runtime = runtime or resolve_command_runtime()
+    command_env = build_subprocess_env(base_env=os.environ, extra_env=env)
+    command_env.update(_load_github_cli_env())
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
-        shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
-    return _sanitize_shell_env(shell_env, shell=resolved_shell)
+        command_env["PATH"] = _prepend_to_path(command_env.get("PATH"), gh_path.parent)
+    return _sanitize_command_env(command_env, runtime=resolved_runtime)
 
 
-async def create_shell_subprocess(
+async def create_command_subprocess(
     *,
     command: str,
     cwd: Path,
     env: dict[str, str] | None = None,
-    shell: ResolvedShell | None = None,
+    runtime: ResolvedCommandRuntime | None = None,
     login: bool = False,
     stdin: int | None = None,
     stdout: int | None = None,
     stderr: int | None = None,
 ) -> asyncio.subprocess.Process:
-    resolved_shell = shell or resolve_exec_shell()
-    shell_env = await build_shell_env(env, shell=resolved_shell)
+    resolved_runtime = runtime or resolve_command_runtime()
+    command_env = await build_command_env(env, runtime=resolved_runtime)
     return await asyncio.create_subprocess_exec(
-        *build_shell_command(
-            shell=resolved_shell,
+        *build_command_argv(
+            runtime=resolved_runtime,
             command=command,
             login=login,
         ),
         cwd=str(cwd),
-        env=shell_env,
+        env=command_env,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,

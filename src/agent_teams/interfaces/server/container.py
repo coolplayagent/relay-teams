@@ -530,6 +530,7 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             run_state_repo=self.run_state_repo,
             background_task_manager=self.background_task_manager,
+            background_task_service=self.background_task_service,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,

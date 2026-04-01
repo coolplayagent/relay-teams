@@ -82,6 +82,11 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "stopSessionContinuity(safeSessionId);" in recovery_script
     assert (
+        "const hasActiveBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || [])"
+        in recovery_script
+    )
+    assert "|| hasActiveBackgroundTasks" in recovery_script
+    assert (
         "detachActiveStreamForSessionSwitch({ focusPrompt: false });" in session_script
     )
     assert "clearAllStreamState({ preserveOverlay: true });" in session_script
