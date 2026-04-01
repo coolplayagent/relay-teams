@@ -51,6 +51,8 @@ async def execute_tool(
     args_summary: dict[str, JsonValue],
     action: Callable[[], object | Awaitable[object]] | object,
     approval_request: ToolApprovalRequest | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    keep_approval_ticket_reusable: bool = False,
 ) -> dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
     tool_call_id = ctx.tool_call_id or f"toolcall_{uuid4().hex[:12]}"
@@ -87,6 +89,7 @@ async def execute_tool(
             ctx=ctx,
             tool_name=tool_name,
             args_summary=args_summary,
+            approval_args_summary=approval_args_summary,
             meta=meta,
             tool_call_id=tool_call_id,
             approval_request=approval_request,
@@ -180,7 +183,7 @@ async def execute_tool(
                 duration_ms=elapsed_ms,
                 success=True,
             )
-            if approval_ticket_id:
+            if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
             return envelope
         except Exception as exc:
@@ -234,7 +237,7 @@ async def execute_tool(
                 duration_ms=elapsed_ms,
                 success=False,
             )
-            if approval_ticket_id:
+            if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
             return envelope
 
@@ -345,6 +348,7 @@ async def _handle_tool_approval(
     ctx: ToolContext,
     tool_name: str,
     args_summary: dict[str, JsonValue],
+    approval_args_summary: dict[str, JsonValue] | None,
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
@@ -356,6 +360,9 @@ async def _handle_tool_approval(
     )
     approval_required = decision.required
     args_preview = _safe_json(args_summary)
+    approval_preview = _safe_json(
+        approval_args_summary if approval_args_summary is not None else args_summary
+    )
     meta["approval_required"] = approval_required
     if decision.permission_scope is not None:
         meta["permission_scope"] = decision.permission_scope.value
@@ -380,6 +387,7 @@ async def _handle_tool_approval(
         tool_name=tool_name,
         args_preview=args_preview,
         cache_key=cache_key,
+        signature_args_preview=approval_preview,
     )
     if reusable_ticket is not None:
         if reusable_ticket.status == ApprovalTicketStatus.APPROVED:
@@ -422,6 +430,7 @@ async def _handle_tool_approval(
         tool_name=tool_name,
         args_preview=args_preview,
         cache_key=cache_key,
+        signature_args_preview=approval_preview,
     )
     return await _wait_for_ticket_resolution(
         ctx=ctx,

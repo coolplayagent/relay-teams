@@ -2,3 +2,9 @@ Fetch content from an http or https URL.
 
 Use this for reading current web pages, downloading files that need to be inspected,
 or explicitly extracting structured data from RSS/Atom feeds and OPML subscription lists.
+
+Notes:
+- Authenticated or private URLs often fail in this tool. Prefer specialized MCP or authenticated tools for GitHub, Confluence, Jira, Google Docs, and similar services.
+- Redirects to a different host are not followed automatically. If a page redirects cross-host, call `webfetch` again with the returned redirect URL.
+- A small built-in docs whitelist can bypass approval for `webfetch` only. It is not a general network allowlist for other tools.
+- `yolo` mode still skips approval, but URL safety validation and redirect restrictions continue to apply.

@@ -206,8 +206,10 @@ def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="exec_command",
-            args_summary={"command": "pwd"},
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com/docs"},
+            approval_args_summary={"host": "example.com"},
+            keep_approval_ticket_reusable=True,
             action=lambda: {"stdout": "/tmp"},
         )
     )
@@ -427,6 +429,73 @@ def test_execute_tool_reuses_approved_ticket_without_reopening_request() -> None
     )
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.COMPLETED
+
+
+def test_execute_tool_reuses_host_scoped_approval_identity_after_success() -> None:
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=_FakePolicy(needs_approval=True),
+    )
+    first_ctx = _FakeCtx(deps)
+    first_ctx.tool_call_id = "call-webfetch-1"
+    first_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, first_ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com/docs/start"},
+            approval_args_summary={"host": "example.com"},
+            keep_approval_ticket_reusable=True,
+            action=lambda: "first",
+        )
+    )
+
+    first_state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-webfetch-1",
+    )
+    first_ticket = deps.approval_ticket_repo.get("call-webfetch-1")
+    assert first_result["ok"] is True
+    assert first_state is not None
+    assert first_state.args_preview == '{"url": "https://example.com/docs/start"}'
+    assert first_ticket is not None
+    assert first_ticket.status == ApprovalTicketStatus.APPROVED
+
+    manager.last_open = None
+    second_ctx = _FakeCtx(deps)
+    second_ctx.tool_call_id = "call-webfetch-2"
+    second_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, second_ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com/docs/next"},
+            approval_args_summary={"host": "example.com"},
+            keep_approval_ticket_reusable=True,
+            action=lambda: "second",
+        )
+    )
+
+    second_state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-webfetch-2",
+    )
+    assert second_result["ok"] is True
+    assert second_result["data"] == "second"
+    assert second_state is not None
+    assert second_state.args_preview == '{"url": "https://example.com/docs/next"}'
+    assert manager.last_open is None
+    assert (
+        len(
+            [
+                event
+                for event in deps.run_event_hub.events
+                if event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+            ]
+        )
+        == 1
+    )
 
 
 def test_execute_tool_republishes_requested_ticket_when_reopened() -> None:

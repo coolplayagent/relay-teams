@@ -207,6 +207,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return {"kind": "text", "content": "fake-response"}
     if _invalid_json_auto_recovery_mode(messages):
         return _plan_invalid_json_auto_recovery_response(payload, messages)
+    if _webfetch_approval_validation_mode(messages):
+        return _plan_webfetch_approval_validation_response(payload, messages)
     computer_validation_mode = _computer_validation_mode(messages)
     if computer_validation_mode is not None:
         response_spec = _plan_computer_validation_response(
@@ -264,6 +266,59 @@ def _plan_invalid_json_auto_recovery_response(
     return {
         "kind": "text",
         "content": "[fake-llm] Invalid JSON auto-recovery scenario reached an unknown step.",
+    }
+
+
+def _webfetch_approval_validation_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[webfetch-approval-validation]")
+
+
+def _plan_webfetch_approval_validation_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "webfetch" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] webfetch is not available for this role.",
+        }
+
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        return {
+            "kind": "tool_call",
+            "tool_name": "webfetch",
+            "tool_call_id": "call-webfetch-1",
+            "arguments": {
+                "url": "https://localhost/one",
+                "format": "text",
+            },
+        }
+
+    if last_tool_call_id == "call-webfetch-1":
+        return {
+            "kind": "tool_call",
+            "tool_name": "webfetch",
+            "tool_call_id": "call-webfetch-2",
+            "arguments": {
+                "url": "https://localhost/two",
+                "format": "text",
+            },
+        }
+
+    if last_tool_call_id == "call-webfetch-2":
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] Webfetch approval validation completed after one "
+                "host-scoped approval."
+            ),
+        }
+
+    return {
+        "kind": "text",
+        "content": ("[fake-llm] Webfetch approval validation reached an unknown step."),
     }
 
 
