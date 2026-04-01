@@ -13,7 +13,7 @@ from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.background_tasks.models import (
@@ -275,6 +275,7 @@ def test_background_task_completion_enqueues_to_running_origin_instance(
     )
     assert len(queued) == 1
     assert queued[0].content == "background task finished"
+    assert queued[0].source == InjectionSource.SYSTEM
 
 
 def test_background_task_completion_attaches_to_existing_active_run_via_create_run(
@@ -343,6 +344,49 @@ def test_background_task_completion_attaches_to_existing_active_run_via_create_r
     assert len(queued) == 1
     assert queued[0].content == "background task finished"
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-newer"
+
+
+def test_background_task_completion_enqueues_to_running_coordinator_as_system(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_background_enqueue_coordinator.db"
+    manager = _build_manager(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-worker",
+        role_id="writer",
+        status=InstanceStatus.COMPLETED,
+        conversation_id="conv-worker",
+    )
+    _create_root_task(TaskRepository(db_path))
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    manager._running_run_ids.add("run-existing")
+    manager._injection_manager.activate("run-existing")
+
+    manager.handle_background_task_completion(
+        record=_build_background_record(),
+        message="background task finished",
+    )
+
+    queued = manager._injection_manager.drain_at_boundary(
+        "run-existing",
+        "inst-1",
+    )
+    assert len(queued) == 1
+    assert queued[0].content == "background task finished"
+    assert queued[0].source == InjectionSource.SYSTEM
 
 
 @pytest.mark.asyncio

@@ -357,9 +357,76 @@ def test_container_interrupts_persisted_background_processes_before_marking_stop
     monkeypatch.setattr(
         container_module.BackgroundTaskRepository,
         "mark_transient_background_tasks_interrupted",
-        lambda self: lifecycle.append("mark") or len(interruptible),
+        lambda self, *, background_task_ids=None: (
+            lifecycle.append(f"mark:{background_task_ids}")
+            or len(background_task_ids or ())
+        ),
     )
 
     _ = ServerContainer(config_dir=config_dir)
 
-    assert lifecycle == ["kill:3210", "mark"]
+    assert lifecycle == [
+        "kill:3210",
+        "mark:('exec-running', 'exec-missing-pid')",
+    ]
+
+
+def test_container_preserves_background_task_rows_when_startup_kill_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    lifecycle: list[str] = []
+    interruptible = (
+        BackgroundTaskRecord(
+            background_task_id="exec-failed-kill",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-failed-kill.log",
+        ),
+        BackgroundTaskRecord(
+            background_task_id="exec-killed",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 60",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.BLOCKED,
+            pid=6543,
+            log_path="tmp/background_tasks/exec-killed.log",
+        ),
+    )
+
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "list_interruptible",
+        lambda self: interruptible,
+    )
+    monkeypatch.setattr(
+        container_module,
+        "kill_process_tree_by_pid",
+        lambda pid: lifecycle.append(f"kill:{pid}") or pid == 6543,
+    )
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "mark_transient_background_tasks_interrupted",
+        lambda self, *, background_task_ids=None: (
+            lifecycle.append(f"mark:{background_task_ids}")
+            or len(background_task_ids or ())
+        ),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert lifecycle == [
+        "kill:3210",
+        "kill:6543",
+        "mark:('exec-killed',)",
+    ]

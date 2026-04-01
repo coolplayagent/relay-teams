@@ -994,12 +994,14 @@ class ServerContainer:
 
     def _interrupt_transient_background_tasks(self) -> int:
         interrupted = self.background_task_repository.list_interruptible()
+        interrupted_ids: list[str] = []
         for record in interrupted:
             if record.pid is None:
                 LOGGER.warning(
                     "Persisted background task lost pid before interruption cleanup",
                     extra={"background_task_id": record.background_task_id},
                 )
+                interrupted_ids.append(record.background_task_id)
                 continue
             killed = kill_process_tree_by_pid(record.pid)
             if not killed:
@@ -1010,7 +1012,13 @@ class ServerContainer:
                         "pid": record.pid,
                     },
                 )
-        return self.background_task_repository.mark_transient_background_tasks_interrupted()
+                continue
+            interrupted_ids.append(record.background_task_id)
+        return (
+            self.background_task_repository.mark_transient_background_tasks_interrupted(
+                background_task_ids=tuple(interrupted_ids)
+            )
+        )
 
     def _build_skill_runtime_service(
         self,

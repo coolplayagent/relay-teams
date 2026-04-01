@@ -255,26 +255,51 @@ class BackgroundTaskRepository:
             operation_name="delete_by_session",
         )
 
-    def mark_transient_background_tasks_interrupted(self) -> int:
+    def mark_transient_background_tasks_interrupted(
+        self,
+        *,
+        background_task_ids: tuple[str, ...] | None = None,
+    ) -> int:
+        if background_task_ids is not None and not background_task_ids:
+            return 0
+
         affected = 0
 
         def operation() -> None:
             nonlocal affected
             now = datetime.now(tz=timezone.utc).isoformat()
-            cursor = self._conn.execute(
-                """
-                UPDATE background_tasks
-                SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
-                WHERE status IN (?, ?)
-                """,
-                (
-                    BackgroundTaskStatus.STOPPED.value,
-                    now,
-                    now,
-                    BackgroundTaskStatus.RUNNING.value,
-                    BackgroundTaskStatus.BLOCKED.value,
-                ),
-            )
+            if background_task_ids is None:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE background_tasks
+                    SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
+                    WHERE status IN (?, ?)
+                    """,
+                    (
+                        BackgroundTaskStatus.STOPPED.value,
+                        now,
+                        now,
+                        BackgroundTaskStatus.RUNNING.value,
+                        BackgroundTaskStatus.BLOCKED.value,
+                    ),
+                )
+            else:
+                placeholders = ", ".join("?" for _ in background_task_ids)
+                cursor = self._conn.execute(
+                    f"""
+                    UPDATE background_tasks
+                    SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
+                    WHERE background_task_id IN ({placeholders}) AND status IN (?, ?)
+                    """,
+                    (
+                        BackgroundTaskStatus.STOPPED.value,
+                        now,
+                        now,
+                        *background_task_ids,
+                        BackgroundTaskStatus.RUNNING.value,
+                        BackgroundTaskStatus.BLOCKED.value,
+                    ),
+                )
             affected = int(cursor.rowcount or 0)
 
         run_sqlite_write_with_retry(

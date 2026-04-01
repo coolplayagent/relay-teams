@@ -1452,6 +1452,7 @@ class RunManager:
                 record.run_id,
                 message,
                 enqueue=True,
+                source=InjectionSource.SYSTEM,
             )
         ):
             with bind_trace_context(
@@ -1911,6 +1912,7 @@ class RunManager:
         content: str,
         *,
         enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
     ) -> bool:
         try:
             root = self._root_task_for_run(run_id)
@@ -1936,7 +1938,7 @@ class RunManager:
                 created = self._injection_manager.enqueue(
                     run_id=run_id,
                     recipient_instance_id=instance_id,
-                    source=InjectionSource.USER,
+                    source=source,
                     content=content,
                 )
                 self._publish_injection_event(
@@ -1958,6 +1960,7 @@ class RunManager:
                     message="Follow-up appended to root agent conversation",
                     payload={
                         "enqueue": enqueue,
+                        "source": source.value,
                         "length": len(content),
                     },
                 )
@@ -2351,6 +2354,7 @@ class RunManager:
             payload.run_id,
             policy.prompt,
             enqueue=False,
+            source=InjectionSource.SYSTEM,
         )
 
     def _build_run_resumed_payload(

@@ -151,3 +151,46 @@ def test_background_task_repository_lists_interruptible_records(tmp_path: Path) 
         "exec-blocked",
         "exec-running",
     )
+
+
+def test_background_task_repository_can_interrupt_specific_records(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-terminals-targeted-interrupted.db"
+    repo = BackgroundTaskRepository(db_path)
+    running = BackgroundTaskRecord(
+        background_task_id="exec-running",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        pid=111,
+        log_path="tmp/background_tasks/exec-running.log",
+    )
+    blocked = BackgroundTaskRecord(
+        background_task_id="exec-blocked",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 60",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.BLOCKED,
+        pid=222,
+        log_path="tmp/background_tasks/exec-blocked.log",
+    )
+    repo.upsert(running)
+    repo.upsert(blocked)
+
+    affected = repo.mark_transient_background_tasks_interrupted(
+        background_task_ids=("exec-blocked",)
+    )
+
+    still_running = repo.get("exec-running")
+    interrupted = repo.get("exec-blocked")
+    assert affected == 1
+    assert still_running is not None
+    assert still_running.status == BackgroundTaskStatus.RUNNING
+    assert still_running.pid == 111
+    assert interrupted is not None
+    assert interrupted.status == BackgroundTaskStatus.STOPPED
+    assert interrupted.pid is None
