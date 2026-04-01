@@ -32,6 +32,42 @@ class AssistantRunError(RuntimeError):
         super().__init__(payload.error_message or payload.assistant_message)
 
 
+INVALID_TOOL_ARGS_RECOVERY_MESSAGE = (
+    "The previous tool call arguments were not valid JSON. "
+    "Do not repeat already successful tool calls. "
+    "Continue from the latest successful tool results already in the conversation. "
+    "If you call a tool again, output strict JSON only, with double-quoted property names "
+    "and arguments that exactly match the tool schema."
+)
+NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE = (
+    "The previous model stream was interrupted by a transient network or transport failure. "
+    "Continue from the latest successful conversation state already persisted. "
+    "Do not repeat already successful tool calls or restate text that has already been sent. "
+    "If prior work is incomplete, continue from the last confirmed point."
+)
+
+
+def build_auto_recovery_prompt(error_code: str | None) -> str | None:
+    code = str(error_code or "").strip().lower()
+    if code == "model_tool_args_invalid_json":
+        return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
+    if code == "network_stream_interrupted":
+        return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    return None
+
+
+def _build_recovery_guidance_message(error_code: str) -> str | None:
+    if error_code == "model_tool_args_invalid_json":
+        return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
+    if error_code in {
+        "network_stream_interrupted",
+        "network_timeout",
+        "network_error",
+    }:
+        return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    return None
+
+
 def build_assistant_error_message(
     *,
     error_code: str | None,
@@ -40,25 +76,9 @@ def build_assistant_error_message(
     code = str(error_code or "").strip().lower()
     detail = str(error_message or "").strip()
 
-    if code == "model_tool_args_invalid_json":
-        return (
-            "The previous tool call arguments were not valid JSON. "
-            "Do not repeat already successful tool calls. "
-            "Continue from the latest successful tool results already in the conversation. "
-            "If you call a tool again, output strict JSON only, with double-quoted property names "
-            "and arguments that exactly match the tool schema."
-        )
-    if code in {
-        "network_stream_interrupted",
-        "network_timeout",
-        "network_error",
-    }:
-        return (
-            "The previous model response was interrupted by a transient network or transport failure. "
-            "Continue from the latest successful conversation state already persisted. "
-            "Do not repeat already successful tool calls or restate text that has already been sent. "
-            "If prior work is incomplete, continue from the last confirmed point."
-        )
+    recovery_guidance = _build_recovery_guidance_message(code)
+    if recovery_guidance is not None:
+        return recovery_guidance
     lowered = detail.lower()
     if "prompt is too long" in lowered:
         return (

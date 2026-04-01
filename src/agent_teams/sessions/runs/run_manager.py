@@ -48,6 +48,7 @@ from agent_teams.sessions.runs.assistant_errors import (
     RunCompletionReason,
     build_assistant_error_message,
     build_assistant_error_response,
+    build_auto_recovery_prompt,
 )
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
@@ -104,31 +105,33 @@ class AutoRecoveryPolicy(BaseModel):
     prompt: str
 
 
-INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT = (
-    "The previous tool call arguments were not valid JSON. "
-    "Do not repeat already successful tool calls. "
-    "Continue from the latest successful tool results already in the conversation. "
-    "If you call a tool again, output strict JSON only, with double-quoted property names "
-    "and arguments that exactly match the tool schema."
-)
-NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT = (
-    "The previous model stream was interrupted by a transient network or transport failure. "
-    "Continue from the latest successful conversation state already persisted. "
-    "Do not repeat already successful tool calls or restate text that has already been sent. "
-    "If prior work is incomplete, continue from the last confirmed point."
-)
+def _auto_recovery_policy(
+    *,
+    error_code: str,
+    reason: AutoRecoveryReason,
+    max_attempts: int,
+) -> AutoRecoveryPolicy:
+    prompt = build_auto_recovery_prompt(error_code)
+    if prompt is None:
+        raise ValueError(f"Missing auto recovery prompt for error_code={error_code}")
+    return AutoRecoveryPolicy(
+        error_code=error_code,
+        reason=reason,
+        max_attempts=max_attempts,
+        prompt=prompt,
+    )
+
+
 AUTO_RECOVERY_POLICIES = (
-    AutoRecoveryPolicy(
+    _auto_recovery_policy(
         error_code="model_tool_args_invalid_json",
         reason=AutoRecoveryReason.INVALID_TOOL_ARGS_JSON,
         max_attempts=1,
-        prompt=INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT,
     ),
-    AutoRecoveryPolicy(
+    _auto_recovery_policy(
         error_code="network_stream_interrupted",
         reason=AutoRecoveryReason.NETWORK_STREAM_INTERRUPTED,
         max_attempts=5,
-        prompt=NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT,
     ),
 )
 
