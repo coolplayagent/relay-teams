@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -525,7 +525,8 @@ def test_process_pending_requests_resume_after_backoff_elapsed(
     _ = queue_repo.update(
         waiting.model_copy(
             update={
-                "resume_next_attempt_at": datetime.now(tz=timezone.utc),
+                "updated_at": waiting.updated_at - timedelta(seconds=1),
+                "resume_next_attempt_at": waiting.updated_at,
             }
         )
     )
@@ -608,7 +609,8 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
         waiting.model_copy(
             update={
                 "resume_attempts": 4,
-                "resume_next_attempt_at": datetime.now(tz=timezone.utc),
+                "updated_at": waiting.updated_at - timedelta(seconds=1),
+                "resume_next_attempt_at": waiting.updated_at,
             }
         )
     )
@@ -680,7 +682,10 @@ def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
     )
     _ = queue_repo.update(
         waiting.model_copy(
-            update={"resume_next_attempt_at": datetime.now(tz=timezone.utc)}
+            update={
+                "updated_at": waiting.updated_at - timedelta(seconds=1),
+                "resume_next_attempt_at": waiting.updated_at,
+            }
         )
     )
 

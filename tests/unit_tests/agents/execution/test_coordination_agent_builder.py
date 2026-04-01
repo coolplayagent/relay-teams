@@ -131,8 +131,8 @@ def test_build_coordination_agent_passes_proxy_http_client(
     )
     monkeypatch.setattr(
         coordination_agent,
-        "OpenAIProvider",
-        _fake_openai_provider,
+        "build_openai_provider_for_endpoint",
+        lambda **kwargs: _fake_openai_provider(**kwargs),
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -159,6 +159,7 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert isinstance(provider, _FakeOpenAIProvider)
     assert provider.kwargs["base_url"] == "https://example.test/v1"
     assert provider.kwargs["api_key"] == "secret"
+    assert provider.kwargs["headers"] == ()
     assert provider.kwargs["http_client"] is sentinel_client
     assert captured["connect_timeout_seconds"] == 22.0
     assert captured["ssl_verify"] is None
@@ -191,7 +192,7 @@ def test_build_coordination_agent_ignores_unknown_skills(
     )
     monkeypatch.setattr(
         coordination_agent,
-        "OpenAIProvider",
+        "build_openai_provider_for_endpoint",
         lambda **kwargs: _FakeOpenAIProvider(**kwargs),
     )
     monkeypatch.setattr(
@@ -243,7 +244,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
     )
     monkeypatch.setattr(
         coordination_agent,
-        "OpenAIProvider",
+        "build_openai_provider_for_endpoint",
         lambda **kwargs: _FakeOpenAIProvider(**kwargs),
     )
     monkeypatch.setattr(

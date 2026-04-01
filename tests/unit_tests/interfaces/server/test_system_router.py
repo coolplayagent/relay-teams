@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import cast
+
+from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -88,6 +91,7 @@ class _FakeSystemService:
                 "base_url": "https://example.test/v1",
                 "api_key": "secret",
                 "has_api_key": True,
+                "headers": [],
                 "is_default": True,
                 "context_window": 128000,
             }
@@ -973,6 +977,40 @@ def test_save_model_profile_includes_default_flag_when_present() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, _ = service.saved_model_profile
     assert saved_profile["is_default"] is True
+
+
+def test_save_model_profile_forwards_headers() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "claude-proxy",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "value": "Bearer from-header",
+                    "secret": True,
+                }
+            ],
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": 2048,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    saved_headers = saved_profile["headers"]
+    assert isinstance(saved_headers, list)
+    first_header = saved_headers[0]
+    assert isinstance(first_header, dict)
+    first_header_payload = first_header
+    assert cast(dict[str, JsonValue], first_header_payload)["name"] == "Authorization"
 
 
 class _FakeEnvironmentVariableService:

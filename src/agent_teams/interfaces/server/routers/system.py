@@ -62,6 +62,7 @@ from agent_teams.notifications.notification_settings_service import (
 )
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    ModelRequestHeader,
     ProviderType,
 )
 from agent_teams.providers.model_config_service import ModelConfigService
@@ -139,6 +140,7 @@ class ModelProfileRequest(BaseModel):
     model: str
     base_url: str
     api_key: str | None = None
+    headers: tuple[ModelRequestHeader, ...] | None = None
     ssl_verify: bool | None = None
     temperature: float = 0.7
     top_p: float = 1.0
@@ -170,6 +172,10 @@ def save_model_profile(
             profile["ssl_verify"] = req.ssl_verify
         if req.api_key is not None and req.api_key.strip():
             profile["api_key"] = req.api_key
+        if req.headers is not None:
+            profile["headers"] = [
+                header.model_dump(mode="json") for header in req.headers
+            ]
         service.save_model_profile(name, profile, source_name=req.source_name)
         return {"status": "ok"}
     except Exception as exc:

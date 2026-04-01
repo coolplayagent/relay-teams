@@ -9,6 +9,7 @@ import pytest
 
 from agent_teams.providers.model_config import (
     ModelEndpointConfig,
+    ModelRequestHeader,
     ProviderType,
     SamplingConfig,
 )
@@ -291,6 +292,40 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
     assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
+def test_probe_allows_header_only_override(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured, response=httpx.Response(200, json={"usage": {}})
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                model="draft-model",
+                base_url="https://draft.test/v1",
+                headers=(
+                    ModelRequestHeader(
+                        name="Authorization",
+                        value="Bearer header-only",
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["Authorization"] == "Bearer header-only"
+
+
 def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
@@ -461,6 +496,40 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     assert result.provider == ProviderType.BIGMODEL
     assert result.models == ("glm-4.5",)
     assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/models"
+
+
+def test_discover_models_allows_header_only_override(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "agent_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"data": [{"id": "draft-model"}]}),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                base_url="https://draft.test/v1",
+                headers=(
+                    ModelRequestHeader(
+                        name="Authorization",
+                        value="Bearer discovery-header",
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["Authorization"] == "Bearer discovery-header"
 
 
 def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:

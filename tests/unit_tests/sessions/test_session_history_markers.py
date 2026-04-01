@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 
@@ -94,6 +94,10 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
     )
 
     cleared_count = service.clear_session_messages("session-1")
+    clear_markers = service._get_session_history_markers("session-1")
+    clear_marker_created_at = datetime.fromisoformat(
+        str(clear_markers[-1]["created_at"]).replace("Z", "+00:00")
+    )
 
     _ = task_repo.create(
         TaskEnvelope(
@@ -106,6 +110,22 @@ def test_session_clear_uses_logical_history_divider(tmp_path: Path) -> None:
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
     )
+    new_task_created_at = clear_marker_created_at + timedelta(seconds=1)
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        UPDATE tasks
+        SET created_at=?, updated_at=?
+        WHERE task_id=?
+        """,
+        (
+            new_task_created_at.isoformat(),
+            new_task_created_at.isoformat(),
+            "task-new",
+        ),
+    )
+    connection.commit()
+    connection.close()
     message_repo.append(
         session_id="session-1",
         workspace_id="default",

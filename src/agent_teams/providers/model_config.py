@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
@@ -29,13 +29,44 @@ class SamplingConfig(BaseModel):
     top_k: int | None = Field(default=None, ge=1)
 
 
+class ModelRequestHeader(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    value: str | None = None
+    secret: bool = False
+    configured: bool = False
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _normalize_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _normalize_value(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def _sync_configured_flag(self) -> "ModelRequestHeader":
+        if self.value is not None:
+            self.configured = True
+        return self
+
+
 class ModelEndpointConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    api_key: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] = ()
     ssl_verify: bool | None = None
     context_window: int | None = Field(default=None, ge=1)
     connect_timeout_seconds: float = Field(
@@ -49,8 +80,35 @@ class ModelEndpointConfig(BaseModel):
     @classmethod
     def _normalize_string_fields(cls, value: object) -> object:
         if isinstance(value, str):
-            return value.strip()
+            normalized = value.strip()
+            return normalized or None
         return value
+
+    @field_validator("headers")
+    @classmethod
+    def _validate_headers(
+        cls,
+        value: tuple[ModelRequestHeader, ...],
+    ) -> tuple[ModelRequestHeader, ...]:
+        seen_names: set[str] = set()
+        for entry in value:
+            normalized_name = entry.name.casefold()
+            if normalized_name in seen_names:
+                raise ValueError(f"Duplicate model header name: {entry.name}")
+            seen_names.add(normalized_name)
+        return value
+
+    @model_validator(mode="after")
+    def _require_auth_source(self) -> "ModelEndpointConfig":
+        if self.api_key is not None:
+            return self
+        if any(
+            header.configured and header.value is not None for header in self.headers
+        ):
+            return self
+        raise ValueError(
+            "Model endpoint config requires api_key or at least one configured header."
+        )
 
 
 class ProviderModelInfo(BaseModel):
