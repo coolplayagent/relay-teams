@@ -57,6 +57,12 @@ from agent_teams.sessions.runs.run_models import (
     RunTopologySnapshot,
 )
 from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from agent_teams.sessions.runs.assistant_errors import (
+    AssistantRunError,
+    RunCompletionReason,
+    build_assistant_error_message,
+    build_assistant_error_response,
+)
 from agent_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -75,6 +81,15 @@ from agent_teams.workspace import WorkspaceManager
 
 LOGGER = get_logger(__name__)
 ProviderUserPromptContent = str | tuple[UserContent, ...]
+
+
+class TaskExecutionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output: str
+    completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class TaskExecutionService(BaseModel):
@@ -109,7 +124,7 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         task: TaskEnvelope,
         user_prompt_override: str | None = None,
-    ) -> str:
+    ) -> TaskExecutionResult:
         worker = asyncio.create_task(
             self._execute_inner(
                 instance_id=instance_id,
@@ -143,7 +158,7 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         task: TaskEnvelope,
         user_prompt_override: str | None,
-    ) -> str:
+    ) -> TaskExecutionResult:
         is_coordinator = self.role_registry.is_coordinator_role(role_id)
         log_event(
             LOGGER,
@@ -314,7 +329,7 @@ class TaskExecutionService(BaseModel):
                     "role_id": role_id,
                 },
             )
-            return result
+            return TaskExecutionResult(output=result)
         except asyncio.CancelledError:
             paused_subagent = False
             if self.run_control_manager is not None:
@@ -338,16 +353,16 @@ class TaskExecutionService(BaseModel):
                     and not run_stop_requested
                 )
             else:
-                stopped = False
+                stopped = True
                 self.task_repo.update_status(
                     task.task_id,
-                    TaskStatus.FAILED,
+                    TaskStatus.STOPPED,
                     error_message="Task cancelled",
                 )
-                self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
+                self.agent_repo.mark_status(instance_id, InstanceStatus.STOPPED)
                 self.event_bus.emit(
                     EventEnvelope(
-                        event_type=EventType.TASK_FAILED,
+                        event_type=EventType.TASK_STOPPED,
                         trace_id=task.trace_id,
                         session_id=task.session_id,
                         task_id=task.task_id,
@@ -357,12 +372,10 @@ class TaskExecutionService(BaseModel):
                 )
             self.run_runtime_repo.update(
                 task.trace_id,
-                status=RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED,
+                status=RunRuntimeStatus.STOPPED,
                 phase=(
                     RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
                     if paused_subagent
-                    else RunRuntimePhase.TERMINAL
-                    if not stopped
                     else RunRuntimePhase.IDLE
                 ),
                 active_instance_id=None,
@@ -386,6 +399,18 @@ class TaskExecutionService(BaseModel):
                 },
             )
             raise
+        except AssistantRunError as exc:
+            return self._complete_with_assistant_error(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                conversation_id=workspace.ref.conversation_id,
+                workspace_id=workspace.ref.workspace_id,
+                assistant_message=exc.payload.assistant_message,
+                error_code=exc.payload.error_code,
+                error_message=exc.payload.error_message,
+                append_message=False,
+            )
         except RecoverableRunPauseError as exc:
             payload = exc.payload
             _ = self.task_repo.update_status(
@@ -431,80 +456,33 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except TimeoutError:
-            _ = self.task_repo.update_status(
-                task.task_id, TaskStatus.TIMEOUT, error_message="Task timeout"
+            return self._complete_with_assistant_error(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                conversation_id=workspace.ref.conversation_id,
+                workspace_id=workspace.ref.workspace_id,
+                assistant_message=build_assistant_error_message(
+                    error_code="task_timeout",
+                    error_message="Task timeout",
+                ),
+                error_code="task_timeout",
+                error_message="Task timeout",
             )
-            _ = self.agent_repo.mark_status(instance_id, InstanceStatus.TIMEOUT)
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=RunRuntimeStatus.FAILED,
-                phase=RunRuntimePhase.TERMINAL,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error="Task timeout",
-            )
-            self.event_bus.emit(
-                EventEnvelope(
-                    event_type=EventType.TASK_TIMEOUT,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json="{}",
-                )
-            )
-            log_event(
-                LOGGER,
-                logging.ERROR,
-                event="task.execution.timeout",
-                message="Task execution timed out",
-                payload={
-                    "task_id": task.task_id,
-                    "instance_id": instance_id,
-                    "role_id": role_id,
-                },
-            )
-            raise
         except Exception as exc:
-            _ = self.task_repo.update_status(
-                task.task_id, TaskStatus.FAILED, error_message=str(exc)
+            return self._complete_with_assistant_error(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                conversation_id=workspace.ref.conversation_id,
+                workspace_id=workspace.ref.workspace_id,
+                assistant_message=build_assistant_error_message(
+                    error_code="internal_execution_error",
+                    error_message=str(exc),
+                ),
+                error_code="internal_execution_error",
+                error_message=str(exc),
             )
-            _ = self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=RunRuntimeStatus.FAILED,
-                phase=RunRuntimePhase.TERMINAL,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error=str(exc),
-            )
-            self.event_bus.emit(
-                EventEnvelope(
-                    event_type=EventType.TASK_FAILED,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json="{}",
-                )
-            )
-            log_event(
-                LOGGER,
-                logging.ERROR,
-                event="task.execution.failed",
-                message="Task execution failed",
-                payload={
-                    "task_id": task.task_id,
-                    "instance_id": instance_id,
-                    "role_id": role_id,
-                },
-                exc_info=exc,
-            )
-            raise
 
     def _thinking_for_run(self, run_id: str) -> RunThinkingConfig:
         if self.run_intent_repo is None:
@@ -513,6 +491,80 @@ class TaskExecutionService(BaseModel):
             return self.run_intent_repo.get(run_id).thinking
         except KeyError:
             return RunThinkingConfig()
+
+    def _complete_with_assistant_error(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        conversation_id: str,
+        workspace_id: str,
+        assistant_message: str,
+        error_code: str,
+        error_message: str,
+        append_message: bool = True,
+    ) -> TaskExecutionResult:
+        if append_message:
+            self.message_repo.prune_conversation_history_to_safe_boundary(
+                conversation_id
+            )
+            self.message_repo.append(
+                session_id=task.session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=role_id,
+                instance_id=instance_id,
+                task_id=task.task_id,
+                trace_id=task.trace_id,
+                messages=[build_assistant_error_response(assistant_message)],
+            )
+        self.task_repo.update_status(
+            task.task_id,
+            TaskStatus.COMPLETED,
+            assigned_instance_id=instance_id,
+            result=assistant_message,
+            error_message=error_message or assistant_message,
+        )
+        _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
+        self.run_runtime_repo.update(
+            task.trace_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=error_message or assistant_message,
+        )
+        self.event_bus.emit(
+            EventEnvelope(
+                event_type=EventType.TASK_COMPLETED,
+                trace_id=task.trace_id,
+                session_id=task.session_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                payload_json="{}",
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="task.execution.completed_with_assistant_error",
+            message="Task execution completed after assistant error message was persisted",
+            payload={
+                "task_id": task.task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "error_code": error_code,
+            },
+        )
+        return TaskExecutionResult(
+            output=assistant_message,
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code=error_code,
+            error_message=error_message or assistant_message,
+        )
 
     def _topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
         if self.run_intent_repo is None:

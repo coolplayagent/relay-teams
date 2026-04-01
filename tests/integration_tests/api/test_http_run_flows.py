@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 
@@ -111,17 +112,16 @@ def test_ai_run_continues_after_invalid_tool_args_validation_failure(
     assert "run_paused" not in event_types
     assert "tool_call" in event_types
     assert "tool_result" in event_types
-    assert "tool_input_validation_failed" in event_types
-
-    validation_payloads = [
+    tool_result_payloads = [
         json.loads(str(event["payload_json"]))
         for event in events
-        if str(event.get("event_type") or "") == "tool_input_validation_failed"
+        if str(event.get("event_type") or "") == "tool_result"
     ]
     assert any(
         payload.get("tool_name") == "read"
-        and payload.get("reason") == "Input validation failed before tool execution."
-        for payload in validation_payloads
+        and payload.get("error") is True
+        and '"ok": false' in json.dumps(payload.get("result", {})).lower()
+        for payload in tool_result_payloads
     )
 
 
@@ -202,6 +202,7 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
         json=_role_draft_payload(updated_record),
     )
     save_response.raise_for_status()
+    _wait_for_role_tools(api_client, "MainAgent", {"capture_screen", "launch_app"})
 
     try:
         session_id = create_session(
@@ -279,6 +280,11 @@ def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
         json=_role_draft_payload(updated_record),
     )
     save_response.raise_for_status()
+    _wait_for_role_tools(
+        api_client,
+        "MainAgent",
+        {"capture_screen", "launch_app", "wait_for_window"},
+    )
 
     try:
         session_id = create_session(
@@ -354,3 +360,28 @@ def _role_draft_payload(record: dict[str, object]) -> dict[str, object]:
         "memory_profile": record["memory_profile"],
         "system_prompt": record["system_prompt"],
     }
+
+
+def _wait_for_role_tools(
+    client: httpx.Client,
+    role_id: str,
+    expected_tools: set[str],
+    *,
+    timeout_seconds: float = 5.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/roles/configs/{role_id}")
+        response.raise_for_status()
+        payload = response.json()
+        tools = {
+            str(tool)
+            for tool in payload.get("tools", [])
+            if isinstance(tool, str) and tool
+        }
+        if expected_tools.issubset(tools):
+            return
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Role {role_id} did not expose expected tools within {timeout_seconds}s: {sorted(expected_tools)}"
+    )

@@ -5,6 +5,7 @@ from json import loads
 from pathlib import Path
 
 from agent_teams.secrets import AppSecretStore
+from agent_teams.secrets.secret_models import SecretCoordinate
 
 
 class _FileOnlySecretStore(AppSecretStore):
@@ -12,8 +13,54 @@ class _FileOnlySecretStore(AppSecretStore):
         return False
 
 
+class _FlakyKeyringSecretStore(AppSecretStore):
+    def has_usable_keyring_backend(self) -> bool:
+        return True
+
+    def _set_in_keyring(
+        self,
+        config_dir: Path,
+        coordinate: SecretCoordinate,
+        value: str,
+    ) -> None:
+        _ = (config_dir, coordinate, value)
+        raise RuntimeError("simulated keyring failure")
+
+
 def test_set_secret_falls_back_to_shared_secrets_file(tmp_path: Path) -> None:
     store = _FileOnlySecretStore()
+
+    store.set_secret(
+        tmp_path,
+        namespace="proxy_config",
+        owner_id="default",
+        field_name="password",
+        value="secret",
+    )
+
+    assert (
+        store.get_secret(
+            tmp_path,
+            namespace="proxy_config",
+            owner_id="default",
+            field_name="password",
+        )
+        == "secret"
+    )
+    payload = loads((tmp_path / "secrets.json").read_text(encoding="utf-8"))
+    assert payload["entries"] == [
+        {
+            "namespace": "proxy_config",
+            "owner_id": "default",
+            "field_name": "password",
+            "storage": "file",
+            "value": "secret",
+        }
+    ]
+
+
+def test_set_secret_falls_back_to_file_when_keyring_write_fails(tmp_path: Path) -> None:
+    store = _FlakyKeyringSecretStore()
 
     store.set_secret(
         tmp_path,

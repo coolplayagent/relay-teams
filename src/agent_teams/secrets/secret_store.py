@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from json import dumps, loads
 from pathlib import Path
+from typing import cast
 
 try:
     import keyring
@@ -14,9 +16,11 @@ from agent_teams.secrets.secret_models import (
     SecretIndexDocument,
     SecretIndexEntry,
 )
+from pydantic import JsonValue
 
 _KEYRING_SERVICE_NAME = "agent-teams"
 _SECRETS_FILE_NAME = "secrets.json"
+LOGGER = logging.getLogger(__name__)
 
 
 class AppSecretStore:
@@ -66,14 +70,27 @@ class AppSecretStore:
 
         index = self._load_index(config_dir)
         if self.has_usable_keyring_backend():
-            self._set_in_keyring(config_dir, coordinate, value)
+            if self._try_set_in_keyring(config_dir, coordinate, value):
+                index = _upsert_entry(
+                    index,
+                    SecretIndexEntry(
+                        namespace=coordinate.namespace,
+                        owner_id=coordinate.owner_id,
+                        field_name=coordinate.field_name,
+                        storage="keyring",
+                    ),
+                )
+                self._save_index(config_dir, index)
+                return
+            index = _drop_entry(index, coordinate)
             index = _upsert_entry(
                 index,
                 SecretIndexEntry(
                     namespace=coordinate.namespace,
                     owner_id=coordinate.owner_id,
                     field_name=coordinate.field_name,
-                    storage="keyring",
+                    storage="file",
+                    value=value,
                 ),
             )
             self._save_index(config_dir, index)
@@ -213,18 +230,31 @@ class AppSecretStore:
             )
             if entry.storage == "keyring":
                 value = self._get_from_keyring(config_dir, coordinate)
-                if value is not None and self.has_usable_keyring_backend():
-                    self._set_in_keyring(config_dir, next_coordinate, value)
+                if (
+                    value is not None
+                    and self.has_usable_keyring_backend()
+                    and self._try_set_in_keyring(config_dir, next_coordinate, value)
+                ):
+                    next_entries.append(
+                        SecretIndexEntry(
+                            namespace=next_coordinate.namespace,
+                            owner_id=next_coordinate.owner_id,
+                            field_name=next_coordinate.field_name,
+                            storage="keyring",
+                        )
+                    )
+                elif value is not None:
+                    next_entries.append(
+                        SecretIndexEntry(
+                            namespace=next_coordinate.namespace,
+                            owner_id=next_coordinate.owner_id,
+                            field_name=next_coordinate.field_name,
+                            storage="file",
+                            value=value,
+                        )
+                    )
                 if self.has_usable_keyring_backend():
                     self._delete_from_keyring(config_dir, coordinate)
-                next_entries.append(
-                    SecretIndexEntry(
-                        namespace=next_coordinate.namespace,
-                        owner_id=next_coordinate.owner_id,
-                        field_name=next_coordinate.field_name,
-                        storage="keyring",
-                    )
-                )
                 continue
             next_entries.append(
                 SecretIndexEntry(
@@ -357,6 +387,39 @@ class AppSecretStore:
                 "Failed to persist secrets to the system keyring."
             ) from exc
 
+    def _try_set_in_keyring(
+        self,
+        config_dir: Path,
+        coordinate: SecretCoordinate,
+        value: str,
+    ) -> bool:
+        try:
+            self._set_in_keyring(config_dir, coordinate, value)
+        except RuntimeError:
+            payload = {
+                "config_dir": str(config_dir.expanduser().resolve()),
+                "namespace": coordinate.namespace,
+                "owner_id": coordinate.owner_id,
+                "field_name": coordinate.field_name,
+            }
+            try:
+                from agent_teams.logger import log_event
+
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="secret_store.keyring_write_failed",
+                    message="Falling back to file-backed secret storage after keyring write failure",
+                    payload=cast(dict[str, JsonValue], payload),
+                )
+            except Exception:
+                LOGGER.warning(
+                    "Falling back to file-backed secret storage after keyring write failure: %s",
+                    payload,
+                )
+            return False
+        return True
+
     def _delete_from_keyring(
         self,
         config_dir: Path,
@@ -423,3 +486,15 @@ def _upsert_entry(
         entries.append(next_entry)
     entries.sort(key=lambda item: (item.namespace, item.owner_id, item.field_name))
     return SecretIndexDocument(version=index.version, entries=tuple(entries))
+
+
+def _drop_entry(
+    index: SecretIndexDocument,
+    coordinate: SecretCoordinate,
+) -> SecretIndexDocument:
+    return SecretIndexDocument(
+        version=index.version,
+        entries=tuple(
+            entry for entry in index.entries if entry.coordinate() != coordinate
+        ),
+    )

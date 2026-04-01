@@ -602,10 +602,25 @@ def test_resume_run_rejects_stopping_run(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("result_status", "runtime_status", "terminal_event_type"),
+    (
+        "result_status",
+        "runtime_status",
+        "terminal_event_type",
+        "projected_status",
+    ),
     [
-        ("completed", RunRuntimeStatus.COMPLETED, RunEventType.RUN_COMPLETED),
-        ("failed", RunRuntimeStatus.FAILED, RunEventType.RUN_FAILED),
+        (
+            "completed",
+            RunRuntimeStatus.COMPLETED,
+            RunEventType.RUN_COMPLETED,
+            "completed",
+        ),
+        (
+            "failed",
+            RunRuntimeStatus.COMPLETED,
+            RunEventType.RUN_COMPLETED,
+            "completed",
+        ),
     ],
 )
 async def test_worker_terminal_status_matches_run_result(
@@ -613,6 +628,7 @@ async def test_worker_terminal_status_matches_run_result(
     result_status: str,
     runtime_status: RunRuntimeStatus,
     terminal_event_type: RunEventType,
+    projected_status: str,
 ) -> None:
     db_path = tmp_path / f"run_worker_terminal_{result_status}.db"
     manager = _build_manager(db_path)
@@ -656,7 +672,7 @@ async def test_worker_terminal_status_matches_run_result(
 
     state = run_state_repo.get_run_state("run-existing")
     assert state is not None
-    assert state.status.value == result_status
+    assert state.status.value == projected_status
     assert state.phase.value == "terminal"
     assert state.recoverable is False
 

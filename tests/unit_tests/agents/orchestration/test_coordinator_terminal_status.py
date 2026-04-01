@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -9,11 +8,13 @@ from agent_teams.media import content_parts_from_text
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.coordinator import CoordinatorGraph
+from agent_teams.agents.orchestration.task_execution_service import TaskExecutionResult
 from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_models import IntentInput
@@ -48,7 +49,7 @@ class _RecordingTaskExecutionService:
 
     async def execute(
         self, *, instance_id: str, role_id: str, task: TaskEnvelope
-    ) -> str:
+    ) -> TaskExecutionResult:
         _ = role_id
         self.calls.append(task.task_id)
         result = f"{task.task_id} done"
@@ -58,7 +59,7 @@ class _RecordingTaskExecutionService:
             assigned_instance_id=instance_id,
             result=result,
         )
-        return result
+        return TaskExecutionResult(output=result)
 
 
 def _build_coordinator(
@@ -140,7 +141,7 @@ def _build_coordinator(
     )
 
 
-def test_terminal_status_from_verification_marks_root_task_failed(
+def test_terminal_status_from_verification_completes_with_assistant_error(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "coordinator_terminal_status.db"
@@ -165,7 +166,7 @@ def test_terminal_status_from_verification_marks_root_task_failed(
         event_bus=event_log,
     )
 
-    status = coordinator._terminal_status_from_verification(
+    result = coordinator._terminal_status_from_verification(
         trace_id="run-1",
         root_task=root_task,
         verification=VerificationResult(
@@ -174,19 +175,21 @@ def test_terminal_status_from_verification_marks_root_task_failed(
             details=("Task not completed yet",),
         ),
         output="",
+        root_instance_id=None,
+        root_role_id="Coordinator",
     )
 
-    assert status == "failed"
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "verification_failed"
+    assert result.error_message == "Task not completed yet"
     record = task_repo.get(root_task.task_id)
-    assert record.status == TaskStatus.FAILED
+    assert record.status == TaskStatus.COMPLETED
     assert record.assigned_instance_id == "inst-1"
     assert record.error_message == "Task not completed yet"
+    assert "Task not completed yet" in (record.result or "")
 
     events = event_log.list_by_session("session-1")
-    assert events[-1]["event_type"] == "task_failed"
-    payload = json.loads(str(events[-1]["payload_json"]))
-    assert payload["reason"] == "verification_failed"
-    assert payload["details"] == ["Task not completed yet"]
+    assert events == ()
 
 
 @pytest.mark.asyncio
@@ -271,14 +274,12 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         )
     )
 
-    trace_id, root_task_id, status, result = await coordinator.resume(trace_id="run-1")
+    result = await coordinator.resume(trace_id="run-1")
 
-    assert (trace_id, root_task_id, status, result) == (
-        "run-1",
-        root_task.task_id,
-        "completed",
-        "task-root-1 done",
-    )
+    assert result.trace_id == "run-1"
+    assert result.root_task_id == root_task.task_id
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+    assert result.output == "task-root-1 done"
     assert task_execution_service.calls == [child_task.task_id, root_task.task_id]
     assert task_repo.get(child_task.task_id).status == TaskStatus.COMPLETED
     assert task_repo.get(root_task.task_id).status == TaskStatus.COMPLETED
@@ -397,7 +398,7 @@ async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
         coordinator_role_id="Coordinator",
     )
 
-    trace_id, root_task_id, status, result = await coordinator.run(
+    result = await coordinator.run(
         IntentInput(
             session_id="session-1",
             input=content_parts_from_text("hello"),
@@ -405,14 +406,14 @@ async def test_run_resolves_dynamic_coordinator_role_id(tmp_path: Path) -> None:
         trace_id="run-dynamic",
     )
 
-    root_task = task_repo.get(root_task_id)
+    root_task = task_repo.get(result.root_task_id)
     coordinator_instance = agent_repo.get_session_role_instance(
         "session-1", "Coordinator"
     )
 
-    assert trace_id == "run-dynamic"
-    assert status == "completed"
-    assert result == f"{root_task_id} done"
+    assert result.trace_id == "run-dynamic"
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+    assert result.output == f"{result.root_task_id} done"
     assert root_task.envelope.role_id == "Coordinator"
     assert coordinator_instance is not None
     assert coordinator_instance.role_id == "Coordinator"
@@ -442,7 +443,7 @@ async def test_run_with_fresh_root_instance_skips_stale_session_role_instance(
         status=InstanceStatus.IDLE,
     )
 
-    trace_id, root_task_id, status, _result = await coordinator.run(
+    result = await coordinator.run(
         IntentInput(
             session_id="session-1",
             input=content_parts_from_text("hello"),
@@ -451,10 +452,10 @@ async def test_run_with_fresh_root_instance_skips_stale_session_role_instance(
         trace_id="run-fresh",
     )
 
-    root_task = task_repo.get(root_task_id)
+    root_task = task_repo.get(result.root_task_id)
     assigned_instance_id = root_task.assigned_instance_id
-    assert trace_id == "run-fresh"
-    assert status == "completed"
+    assert result.trace_id == "run-fresh"
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
     assert assigned_instance_id is not None
     assert assigned_instance_id != stale_instance.instance_id
     runtime_record = agent_repo.get_instance(assigned_instance_id)

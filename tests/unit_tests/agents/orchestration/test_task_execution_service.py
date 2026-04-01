@@ -295,7 +295,7 @@ async def test_execute_omits_objective_when_task_history_exists(
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     assert provider.prompts == [None]
 
 
@@ -341,7 +341,7 @@ async def test_execute_persists_objective_before_first_turn(
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     assert provider.prompts == [None]
     history = message_repo.get_history_for_task(instance.instance_id, "task-1")
     assert len(history) == 1
@@ -441,7 +441,7 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     history = message_repo.get_history_for_task(instance_id, "task-1")
     assert len(history) == 1
     assert isinstance(history[0], ModelRequest)
@@ -561,7 +561,7 @@ async def test_execute_persists_followup_prompt_before_turn(
         user_prompt_override="Follow up: query time again.",
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     assert provider.prompts == [None]
     history = message_repo.get_history_for_task(instance_id, "task-1")
     assert len(history) == 2
@@ -726,7 +726,7 @@ async def test_execute_root_intent_input_appends_routed_skill_candidates(
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     history = message_repo.get_history_for_task(instance.instance_id, "task-1")
     assert len(history) == 1
     assert isinstance(history[0], ModelRequest)
@@ -951,7 +951,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     assert provider.system_prompts
     assert "Coordinate tasks." in provider.system_prompts[0]
     assert "## Orchestration Rules" in provider.system_prompts[0]
@@ -1119,7 +1119,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
         task=task,
     )
 
-    assert result == "ok"
+    assert result.output == "ok"
     assert provider.system_prompts
     assert "## Reflection Memory" in provider.system_prompts[0]
     assert "Prefer concise output." in provider.system_prompts[0]

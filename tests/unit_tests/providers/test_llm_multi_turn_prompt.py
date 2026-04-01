@@ -9,7 +9,7 @@ from typing import cast
 
 import httpx
 import pytest
-from openai import APIError
+from openai import APIError, APIStatusError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -21,6 +21,7 @@ from pydantic_ai.messages import (
     ThinkingPart,
     ThinkingPartDelta,
     ToolCallPart,
+    ToolCallPartDelta,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -46,7 +47,7 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.sessions.runs.run_models import RunThinkingConfig
-from agent_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from agent_teams.sessions.runs.assistant_errors import AssistantRunError
 from agent_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
@@ -1650,17 +1651,18 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
 
 
 @pytest.mark.asyncio
-async def test_generate_retries_provider_coded_error_before_side_effects(
+async def test_generate_retries_retryable_status_error_before_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
     provider, message_repo = _build_provider(tmp_path / "retry_success.db", fake_hub)
     provider._session._retry_config.jitter = False
-    request_error = APIError(
-        "provider error",
-        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
-        body={"error": {"code": "2062", "message": "busy"}},
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    request_error = APIStatusError(
+        "lock timeout",
+        response=httpx.Response(409, request=request),
+        body={"error": {"code": "conflict", "message": "busy"}},
     )
     scripted_agent = _SequentialAgent(
         [
@@ -1708,12 +1710,67 @@ async def test_generate_retries_provider_coded_error_before_side_effects(
 
 
 @pytest.mark.asyncio
-async def test_generate_does_not_retry_after_streamed_text_side_effect(
+async def test_generate_does_not_retry_statusless_api_error_before_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
-    provider, _ = _build_provider(tmp_path / "retry_blocked.db", fake_hub)
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_statusless_error.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=APIError(
+                    "provider error",
+                    request=httpx.Request(
+                        "POST",
+                        "https://example.test/v1/chat/completions",
+                    ),
+                    body={"error": {"code": "2062", "message": "busy"}},
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-statusless-error",
+        trace_id="run-statusless-error",
+        task_id="task-statusless-error",
+        session_id="session-statusless-error",
+        workspace_id="default",
+        instance_id="inst-statusless-error",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(AssistantRunError) as exc_info:
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert RunEventType.LLM_RETRY_EXHAUSTED not in event_types
+    assert exc_info.value.payload.error_message == "busy"
+    history = message_repo.get_history("inst-statusless-error")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_retry_after_streamed_text_side_effect_for_non_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "retry_blocked.db", fake_hub)
     provider._session._retry_config.jitter = False
     scripted_agent = _SequentialAgent(
         [
@@ -1750,12 +1807,85 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect(
         user_prompt="retry me",
     )
 
-    with pytest.raises(RecoverableRunPauseError) as exc_info:
+    with pytest.raises(AssistantRunError) as exc_info:
         await provider.generate(request)
 
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
     assert exc_info.value.payload.error_message == "busy"
+    history = message_repo.get_history("inst-retry-blocked")
+    assert len(history) == 2
+    final_message = history[-1]
+    assert isinstance(final_message, ModelResponse)
+    assert isinstance(final_message.parts[0], TextPart)
+    assert "Continue from the latest successful conversation state" in (
+        final_message.parts[0].content
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_midstream_provider_500_after_streamed_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_midstream_500.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_StreamingTextNode(["partial "])],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=APIStatusError(
+                    "server error",
+                    response=httpx.Response(
+                        500,
+                        request=httpx.Request(
+                            "POST",
+                            "https://example.test/v1/chat/completions",
+                        ),
+                    ),
+                    body={"error": {"code": "provider_error", "message": "retry me"}},
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after retry")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after retry")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _StreamingTextNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-midstream-500",
+        trace_id="run-midstream-500",
+        task_id="task-midstream-500",
+        session_id="session-midstream-500",
+        workspace_id="default",
+        instance_id="inst-midstream-500",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after retry"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+    history = message_repo.get_history("inst-midstream-500")
+    assert len(history) == 2
 
 
 @pytest.mark.asyncio
@@ -1764,7 +1894,9 @@ async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_ev
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
-    provider, _ = _build_provider(tmp_path / "retry_invalid_tool_args.db", fake_hub)
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_invalid_tool_args.db", fake_hub
+    )
     provider._session._retry_config.jitter = False
     committed_tool_messages = [
         ModelResponse(
@@ -1817,7 +1949,7 @@ async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_ev
         user_prompt="retry me",
     )
 
-    with pytest.raises(RecoverableRunPauseError) as exc_info:
+    with pytest.raises(AssistantRunError) as exc_info:
         await provider.generate(request)
 
     event_types = [event.event_type for event in fake_hub.events]
@@ -1828,6 +1960,231 @@ async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_ev
     assert "Expecting property name enclosed in double quotes" in (
         exc_info.value.payload.error_message
     )
+    history = message_repo.get_history("inst-invalid-tool-args")
+    assert len(history) == 4
+    final_message = history[-1]
+    assert isinstance(final_message, ModelResponse)
+    assert isinstance(final_message.parts[0], TextPart)
+    assert "not valid JSON" in final_message.parts[0].content
+
+
+@pytest.mark.asyncio
+async def test_generate_salvages_streamed_tool_call_parse_failure_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "stream_tool_salvage.db", fake_hub
+    )
+    usage_after_request = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        requests=1,
+        tool_calls=0,
+        details={"reasoning_tokens": 0},
+    )
+    part_events = [
+        PartStartEvent(index=0, part=TextPart(content="继续生成第5和第6页。")),
+        PartStartEvent(
+            index=1,
+            part=ToolCallPart(
+                tool_name="write",
+                args='{"content":"broken"',
+                tool_call_id="call-live",
+            ),
+        ),
+        PartDeltaEvent(
+            index=1, delta=ToolCallPartDelta(args_delta=', path:"demo.html"}')
+        ),
+    ]
+    request_error = APIStatusError(
+        "bad request",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={
+            "error": {
+                "message": (
+                    "litellm.BadRequestError: OpenAIException - "
+                    "Expecting property name enclosed in double quotes: "
+                    "line 1 column 2 (char 1)"
+                )
+            }
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_PartEventNode(part_events, usage_after_request)],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="recovered done")]),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="recovered done")])
+                    ],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _PartEventNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-stream-tool-salvage",
+        trace_id="run-stream-tool-salvage",
+        task_id="task-stream-tool-salvage",
+        session_id="session-stream-tool-salvage",
+        workspace_id="default",
+        instance_id="inst-stream-tool-salvage",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="continue",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "recovered done"
+    history = message_repo.get_history("inst-stream-tool-salvage")
+    assert len(history) == 4
+    assert isinstance(history[1], ModelResponse)
+    salvaged_response = history[1]
+    assert isinstance(salvaged_response.parts[0], TextPart)
+    assert isinstance(salvaged_response.parts[1], ToolCallPart)
+    assert salvaged_response.parts[1].tool_call_id == "call-live"
+    assert salvaged_response.parts[1].args == {
+        "content": "broken",
+        "path": "demo.html",
+    }
+    assert isinstance(history[2], ModelRequest)
+    salvaged_request = history[2]
+    assert isinstance(salvaged_request.parts[0], ToolReturnPart)
+    assert salvaged_request.parts[0].tool_call_id == "call-live"
+    result_payload = cast(dict[str, object], salvaged_request.parts[0].content)
+    assert result_payload["ok"] is False
+    error_payload = cast(dict[str, object], result_payload["error"])
+    assert error_payload["code"] == "tool_input_validation_failed"
+    error_message = cast(str, error_payload["message"])
+    assert "Tool arguments were not valid JSON." in error_message
+    assert "Expecting property name enclosed in double quotes" in error_message
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.TOOL_CALL in event_types
+    assert RunEventType.TOOL_RESULT in event_types
+    assert len(scripted_agent.histories) == 2
+    second_history = scripted_agent.histories[1]
+    assert any(
+        isinstance(message, ModelRequest)
+        and any(isinstance(part, ToolReturnPart) for part in message.parts)
+        for message in second_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_salvages_unrepairable_streamed_tool_call_with_invalid_json_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "stream_tool_salvage_invalid_wrapper.db",
+        fake_hub,
+    )
+    usage_after_request = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        requests=1,
+        tool_calls=0,
+        details={"reasoning_tokens": 0},
+    )
+    part_events: list[object] = [
+        PartStartEvent(
+            index=0,
+            part=ToolCallPart(
+                tool_name="write",
+                args="not-json-at-all",
+                tool_call_id="call-live-invalid",
+            ),
+        )
+    ]
+    request_error = APIStatusError(
+        "bad request",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={
+            "error": {
+                "message": (
+                    "litellm.BadRequestError: OpenAIException - "
+                    "Expecting value: line 1 column 1 (char 0)"
+                )
+            }
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[cast(object, _PartEventNode(part_events, usage_after_request))],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="recovered done")]),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="recovered done")])
+                    ],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _PartEventNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-stream-tool-salvage-invalid",
+        trace_id="run-stream-tool-salvage-invalid",
+        task_id="task-stream-tool-salvage-invalid",
+        session_id="session-stream-tool-salvage-invalid",
+        workspace_id="default",
+        instance_id="inst-stream-tool-salvage-invalid",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="continue",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "recovered done"
+    history = message_repo.get_history("inst-stream-tool-salvage-invalid")
+    assert len(history) == 4
+    salvaged_response = cast(ModelResponse, history[1])
+    assert isinstance(salvaged_response.parts[0], ToolCallPart)
+    assert salvaged_response.parts[0].args == {"INVALID_JSON": "not-json-at-all"}
 
 
 @pytest.mark.asyncio
@@ -1836,14 +2193,17 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
-    provider, _ = _build_provider(tmp_path / "retry_exhausted.db", fake_hub)
+    provider, message_repo = _build_provider(tmp_path / "retry_exhausted.db", fake_hub)
     provider._session._retry_config.jitter = False
     provider._session._retry_config.initial_delay_ms = 2000
     provider._session._retry_config.max_retries = 2
-    request_error = APIError(
-        "provider error",
-        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
-        body={"error": {"code": "2062", "message": "busy"}},
+    request_error = APIStatusError(
+        "timeout",
+        response=httpx.Response(
+            408,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={"error": {"code": "request_timeout", "message": "busy"}},
     )
     scripted_agent = _SequentialAgent(
         [
@@ -1884,7 +2244,7 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
         user_prompt="retry me",
     )
 
-    with pytest.raises(RecoverableRunPauseError) as exc_info:
+    with pytest.raises(AssistantRunError) as exc_info:
         await provider.generate(request)
 
     event_types = [event.event_type for event in fake_hub.events]
@@ -1900,3 +2260,11 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     assert payload["attempt_number"] == 3
     assert payload["total_attempts"] == 3
     assert payload["error_message"] == "busy"
+    history = message_repo.get_history("inst-retry-exhausted")
+    assert len(history) == 2
+    final_message = history[-1]
+    assert isinstance(final_message, ModelResponse)
+    assert isinstance(final_message.parts[0], TextPart)
+    assert "Continue from the latest successful conversation state" in (
+        final_message.parts[0].content
+    )

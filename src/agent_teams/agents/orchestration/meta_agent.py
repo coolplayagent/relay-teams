@@ -18,23 +18,25 @@ class MetaAgent(BaseModel):
     async def handle_intent(
         self, intent: IntentInput, trace_id: str | None = None
     ) -> RunResult:
-        next_trace_id, task_id, status, output = await self.coordinator.run(
-            intent, trace_id=trace_id
-        )
+        result = await self.coordinator.run(intent, trace_id=trace_id)
         return RunResult(
-            trace_id=next_trace_id,
-            root_task_id=task_id,
-            status=status,
-            output=content_parts_from_text(output),
+            trace_id=result.trace_id,
+            root_task_id=result.root_task_id,
+            status="completed",
+            completion_reason=result.completion_reason,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            output=content_parts_from_text(result.output),
         )
 
     async def resume_run(self, *, trace_id: str) -> RunResult:
-        next_trace_id, task_id, status, output = await self.coordinator.resume(
-            trace_id=trace_id
-        )
+        result = await self.coordinator.resume(trace_id=trace_id)
         return RunResult(
-            trace_id=next_trace_id,
-            root_task_id=task_id,
-            status=status,
-            output=content_parts_from_text(output),
+            trace_id=result.trace_id,
+            root_task_id=result.root_task_id,
+            status="completed",
+            completion_reason=result.completion_reason,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            output=content_parts_from_text(result.output),
         )
