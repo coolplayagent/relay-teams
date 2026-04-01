@@ -549,14 +549,25 @@ function renderExecutionSurfaceSelect(selectedSurface) {
 function renderSkillsShellAdvisory() {
     const container = document.getElementById('role-skills-picker');
     if (!container) return;
+    const advisoryHtml = `
+        <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
+    `;
+    const advisoryPattern = /<div class="role-option-empty role-option-advisory">[\s\S]*?<\/div>/g;
+    const existingAdvisory = typeof container.querySelector === 'function'
+        ? container.querySelector('.role-option-advisory')
+        : null;
+    if (existingAdvisory && typeof existingAdvisory.remove === 'function') {
+        existingAdvisory.remove();
+    } else if (typeof container.innerHTML === 'string' && advisoryPattern.test(container.innerHTML)) {
+        advisoryPattern.lastIndex = 0;
+        container.innerHTML = container.innerHTML.replace(advisoryPattern, '');
+    }
     const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
     const hasShell = Array.isArray(currentSelections.tools) && currentSelections.tools.includes('shell');
     if (!hasSkills || hasShell) {
         return;
     }
-    container.insertAdjacentHTML('beforeend', `
-        <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
-    `);
+    container.insertAdjacentHTML('beforeend', advisoryHtml);
 }
 
 function syncOptionSelection(containerId) {
@@ -576,7 +587,7 @@ function syncOptionSelection(containerId) {
         currentSelections.skills = nextValues;
     }
     if (containerId === 'role-tools-picker' || containerId === 'role-skills-picker') {
-        renderRoleOptionPickers();
+        renderSkillsShellAdvisory();
     }
 }
 
