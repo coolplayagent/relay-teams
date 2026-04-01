@@ -536,7 +536,6 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
         )
-        self.background_task_service.bind_completion_sink(self.run_service)
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
             task_repo=self.task_repo,
@@ -847,6 +846,7 @@ class ServerContainer:
 
     async def start(self) -> None:
         self.run_service.bind_event_loop(asyncio.get_running_loop())
+        self.background_task_service.bind_completion_sink(self.run_service)
         self.wechat_gateway_service.start()
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()

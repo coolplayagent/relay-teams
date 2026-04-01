@@ -120,6 +120,13 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));"
         in stream_script
     )
+    assert (
+        "const focusedRunId = String(activeConnection?.runId || '').trim();"
+        in stream_script
+    )
+    assert "const backgroundRunIds = new Set();" in stream_script
+    assert "if (focusedRunId && runId === focusedRunId) {" in stream_script
+    assert "if (backgroundRunIds.has(runId)) {" in stream_script
     assert "if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {" in stream_script
     assert (
         "finishActiveConnection(connection, { preserveRunStreamState: true });"

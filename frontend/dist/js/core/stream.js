@@ -546,13 +546,11 @@ async function runBackgroundDiscovery() {
 
 async function reconcileBackgroundStreams(sessionRecords = []) {
     const records = Array.isArray(sessionRecords) ? sessionRecords : [];
-    const activeRunIds = new Set();
-    if (activeConnection?.runId) {
-        activeRunIds.add(activeConnection.runId);
-    }
+    const focusedRunId = String(activeConnection?.runId || '').trim();
+    const backgroundRunIds = new Set();
     backgroundStreams.forEach(connection => {
         if (connection?.runId) {
-            activeRunIds.add(connection.runId);
+            backgroundRunIds.add(connection.runId);
         }
     });
 
@@ -585,15 +583,19 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
         if (!runId) {
             continue;
         }
+        if (focusedRunId && runId === focusedRunId) {
+            desiredRunIds.add(runId);
+            continue;
+        }
         if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {
             break;
         }
         desiredRunIds.add(runId);
-        if (activeRunIds.has(runId)) {
+        if (backgroundRunIds.has(runId)) {
             continue;
         }
         await attachBackgroundStreamForSession(record);
-        activeRunIds.add(runId);
+        backgroundRunIds.add(runId);
     }
 
     Array.from(backgroundStreams.values()).forEach(connection => {

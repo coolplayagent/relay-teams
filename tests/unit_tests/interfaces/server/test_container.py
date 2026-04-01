@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+
+import pytest
 from pathlib import Path
 
 from agent_teams.builtin import get_builtin_roles_dir
@@ -201,6 +203,91 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     assert feishu_reload_calls == ["feishu"]
     assert wechat_reload_calls == ["wechat"]
     assert mcp_reload_calls == ["mcp"]
+
+
+@pytest.mark.asyncio
+async def test_container_binds_background_completion_sink_during_start(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    start_calls: list[str] = []
+    lifecycle_calls: list[str] = []
+    original_bind_event_loop = container.run_service.bind_event_loop
+    original_bind_completion_sink = (
+        container.background_task_service.bind_completion_sink
+    )
+
+    def _record_bind_event_loop(loop) -> None:
+        lifecycle_calls.append("bind_event_loop")
+        original_bind_event_loop(loop)
+
+    def _record_bind_completion_sink(sink) -> None:
+        lifecycle_calls.append("bind_completion_sink")
+        original_bind_completion_sink(sink)
+
+    monkeypatch.setattr(
+        container.run_service, "bind_event_loop", _record_bind_event_loop
+    )
+    monkeypatch.setattr(
+        container.background_task_service,
+        "bind_completion_sink",
+        _record_bind_completion_sink,
+    )
+
+    monkeypatch.setattr(
+        container.wechat_gateway_service,
+        "start",
+        lambda: start_calls.append("wechat"),
+    )
+    monkeypatch.setattr(
+        container.feishu_subscription_service,
+        "start",
+        lambda: start_calls.append("feishu-subscription"),
+    )
+    monkeypatch.setattr(
+        container.feishu_message_pool_service,
+        "start",
+        lambda: start_calls.append("feishu-message-pool"),
+    )
+    monkeypatch.setattr(
+        container.automation_delivery_worker,
+        "start",
+        lambda: start_calls.append("automation-delivery"),
+    )
+    monkeypatch.setattr(
+        container.automation_bound_session_queue_worker,
+        "start",
+        lambda: start_calls.append("automation-bound-session"),
+    )
+
+    async def _fake_scheduler_start() -> None:
+        start_calls.append("scheduler")
+
+    monkeypatch.setattr(
+        container.automation_scheduler_service,
+        "start",
+        _fake_scheduler_start,
+    )
+
+    assert container.background_task_service._completion_sink is None
+
+    await container.start()
+
+    assert lifecycle_calls == ["bind_event_loop", "bind_completion_sink"]
+    assert container.background_task_service._completion_sink is container.run_service
+    assert start_calls == [
+        "wechat",
+        "feishu-subscription",
+        "feishu-message-pool",
+        "automation-delivery",
+        "automation-bound-session",
+        "scheduler",
+    ]
 
 
 def test_container_wires_automation_bound_session_queue_runtime(
