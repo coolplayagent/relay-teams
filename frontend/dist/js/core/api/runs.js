@@ -103,27 +103,27 @@ export async function resumeRun(runId) {
     );
 }
 
-export async function fetchRunExecSessions(runId) {
+export async function fetchRunBackgroundTasks(runId) {
     return requestJson(
-        `/api/runs/${runId}/exec-sessions`,
+        `/api/runs/${runId}/background-tasks`,
         undefined,
-        'Failed to fetch exec sessions',
+        'Failed to fetch background tasks',
     );
 }
 
-export async function fetchRunExecSession(runId, execSessionId) {
+export async function fetchRunBackgroundTask(runId, backgroundTaskId) {
     return requestJson(
-        `/api/runs/${runId}/exec-sessions/${execSessionId}`,
+        `/api/runs/${runId}/background-tasks/${backgroundTaskId}`,
         undefined,
-        'Failed to fetch exec session',
+        'Failed to fetch background task',
     );
 }
 
-export async function stopExecSession(runId, execSessionId) {
+export async function stopBackgroundTask(runId, backgroundTaskId) {
     return requestJson(
-        `/api/runs/${runId}/exec-sessions/${execSessionId}:stop`,
+        `/api/runs/${runId}/background-tasks/${backgroundTaskId}:stop`,
         { method: 'POST' },
-        'Failed to stop exec session',
+        'Failed to stop background task',
     );
 }
 

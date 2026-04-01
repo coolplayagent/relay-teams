@@ -12,7 +12,6 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
         "create_tasks",
         "dispatch_task",
         "update_task",
-        "exec_command",
         "shell",
         "edit",
         "write",

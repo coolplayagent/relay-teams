@@ -1135,7 +1135,7 @@ class RunManager:
                         log_event(
                             logger,
                             logging.ERROR,
-                            event="exec_session.cleanup_failed",
+                            event="background_task.cleanup_failed",
                             message="Failed to clean up background tasks",
                             exc_info=exc,
                         )
@@ -1389,7 +1389,7 @@ class RunManager:
                     logging.INFO,
                     event="background_task.notification.enqueued",
                     message="Background task notification enqueued to originating instance",
-                    payload={"background_task_id": record.exec_session_id},
+                    payload={"background_task_id": record.background_task_id},
                 )
             return
         if self._can_enqueue_followup_to_coordinator(record.run_id) and (
@@ -1409,7 +1409,7 @@ class RunManager:
                     logging.INFO,
                     event="background_task.notification.enqueued",
                     message="Background task notification enqueued to coordinator",
-                    payload={"background_task_id": record.exec_session_id},
+                    payload={"background_task_id": record.background_task_id},
                 )
             return
 
@@ -1436,7 +1436,7 @@ class RunManager:
                 event="background_task.notification.spawned",
                 message="Background task notification started a new run",
                 payload={
-                    "background_task_id": record.exec_session_id,
+                    "background_task_id": record.background_task_id,
                     "source_run_id": record.run_id,
                 },
             )
@@ -1519,7 +1519,7 @@ class RunManager:
             instance_id=instance_id,
         )
 
-    def list_exec_sessions(self, run_id: str) -> tuple[dict[str, object], ...]:
+    def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         if self._background_task_manager is None:
             return ()
         return tuple(
@@ -1527,30 +1527,30 @@ class RunManager:
             for record in self._background_task_manager.list_for_run(run_id)
         )
 
-    def get_exec_session(
+    def get_background_task(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
     ) -> dict[str, object]:
         if self._background_task_manager is None:
-            raise KeyError(f"Background task {exec_session_id} not found")
+            raise KeyError(f"Background task {background_task_id} not found")
         return self._background_task_manager.get_for_run(
             run_id=run_id,
-            exec_session_id=exec_session_id,
+            background_task_id=background_task_id,
         ).model_dump(mode="json")
 
-    async def stop_exec_session(
+    async def stop_background_task(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
     ) -> dict[str, object]:
         if self._background_task_manager is None:
-            raise KeyError(f"Background task {exec_session_id} not found")
+            raise KeyError(f"Background task {background_task_id} not found")
         record = await self._background_task_manager.stop_for_run(
             run_id=run_id,
-            exec_session_id=exec_session_id,
+            background_task_id=background_task_id,
         )
         return record.model_dump(mode="json")
 

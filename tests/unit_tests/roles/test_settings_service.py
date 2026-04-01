@@ -185,7 +185,9 @@ def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> N
     assert record.skills == ("app:time",)
 
 
-def test_get_role_document_canonicalizes_legacy_tool_names(tmp_path: Path) -> None:
+def test_get_role_document_preserves_unknown_tool_names_without_aliases(
+    tmp_path: Path,
+) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()
     _write_role(
@@ -213,7 +215,7 @@ def test_get_role_document_canonicalizes_legacy_tool_names(tmp_path: Path) -> No
 
     record = service.get_role_document("legacy")
 
-    assert record.tools == ("write", "shell", "missing_tool")
+    assert record.tools == ("write_tmp", "shell", "missing_tool")
 
 
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(

@@ -33,7 +33,7 @@ class BackgroundTaskRepository:
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS background_tasks (
-                    exec_session_id  TEXT PRIMARY KEY,
+                    background_task_id  TEXT PRIMARY KEY,
                     run_id           TEXT NOT NULL,
                     session_id       TEXT NOT NULL,
                     instance_id      TEXT,
@@ -93,7 +93,7 @@ class BackgroundTaskRepository:
             self._conn.execute(
                 """
                 INSERT INTO background_tasks(
-                    exec_session_id,
+                    background_task_id,
                     run_id,
                     session_id,
                     instance_id,
@@ -115,7 +115,7 @@ class BackgroundTaskRepository:
                     completion_notified_at
                 )
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(exec_session_id)
+                ON CONFLICT(background_task_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
                     session_id=excluded.session_id,
@@ -148,22 +148,22 @@ class BackgroundTaskRepository:
             repository_name="BackgroundTaskRepository",
             operation_name="upsert",
         )
-        persisted = self.get(record.exec_session_id)
+        persisted = self.get(record.background_task_id)
         if persisted is None:
             raise RuntimeError(
-                f"Failed to persist background task {record.exec_session_id}"
+                f"Failed to persist background task {record.background_task_id}"
             )
         return persisted
 
-    def get(self, exec_session_id: str) -> BackgroundTaskRecord | None:
+    def get(self, background_task_id: str) -> BackgroundTaskRecord | None:
         with self._lock:
             row = self._conn.execute(
                 """
                 SELECT *
                 FROM background_tasks
-                WHERE exec_session_id=?
+                WHERE background_task_id=?
                 """,
-                (exec_session_id,),
+                (background_task_id,),
             ).fetchone()
         if row is None:
             return None
@@ -206,13 +206,13 @@ class BackgroundTaskRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
-    def delete(self, exec_session_id: str) -> None:
+    def delete(self, background_task_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
-                "DELETE FROM background_tasks WHERE exec_session_id=?",
-                (exec_session_id,),
+                "DELETE FROM background_tasks WHERE background_task_id=?",
+                (background_task_id,),
             ),
             lock=self._lock,
             repository_name="BackgroundTaskRepository",
@@ -267,7 +267,7 @@ class BackgroundTaskRepository:
 
 def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
     return (
-        record.exec_session_id,
+        record.background_task_id,
         record.run_id,
         record.session_id,
         record.instance_id,
@@ -300,8 +300,8 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
     if created_at is None or updated_at is None:
         raise ValueError("Invalid persisted background task timestamps")
     return BackgroundTaskRecord(
-        exec_session_id=require_persisted_identifier(
-            row["exec_session_id"], field_name="exec_session_id"
+        background_task_id=require_persisted_identifier(
+            row["background_task_id"], field_name="background_task_id"
         ),
         run_id=require_persisted_identifier(row["run_id"], field_name="run_id"),
         session_id=require_persisted_identifier(

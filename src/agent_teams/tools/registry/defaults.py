@@ -12,12 +12,6 @@ IM_TOOLS = {
     "im_send": register_im_send,
 }
 HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send",)
-LEGACY_TOOL_ALIASES = {
-    "exec_command": "shell",
-    "list_exec_sessions": "list_background_tasks",
-    "terminate_exec_session": "stop_background_task",
-    "write_tmp": "write",
-}
 
 
 def build_default_registry() -> ToolRegistry:
@@ -31,5 +25,4 @@ def build_default_registry() -> ToolRegistry:
     return ToolRegistry(
         tools,
         hidden_from_config=HIDDEN_FROM_ROLE_CONFIG,
-        legacy_aliases=LEGACY_TOOL_ALIASES,
     )

@@ -277,7 +277,7 @@ console.log(JSON.stringify({
     assert "Writer" in cast(str, payload["listHtml"])
 
 
-def test_role_settings_shows_exec_command_advisory_when_skills_are_selected(
+def test_role_settings_shows_shell_advisory_when_skills_are_selected(
     tmp_path: Path,
 ) -> None:
     payload = _run_roles_settings_script(
@@ -740,7 +740,7 @@ export async function fetchRoleConfigOptions() {
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
-        tools: ["read_file", "write_file", "exec_command"],
+        tools: ["read_file", "write_file", "shell"],
         mcp_servers: ["docs"],
         skills: [
             { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },

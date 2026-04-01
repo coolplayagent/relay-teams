@@ -91,7 +91,7 @@ class BackgroundTaskService:
             )
             updated, completed = await manager.interact_for_run(
                 run_id=run_id,
-                exec_session_id=record.exec_session_id,
+                background_task_id=record.background_task_id,
                 chars="",
                 yield_time_ms=yield_time_ms,
                 is_initial_poll=True,
@@ -116,7 +116,7 @@ class BackgroundTaskService:
         while True:
             updated, completed = await manager.wait_for_run(
                 run_id=run_id,
-                exec_session_id=record.exec_session_id,
+                background_task_id=record.background_task_id,
                 wait_ms=wait_ms,
             )
             if completed:
@@ -138,7 +138,7 @@ class BackgroundTaskService:
     ) -> BackgroundTaskRecord:
         record = self._require_manager().get_for_run(
             run_id=run_id,
-            exec_session_id=background_task_id,
+            background_task_id=background_task_id,
         )
         if record.execution_mode != "background":
             raise KeyError(f"Unknown background task: {background_task_id}")
@@ -156,7 +156,7 @@ class BackgroundTaskService:
             return self._mark_completion_consumed(record), True
         updated, completed = await self._require_manager().wait_for_run(
             run_id=run_id,
-            exec_session_id=background_task_id,
+            background_task_id=background_task_id,
             wait_ms=wait_ms,
         )
         if not completed:
@@ -172,14 +172,14 @@ class BackgroundTaskService:
         _ = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         return await self._require_manager().stop_for_run(
             run_id=run_id,
-            exec_session_id=background_task_id,
+            background_task_id=background_task_id,
         )
 
     async def _handle_background_task_completion(
         self, record: BackgroundTaskRecord
     ) -> None:
         await asyncio.sleep(0)
-        latest = self._repository.get(record.exec_session_id)
+        latest = self._repository.get(record.background_task_id)
         current = latest or record
         if current.execution_mode != "background":
             return
@@ -201,7 +201,7 @@ class BackgroundTaskService:
                 logging.ERROR,
                 event="background_task.notification_failed",
                 message="Failed to deliver background task completion notification",
-                payload={"background_task_id": current.exec_session_id},
+                payload={"background_task_id": current.background_task_id},
                 exc_info=exc,
             )
             return
@@ -247,7 +247,7 @@ def _build_completion_message(record: BackgroundTaskRecord) -> str:
     summary = _notification_summary(record)
     return (
         "<background-task-notification>\n"
-        f"<background-task-id>{_xml_escape(record.exec_session_id)}</background-task-id>\n"
+        f"<background-task-id>{_xml_escape(record.background_task_id)}</background-task-id>\n"
         f"<tool-call-id>{_xml_escape(tool_call_id)}</tool-call-id>\n"
         f"<status>{_xml_escape(record.status.value)}</status>\n"
         f"<command>{_xml_escape(record.command)}</command>\n"

@@ -453,8 +453,8 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
     assert active_run.get("pending_tool_approval_count") == 1
 
 
-def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
-    db_path = tmp_path / "recovery_exec_sessions.db"
+def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None:
+    db_path = tmp_path / "recovery_background_tasks.db"
     service = _build_service(db_path)
 
     _ = service.create_session(session_id="session-1", workspace_id="default")
@@ -473,7 +473,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
     terminal_repo = BackgroundTaskRepository(db_path)
     terminal_repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-1",
+            background_task_id="exec-1",
             run_id="run-active",
             session_id="session-1",
             instance_id="inst-1",
@@ -489,7 +489,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
     )
     terminal_repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-2",
+            background_task_id="exec-2",
             run_id="run-active",
             session_id="session-1",
             instance_id="inst-2",
@@ -506,7 +506,7 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
     )
     terminal_repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-3",
+            background_task_id="exec-3",
             run_id="run-active",
             session_id="session-1",
             instance_id="inst-3",
@@ -526,15 +526,18 @@ def test_get_recovery_snapshot_includes_exec_sessions(tmp_path: Path) -> None:
 
     active_run = snapshot.get("active_run")
     assert isinstance(active_run, dict)
-    assert active_run.get("exec_session_count") == 2
-    exec_sessions = snapshot.get("exec_sessions")
-    assert isinstance(exec_sessions, list)
-    assert len(exec_sessions) == 2
-    assert [item["exec_session_id"] for item in exec_sessions] == ["exec-2", "exec-1"]
-    assert all("output_excerpt" not in item for item in exec_sessions)
+    assert active_run.get("background_task_count") == 2
+    background_tasks = snapshot.get("background_tasks")
+    assert isinstance(background_tasks, list)
+    assert len(background_tasks) == 2
+    assert [item["background_task_id"] for item in background_tasks] == [
+        "exec-2",
+        "exec-1",
+    ]
+    assert all("output_excerpt" not in item for item in background_tasks)
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
-    assert round_snapshot.get("exec_session_count") == 2
+    assert round_snapshot.get("background_task_count") == 2
 
 
 def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_tasks_exist(
@@ -555,7 +558,7 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
     )
     BackgroundTaskRepository(db_path).upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-1",
+            background_task_id="exec-1",
             run_id="run-completed",
             session_id="session-1",
             instance_id="inst-1",
@@ -577,10 +580,10 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
     assert isinstance(active_run, dict)
     assert active_run.get("run_id") == "run-completed"
     assert active_run.get("status") == "completed"
-    assert active_run.get("exec_session_count") == 1
-    exec_sessions = snapshot.get("exec_sessions")
-    assert isinstance(exec_sessions, list)
-    assert len(exec_sessions) == 1
+    assert active_run.get("background_task_count") == 1
+    background_tasks = snapshot.get("background_tasks")
+    assert isinstance(background_tasks, list)
+    assert len(background_tasks) == 1
 
 
 def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(

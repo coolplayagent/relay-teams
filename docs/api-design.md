@@ -176,7 +176,7 @@ Fields:
 - `provider`: currently only `exa`
 - `api_key`: optional value rehydrated from the unified secret store
 
-The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
+The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `websearch` uses Exa's advanced MCP search tool internally, returns structured search hits, and accepts optional allow/block domain filters at tool-call time; persisted tool state stores only sanitized Exa host/tool metadata and must not retain API-key-bearing URLs. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
 
 ### `PUT /system/configs/web`
 
@@ -513,22 +513,22 @@ Gets one round projection.
 
 ### `GET /sessions/{session_id}/recovery`
 
-Returns active run recovery state, pending tool approvals, managed exec session state, paused subagent state, and round snapshot.
+Returns active run recovery state, pending tool approvals, managed background task state, paused subagent state, and round snapshot.
 
 `active_run` also includes:
 - `last_event_id`
 - `checkpoint_event_id`
-- `exec_session_count`
+- `background_task_count`
 - `stream_connected`
 - `should_show_recover`
 - `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
 `round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
-`round_snapshot.exec_session_count` mirrors the current managed exec session count for the active run.
+`round_snapshot.background_task_count` mirrors the current managed background task count for the active run.
 
-`exec_sessions[]` entries include:
-- `exec_session_id`
+`background_tasks[]` entries include:
+- `background_task_id`
 - `run_id`
 - `session_id`
 - `instance_id`
@@ -731,12 +731,12 @@ Retry events:
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
 - `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`. For `model_tool_args_invalid_json`, the payload also includes `auto_recovery_exhausted`, `attempt`, and `max_attempts`.
 - `run_resumed`: payload always includes `session_id` and `reason`. When the backend auto-recovers a malformed tool-arguments response, `reason="auto_recovery_invalid_tool_args_json"` and the payload also includes `attempt` and `max_attempts`.
-- Exec session lifecycle events:
-  - `exec_session_started`
-  - `exec_session_updated`
-  - `exec_session_completed`
-  - `exec_session_stopped`
-  Each payload is the current exec session snapshot, including `exec_session_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
+- Background task lifecycle events:
+  - `background_task_started`
+  - `background_task_updated`
+  - `background_task_completed`
+  - `background_task_stopped`
+  Each payload is the current background task snapshot, including `background_task_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
@@ -746,7 +746,7 @@ Frontend behavior:
 - If a model emits malformed tool arguments JSON after a safe checkpoint, the backend may emit `run_resumed` with `reason="auto_recovery_invalid_tool_args_json"` and continue the same stream without surfacing `run_paused`.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
-- Exec session events are operator/UI continuity signals only. They update recovery state and `/ps`-style UI surfaces, but do not become model-visible conversation messages.
+- Background task events are operator/UI continuity signals only. They update recovery state and `/ps`-style UI surfaces, but do not become model-visible conversation messages.
 
 ### `POST /runs/{run_id}/inject`
 
@@ -756,9 +756,9 @@ Injects follow-up content to active agents in a run.
 
 Lists pending tool approvals.
 
-### `GET /runs/{run_id}/exec-sessions`
+### `GET /runs/{run_id}/background-tasks`
 
-Lists managed exec sessions bound to the run.
+Lists managed background tasks bound to the run.
 
 Response:
 
@@ -766,7 +766,7 @@ Response:
 {
   "items": [
     {
-      "exec_session_id": "exec_a1b2c3d4e5f6",
+      "background_task_id": "exec_a1b2c3d4e5f6",
       "run_id": "run-1",
       "session_id": "session-1",
       "command": "sleep 30",
@@ -778,7 +778,7 @@ Response:
       "exit_code": null,
       "recent_output": [],
       "output_excerpt": "",
-      "log_path": "tmp/exec_sessions/exec_a1b2c3d4e5f6.log",
+      "log_path": "tmp/background_tasks/exec_a1b2c3d4e5f6.log",
       "created_at": "2026-03-31T10:00:00Z",
       "updated_at": "2026-03-31T10:00:00Z",
       "completed_at": null
@@ -787,19 +787,19 @@ Response:
 }
 ```
 
-### `GET /runs/{run_id}/exec-sessions/{exec_session_id}`
+### `GET /runs/{run_id}/background-tasks/{background_task_id}`
 
-Returns one managed exec session snapshot for the run.
+Returns one managed background task snapshot for the run.
 
-### `POST /runs/{run_id}/exec-sessions/{exec_session_id}:stop`
+### `POST /runs/{run_id}/background-tasks/{background_task_id}:stop`
 
-Stops one managed exec session and returns its final snapshot.
+Stops one managed background task and returns its final snapshot.
 
 Notes:
-- Exec sessions are scoped to the owning run. Cross-run access returns `404`.
+- Background tasks are scoped to the owning run. Cross-run access returns `404`.
 - The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
 - Runtime shell selection is internal, not part of the REST contract. Linux/macOS use the managed bash path; Windows prefers Git Bash and falls back to PowerShell when Git Bash is unavailable.
-- `tty=true` exec sessions use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY exec sessions remain available.
+- `tty=true` background tasks use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY background tasks remain available.
 - Unlike Codex's stricter unified-exec contract, Agent Teams keeps non-TTY `write_stdin` enabled for compatibility with existing pipe-style workflows.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`

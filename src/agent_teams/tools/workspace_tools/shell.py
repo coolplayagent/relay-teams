@@ -146,7 +146,7 @@ def project_background_task(
 
 def background_task_payload(record: BackgroundTaskRecord) -> dict[str, JsonValue]:
     return {
-        "background_task_id": record.exec_session_id,
+        "background_task_id": record.background_task_id,
         "run_id": record.run_id,
         "session_id": record.session_id,
         "instance_id": record.instance_id,

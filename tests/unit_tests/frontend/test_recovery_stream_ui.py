@@ -45,14 +45,15 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
 
     assert "Connect Stream" not in recovery_script
     assert "t('recovery.recoverable_run_active')" in recovery_script
-    assert "t('recovery.exec_session.panel_label')" in recovery_script
-    assert "const host = ensureExecSessionHost();" in recovery_script
+    assert "t('recovery.background_task.panel_label')" in recovery_script
+    assert "const host = ensureBackgroundTaskHost();" in recovery_script
     assert (
-        "const activeTerminals = terminals.filter(terminal => isExecSessionActive(terminal));"
+        "const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));"
         in recovery_script
     )
     assert (
-        "const hidePanel = !runId || activeTerminals.length === 0;" in recovery_script
+        "const hidePanel = !runId || activeBackgroundTasks.length === 0;"
+        in recovery_script
     )
     assert "activeRun.status !== 'stopping'" in recovery_script
     assert "!activeRun.should_show_recover" in recovery_script

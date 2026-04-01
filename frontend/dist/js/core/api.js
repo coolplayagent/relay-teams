@@ -24,7 +24,7 @@ export {
     injectMessage,
     injectSubagentMessage,
     resumeRun,
-    stopExecSession,
+    stopBackgroundTask,
     deleteSession,
     deleteRoleConfig,
     fetchRoleConfigOptions,

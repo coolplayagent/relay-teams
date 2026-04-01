@@ -53,28 +53,23 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
     assert "im_send" not in registry.list_configurable_names()
 
 
-def test_default_registry_maps_legacy_tool_aliases_for_runtime_resolution() -> None:
+def test_default_registry_ignores_legacy_tool_aliases_for_runtime_resolution() -> None:
     registry = build_default_registry()
 
-    assert registry.resolve_known(("exec_command",), strict=False) == ("shell",)
-    assert registry.resolve_known(("list_exec_sessions",), strict=False) == (
-        "list_background_tasks",
-    )
-    assert registry.resolve_known(("terminate_exec_session",), strict=False) == (
-        "stop_background_task",
-    )
-    assert registry.resolve_known(("write_tmp",), strict=False) == ("write",)
+    assert registry.resolve_known(("shell",), strict=False) == ("shell",)
+    assert registry.resolve_known(("exec_command",), strict=False) == ()
+    assert registry.resolve_known(("terminate_background_task",), strict=False) == ()
+    assert registry.resolve_known(("write_tmp",), strict=False) == ()
 
 
 def test_default_registry_rejects_legacy_tool_aliases_for_explicit_validation() -> None:
     registry = build_default_registry()
 
     registry.validate_known(("shell",))
+    registry.validate_known(("list_background_tasks",))
     with pytest.raises(ValueError, match="Unknown tools"):
         registry.validate_known(("exec_command",))
     with pytest.raises(ValueError, match="Unknown tools"):
-        registry.validate_known(("list_exec_sessions",))
-    with pytest.raises(ValueError, match="Unknown tools"):
-        registry.validate_known(("terminate_exec_session",))
+        registry.validate_known(("terminate_background_task",))
     with pytest.raises(ValueError, match="Unknown tools"):
         registry.validate_known(("write_tmp",))

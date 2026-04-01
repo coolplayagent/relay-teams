@@ -157,7 +157,7 @@ async def test_background_task_manager_completes_and_publishes_events(
     queue = hub.subscribe("run-1")
 
     try:
-        started, completed = await manager.exec_command(
+        started, completed = await manager.run_command(
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -186,12 +186,12 @@ async def test_background_task_manager_completes_and_publishes_events(
     while not queue.empty():
         event = queue.get_nowait()
         event_types.append(event.event_type)
-        if event.event_type == RunEventType.EXEC_SESSION_UPDATED:
+        if event.event_type == RunEventType.BACKGROUND_TASK_UPDATED:
             updated_payload = json.loads(event.payload_json)
-        if event.event_type == RunEventType.EXEC_SESSION_COMPLETED:
+        if event.event_type == RunEventType.BACKGROUND_TASK_COMPLETED:
             completed_payload = json.loads(event.payload_json)
-    assert RunEventType.EXEC_SESSION_STARTED in event_types
-    assert RunEventType.EXEC_SESSION_COMPLETED in event_types
+    assert RunEventType.BACKGROUND_TASK_STARTED in event_types
+    assert RunEventType.BACKGROUND_TASK_COMPLETED in event_types
     assert updated_payload is not None
     assert "output_excerpt" not in updated_payload
     assert updated_payload["delta"] == "hello\n"
@@ -211,7 +211,7 @@ async def test_background_task_manager_writes_logs_via_to_thread(
     manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     record = repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-1",
+            background_task_id="exec-1",
             run_id="run-1",
             session_id="session-1",
             command="printf ready",
@@ -273,13 +273,13 @@ async def test_background_task_manager_write_finishes_shell_prompt(
         )
         _, _ = await manager.interact_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             chars="hello\n",
             yield_time_ms=5000,
         )
         completed_record, completed = await manager.wait_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             wait_ms=5000,
         )
     finally:
@@ -336,7 +336,7 @@ async def test_background_task_manager_stop_marks_terminal_stopped(
         )
         stopped = await manager.stop_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
         )
     finally:
         await manager.close()
@@ -379,14 +379,14 @@ async def test_background_task_manager_stop_marks_tty_terminal_stopped(
         )
         _, _ = await manager.interact_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             chars="hello\n",
             yield_time_ms=5000,
         )
         stopped = await asyncio.wait_for(
             manager.stop_for_run(
                 run_id="run-1",
-                exec_session_id=started.exec_session_id,
+                background_task_id=started.background_task_id,
             ),
             timeout=5,
         )
@@ -408,7 +408,7 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
 
     foreground = repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-foreground",
+            background_task_id="exec-foreground",
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -422,7 +422,7 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
     )
     background = repo.upsert(
         BackgroundTaskRecord(
-            exec_session_id="exec-background",
+            background_task_id="exec-background",
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -441,10 +441,10 @@ async def test_stop_all_for_run_can_leave_background_sessions_running(
             transport=cast(
                 manager_module._BackgroundTaskTransport, _WaitableTransport()
             ),
-            log_file_path=tmp_path / f"{record.exec_session_id}.log",
+            log_file_path=tmp_path / f"{record.background_task_id}.log",
             queue=asyncio.Queue(),
         )
-        manager._runtimes[record.exec_session_id] = runtime
+        manager._runtimes[record.background_task_id] = runtime
         runtime.supervisor_task = asyncio.create_task(manager._supervise(runtime))
 
     try:
@@ -533,25 +533,25 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
         )
         updated, completed = await manager.interact_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             chars="hello\r\n",
             yield_time_ms=5000,
         )
         echoed, _ = await manager.interact_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             chars="",
             yield_time_ms=5000,
         )
         resized = await manager.resize_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
             columns=100,
             rows=30,
         )
         stopped = await manager.stop_for_run(
             run_id="run-1",
-            exec_session_id=started.exec_session_id,
+            background_task_id=started.background_task_id,
         )
     finally:
         await manager.close()
@@ -559,7 +559,7 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     assert completed is False
     assert updated.recent_output == ("ready",)
     assert "echo:hello" in echoed.recent_output
-    assert resized.exec_session_id == started.exec_session_id
+    assert resized.background_task_id == started.background_task_id
     assert fake_process.writes == ["hello\r\n"]
     assert fake_process.sizes == [(30, 100)]
     assert stopped.status == BackgroundTaskStatus.STOPPED
@@ -742,7 +742,7 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
 
     for index in range(MAX_BACKGROUND_TASKS + 2):
         record = BackgroundTaskRecord(
-            exec_session_id=f"exec_{index:03d}",
+            background_task_id=f"exec_{index:03d}",
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -762,7 +762,7 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
     finally:
         await manager.close()
 
-    remaining_ids = {record.exec_session_id for record in repo.list_all()}
+    remaining_ids = {record.background_task_id for record in repo.list_all()}
     protected_ids = {
         f"exec_{index:03d}"
         for index in range(
@@ -789,7 +789,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
 
     for index in range(MAX_BACKGROUND_TASKS):
         record = BackgroundTaskRecord(
-            exec_session_id=f"exec_{index:03d}",
+            background_task_id=f"exec_{index:03d}",
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -808,7 +808,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
     finally:
         await manager.close()
 
-    remaining_ids = {record.exec_session_id for record in repo.list_all()}
+    remaining_ids = {record.background_task_id for record in repo.list_all()}
 
     assert len(remaining_ids) == MAX_BACKGROUND_TASKS - 1
     assert "exec_000" not in remaining_ids

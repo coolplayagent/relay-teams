@@ -116,7 +116,7 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "bash -lc \\"pwd\\""}',
         cache_key=cache_key,
     )
@@ -125,7 +125,7 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "pwd"}',
         cache_key=cache_key,
     )
@@ -149,7 +149,7 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "bash -lc \\"pwd\\""}',
         cache_key=cache_key,
     )
@@ -163,7 +163,7 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "pwd"}',
         cache_key=cache_key,
     )
@@ -194,7 +194,7 @@ def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) ->
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "bash -lc \\"pwd\\""}',
         cache_key=approved_cache_key,
     )
@@ -208,7 +208,7 @@ def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) ->
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="exec_command",
+        tool_name="shell",
         args_preview='{"command": "pwd"}',
         cache_key=mismatched_cache_key,
     )

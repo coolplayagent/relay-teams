@@ -35,20 +35,25 @@ class _FakeBackgroundTaskManager:
     def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return tuple(record for record in self.records if record.run_id == run_id)
 
-    def get_for_run(self, *, run_id: str, exec_session_id: str) -> BackgroundTaskRecord:
+    def get_for_run(
+        self, *, run_id: str, background_task_id: str
+    ) -> BackgroundTaskRecord:
         for record in self.records:
-            if record.run_id == run_id and record.exec_session_id == exec_session_id:
+            if (
+                record.run_id == run_id
+                and record.background_task_id == background_task_id
+            ):
                 return record
-        raise KeyError(exec_session_id)
+        raise KeyError(background_task_id)
 
     async def wait_for_run(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
         wait_ms: int,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        _ = (run_id, exec_session_id, wait_ms)
+        _ = (run_id, background_task_id, wait_ms)
         if self.wait_result is None:
             raise AssertionError("wait_result not configured")
         return self.wait_result
@@ -69,14 +74,14 @@ class _CapturingCompletionSink:
 
 def _build_record(
     *,
-    exec_session_id: str = "exec-1",
+    background_task_id: str = "exec-1",
     execution_mode: Literal["foreground", "background"] = "background",
     status: BackgroundTaskStatus = BackgroundTaskStatus.COMPLETED,
     recent_output: tuple[str, ...] = (),
     output_excerpt: str = "",
 ) -> BackgroundTaskRecord:
     return BackgroundTaskRecord(
-        exec_session_id=exec_session_id,
+        background_task_id=background_task_id,
         run_id="run-1",
         session_id="session-1",
         instance_id="inst-1",
@@ -112,7 +117,7 @@ async def test_background_task_service_notifies_sink_and_persists_completion_mar
     assert manager._listener is not None
     await manager._listener(record)
 
-    persisted = repo.get(record.exec_session_id)
+    persisted = repo.get(record.background_task_id)
     assert persisted is not None
     assert persisted.completion_notified_at is not None
     assert len(sink.calls) == 1
@@ -139,7 +144,7 @@ async def test_background_task_service_skips_non_background_notifications(
     assert manager._listener is not None
     await manager._listener(record)
 
-    persisted = repo.get(record.exec_session_id)
+    persisted = repo.get(record.background_task_id)
     assert persisted is not None
     assert persisted.completion_notified_at is None
     assert sink.calls == []
@@ -153,15 +158,17 @@ def test_background_task_service_lists_only_background_records(tmp_path: Path) -
         repository=repo,
     )
     foreground = _build_record(
-        exec_session_id="exec-foreground",
+        background_task_id="exec-foreground",
         execution_mode="foreground",
     )
-    background = _build_record(exec_session_id="exec-background")
+    background = _build_record(background_task_id="exec-background")
     manager.records = (foreground, background)
 
     records = service.list_for_run("run-1")
 
-    assert tuple(record.exec_session_id for record in records) == ("exec-background",)
+    assert tuple(record.background_task_id for record in records) == (
+        "exec-background",
+    )
 
 
 def test_background_task_service_get_for_run_rejects_foreground_records(
@@ -232,7 +239,7 @@ async def test_background_task_service_skips_notification_when_wait_already_cons
     assert manager._listener is not None
     await manager._listener(fresh)
 
-    persisted = repo.get(consumed.exec_session_id)
+    persisted = repo.get(consumed.background_task_id)
     assert persisted is not None
     assert persisted.completion_notified_at == consumed.completion_notified_at
     assert sink.calls == []

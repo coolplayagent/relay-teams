@@ -549,14 +549,14 @@ CLI 则在：
 - `The maximum number of unified exec processes you can keep open is`
 - `background_terminal_max_timeout`
 - `write_stdin`
-- `Writes characters to an existing unified exec session and returns recent output.`
+- `Writes characters to an existing unified background task and returns recent output.`
 - `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
 
 这些字符串说明 shipped binary 本身就包含如下能力，而不是只在源码里“看起来存在”：
 
 1. background terminal 的用户文案
 2. `/ps` / `/stop` 的交互提示
-3. unified exec session 的持续交互模型
+3. unified background task 的持续交互模型
 4. `write_stdin` 这种针对已有后台 session 写 stdin / 轮询输出的工具语义
 5. 对后台 terminal 超时与数量限制的配置项
 
@@ -576,8 +576,8 @@ CLI 则在：
 - `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
 - `Session identifier to pass to write_stdin when the process is still running.`
 - `write_stdin`
-- `Writes characters to an existing unified exec session and returns recent output.`
-- `Identifier of the running unified exec session.`
+- `Writes characters to an existing unified background task and returns recent output.`
+- `Identifier of the running unified background task.`
 - `Bytes to write to stdin (may be empty to poll).`
 
 这组字符串非常关键，基本可以证明 shipped binary 的真实模型是：
@@ -607,7 +607,7 @@ CLI 则在：
 
 - `Stopping all background terminals.`
 - `CleanBackgroundTerminals`
-- `thread/backgroundTerminals/clean failed in app-server TUI`
+- `thread/backgroundTasks/clean failed in app-server TUI`
 - `struct variant ClientRequest::ThreadBackgroundTerminalsClean`
 
 这一组字符串把 `/stop` 的真实行为进一步钉实了：
@@ -669,7 +669,7 @@ CLI 则在：
 综合源码、文档、以及已安装原生二进制静态逆向，可以把结论升级为：
 
 - Codex 的 background process 能力真实存在于当前 shipped Rust 原生二进制中
-- 它的真实模型是 unified exec session / background terminal，而不是简单的一次性 shell 执行
+- 它的真实模型是 unified background task / background terminal，而不是简单的一次性 shell 执行
 - `/ps` 查看的是 Codex 内部维护的后台 terminal 列表
 - `/stop` 走的是专门的 background terminal 清理路径
 - 后续交互依赖 `write_stdin` 一类的持续会话机制，而不是重新启动命令

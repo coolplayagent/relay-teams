@@ -269,7 +269,7 @@ def test_worker_swallows_cleanup_failures_after_runner_exception() -> None:
     assert "run-1" not in manager._running_run_ids
 
 
-def test_worker_finalization_only_stops_foreground_exec_sessions() -> None:
+def test_worker_finalization_only_stops_foreground_background_tasks() -> None:
     control = RunControlManager()
     background_task_manager = _CapturingBackgroundTaskManager()
     manager = _make_run_manager(

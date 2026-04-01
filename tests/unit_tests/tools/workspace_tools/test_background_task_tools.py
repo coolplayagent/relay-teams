@@ -16,7 +16,7 @@ from agent_teams.sessions.runs.background_tasks.models import (
 )
 from agent_teams.tools.runtime import ToolDeps, ToolResultProjection
 from agent_teams.tools.workspace_tools import (
-    register_exec_session,
+    register_background_tasks,
     register_list_background_tasks,
 )
 from agent_teams.tools.workspace_tools import shell as shell_module
@@ -56,7 +56,7 @@ class _CapturingBackgroundTaskService:
     async def run_shell(self, **kwargs: object):
         self.calls.append(dict(kwargs))
         record = BackgroundTaskRecord(
-            exec_session_id="exec_123",
+            background_task_id="exec_123",
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -79,7 +79,7 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
     tmp_path: Path,
 ) -> None:
     fake_agent = _FakeAgent()
-    register_exec_session(cast(Agent[ToolDeps, str], fake_agent))
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
     tool = cast(
         Callable[..., Awaitable[dict[str, object]]],
         fake_agent.tools["shell"],
@@ -149,7 +149,7 @@ def test_build_shell_cache_key_includes_cwd_background_and_tty() -> None:
     assert running_key != different_mode_key
 
 
-def test_register_exec_session_is_idempotent_per_agent(
+def test_register_background_tasks_is_idempotent_per_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[str] = []
@@ -165,8 +165,8 @@ def test_register_exec_session_is_idempotent_per_agent(
     )
     fake_agent = _FakeAgent()
 
-    register_exec_session(cast(Agent[ToolDeps, str], fake_agent))
-    register_exec_session(cast(Agent[ToolDeps, str], fake_agent))
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
 
     assert captured == [
         "shell",

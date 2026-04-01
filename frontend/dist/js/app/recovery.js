@@ -14,7 +14,7 @@ import {
     fetchSessionRecovery,
     resolveToolApproval,
     resumeRun,
-    stopExecSession,
+    stopBackgroundTask,
 } from '../core/api.js';
 import {
     humanizeRoleId,
@@ -31,9 +31,9 @@ import { sysLog } from '../utils/logger.js';
 let recoveryActionBusy = false;
 const approvalActionBusyIds = new Set();
 const approvalActionErrors = new Map();
-const backgroundTerminalActionBusyIds = new Set();
-const backgroundTerminalActionErrors = new Map();
-const execSessionPanelCollapsedRunIds = new Set();
+const backgroundTaskActionBusyIds = new Set();
+const backgroundTaskActionErrors = new Map();
+const backgroundTaskPanelExpandedRunIds = new Set();
 let recoveryBannerRenderSignature = '';
 const CONTINUITY_POLL_ACTIVE_MS = 1500;
 const CONTINUITY_POLL_IDLE_MS = 4000;
@@ -50,28 +50,28 @@ function isPrimaryOrReservedRoleId(roleId) {
     return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
 }
 
-function isExecSessionPanelCollapsed(runId) {
+function isBackgroundTaskPanelCollapsed(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return false;
-    return !execSessionPanelCollapsedRunIds.has(safeRunId);
+    return !backgroundTaskPanelExpandedRunIds.has(safeRunId);
 }
 
-function setExecSessionPanelCollapsed(runId, collapsed) {
+function setBackgroundTaskPanelCollapsed(runId, collapsed) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
     if (collapsed) {
-        execSessionPanelCollapsedRunIds.delete(safeRunId);
+        backgroundTaskPanelExpandedRunIds.delete(safeRunId);
     } else {
-        execSessionPanelCollapsedRunIds.add(safeRunId);
+        backgroundTaskPanelExpandedRunIds.add(safeRunId);
     }
 }
 
-function handleExecSessionPanelToggle(runId) {
+function handleBackgroundTaskPanelToggle(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
-    setExecSessionPanelCollapsed(
+    setBackgroundTaskPanelCollapsed(
         safeRunId,
-        !isExecSessionPanelCollapsed(safeRunId),
+        !isBackgroundTaskPanelCollapsed(safeRunId),
     );
     renderRecoveryBanner();
 }
@@ -167,8 +167,8 @@ export function clearSessionRecovery() {
     state.pausedSubagent = null;
     approvalActionBusyIds.clear();
     approvalActionErrors.clear();
-    backgroundTerminalActionBusyIds.clear();
-    backgroundTerminalActionErrors.clear();
+    backgroundTaskActionBusyIds.clear();
+    backgroundTaskActionErrors.clear();
     recoveryBannerRenderSignature = '';
     if (!state.isGenerating) {
         state.activeRunId = null;
@@ -205,7 +205,7 @@ export function applyRecoverySnapshot(snapshot) {
     }
 
     reconcileApprovalActionState(normalized.pendingToolApprovals);
-    reconcileExecSessionActionState(normalized.backgroundTerminals);
+    reconcileBackgroundTaskActionState(normalized.backgroundTasks);
     state.currentRecoverySnapshot = normalized;
     state.pausedSubagent = normalized.pausedSubagent;
     if (normalized.activeRun?.run_id) {
@@ -405,7 +405,7 @@ export function markPausedSubagent(payload = {}) {
             }
             : null,
         pendingToolApprovals: [],
-        backgroundTerminals: [],
+        backgroundTasks: [],
         pausedSubagent: null,
         roundSnapshot: null,
     };
@@ -461,7 +461,7 @@ export function markToolApprovalRequested(payload = {}) {
             }
             : null,
         pendingToolApprovals: [],
-        backgroundTerminals: [],
+        backgroundTasks: [],
         pausedSubagent: null,
         roundSnapshot: null,
     };
@@ -536,56 +536,44 @@ function normalizeRecoverySnapshot(snapshot) {
         ? snapshot.pending_tool_approvals.map(item => ({ ...item }))
         : [];
     const pausedSubagent = normalizePausedSubagent(snapshot?.paused_subagent, activeRun?.run_id || null);
-    const backgroundTerminals = Array.isArray(snapshot?.exec_sessions)
-        ? snapshot.exec_sessions
-            .map(item => normalizeExecSession(item, activeRun?.run_id || null))
+    const backgroundTasks = Array.isArray(snapshot?.background_tasks)
+        ? snapshot.background_tasks
+            .map(item => normalizeBackgroundTask(item, activeRun?.run_id || null))
             .filter(Boolean)
-        : Array.isArray(snapshot?.backgroundTerminals)
-            ? snapshot.backgroundTerminals
-                .map(item => normalizeExecSession(item, activeRun?.run_id || null))
-                .filter(Boolean)
-            : [];
+        : [];
     const roundSnapshot = snapshot?.round_snapshot && typeof snapshot.round_snapshot === 'object'
         ? { ...snapshot.round_snapshot }
         : null;
     return {
         activeRun,
         pendingToolApprovals,
-        backgroundTerminals,
+        backgroundTasks,
         pausedSubagent,
         roundSnapshot,
     };
 }
 
-function normalizeExecSession(raw, runId = null) {
+function normalizeBackgroundTask(raw, runId = null) {
     if (!raw || typeof raw !== 'object') return null;
-    const terminalId = typeof raw.exec_session_id === 'string'
-        ? raw.exec_session_id
-        : typeof raw.terminal_id === 'string'
-            ? raw.terminal_id
-        : typeof raw.terminalId === 'string'
-            ? raw.terminalId
-            : '';
-    if (!terminalId) return null;
+    const backgroundTaskId = typeof raw.background_task_id === 'string'
+        ? raw.background_task_id
+        : '';
+    if (!backgroundTaskId) return null;
     const recentOutput = Array.isArray(raw.recent_output)
         ? raw.recent_output.map(line => String(line || '')).filter(Boolean)
-        : Array.isArray(raw.recentOutput)
-            ? raw.recentOutput.map(line => String(line || '')).filter(Boolean)
-            : [];
-    const rawExitCode = raw.exit_code ?? raw.exitCode;
+        : [];
+    const rawExitCode = raw.exit_code;
     const outputExcerpt = typeof raw.output_excerpt === 'string'
         ? raw.output_excerpt
-        : typeof raw.outputExcerpt === 'string'
-            ? raw.outputExcerpt
-            : '';
+        : '';
     return {
-        terminalId,
-        runId: String(raw.run_id || raw.runId || runId || ''),
+        backgroundTaskId,
+        runId: String(raw.run_id || runId || ''),
         command: String(raw.command || '').trim(),
         cwd: String(raw.cwd || '').trim(),
         status: String(raw.status || '').trim(),
         tty: raw.tty === true,
-        timeoutMs: Number(raw.timeout_ms || raw.timeoutMs || 0),
+        timeoutMs: Number(raw.timeout_ms || 0),
         exitCode: rawExitCode === null || rawExitCode === undefined ? null : Number(rawExitCode),
         recentOutput,
         outputExcerpt,
@@ -709,13 +697,13 @@ function shouldPollContinuity() {
 
     const activeRun = getActiveRecoveryRun();
     const hasApprovals = (state.currentRecoverySnapshot?.pendingToolApprovals || []).length > 0;
-    const hasExecSessions = (state.currentRecoverySnapshot?.backgroundTerminals || []).length > 0;
+    const hasBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || []).length > 0;
     const hasPausedSubagent = !!(state.pausedSubagent || state.currentRecoverySnapshot?.pausedSubagent);
     return !!(
         state.isGenerating
         || state.activeEventSource
         || hasApprovals
-        || hasExecSessions
+        || hasBackgroundTasks
         || hasPausedSubagent
         || activeRun?.is_recoverable
     );
@@ -837,22 +825,22 @@ function reconcileApprovalActionState(approvals) {
     });
 }
 
-function reconcileExecSessionActionState(terminals) {
+function reconcileBackgroundTaskActionState(tasks) {
     const pendingIds = new Set(
-        Array.isArray(terminals)
-            ? terminals
-                .map(item => String(item?.terminalId || '').trim())
+        Array.isArray(tasks)
+            ? tasks
+                .map(item => String(item?.backgroundTaskId || '').trim())
                 .filter(Boolean)
             : [],
     );
-    Array.from(backgroundTerminalActionBusyIds).forEach(terminalId => {
-        if (!pendingIds.has(terminalId)) {
-            backgroundTerminalActionBusyIds.delete(terminalId);
+    Array.from(backgroundTaskActionBusyIds).forEach(backgroundTaskId => {
+        if (!pendingIds.has(backgroundTaskId)) {
+            backgroundTaskActionBusyIds.delete(backgroundTaskId);
         }
     });
-    Array.from(backgroundTerminalActionErrors.keys()).forEach(terminalId => {
-        if (!pendingIds.has(terminalId)) {
-            backgroundTerminalActionErrors.delete(terminalId);
+    Array.from(backgroundTaskActionErrors.keys()).forEach(backgroundTaskId => {
+        if (!pendingIds.has(backgroundTaskId)) {
+            backgroundTaskActionErrors.delete(backgroundTaskId);
         }
     });
 }
@@ -868,8 +856,8 @@ function recoverySnapshotSignature(snapshot) {
         pendingToolApprovals: Array.isArray(snapshot.pendingToolApprovals)
             ? snapshot.pendingToolApprovals.map(signatureApproval)
             : [],
-        backgroundTerminals: Array.isArray(snapshot.backgroundTerminals)
-            ? snapshot.backgroundTerminals.map(signatureExecSession)
+        backgroundTasks: Array.isArray(snapshot.backgroundTasks)
+            ? snapshot.backgroundTasks.map(signatureBackgroundTask)
             : [],
         pausedSubagent: signaturePausedSubagent(snapshot.pausedSubagent),
         roundSnapshotRunId: String(snapshot.roundSnapshot?.run_id || ''),
@@ -886,7 +874,7 @@ function signatureActiveRun(activeRun) {
         checkpoint_event_id: Number(activeRun.checkpoint_event_id || 0),
         last_event_id: Number(activeRun.last_event_id || 0),
         pending_tool_approval_count: Number(activeRun.pending_tool_approval_count || 0),
-        exec_session_count: Number(activeRun.exec_session_count || 0),
+        background_task_count: Number(activeRun.background_task_count || 0),
         stream_connected: !!activeRun.stream_connected,
         should_show_recover: !!activeRun.should_show_recover,
     };
@@ -913,18 +901,18 @@ function signaturePausedSubagent(pausedSubagent) {
     };
 }
 
-function signatureExecSession(terminal) {
-    if (!terminal || typeof terminal !== 'object') return null;
+function signatureBackgroundTask(task) {
+    if (!task || typeof task !== 'object') return null;
     return {
-        terminalId: String(terminal.terminalId || ''),
-        runId: String(terminal.runId || ''),
-        status: String(terminal.status || ''),
-        exitCode: terminal.exitCode === null || terminal.exitCode === undefined
+        backgroundTaskId: String(task.backgroundTaskId || ''),
+        runId: String(task.runId || ''),
+        status: String(task.status || ''),
+        exitCode: task.exitCode === null || task.exitCode === undefined
             ? null
-            : Number(terminal.exitCode),
-        updatedAt: String(terminal.updatedAt || ''),
-        recentOutput: Array.isArray(terminal.recentOutput)
-            ? terminal.recentOutput.map(line => String(line || ''))
+            : Number(task.exitCode),
+        updatedAt: String(task.updatedAt || ''),
+        recentOutput: Array.isArray(task.recentOutput)
+            ? task.recentOutput.map(line => String(line || ''))
             : [],
     };
 }
@@ -939,7 +927,7 @@ function isLocallyStreaming(runId) {
 }
 
 function renderRecoveryBanner() {
-    renderExecSessionPanel();
+    renderBackgroundTaskPanel();
     const host = ensureRecoveryBannerHost();
     if (!host) return;
 
@@ -964,7 +952,7 @@ function renderRecoveryBanner() {
         hideBanner,
         activeRun,
         approvals,
-        backgroundTerminals: [],
+        backgroundTasks: [],
         pausedSubagent,
     });
     if (nextSignature === recoveryBannerRenderSignature) {
@@ -1050,28 +1038,28 @@ function renderRecoveryBanner() {
     });
 }
 
-function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundTerminals, pausedSubagent }) {
+function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundTasks, pausedSubagent }) {
     const busyIds = Array.from(approvalActionBusyIds).sort();
     const errorEntries = Array.from(approvalActionErrors.entries())
         .map(([toolCallId, message]) => [String(toolCallId), String(message || '')])
         .sort((left, right) => left[0].localeCompare(right[0]));
-    const terminalBusyIds = Array.from(backgroundTerminalActionBusyIds).sort();
-    const terminalErrorEntries = Array.from(backgroundTerminalActionErrors.entries())
-        .map(([terminalId, message]) => [String(terminalId), String(message || '')])
+    const backgroundTaskBusyIds = Array.from(backgroundTaskActionBusyIds).sort();
+    const backgroundTaskErrorEntries = Array.from(backgroundTaskActionErrors.entries())
+        .map(([backgroundTaskId, message]) => [String(backgroundTaskId), String(message || '')])
         .sort((left, right) => left[0].localeCompare(right[0]));
     return JSON.stringify({
         hidden: !!hideBanner,
         activeRun: signatureActiveRun(activeRun),
         approvals: Array.isArray(approvals) ? approvals.map(signatureApproval) : [],
-        backgroundTerminals: Array.isArray(backgroundTerminals)
-            ? backgroundTerminals.map(signatureExecSession)
+        backgroundTasks: Array.isArray(backgroundTasks)
+            ? backgroundTasks.map(signatureBackgroundTask)
             : [],
         pausedSubagent: signaturePausedSubagent(pausedSubagent),
         recoveryActionBusy: !!recoveryActionBusy,
         approvalBusyIds: busyIds,
         approvalErrors: errorEntries,
-        backgroundTerminalBusyIds: terminalBusyIds,
-        backgroundTerminalErrors: terminalErrorEntries,
+        backgroundTaskBusyIds,
+        backgroundTaskErrors: backgroundTaskErrorEntries,
         localStreamingRunId: activeRun && isLocallyStreaming(activeRun.run_id)
             ? String(activeRun.run_id || '')
             : '',
@@ -1091,17 +1079,17 @@ function ensureRecoveryBannerHost() {
     return host;
 }
 
-function ensureExecSessionHost() {
-    if (els.execSessionHost) return els.execSessionHost;
+function ensureBackgroundTaskHost() {
+    if (els.backgroundTaskHost) return els.backgroundTaskHost;
     const chatContainer = els.chatContainer || els.chatMessages?.parentElement;
     const inputContainer = document.querySelector('.input-container');
     if (!chatContainer || !inputContainer || inputContainer.parentNode !== chatContainer) return null;
     const host = document.createElement('div');
-    host.id = 'exec-session-host';
+    host.id = 'background-task-host';
     host.className = 'background-task-strip-host';
     host.style.display = 'none';
     chatContainer.insertBefore(host, inputContainer);
-    els.execSessionHost = host;
+    els.backgroundTaskHost = host;
     return host;
 }
 
@@ -1232,60 +1220,60 @@ async function handleApprovalAction(runId, approval, action) {
     }
 }
 
-async function handleExecSessionAction(runId, terminal, action) {
+async function handleBackgroundTaskAction(runId, backgroundTask, action) {
     const safeRunId = String(runId || '').trim();
-    const safeTerminalId = String(terminal?.terminalId || '').trim();
+    const safeBackgroundTaskId = String(backgroundTask?.backgroundTaskId || '').trim();
     const safeAction = String(action || '').trim().toLowerCase();
-    if (!safeRunId || !safeTerminalId || !safeAction) return;
-    if (backgroundTerminalActionBusyIds.has(safeTerminalId)) return;
+    if (!safeRunId || !safeBackgroundTaskId || !safeAction) return;
+    if (backgroundTaskActionBusyIds.has(safeBackgroundTaskId)) return;
 
-    backgroundTerminalActionBusyIds.add(safeTerminalId);
-    backgroundTerminalActionErrors.delete(safeTerminalId);
+    backgroundTaskActionBusyIds.add(safeBackgroundTaskId);
+    backgroundTaskActionErrors.delete(safeBackgroundTaskId);
     renderRecoveryBanner();
 
     try {
         if (safeAction !== 'stop') return;
-        const response = await stopExecSession(safeRunId, safeTerminalId);
-        const updated = normalizeExecSession(response?.exec_session, safeRunId);
+        const response = await stopBackgroundTask(safeRunId, safeBackgroundTaskId);
+        const updated = normalizeBackgroundTask(response?.background_task, safeRunId);
         if (updated) {
-            applyExecSessionUpdate(updated);
+            applyBackgroundTaskUpdate(updated);
         }
         scheduleRecoveryContinuityRefresh({
             sessionId: state.currentSessionId,
             delayMs: 0,
             includeRounds: false,
             quiet: true,
-            reason: 'exec-session-stop',
+            reason: 'background-task-stop',
         });
     } catch (e) {
-        backgroundTerminalActionErrors.set(
-            safeTerminalId,
-            e?.message || t('recovery.exec_session.stop_failed'),
+        backgroundTaskActionErrors.set(
+            safeBackgroundTaskId,
+            e?.message || t('recovery.background_task.stop_failed'),
         );
-        sysLog(e?.message || t('recovery.exec_session.stop_failed'), 'log-error');
+        sysLog(e?.message || t('recovery.background_task.stop_failed'), 'log-error');
     } finally {
-        backgroundTerminalActionBusyIds.delete(safeTerminalId);
+        backgroundTaskActionBusyIds.delete(safeBackgroundTaskId);
         renderRecoveryBanner();
     }
 }
 
-function applyExecSessionUpdate(terminal) {
+function applyBackgroundTaskUpdate(backgroundTask) {
     const snapshot = state.currentRecoverySnapshot;
     if (!snapshot) return;
-    const existing = snapshot.backgroundTerminals || [];
-    const found = existing.some(item => item.terminalId === terminal.terminalId);
-    const nextExecSessions = found
-        ? existing.map(item => (item.terminalId === terminal.terminalId ? terminal : item))
-        : [terminal, ...existing];
+    const existing = snapshot.backgroundTasks || [];
+    const found = existing.some(item => item.backgroundTaskId === backgroundTask.backgroundTaskId);
+    const nextBackgroundTasks = found
+        ? existing.map(item => (item.backgroundTaskId === backgroundTask.backgroundTaskId ? backgroundTask : item))
+        : [backgroundTask, ...existing];
     state.currentRecoverySnapshot = {
         ...snapshot,
         activeRun: snapshot.activeRun
             ? {
                 ...snapshot.activeRun,
-                exec_session_count: nextExecSessions.length,
+                background_task_count: nextBackgroundTasks.length,
             }
             : snapshot.activeRun,
-        backgroundTerminals: nextExecSessions,
+        backgroundTasks: nextBackgroundTasks,
     };
 }
 
@@ -1346,17 +1334,20 @@ function describeRecoveryState(activeRun, approvals, pausedSubagent) {
     return t('recovery.recoverable_run_available');
 }
 
-function renderExecSessionPanel() {
-    const host = ensureExecSessionHost();
+function renderBackgroundTaskPanel() {
+    const host = ensureBackgroundTaskHost();
     if (!host) return;
 
     const snapshot = state.currentRecoverySnapshot;
-    const terminals = snapshot?.backgroundTerminals || [];
-    const activeTerminals = terminals.filter(terminal => isExecSessionActive(terminal));
+    const backgroundTasks = snapshot?.backgroundTasks || [];
+    const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));
     const runId = String(
-        snapshot?.activeRun?.run_id || activeTerminals[0]?.runId || terminals[0]?.runId || '',
+        snapshot?.activeRun?.run_id
+        || activeBackgroundTasks[0]?.runId
+        || backgroundTasks[0]?.runId
+        || '',
     ).trim();
-    const hidePanel = !runId || activeTerminals.length === 0;
+    const hidePanel = !runId || activeBackgroundTasks.length === 0;
 
     if (hidePanel) {
         host.style.display = 'none';
@@ -1368,29 +1359,31 @@ function renderExecSessionPanel() {
     host.innerHTML = `
         <div class="background-task-strip" role="status" aria-live="polite">
             <div class="background-task-strip-summary">
-                <span class="background-task-strip-label">${escapeHtml(t('recovery.exec_session.panel_label'))}</span>
-                <span class="background-task-strip-meta">${escapeHtml(describeExecSessionPanel(activeTerminals))}</span>
+                <span class="background-task-strip-label">${escapeHtml(t('recovery.background_task.panel_label'))}</span>
+                <span class="background-task-strip-meta">${escapeHtml(describeBackgroundTaskPanel(activeBackgroundTasks))}</span>
             </div>
             <div class="background-task-strip-items">
-                ${renderExecSessionList(runId, activeTerminals)}
+                ${renderBackgroundTaskList(runId, activeBackgroundTasks)}
             </div>
         </div>
     `;
 
-    host.querySelectorAll('[data-background-terminal-action]').forEach(button => {
-        const terminalId = String(button.dataset.terminalId || '');
-        const action = String(button.dataset.backgroundTerminalAction || '');
-        if (!terminalId || !action) return;
-        const terminal = activeTerminals.find(item => item.terminalId === terminalId);
-        if (!terminal) return;
+    host.querySelectorAll('[data-background-task-action]').forEach(button => {
+        const backgroundTaskId = String(button.dataset.backgroundTaskId || '');
+        const action = String(button.dataset.backgroundTaskAction || '');
+        if (!backgroundTaskId || !action) return;
+        const backgroundTask = activeBackgroundTasks.find(
+            item => item.backgroundTaskId === backgroundTaskId,
+        );
+        if (!backgroundTask) return;
         button.onclick = () => {
-            void handleExecSessionAction(runId, terminal, action);
+            void handleBackgroundTaskAction(runId, backgroundTask, action);
         };
     });
 }
 
-function describeExecSessionPanel(terminals) {
-    return `${terminals.length} active`;
+function describeBackgroundTaskPanel(backgroundTasks) {
+    return `${backgroundTasks.length} active`;
 }
 
 function stateLabel(activeRun) {
@@ -1456,43 +1449,43 @@ function shortRunId(runId) {
     return safe.length > 16 ? `${safe.slice(0, 8)}...${safe.slice(-4)}` : safe;
 }
 
-function renderExecSessionList(runId, terminals) {
+function renderBackgroundTaskList(runId, backgroundTasks) {
     return `
         <div class="background-task-chip-list">
-            ${terminals.map(item => renderExecSessionItem(runId, item)).join('')}
+            ${backgroundTasks.map(item => renderBackgroundTaskItem(runId, item)).join('')}
         </div>
     `;
 }
 
-function renderExecSessionItem(runId, terminal) {
-    const terminalId = String(terminal?.terminalId || '');
-    const busy = backgroundTerminalActionBusyIds.has(terminalId);
-    const error = backgroundTerminalActionErrors.get(terminalId) || '';
+function renderBackgroundTaskItem(runId, backgroundTask) {
+    const backgroundTaskId = String(backgroundTask?.backgroundTaskId || '');
+    const busy = backgroundTaskActionBusyIds.has(backgroundTaskId);
+    const error = backgroundTaskActionErrors.get(backgroundTaskId) || '';
     const statusText = error
-        || (busy ? t('recovery.applying') : backgroundTerminalStatusLabel(terminal));
-    const chipTone = backgroundTerminalTone(terminal, { busy, error });
+        || (busy ? t('recovery.applying') : backgroundTaskStatusLabel(backgroundTask));
+    const chipTone = backgroundTaskTone(backgroundTask, { busy, error });
     const details = [
         statusText,
-        terminal.command || shortRunId(terminalId),
-        terminal.cwd ? `cwd: ${terminal.cwd}` : '',
-        terminal.logPath ? `log: ${terminal.logPath}` : '',
-        terminal.exitCode === null ? '' : `exit: ${terminal.exitCode}`,
+        backgroundTask.command || shortRunId(backgroundTaskId),
+        backgroundTask.cwd ? `cwd: ${backgroundTask.cwd}` : '',
+        backgroundTask.logPath ? `log: ${backgroundTask.logPath}` : '',
+        backgroundTask.exitCode === null ? '' : `exit: ${backgroundTask.exitCode}`,
     ].filter(Boolean).join('\n');
 
     return `
         <section class="background-task-chip background-task-chip-${chipTone}" title="${escapeAttribute(details)}">
             <span class="background-task-chip-status">${escapeHtml(statusText)}</span>
-            <span class="background-task-chip-command">${escapeHtml(terminal.command || shortRunId(terminalId))}</span>
-            ${isExecSessionActive(terminal)
+            <span class="background-task-chip-command">${escapeHtml(backgroundTask.command || shortRunId(backgroundTaskId))}</span>
+            ${isBackgroundTaskActive(backgroundTask)
         ? `<button
                     type="button"
                     class="background-task-chip-stop"
-                    data-background-terminal-action="stop"
-                    data-terminal-id="${escapeAttribute(terminalId)}"
+                    data-background-task-action="stop"
+                    data-background-task-id="${escapeAttribute(backgroundTaskId)}"
                     data-run-id="${escapeAttribute(runId)}"
                     ${busy || recoveryActionBusy ? 'disabled' : ''}
                 >
-                    ${escapeHtml(t('recovery.exec_session.stop'))}
+                    ${escapeHtml(t('recovery.background_task.stop'))}
                 </button>`
         : ''
     }
@@ -1500,14 +1493,14 @@ function renderExecSessionItem(runId, terminal) {
     `;
 }
 
-function isExecSessionActive(terminal) {
-    return terminal?.status === 'running' || terminal?.status === 'blocked';
+function isBackgroundTaskActive(backgroundTask) {
+    return backgroundTask?.status === 'running' || backgroundTask?.status === 'blocked';
 }
 
-function backgroundTerminalTone(terminal, { busy = false, error = '' } = {}) {
+function backgroundTaskTone(backgroundTask, { busy = false, error = '' } = {}) {
     if (error) return 'danger';
     if (busy) return 'warning';
-    switch (terminal?.status) {
+    switch (backgroundTask?.status) {
         case 'running':
             return 'running';
         case 'blocked':
@@ -1521,8 +1514,8 @@ function backgroundTerminalTone(terminal, { busy = false, error = '' } = {}) {
     }
 }
 
-function backgroundTerminalStatusLabel(terminal) {
-    switch (terminal?.status) {
+function backgroundTaskStatusLabel(backgroundTask) {
+    switch (backgroundTask?.status) {
         case 'running':
             return t('recovery.state.running');
         case 'blocked':

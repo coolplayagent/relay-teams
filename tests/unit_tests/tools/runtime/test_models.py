@@ -68,7 +68,7 @@ def test_tool_result_envelope_rejects_unknown_fields() -> None:
 
 def test_tool_internal_record_stores_visible_result_and_runtime_meta() -> None:
     record = ToolInternalRecord(
-        tool="exec_command",
+        tool="shell",
         visible_result=ToolResultEnvelope(
             ok=True,
             data={"output": "/tmp", "exit_code": 0},
@@ -80,7 +80,7 @@ def test_tool_internal_record_stores_visible_result_and_runtime_meta() -> None:
 
     payload = record.model_dump(mode="json")
 
-    assert payload["tool"] == "exec_command"
+    assert payload["tool"] == "shell"
     assert payload["visible_result"]["data"]["output"] == "/tmp"
     assert payload["runtime_meta"]["approval_status"] == "not_required"
 

@@ -397,7 +397,7 @@ def _build_role() -> RoleDefinition:
         name="Spec Coder",
         description="Implements requested changes.",
         version="1.0.0",
-        tools=("exec_command",),
+        tools=("shell",),
         mcp_servers=(),
         skills=(),
         model_profile="default",

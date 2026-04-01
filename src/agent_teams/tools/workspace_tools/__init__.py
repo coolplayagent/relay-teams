@@ -43,22 +43,10 @@ def register_stop_background_task(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("stop_background_task",))
 
 
-def register_exec_session(agent: Agent[ToolDeps, str]) -> None:
+def register_background_tasks(agent: Agent[ToolDeps, str]) -> None:
     register_shell(agent)
     register_list_background_tasks(agent)
     register_wait_background_task(agent)
-    register_stop_background_task(agent)
-
-
-def register_exec_command(agent: Agent[ToolDeps, str]) -> None:
-    register_shell(agent)
-
-
-def register_list_exec_sessions(agent: Agent[ToolDeps, str]) -> None:
-    register_list_background_tasks(agent)
-
-
-def register_terminate_exec_session(agent: Agent[ToolDeps, str]) -> None:
     register_stop_background_task(agent)
 
 
@@ -129,17 +117,14 @@ TOOLS = {
 
 __all__ = [
     "TOOLS",
+    "register_background_tasks",
     "register_edit",
-    "register_exec_command",
-    "register_exec_session",
     "register_glob",
     "register_grep",
     "register_list_background_tasks",
-    "register_list_exec_sessions",
     "register_read",
     "register_shell",
     "register_stop_background_task",
-    "register_terminate_exec_session",
     "register_wait_background_task",
     "register_write",
 ]

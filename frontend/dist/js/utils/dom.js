@@ -13,7 +13,7 @@ export const els = {
   projectsList: qs("#projects-list"),
   roundsList: qs("#rounds-list"),
   backBtn: qs("#back-btn"),
-  execSessionHost: qs("#exec-session-host"),
+  backgroundTaskHost: qs("#background-task-host"),
   recoveryBannerHost: qs("#recovery-banner-host"),
   inspectorPanel: qs("#rail-inspector"),
   systemLogs: qs("#system-logs"),

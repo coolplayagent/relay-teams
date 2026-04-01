@@ -78,10 +78,10 @@ class InjectSubagentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
-class StopExecSessionResponse(BaseModel):
+class StopBackgroundTaskResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    exec_session: dict[str, object]
+    background_task: dict[str, object]
 
 
 @router.post(
@@ -254,28 +254,28 @@ def list_tool_approvals(
         return result
 
 
-@router.get("/{run_id}/exec-sessions")
-def list_exec_sessions(
+@router.get("/{run_id}/background-tasks")
+def list_background_tasks(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        return {"items": list(service.list_exec_sessions(run_id))}
+        return {"items": list(service.list_background_tasks(run_id))}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/{run_id}/exec-sessions/{exec_session_id}")
-def get_exec_session(
+@router.get("/{run_id}/background-tasks/{background_task_id}")
+def get_background_task(
     run_id: RequiredIdentifierStr,
-    exec_session_id: RequiredIdentifierStr,
+    background_task_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         return {
-            "exec_session": service.get_exec_session(
+            "background_task": service.get_background_task(
                 run_id=run_id,
-                exec_session_id=exec_session_id,
+                background_task_id=background_task_id,
             )
         }
     except KeyError as exc:
@@ -283,20 +283,20 @@ def get_exec_session(
 
 
 @router.post(
-    "/{run_id}/exec-sessions/{exec_session_id}:stop",
-    response_model=StopExecSessionResponse,
+    "/{run_id}/background-tasks/{background_task_id}:stop",
+    response_model=StopBackgroundTaskResponse,
 )
-async def stop_exec_session(
+async def stop_background_task(
     run_id: RequiredIdentifierStr,
-    exec_session_id: RequiredIdentifierStr,
+    background_task_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
-) -> StopExecSessionResponse:
+) -> StopBackgroundTaskResponse:
     try:
-        result = await service.stop_exec_session(
+        result = await service.stop_background_task(
             run_id=run_id,
-            exec_session_id=exec_session_id,
+            background_task_id=background_task_id,
         )
-        return StopExecSessionResponse(exec_session=result)
+        return StopBackgroundTaskResponse(background_task=result)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

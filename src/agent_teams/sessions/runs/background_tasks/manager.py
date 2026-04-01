@@ -428,14 +428,14 @@ class BackgroundTaskManager:
         async with self._admission_lock:
             await self._prune_sessions_if_needed()
             effective_timeout_ms = timeout_ms or DEFAULT_BACKGROUND_TASK_TIMEOUT_MS
-            exec_session_id = f"exec_{uuid4().hex[:12]}"
+            background_task_id = f"background_task_{uuid4().hex[:12]}"
             log_dir = workspace.resolve_tmp_path("background_tasks", write=True)
             log_dir.mkdir(parents=True, exist_ok=True)
-            log_file_path = log_dir / f"{exec_session_id}.log"
+            log_file_path = log_dir / f"{background_task_id}.log"
             log_file_path.touch(exist_ok=True)
             logical_log_path = workspace.logical_tmp_path(log_file_path)
             record = BackgroundTaskRecord(
-                exec_session_id=exec_session_id,
+                background_task_id=background_task_id,
                 run_id=run_id,
                 session_id=session_id,
                 instance_id=instance_id,
@@ -454,25 +454,25 @@ class BackgroundTaskManager:
                 env=env,
                 log_file_path=log_file_path,
             )
-            self._runtimes[exec_session_id] = runtime
+            self._runtimes[background_task_id] = runtime
             persisted = False
             try:
                 runtime.record = self._repository.upsert(record)
                 persisted = True
                 self._publish_background_task_event(
-                    event_type=RunEventType.EXEC_SESSION_STARTED,
+                    event_type=RunEventType.BACKGROUND_TASK_STARTED,
                     record=runtime.record,
                 )
             except Exception:
-                self._runtimes.pop(exec_session_id, None)
+                self._runtimes.pop(background_task_id, None)
                 if persisted:
-                    self._repository.delete(exec_session_id)
+                    self._repository.delete(background_task_id)
                 await self._rollback_runtime(runtime)
                 raise
             runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
             return runtime.record
 
-    async def exec_command(
+    async def run_command(
         self,
         *,
         run_id: str,
@@ -504,7 +504,7 @@ class BackgroundTaskManager:
         )
         updated, _ = await self.interact_for_run(
             run_id=run_id,
-            exec_session_id=record.exec_session_id,
+            background_task_id=record.background_task_id,
             chars="",
             yield_time_ms=yield_time_ms,
             is_initial_poll=True,
@@ -512,7 +512,7 @@ class BackgroundTaskManager:
         if updated.is_active:
             follow_up, completed = await self.wait_for_run(
                 run_id=run_id,
-                exec_session_id=record.exec_session_id,
+                background_task_id=record.background_task_id,
                 wait_ms=250,
             )
             return follow_up, completed
@@ -525,12 +525,12 @@ class BackgroundTaskManager:
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
     ) -> BackgroundTaskRecord:
-        record = self._get_record(exec_session_id)
+        record = self._get_record(background_task_id)
         if record.run_id != run_id:
             raise KeyError(
-                f"Background task {exec_session_id} does not belong to run {run_id}"
+                f"Background task {background_task_id} does not belong to run {run_id}"
             )
         return record
 
@@ -538,32 +538,32 @@ class BackgroundTaskManager:
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
         wait_ms: int,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
-        runtime = self._runtimes.get(exec_session_id)
+        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        runtime = self._runtimes.get(background_task_id)
         if runtime is None or not record.is_active:
             return record, True
         if wait_ms < 1:
             raise ValueError("wait_ms must be >= 1")
         try:
             await asyncio.wait_for(runtime.completed.wait(), timeout=wait_ms / 1000.0)
-            return self._get_record(exec_session_id), True
+            return self._get_record(background_task_id), True
         except asyncio.TimeoutError:
-            return self._get_record(exec_session_id), False
+            return self._get_record(background_task_id), False
 
     async def interact_for_run(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
         chars: str,
         yield_time_ms: int | None,
         is_initial_poll: bool = False,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
-        runtime = self._runtimes.get(exec_session_id)
+        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        runtime = self._runtimes.get(background_task_id)
         if runtime is None or not record.is_active:
             return record, True
         before_version = runtime.change_version
@@ -579,45 +579,45 @@ class BackgroundTaskManager:
             before_version=before_version,
             timeout_ms=timeout_ms,
         )
-        updated = self._get_record(exec_session_id)
+        updated = self._get_record(background_task_id)
         return updated, not updated.is_active
 
     async def resize_for_run(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
         columns: int,
         rows: int,
     ) -> BackgroundTaskRecord:
         if columns < 1 or rows < 1:
             raise ValueError("columns and rows must both be >= 1")
-        record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
-        runtime = self._runtimes.get(exec_session_id)
+        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        runtime = self._runtimes.get(background_task_id)
         if runtime is None or not record.is_active:
             return record
         if not runtime.tty:
             raise ValueError("resize is only supported for active TTY background tasks")
         await runtime.transport.resize(columns=columns, rows=rows)
-        return self._get_record(exec_session_id)
+        return self._get_record(background_task_id)
 
     async def stop_for_run(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
         reason: str = "stopped_by_user",
     ) -> BackgroundTaskRecord:
         _ = reason
-        record = self.get_for_run(run_id=run_id, exec_session_id=exec_session_id)
-        runtime = self._runtimes.get(exec_session_id)
+        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        runtime = self._runtimes.get(background_task_id)
         if runtime is None or not record.is_active:
             return record
         runtime.stop_requested = True
         if runtime.transport.returncode is None:
             await runtime.transport.terminate()
         await runtime.completed.wait()
-        return self._get_record(exec_session_id)
+        return self._get_record(background_task_id)
 
     async def stop_all_for_run(
         self,
@@ -627,29 +627,29 @@ class BackgroundTaskManager:
         execution_mode: str | None = None,
     ) -> None:
         active_ids = [
-            record.exec_session_id
+            record.background_task_id
             for record in self._repository.list_by_run(run_id)
             if record.is_active
             and (execution_mode is None or record.execution_mode == execution_mode)
         ]
-        for exec_session_id in active_ids:
+        for background_task_id in active_ids:
             with contextlib.suppress(KeyError):
                 _ = await self.stop_for_run(
                     run_id=run_id,
-                    exec_session_id=exec_session_id,
+                    background_task_id=background_task_id,
                     reason=reason,
                 )
 
     async def close(self) -> None:
         active_ids = list(self._runtimes.keys())
-        for exec_session_id in active_ids:
-            record = self._repository.get(exec_session_id)
+        for background_task_id in active_ids:
+            record = self._repository.get(background_task_id)
             if record is None:
                 continue
             with contextlib.suppress(KeyError):
                 _ = await self.stop_for_run(
                     run_id=record.run_id,
-                    exec_session_id=exec_session_id,
+                    background_task_id=background_task_id,
                     reason="server_shutdown",
                 )
 
@@ -912,7 +912,7 @@ class BackgroundTaskManager:
         )
         await self._mark_runtime_changed(runtime)
         self._publish_background_task_event(
-            event_type=RunEventType.EXEC_SESSION_UPDATED,
+            event_type=RunEventType.BACKGROUND_TASK_UPDATED,
             record=runtime.record,
             payload=self._build_background_task_update_payload(
                 record=runtime.record,
@@ -951,15 +951,15 @@ class BackgroundTaskManager:
                 }
             )
         )
-        self._runtimes.pop(runtime.record.exec_session_id, None)
+        self._runtimes.pop(runtime.record.background_task_id, None)
         await runtime.transport.close()
         runtime.completed.set()
         await self._mark_runtime_changed(runtime)
         self._publish_background_task_event(
             event_type=(
-                RunEventType.EXEC_SESSION_STOPPED
+                RunEventType.BACKGROUND_TASK_STOPPED
                 if status == BackgroundTaskStatus.STOPPED
-                else RunEventType.EXEC_SESSION_COMPLETED
+                else RunEventType.BACKGROUND_TASK_COMPLETED
             ),
             record=runtime.record,
         )
@@ -1032,7 +1032,7 @@ class BackgroundTaskManager:
             return
         required_slots = len(records) - MAX_BACKGROUND_TASKS + 1
         protected = {
-            record.exec_session_id
+            record.background_task_id
             for record in sorted(
                 records, key=lambda item: item.updated_at, reverse=True
             )[:PROTECTED_RECENT_BACKGROUND_TASKS]
@@ -1040,26 +1040,26 @@ class BackgroundTaskManager:
         reclaimable = [
             record
             for record in sorted(records, key=lambda item: item.updated_at)
-            if record.exec_session_id not in protected and not record.is_active
+            if record.background_task_id not in protected and not record.is_active
         ]
         for record in reclaimable[:required_slots]:
-            self._repository.delete(record.exec_session_id)
+            self._repository.delete(record.background_task_id)
         required_slots -= min(required_slots, len(reclaimable))
         if required_slots <= 0:
             return
         active_candidates = [
             record
             for record in sorted(records, key=lambda item: item.updated_at)
-            if record.exec_session_id not in protected and record.is_active
+            if record.background_task_id not in protected and record.is_active
         ]
         for record in active_candidates[:required_slots]:
             with contextlib.suppress(KeyError):
                 _ = await self.stop_for_run(
                     run_id=record.run_id,
-                    exec_session_id=record.exec_session_id,
+                    background_task_id=record.background_task_id,
                     reason="lru_pruned",
                 )
-            self._repository.delete(record.exec_session_id)
+            self._repository.delete(record.background_task_id)
 
     def _publish_background_task_event(
         self,
@@ -1087,10 +1087,10 @@ class BackgroundTaskManager:
             log_event(
                 LOGGER,
                 logging.INFO,
-                event=f"exec_session.{event_type.value}",
+                event=f"background_task.{event_type.value}",
                 message="Background task state updated",
                 payload={
-                    "exec_session_id": record.exec_session_id,
+                    "background_task_id": record.background_task_id,
                     "run_id": record.run_id,
                     "status": record.status.value,
                 },
@@ -1108,10 +1108,10 @@ class BackgroundTaskManager:
         payload["delta"] = chunk
         return payload
 
-    def _get_record(self, exec_session_id: str) -> BackgroundTaskRecord:
-        record = self._repository.get(exec_session_id)
+    def _get_record(self, background_task_id: str) -> BackgroundTaskRecord:
+        record = self._repository.get(background_task_id)
         if record is None:
-            raise KeyError(f"Unknown background task: {exec_session_id}")
+            raise KeyError(f"Unknown background task: {background_task_id}")
         return record
 
     @staticmethod

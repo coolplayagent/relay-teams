@@ -118,10 +118,10 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'gate_resolved') {
         handleGateResolved(payload, instanceId);
     } else if (
-        evType === 'exec_session_started'
-        || evType === 'exec_session_updated'
-        || evType === 'exec_session_completed'
-        || evType === 'exec_session_stopped'
+        evType === 'background_task_started'
+        || evType === 'background_task_updated'
+        || evType === 'background_task_completed'
+        || evType === 'background_task_stopped'
     ) {
         return;
     } else if (evType === 'token_usage') {
@@ -167,10 +167,10 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'tool_approval_resolved'
         || evType === 'subagent_stopped'
         || evType === 'subagent_resumed'
-        || evType === 'exec_session_started'
-        || evType === 'exec_session_updated'
-        || evType === 'exec_session_completed'
-        || evType === 'exec_session_stopped'
+        || evType === 'background_task_started'
+        || evType === 'background_task_updated'
+        || evType === 'background_task_completed'
+        || evType === 'background_task_stopped'
         || evType === 'notification_requested'
         || evType === 'awaiting_human_dispatch'
         || evType === 'human_task_dispatched'

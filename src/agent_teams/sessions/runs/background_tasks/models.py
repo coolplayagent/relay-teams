@@ -21,7 +21,7 @@ class BackgroundTaskStatus(str, Enum):
 class BackgroundTaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    exec_session_id: RequiredIdentifierStr
+    background_task_id: RequiredIdentifierStr
     run_id: RequiredIdentifierStr
     session_id: RequiredIdentifierStr
     instance_id: OptionalIdentifierStr = None
@@ -48,11 +48,3 @@ class BackgroundTaskRecord(BaseModel):
             BackgroundTaskStatus.RUNNING,
             BackgroundTaskStatus.BLOCKED,
         }
-
-    @property
-    def background_task_id(self) -> str:
-        return self.exec_session_id
-
-    @property
-    def terminal_id(self) -> str:
-        return self.exec_session_id

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_recovery_ui_tracks_exec_sessions_in_banner_and_events() -> None:
+def test_recovery_ui_tracks_background_tasks_in_banner_and_events() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     recovery_script = (
         repo_root / "frontend" / "dist" / "js" / "app" / "recovery.js"
@@ -19,12 +19,12 @@ def test_recovery_ui_tracks_exec_sessions_in_banner_and_events() -> None:
         repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
     ).read_text(encoding="utf-8")
 
-    assert "stopExecSession" in recovery_script
-    assert "backgroundTerminals" in recovery_script
-    assert "renderExecSessionPanel" in recovery_script
-    assert "ensureExecSessionHost" in recovery_script
-    assert "renderExecSessionList" in recovery_script
-    assert "handleExecSessionAction" in recovery_script
+    assert "stopBackgroundTask" in recovery_script
+    assert "backgroundTasks" in recovery_script
+    assert "renderBackgroundTaskPanel" in recovery_script
+    assert "ensureBackgroundTaskHost" in recovery_script
+    assert "renderBackgroundTaskList" in recovery_script
+    assert "handleBackgroundTaskAction" in recovery_script
     assert (
         "const chatContainer = els.chatContainer || els.chatMessages?.parentElement;"
         in recovery_script
@@ -45,19 +45,20 @@ def test_recovery_ui_tracks_exec_sessions_in_banner_and_events() -> None:
         in recovery_script
     )
     assert (
-        "const activeTerminals = terminals.filter(terminal => isExecSessionActive(terminal));"
+        "const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));"
         in recovery_script
     )
     assert (
-        "const hidePanel = !runId || activeTerminals.length === 0;" in recovery_script
+        "const hidePanel = !runId || activeBackgroundTasks.length === 0;"
+        in recovery_script
     )
     assert "filter(Boolean)" in recovery_script
-    assert "const nextExecSessions = found" in recovery_script
+    assert "const nextBackgroundTasks = found" in recovery_script
     assert ".background-task-strip-host" in components_css
     assert ".background-task-strip" in components_css
     assert ".background-task-chip" in components_css
     assert ".background-task-chip-stop" in components_css
-    assert "recovery.exec_session.panel_label" in i18n_script
-    assert "exec_session_started" in event_router_script
-    assert "exec_session_completed" in event_router_script
-    assert "recovery.exec_session.stop" in i18n_script
+    assert "recovery.background_task.panel_label" in i18n_script
+    assert "background_task_started" in event_router_script
+    assert "background_task_completed" in event_router_script
+    assert "recovery.background_task.stop" in i18n_script

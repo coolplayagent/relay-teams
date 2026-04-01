@@ -15,9 +15,9 @@ class _FakeRunService:
         self.started_run_ids: list[str] = []
         self.raise_on_tool_approval = False
         self.created_run_inputs: list[IntentInput] = []
-        self.exec_sessions: dict[str, dict[str, object]] = {
+        self.background_tasks: dict[str, dict[str, object]] = {
             "exec-1": {
-                "exec_session_id": "exec-1",
+                "background_task_id": "exec-1",
                 "run_id": "run-1",
                 "status": "running",
                 "command": "sleep 30",
@@ -47,34 +47,34 @@ class _FakeRunService:
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
 
-    def list_exec_sessions(self, run_id: str) -> tuple[dict[str, object], ...]:
+    def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         _ = run_id
-        return tuple(self.exec_sessions.values())
+        return tuple(self.background_tasks.values())
 
-    def get_exec_session(
+    def get_background_task(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
     ) -> dict[str, object]:
         _ = run_id
-        if exec_session_id not in self.exec_sessions:
-            raise KeyError(exec_session_id)
-        return self.exec_sessions[exec_session_id]
+        if background_task_id not in self.background_tasks:
+            raise KeyError(background_task_id)
+        return self.background_tasks[background_task_id]
 
-    async def stop_exec_session(
+    async def stop_background_task(
         self,
         *,
         run_id: str,
-        exec_session_id: str,
+        background_task_id: str,
     ) -> dict[str, object]:
         _ = run_id
-        exec_session = self.get_exec_session(
+        background_task = self.get_background_task(
             run_id=run_id,
-            exec_session_id=exec_session_id,
+            background_task_id=background_task_id,
         )
-        exec_session["status"] = "stopped"
-        return exec_session
+        background_task["status"] = "stopped"
+        return background_task
 
 
 def _create_client(fake_service: _FakeRunService) -> TestClient:
@@ -230,36 +230,38 @@ def test_resume_route_rejects_none_like_run_id() -> None:
     assert fake_service.resumed_run_ids == []
 
 
-def test_list_exec_sessions_route_returns_items() -> None:
+def test_list_background_tasks_route_returns_items() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
 
-    response = client.get("/api/runs/run-1/exec-sessions")
+    response = client.get("/api/runs/run-1/background-tasks")
 
     assert response.status_code == 200
-    assert response.json() == {"items": [fake_service.exec_sessions["exec-1"]]}
+    assert response.json() == {"items": [fake_service.background_tasks["exec-1"]]}
 
 
-def test_get_exec_session_route_returns_single_terminal() -> None:
+def test_get_background_task_route_returns_single_terminal() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
 
-    response = client.get("/api/runs/run-1/exec-sessions/exec-1")
-
-    assert response.status_code == 200
-    assert response.json() == {"exec_session": fake_service.exec_sessions["exec-1"]}
-
-
-def test_stop_exec_session_route_returns_updated_terminal() -> None:
-    fake_service = _FakeRunService()
-    client = _create_client(fake_service)
-
-    response = client.post("/api/runs/run-1/exec-sessions/exec-1:stop")
+    response = client.get("/api/runs/run-1/background-tasks/exec-1")
 
     assert response.status_code == 200
     assert response.json() == {
-        "exec_session": {
-            "exec_session_id": "exec-1",
+        "background_task": fake_service.background_tasks["exec-1"]
+    }
+
+
+def test_stop_background_task_route_returns_updated_terminal() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/runs/run-1/background-tasks/exec-1:stop")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "background_task": {
+            "background_task_id": "exec-1",
             "run_id": "run-1",
             "status": "stopped",
             "command": "sleep 30",

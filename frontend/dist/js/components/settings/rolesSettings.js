@@ -552,7 +552,7 @@ function renderSkillsShellAdvisory() {
     const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
     const hasExecCommand = Array.isArray(currentSelections.tools)
         && (
-            currentSelections.tools.includes('exec_command')
+            currentSelections.tools.includes('shell')
             || currentSelections.tools.includes('shell')
         );
     if (!hasSkills || hasExecCommand) {

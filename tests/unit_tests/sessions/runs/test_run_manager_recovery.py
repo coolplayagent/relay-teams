@@ -184,7 +184,7 @@ def _build_background_record(
     role_id: str = "writer",
 ) -> BackgroundTaskRecord:
     return BackgroundTaskRecord(
-        exec_session_id="exec-1",
+        background_task_id="exec-1",
         run_id="run-existing",
         session_id="session-1",
         instance_id=instance_id,

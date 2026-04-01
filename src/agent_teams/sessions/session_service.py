@@ -627,7 +627,7 @@ class SessionService:
         if selected is None:
             return {
                 "active_run": None,
-                "exec_sessions": [],
+                "background_tasks": [],
                 "pending_tool_approvals": [],
                 "paused_subagent": None,
                 "round_snapshot": None,
@@ -657,7 +657,7 @@ class SessionService:
             if self._run_state_repo is not None
             else None
         )
-        exec_sessions = [
+        background_tasks = [
             record.model_dump(mode="json", exclude={"output_excerpt"})
             for record in (
                 exec_record
@@ -681,7 +681,7 @@ class SessionService:
                 int(run_state.checkpoint_event_id) if run_state is not None else 0
             ),
             "pending_tool_approval_count": len(approvals),
-            "exec_session_count": len(exec_sessions),
+            "background_task_count": len(background_tasks),
             "stream_connected": stream_connected,
             "should_show_recover": self._is_runtime_publicly_recoverable(runtime)
             and not stream_connected,
@@ -693,10 +693,10 @@ class SessionService:
             round_snapshot = None
         if isinstance(round_snapshot, dict):
             active_run["primary_role_id"] = round_snapshot.get("primary_role_id")
-            round_snapshot["exec_session_count"] = len(exec_sessions)
+            round_snapshot["background_task_count"] = len(background_tasks)
         return {
             "active_run": active_run,
-            "exec_sessions": exec_sessions,
+            "background_tasks": background_tasks,
             "pending_tool_approvals": approvals,
             "paused_subagent": paused_subagent,
             "round_snapshot": round_snapshot,
@@ -856,11 +856,11 @@ class SessionService:
                 RunRuntimeStatus.FAILED,
             }:
                 continue
-            if self._has_background_exec_sessions(runtime.run_id):
+            if self._has_background_tasks(runtime.run_id):
                 return runtime.run_id, runtime
         return None
 
-    def _has_background_exec_sessions(self, run_id: str) -> bool:
+    def _has_background_tasks(self, run_id: str) -> bool:
         if self._background_task_repository is None:
             return False
         return any(

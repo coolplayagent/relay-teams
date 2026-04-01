@@ -17,7 +17,7 @@ def test_background_task_repository_roundtrips_records(tmp_path: Path) -> None:
     db_path = tmp_path / "background-terminals.db"
     repo = BackgroundTaskRepository(db_path)
     record = BackgroundTaskRecord(
-        exec_session_id="exec-1",
+        background_task_id="exec-1",
         run_id="run-1",
         session_id="session-1",
         instance_id="inst-1",
@@ -36,13 +36,13 @@ def test_background_task_repository_roundtrips_records(tmp_path: Path) -> None:
     persisted = repo.upsert(record)
     loaded = repo.get("exec-1")
 
-    assert persisted.exec_session_id == "exec-1"
+    assert persisted.background_task_id == "exec-1"
     assert loaded is not None
     assert loaded.run_id == "run-1"
     assert loaded.execution_mode == "foreground"
     assert loaded.output_excerpt == "booting"
     assert loaded.completion_notified_at is not None
-    assert repo.list_by_run("run-1")[0].exec_session_id == "exec-1"
+    assert repo.list_by_run("run-1")[0].background_task_id == "exec-1"
 
 
 def test_background_task_repository_marks_transient_terminals_interrupted(
@@ -51,7 +51,7 @@ def test_background_task_repository_marks_transient_terminals_interrupted(
     db_path = tmp_path / "background-terminals-interrupted.db"
     repo = BackgroundTaskRepository(db_path)
     running = BackgroundTaskRecord(
-        exec_session_id="exec-running",
+        background_task_id="exec-running",
         run_id="run-1",
         session_id="session-1",
         command="sleep 30",
@@ -60,7 +60,7 @@ def test_background_task_repository_marks_transient_terminals_interrupted(
         log_path="tmp/background_tasks/exec-running.log",
     )
     completed = BackgroundTaskRecord(
-        exec_session_id="exec-completed",
+        background_task_id="exec-completed",
         run_id="run-1",
         session_id="session-1",
         command="echo done",
@@ -89,7 +89,7 @@ def test_background_task_repository_can_delete_records_by_session(
     db_path = tmp_path / "background-terminals-delete-session.db"
     repo = BackgroundTaskRepository(db_path)
     record = BackgroundTaskRecord(
-        exec_session_id="exec-1",
+        background_task_id="exec-1",
         run_id="run-1",
         session_id="session-1",
         command="sleep 30",
