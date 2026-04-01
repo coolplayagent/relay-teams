@@ -27,9 +27,6 @@ from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.exec_session_manager import (
-    ExecSessionManager,
-)
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -129,7 +126,6 @@ class ToolDeps(BaseModel):
     role_memory: SkipValidation[RoleMemoryService | None] = None
     media_asset_service: SkipValidation[MediaAssetService | None] = None
     computer_runtime: SkipValidation[ComputerRuntime | None] = None
-    exec_session_manager: SkipValidation[ExecSessionManager | None] = None
     background_task_service: SkipValidation[BackgroundTaskService | None] = None
     run_id: str
     trace_id: str

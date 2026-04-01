@@ -9,9 +9,7 @@ from agent_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketStatus,
     approval_signature_key,
 )
-from agent_teams.tools.workspace_tools.exec_session import (
-    _build_exec_command_cache_key,
-)
+from agent_teams.tools.workspace_tools.shell import build_shell_cache_key
 
 
 def test_approval_ticket_repo_skips_invalid_persisted_rows(tmp_path: Path) -> None:
@@ -106,10 +104,11 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
 
 
 def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
-    cache_key = _build_exec_command_cache_key(
+    cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
         cwd=Path("/workspace"),
         tty=False,
+        background=False,
     )
 
     wrapped = approval_signature_key(
@@ -136,10 +135,11 @@ def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
 
 def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> None:
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cache_key.db")
-    cache_key = _build_exec_command_cache_key(
+    cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
         cwd=Path("/workspace"),
         tty=False,
+        background=False,
     )
 
     created = repository.upsert_requested(
@@ -174,15 +174,17 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
 
 def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) -> None:
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_exec_context.db")
-    approved_cache_key = _build_exec_command_cache_key(
+    approved_cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",
         cwd=Path("/workspace/one"),
         tty=False,
+        background=False,
     )
-    mismatched_cache_key = _build_exec_command_cache_key(
+    mismatched_cache_key = build_shell_cache_key(
         "pwd",
         cwd=Path("/workspace/two"),
         tty=True,
+        background=False,
     )
 
     created = repository.upsert_requested(

@@ -70,9 +70,6 @@ from agent_teams.agents.execution.conversation_compaction import (
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.exec_session_manager import (
-    ExecSessionManager,
-)
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
@@ -196,7 +193,6 @@ class AgentLlmSession:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
-        exec_session_manager: ExecSessionManager | None,
         background_task_service: BackgroundTaskService | None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
@@ -233,7 +229,6 @@ class AgentLlmSession:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
-        self._exec_session_manager = exec_session_manager
         self._background_task_service = background_task_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
@@ -353,7 +348,6 @@ class AgentLlmSession:
             role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
-            exec_session_manager=self._exec_session_manager,
             background_task_service=self._background_task_service,
             run_id=request.run_id,
             trace_id=request.trace_id,

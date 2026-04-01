@@ -58,14 +58,6 @@ def register_list_exec_sessions(agent: Agent[ToolDeps, str]) -> None:
     register_list_background_tasks(agent)
 
 
-def register_write_stdin(agent: Agent[ToolDeps, str]) -> None:
-    _register_workspace_tools(agent, ("write_stdin",))
-
-
-def register_resize_exec_session(agent: Agent[ToolDeps, str]) -> None:
-    _register_workspace_tools(agent, ("resize_exec_session",))
-
-
 def register_terminate_exec_session(agent: Agent[ToolDeps, str]) -> None:
     register_stop_background_task(agent)
 
@@ -118,13 +110,6 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         from agent_teams.tools.workspace_tools.stop_background_task import (
             register as register_impl,
         )
-    elif tool_name in {"write_stdin", "resize_exec_session"}:
-        from agent_teams.tools.workspace_tools.exec_session import (
-            register as register_impl,
-        )
-
-        register_impl(agent, tool_names=(tool_name,))
-        return
     else:
         raise ValueError(f"Unknown workspace tool: {tool_name}")
     register_impl(agent)
@@ -152,11 +137,9 @@ __all__ = [
     "register_list_background_tasks",
     "register_list_exec_sessions",
     "register_read",
-    "register_resize_exec_session",
     "register_shell",
     "register_stop_background_task",
     "register_terminate_exec_session",
     "register_wait_background_task",
     "register_write",
-    "register_write_stdin",
 ]
