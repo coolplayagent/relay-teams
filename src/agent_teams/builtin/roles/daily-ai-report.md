@@ -9,11 +9,10 @@ tools:
 - glob
 - grep
 - read
-- exec_command
-- list_exec_sessions
-- write_stdin
-- resize_exec_session
-- terminate_exec_session
+- shell
+- list_background_tasks
+- wait_background_task
+- stop_background_task
 - webfetch
 - websearch
 - write
@@ -36,7 +35,7 @@ skills:
 
 ### 1. 获取当前精确时间
 
-- 必须先通过 `exec_command` 工具获取当前精确时间。
+- 必须先通过 `shell` 工具获取当前精确时间。
 - 输出中需要明确：
   - 当前日期
   - 当前时间
