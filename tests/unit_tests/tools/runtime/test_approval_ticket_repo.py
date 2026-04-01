@@ -216,6 +216,54 @@ def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) ->
     assert record is None
 
 
+def test_find_reusable_does_not_collapse_multiline_command_whitespace(
+    tmp_path: Path,
+) -> None:
+    repository = ApprovalTicketRepository(
+        tmp_path / "approval_ticket_multiline_command.db"
+    )
+    approved_cache_key = build_shell_cache_key(
+        "bash -lc \"\ncat <<'EOF'\nhello\n\nEOF\n\"",
+        workdir="one",
+        tty=False,
+        background=False,
+    )
+    mismatched_cache_key = build_shell_cache_key(
+        "bash -lc \"\ncat <<'EOF'\nhello\nEOF\n\"",
+        workdir="one",
+        tty=False,
+        background=False,
+    )
+
+    created = repository.upsert_requested(
+        tool_call_id="call-approved",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="shell",
+        args_preview='{"command": "bash -lc \\"cat <<EOF\\""}',
+        cache_key=approved_cache_key,
+    )
+    repository.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+    )
+
+    record = repository.find_reusable(
+        run_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="shell",
+        args_preview='{"command": "bash -lc \\"cat <<EOF\\""}',
+        cache_key=mismatched_cache_key,
+    )
+
+    assert record is None
+
+
 def _insert_approval_ticket_row(
     db_path: Path,
     *,

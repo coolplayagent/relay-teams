@@ -31,3 +31,11 @@ def test_canonicalize_shell_command_strips_powershell_utf8_prefix() -> None:
     )
 
     assert canonicalize_shell_command(command) == "Write-Output hello"
+
+
+def test_canonicalize_shell_command_preserves_multiline_body_whitespace() -> None:
+    command = "bash -lc \"\n  cat <<'EOF'\n    hello\n\nEOF\n\""
+
+    assert canonicalize_shell_command(command) == (
+        "\n  cat <<'EOF'\n    hello\n\nEOF\n"
+    )

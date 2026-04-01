@@ -19,34 +19,36 @@ _POWERSHELL_UTF8_PREFIX_LINES = (
 
 
 def canonicalize_shell_command(command: str) -> str:
-    normalized = command.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not normalized:
+    normalized = _normalize_line_endings(command)
+    if not normalized.strip():
         return ""
     normalized = _unwrap_bash_wrapper(normalized)
     normalized = _unwrap_powershell_wrapper(normalized)
-    lines = [line.strip() for line in normalized.split("\n")]
-    return "\n".join(line for line in lines if line)
+    normalized = _normalize_line_endings(normalized)
+    if not normalized.strip():
+        return ""
+    return normalized
 
 
 def _unwrap_bash_wrapper(command: str) -> str:
     match = _BASH_WRAPPER_PATTERN.match(command)
     if match is None:
         return command
-    return _strip_outer_quotes(match.group("body").strip())
+    return _strip_outer_quotes(match.group("body"))
 
 
 def _unwrap_powershell_wrapper(command: str) -> str:
     match = _POWERSHELL_WRAPPER_PATTERN.match(command)
     if match is None:
         return command
-    body = _strip_outer_quotes(match.group("body").strip())
-    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    body = _strip_outer_quotes(match.group("body"))
+    lines = _normalize_line_endings(body).split("\n")
     if (
         tuple(lines[: len(_POWERSHELL_UTF8_PREFIX_LINES)])
         == _POWERSHELL_UTF8_PREFIX_LINES
     ):
         lines = lines[len(_POWERSHELL_UTF8_PREFIX_LINES) :]
-    return "\n".join(lines).strip()
+    return "\n".join(lines)
 
 
 def _strip_outer_quotes(value: str) -> str:
@@ -55,5 +57,9 @@ def _strip_outer_quotes(value: str) -> str:
     if (value.startswith("'") and value.endswith("'")) or (
         value.startswith('"') and value.endswith('"')
     ):
-        return value[1:-1].strip()
+        return value[1:-1]
     return value
+
+
+def _normalize_line_endings(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n")
