@@ -94,3 +94,44 @@ def test_sanitize_replayed_messages_drops_orphan_tool_results() -> None:
     assert len(sanitized) == 2
     assert isinstance(sanitized[0], ModelRequest)
     assert isinstance(sanitized[1], ModelResponse)
+
+
+def test_sanitize_replayed_messages_drops_duplicate_late_tool_results() -> None:
+    messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="write",
+                    args={"content": "hello"},
+                    tool_call_id="call-real",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="write",
+                    tool_call_id="call-real",
+                    content={"ok": True},
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="write",
+                    tool_call_id="call-real",
+                    content={"ok": True},
+                ),
+                UserPromptPart(content="optimize it"),
+            ]
+        ),
+    ]
+
+    sanitized = RecoverableOpenAIChatModel._sanitize_replayed_messages(messages)
+
+    assert len(sanitized) == 3
+    assert isinstance(sanitized[2], ModelRequest)
+    assert len(sanitized[2].parts) == 1
+    assert isinstance(sanitized[2].parts[0], UserPromptPart)
+    assert sanitized[2].parts[0].content == "optimize it"
