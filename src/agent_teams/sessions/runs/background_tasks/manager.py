@@ -66,6 +66,7 @@ MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 MAX_DELTA_BYTES = 8192
 _DEFAULT_PTY_COLUMNS = 120
 _DEFAULT_PTY_ROWS = 40
+_STOP_WAIT_TIMEOUT_SECONDS = 10.0
 
 
 class _RecentOutputBuffer:
@@ -385,6 +386,7 @@ class _BackgroundTaskRuntime:
         self.pump_tasks: list[asyncio.Task[None]] = []
         self.supervisor_task: asyncio.Task[None] | None = None
         self.completed = asyncio.Event()
+        self.finalize_lock = asyncio.Lock()
         self.change_condition = asyncio.Condition()
         self.change_version = 0
         self.stop_requested = False
@@ -616,7 +618,33 @@ class BackgroundTaskManager:
         runtime.stop_requested = True
         if runtime.transport.returncode is None:
             await runtime.transport.terminate()
-        await runtime.completed.wait()
+        await self._signal_runtime_stop(runtime)
+        try:
+            if runtime.supervisor_task is not None:
+                await asyncio.wait_for(
+                    asyncio.shield(runtime.supervisor_task),
+                    timeout=_STOP_WAIT_TIMEOUT_SECONDS,
+                )
+            else:
+                await asyncio.wait_for(
+                    runtime.completed.wait(),
+                    timeout=_STOP_WAIT_TIMEOUT_SECONDS,
+                )
+        except asyncio.TimeoutError:
+            LOGGER.warning(
+                "Timed out waiting for background task supervisor to stop",
+                extra={"background_task_id": background_task_id},
+            )
+            supervisor_task = runtime.supervisor_task
+            if supervisor_task is not None and not supervisor_task.done():
+                supervisor_task.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(supervisor_task, return_exceptions=True)
+            await self._finalize_runtime(
+                runtime,
+                timed_out=False,
+                wait_for_exit=False,
+            )
         return self._get_record(background_task_id)
 
     async def stop_all_for_run(
@@ -926,52 +954,61 @@ class BackgroundTaskManager:
         runtime: _BackgroundTaskRuntime,
         *,
         timed_out: bool,
+        wait_for_exit: bool = True,
     ) -> None:
-        runtime.recent_output.finalize()
-        exit_code = runtime.transport.returncode
-        if exit_code is None and not timed_out:
-            exit_code = await runtime.transport.wait()
-        if timed_out:
-            exit_code = 124
-        status = self._resolve_background_task_status(
-            runtime=runtime,
-            exit_code=exit_code,
-            timed_out=timed_out,
-        )
-        completed_at = datetime.now(tz=timezone.utc)
-        runtime.record = self._repository.upsert(
-            runtime.record.model_copy(
-                update={
-                    "status": status,
-                    "exit_code": exit_code,
-                    "recent_output": runtime.recent_output.snapshot(),
-                    "output_excerpt": runtime.output_buffer.render(),
-                    "updated_at": completed_at,
-                    "completed_at": completed_at,
-                }
+        async with runtime.finalize_lock:
+            if runtime.completed.is_set():
+                return
+            runtime.recent_output.finalize()
+            exit_code = runtime.transport.returncode
+            if exit_code is None and not timed_out and wait_for_exit:
+                exit_code = await runtime.transport.wait()
+            if timed_out:
+                exit_code = 124
+            status = self._resolve_background_task_status(
+                runtime=runtime,
+                exit_code=exit_code,
+                timed_out=timed_out,
             )
-        )
-        self._runtimes.pop(runtime.record.background_task_id, None)
-        runtime.completed.set()
-        try:
-            await runtime.transport.close()
-        except Exception:
-            LOGGER.warning(
-                "Failed to close background task transport",
-                extra={"background_task_id": runtime.record.background_task_id},
-                exc_info=True,
+            completed_at = datetime.now(tz=timezone.utc)
+            runtime.record = self._repository.upsert(
+                runtime.record.model_copy(
+                    update={
+                        "status": status,
+                        "exit_code": exit_code,
+                        "recent_output": runtime.recent_output.snapshot(),
+                        "output_excerpt": runtime.output_buffer.render(),
+                        "updated_at": completed_at,
+                        "completed_at": completed_at,
+                    }
+                )
             )
+            self._runtimes.pop(runtime.record.background_task_id, None)
+            runtime.completed.set()
+            try:
+                await runtime.transport.close()
+            except Exception:
+                LOGGER.warning(
+                    "Failed to close background task transport",
+                    extra={"background_task_id": runtime.record.background_task_id},
+                    exc_info=True,
+                )
+            await self._mark_runtime_changed(runtime)
+            self._publish_background_task_event(
+                event_type=(
+                    RunEventType.BACKGROUND_TASK_STOPPED
+                    if status == BackgroundTaskStatus.STOPPED
+                    else RunEventType.BACKGROUND_TASK_COMPLETED
+                ),
+                record=runtime.record,
+            )
+            if self._completion_listener is not None:
+                await self._completion_listener(runtime.record)
+
+    async def _signal_runtime_stop(self, runtime: _BackgroundTaskRuntime) -> None:
+        for _ in range(runtime.stream_count):
+            await runtime.queue.put(None)
         await self._mark_runtime_changed(runtime)
-        self._publish_background_task_event(
-            event_type=(
-                RunEventType.BACKGROUND_TASK_STOPPED
-                if status == BackgroundTaskStatus.STOPPED
-                else RunEventType.BACKGROUND_TASK_COMPLETED
-            ),
-            record=runtime.record,
-        )
-        if self._completion_listener is not None:
-            await self._completion_listener(runtime.record)
 
     def _resolve_background_task_status(
         self,
