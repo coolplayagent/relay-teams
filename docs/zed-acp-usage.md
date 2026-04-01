@@ -225,7 +225,7 @@ Zed renders your own user message itself, so the gateway does not send a second 
 
 Formatting of streamed assistant text is preserved. Multi-line answers, indentation, and blank lines should render correctly in a new thread after upgrading.
 
-If a run is interrupted and later resumed through ACP `session/resume`, the resumed stream should continue from the last visible breakpoint. Already rendered text must not be replayed from the top again.
+If a run is interrupted, a later ACP `session/resume` or any subsequent non-empty `session/prompt` should continue from the last visible breakpoint. Already rendered text must not be replayed from the top again.
 
 ## 8. Verifying MCP-over-ACP in Zed
 
