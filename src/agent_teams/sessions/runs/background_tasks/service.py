@@ -27,6 +27,8 @@ from agent_teams.workspace import WorkspaceHandle
 LOGGER = get_logger(__name__)
 _DEFAULT_SYNC_WAIT_MS = 1000
 _MIN_SYNC_WAIT_MS = 200
+_COMPLETION_RETRY_INITIAL_DELAY_SECONDS = 1.0
+_COMPLETION_RETRY_MAX_DELAY_SECONDS = 30.0
 
 
 class BackgroundTaskCompletionSink(Protocol):
@@ -48,6 +50,7 @@ class BackgroundTaskService:
         self._background_task_manager = background_task_manager
         self._repository = repository
         self._completion_sink: BackgroundTaskCompletionSink | None = None
+        self._completion_retry_tasks: dict[str, asyncio.Task[None]] = {}
         if self._background_task_manager is not None:
             self._background_task_manager.set_completion_listener(
                 self._handle_background_task_completion
@@ -58,6 +61,8 @@ class BackgroundTaskService:
         sink: BackgroundTaskCompletionSink | None,
     ) -> None:
         self._completion_sink = sink
+        if sink is not None:
+            self._flush_pending_completion_notifications()
 
     async def execute_command(
         self,
@@ -183,16 +188,18 @@ class BackgroundTaskService:
         self, record: BackgroundTaskRecord
     ) -> None:
         await asyncio.sleep(0)
-        latest = self._repository.get(record.background_task_id)
-        current = latest or record
-        if current.execution_mode != "background":
-            return
-        if current.status == BackgroundTaskStatus.STOPPED:
-            return
-        if current.completion_notified_at is not None:
-            return
+        delivered = self._attempt_completion_delivery(record.background_task_id)
+        if not delivered and self._completion_sink is not None:
+            self._schedule_completion_retry(record.background_task_id)
+
+    def _attempt_completion_delivery(self, background_task_id: str) -> bool:
+        current = self._repository.get(background_task_id)
+        if current is None:
+            return True
+        if not self._should_notify_completion(current):
+            return True
         if self._completion_sink is None:
-            return
+            return False
         message = build_background_task_completion_message(current)
         try:
             self._completion_sink.handle_background_task_completion(
@@ -208,18 +215,72 @@ class BackgroundTaskService:
                 payload={"background_task_id": current.background_task_id},
                 exc_info=exc,
             )
-            return
+            return False
         _ = self._mark_completion_consumed(current)
+        return True
+
+    def _flush_pending_completion_notifications(self) -> None:
+        for record in self._repository.list_all():
+            if self._should_notify_completion(record):
+                delivered = self._attempt_completion_delivery(record.background_task_id)
+                if not delivered and self._completion_sink is not None:
+                    self._schedule_completion_retry(
+                        record.background_task_id,
+                        initial_delay_seconds=0.0,
+                    )
+
+    def _schedule_completion_retry(
+        self,
+        background_task_id: str,
+        *,
+        initial_delay_seconds: float = _COMPLETION_RETRY_INITIAL_DELAY_SECONDS,
+    ) -> None:
+        existing = self._completion_retry_tasks.get(background_task_id)
+        if existing is not None and not existing.done():
+            return
+        try:
+            self._completion_retry_tasks[background_task_id] = asyncio.create_task(
+                self._retry_completion_delivery(
+                    background_task_id,
+                    initial_delay_seconds=initial_delay_seconds,
+                )
+            )
+        except RuntimeError:
+            return
+
+    async def _retry_completion_delivery(
+        self,
+        background_task_id: str,
+        *,
+        initial_delay_seconds: float,
+    ) -> None:
+        delay_seconds = initial_delay_seconds
+        try:
+            while True:
+                if delay_seconds > 0:
+                    await asyncio.sleep(delay_seconds)
+                if self._attempt_completion_delivery(background_task_id):
+                    return
+                if self._completion_sink is None:
+                    return
+                delay_seconds = min(
+                    _COMPLETION_RETRY_MAX_DELAY_SECONDS,
+                    max(
+                        _COMPLETION_RETRY_INITIAL_DELAY_SECONDS,
+                        delay_seconds * 2
+                        if delay_seconds > 0
+                        else _COMPLETION_RETRY_INITIAL_DELAY_SECONDS,
+                    ),
+                )
+        finally:
+            task = self._completion_retry_tasks.get(background_task_id)
+            if task is asyncio.current_task():
+                self._completion_retry_tasks.pop(background_task_id, None)
 
     def _mark_completion_consumed(
         self, record: BackgroundTaskRecord
     ) -> BackgroundTaskRecord:
-        if (
-            record.execution_mode != "background"
-            or record.is_active
-            or record.status == BackgroundTaskStatus.STOPPED
-            or record.completion_notified_at is not None
-        ):
+        if not self._should_notify_completion(record):
             return record
         completed_at = datetime.now(tz=timezone.utc)
         return self._repository.upsert(
@@ -229,6 +290,14 @@ class BackgroundTaskService:
                     "updated_at": completed_at,
                 }
             )
+        )
+
+    def _should_notify_completion(self, record: BackgroundTaskRecord) -> bool:
+        return (
+            record.execution_mode == "background"
+            and not record.is_active
+            and record.status != BackgroundTaskStatus.STOPPED
+            and record.completion_notified_at is None
         )
 
     def _require_manager(self) -> BackgroundTaskManager:

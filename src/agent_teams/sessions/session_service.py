@@ -864,7 +864,7 @@ class SessionService:
         if self._background_task_repository is None:
             return False
         return any(
-            record.execution_mode == "background"
+            record.execution_mode == "background" and record.is_active
             for record in self._background_task_repository.list_by_run(run_id)
         )
 

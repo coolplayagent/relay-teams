@@ -540,7 +540,7 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
     assert round_snapshot.get("background_task_count") == 2
 
 
-def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_tasks_exist(
+def test_get_recovery_snapshot_keeps_completed_run_visible_while_active_background_tasks_exist(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "recovery_completed_background.db"
@@ -567,9 +567,9 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
             command="sleep 30",
             cwd="/tmp/project",
             execution_mode="background",
-            status=BackgroundTaskStatus.COMPLETED,
-            recent_output=("done",),
-            output_excerpt="done",
+            status=BackgroundTaskStatus.RUNNING,
+            recent_output=("still working",),
+            output_excerpt="still working",
             log_path="tmp/background_tasks/exec-1.log",
         )
     )
@@ -584,6 +584,47 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_background_task
     background_tasks = snapshot.get("background_tasks")
     assert isinstance(background_tasks, list)
     assert len(background_tasks) == 1
+
+
+def test_get_recovery_snapshot_ignores_finished_background_tasks_for_completed_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_finished_background_only.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-completed", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-completed",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    BackgroundTaskRepository(db_path).upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-completed",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="coordinator_agent",
+            tool_call_id="call-1",
+            command="echo done",
+            cwd="/tmp/project",
+            execution_mode="background",
+            status=BackgroundTaskStatus.COMPLETED,
+            recent_output=("done",),
+            output_excerpt="done",
+            log_path="tmp/background_tasks/exec-1.log",
+        )
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    assert snapshot.get("active_run") is None
+    assert snapshot.get("background_tasks") == []
+    assert snapshot.get("round_snapshot") is None
 
 
 def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(

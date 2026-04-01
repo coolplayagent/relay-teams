@@ -72,6 +72,24 @@ class _CapturingCompletionSink:
         self.calls.append((record, message))
 
 
+class _FailingThenCapturingCompletionSink:
+    def __init__(self, *, failures_before_success: int) -> None:
+        self._failures_before_success = failures_before_success
+        self.attempts = 0
+        self.calls: list[tuple[BackgroundTaskRecord, str]] = []
+
+    def handle_background_task_completion(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        message: str,
+    ) -> None:
+        self.attempts += 1
+        if self.attempts <= self._failures_before_success:
+            raise RuntimeError("transient sink failure")
+        self.calls.append((record, message))
+
+
 def _build_record(
     *,
     background_task_id: str = "exec-1",
@@ -246,3 +264,85 @@ async def test_background_task_service_skips_notification_when_wait_already_cons
     assert persisted is not None
     assert persisted.completion_notified_at == consumed.completion_notified_at
     assert sink.calls == []
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_retries_completion_delivery_after_sink_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs.background_tasks import service as service_module
+
+    async def _fake_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(service_module.asyncio, "sleep", _fake_sleep)
+
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-retry.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    sink = _FailingThenCapturingCompletionSink(failures_before_success=1)
+    service.bind_completion_sink(sink)
+    record = repo.upsert(_build_record())
+
+    assert manager._listener is not None
+    await manager._listener(record)
+    retry_task = service._completion_retry_tasks.get(record.background_task_id)
+    assert retry_task is not None
+    await retry_task
+
+    persisted = repo.get(record.background_task_id)
+    assert persisted is not None
+    assert sink.attempts == 2
+    assert len(sink.calls) == 1
+    assert persisted.completion_notified_at is not None
+    assert service._completion_retry_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_flushes_pending_completion_when_sink_binds(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-bind.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    record = repo.upsert(_build_record())
+
+    assert manager._listener is not None
+    await manager._listener(record)
+    persisted = repo.get(record.background_task_id)
+    assert persisted is not None
+    assert persisted.completion_notified_at is None
+
+    sink = _CapturingCompletionSink()
+    service.bind_completion_sink(sink)
+
+    refreshed = repo.get(record.background_task_id)
+    assert refreshed is not None
+    assert refreshed.completion_notified_at is not None
+    assert len(sink.calls) == 1
+
+
+def test_background_task_service_bind_completion_sink_flushes_pending_without_running_loop(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-startup.db")
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+    )
+    record = repo.upsert(_build_record())
+    sink = _CapturingCompletionSink()
+
+    service.bind_completion_sink(sink)
+
+    persisted = repo.get(record.background_task_id)
+    assert persisted is not None
+    assert persisted.completion_notified_at is not None
+    assert len(sink.calls) == 1
