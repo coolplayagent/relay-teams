@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 app = FastAPI(title="Fake OpenAI-Compatible LLM")
 
 _chat_completions_calls = 0
+_scenario_attempts: dict[str, int] = {}
 
 
 @app.get("/health")
@@ -18,8 +19,19 @@ def health() -> dict[str, str]:
 
 
 @app.get("/metrics")
-def metrics() -> dict[str, int]:
-    return {"chat_completions_calls": _chat_completions_calls}
+def metrics() -> dict[str, object]:
+    return {
+        "chat_completions_calls": _chat_completions_calls,
+        "scenario_attempts": dict(_scenario_attempts),
+    }
+
+
+@app.post("/admin/reset")
+def reset() -> dict[str, str]:
+    global _chat_completions_calls
+    _chat_completions_calls = 0
+    _scenario_attempts.clear()
+    return {"status": "ok"}
 
 
 @app.get("/v1/models")
@@ -45,6 +57,14 @@ async def chat_completions(request: Request):
     model = str(payload.get("model") or "fake-chat-model")
     response_spec = plan_fake_response(payload)
     stream = bool(payload.get("stream"))
+    if str(response_spec.get("kind") or "") == "error_status":
+        _sleep_ms(response_spec.get("delay_before_ms"))
+        return JSONResponse(
+            status_code=_coerce_int(response_spec.get("status_code"), default=500),
+            content=response_spec.get("body")
+            or {"error": {"code": "fake_error", "message": "fake error"}},
+            headers=_normalize_headers(response_spec.get("headers")),
+        )
 
     if stream:
         return StreamingResponse(
@@ -64,6 +84,7 @@ def stream_chat_completions(
 ) -> Iterator[bytes]:
     created = int(time.time())
     completion_id = f"chatcmpl-{_chat_completions_calls}"
+    _sleep_ms(response_spec.get("delay_before_ms"))
 
     response_kind = str(response_spec.get("kind") or "")
     if response_kind in {"tool_call", "invalid_tool_call"}:
@@ -104,6 +125,8 @@ def stream_chat_completions(
             ],
         }
         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+        _maybe_abort_stream(response_spec, emitted_chunk_count=1)
+        _sleep_ms(response_spec.get("delay_between_chunks_ms"))
         final_chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -130,6 +153,8 @@ def stream_chat_completions(
             "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
         }
         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+        _maybe_abort_stream(response_spec, emitted_chunk_count=index + 1)
+        _sleep_ms(response_spec.get("delay_between_chunks_ms"))
 
     final_chunk = {
         "id": completion_id,
@@ -207,6 +232,12 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return {"kind": "text", "content": "fake-response"}
     if _invalid_json_auto_recovery_mode(messages):
         return _plan_invalid_json_auto_recovery_response(payload, messages)
+    if _rate_limit_retry_mode(messages):
+        return _plan_rate_limit_retry_response(messages)
+    if _stream_drop_retry_mode(messages):
+        return _plan_stream_drop_retry_response(messages)
+    if _slow_stream_mode(messages):
+        return _plan_slow_stream_response()
     if _webfetch_approval_validation_mode(messages):
         return _plan_webfetch_approval_validation_response(payload, messages)
     computer_validation_mode = _computer_validation_mode(messages)
@@ -266,6 +297,64 @@ def _plan_invalid_json_auto_recovery_response(
     return {
         "kind": "text",
         "content": "[fake-llm] Invalid JSON auto-recovery scenario reached an unknown step.",
+    }
+
+
+def _rate_limit_retry_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[rate-limit-once]")
+
+
+def _plan_rate_limit_retry_response(messages: list[object]) -> dict[str, object]:
+    attempt = _next_scenario_attempt(messages, marker="[rate-limit-once]")
+    if attempt == 1:
+        return {
+            "kind": "error_status",
+            "status_code": 429,
+            "headers": {"retry-after": "1"},
+            "body": {
+                "error": {
+                    "code": "rate_limited",
+                    "message": "Provider rate limit reached",
+                }
+            },
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Recovered after provider rate limit retry.",
+    }
+
+
+def _stream_drop_retry_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[stream-drop-once]")
+
+
+def _plan_stream_drop_retry_response(messages: list[object]) -> dict[str, object]:
+    attempt = _next_scenario_attempt(messages, marker="[stream-drop-once]")
+    if attempt == 1:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] partial stream before interruption",
+            "drop_after_chunk_count": 1,
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Recovered after dropped stream.",
+    }
+
+
+def _slow_stream_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[slow-stream]")
+
+
+def _plan_slow_stream_response() -> dict[str, object]:
+    return {
+        "kind": "text",
+        "content": (
+            "[fake-llm] Slow stream completed successfully after simulated "
+            "latency across multiple chunks."
+        ),
+        "delay_before_ms": 200,
+        "delay_between_chunks_ms": 120,
     }
 
 
@@ -549,6 +638,56 @@ def _messages_contain_user_text(messages: list[object], snippet: str) -> bool:
             if isinstance(text, str) and normalized_snippet in text:
                 return True
     return False
+
+
+def _next_scenario_attempt(messages: list[object], *, marker: str) -> int:
+    key = _scenario_key(messages, marker=marker)
+    attempt = _scenario_attempts.get(key, 0) + 1
+    _scenario_attempts[key] = attempt
+    return attempt
+
+
+def _scenario_key(messages: list[object], *, marker: str) -> str:
+    return f"{marker}:{_extract_last_user_text(messages).strip()}"
+
+
+def _normalize_headers(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    headers: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(item, str):
+            headers[key] = item
+    return headers
+
+
+def _sleep_ms(value: object) -> None:
+    milliseconds = _coerce_int(value, default=0)
+    if milliseconds <= 0:
+        return
+    time.sleep(milliseconds / 1000)
+
+
+def _coerce_int(value: object, *, default: int) -> int:
+    if isinstance(value, int):
+        return value
+    return default
+
+
+def _maybe_abort_stream(
+    response_spec: dict[str, object],
+    *,
+    emitted_chunk_count: int,
+) -> None:
+    drop_after_chunk_count = response_spec.get("drop_after_chunk_count")
+    if (
+        isinstance(drop_after_chunk_count, int)
+        and drop_after_chunk_count > 0
+        and emitted_chunk_count >= drop_after_chunk_count
+    ):
+        raise RuntimeError("Simulated stream interruption")
 
 
 def split_text(text: str, *, size: int) -> list[str]:

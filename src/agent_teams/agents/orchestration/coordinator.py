@@ -4,13 +4,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from json import dumps
-from typing import Callable, Literal
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_ai.messages import ModelResponse, TextPart
 
 from agent_teams.agents.instances.enums import InstanceStatus
 from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.orchestration.task_execution_service import (
+    TaskExecutionResult,
     TaskExecutionService,
 )
 from agent_teams.agents.orchestration.verification import verify_task
@@ -26,6 +28,10 @@ from agent_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
+from agent_teams.sessions.runs.assistant_errors import (
+    RunCompletionReason,
+    build_assistant_error_message,
+)
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.sessions.runs.run_runtime_repo import (
@@ -51,6 +57,17 @@ MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
 
 
+class CoordinatorRunResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trace_id: str
+    root_task_id: str
+    output: str
+    completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
+    error_code: str | None = None
+    error_message: str | None = None
+
+
 class CoordinatorGraph(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
@@ -72,7 +89,7 @@ class CoordinatorGraph(BaseModel):
         self,
         intent: IntentInput,
         trace_id: str | None = None,
-    ) -> tuple[str, str, Literal["completed", "failed"], str]:
+    ) -> CoordinatorRunResult:
         trace_id = trace_id or new_trace_id().value
         session_id = intent.session_id
         if session_id is None:
@@ -114,9 +131,13 @@ class CoordinatorGraph(BaseModel):
         )
 
         mode = intent.execution_mode
+        root_instance_id: str | None = None
         if mode == ExecutionMode.MANUAL:
-            result = self._initialize_manual_mode(
-                trace_id=trace_id, root_task=root_task
+            result = TaskExecutionResult(
+                output=self._initialize_manual_mode(
+                    trace_id=trace_id, root_task=root_task
+                ),
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
             )
         elif mode == ExecutionMode.AI:
             root_instance_id = self._ensure_root_instance(
@@ -133,41 +154,65 @@ class CoordinatorGraph(BaseModel):
                     task=root_task,
                 )
             else:
-                result = await self._run_ai_mode(
-                    trace_id=trace_id,
-                    root_task=root_task,
-                    coordinator_instance_id=root_instance_id,
+                result = self._coerce_task_execution_result(
+                    await self._run_ai_mode(
+                        trace_id=trace_id,
+                        root_task=root_task,
+                        coordinator_instance_id=root_instance_id,
+                    )
                 )
         else:
             raise ValueError(f"Unknown execution mode: {mode}")
 
-        verification = verify_task(self.task_repo, self.event_bus, root_task.task_id)
-        status = self._terminal_status_from_verification(
-            trace_id=trace_id,
-            root_task=root_task,
-            verification=verification,
-            output=result,
-        )
+        if result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
+            final_result = CoordinatorRunResult(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+                output=result.output,
+                completion_reason=result.completion_reason,
+                error_code=result.error_code,
+                error_message=result.error_message,
+            )
+        else:
+            verification = verify_task(
+                self.task_repo, self.event_bus, root_task.task_id
+            )
+            verification_result = self._terminal_status_from_verification(
+                trace_id=trace_id,
+                root_task=root_task,
+                verification=verification,
+                output=result.output,
+                root_instance_id=root_instance_id,
+                root_role_id=root_role_id,
+            )
+            final_result = CoordinatorRunResult(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+                output=verification_result.output,
+                completion_reason=verification_result.completion_reason,
+                error_code=verification_result.error_code,
+                error_message=verification_result.error_message,
+            )
         log_event(
             LOGGER,
-            logging.INFO if status == "completed" else logging.WARNING,
-            event="coord.run.completed"
-            if status == "completed"
-            else "coord.run.failed",
+            logging.INFO
+            if final_result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+            else logging.WARNING,
+            event="coord.run.completed",
             message="Coordinator run finished",
             payload={
                 "execution_mode": mode.value,
-                "status": status,
+                "completion_reason": final_result.completion_reason.value,
                 "root_task_id": root_task.task_id,
             },
         )
-        return trace_id, root_task.task_id, status, result
+        return final_result
 
     async def resume(
         self,
         *,
         trace_id: str,
-    ) -> tuple[str, str, Literal["completed", "failed"], str]:
+    ) -> CoordinatorRunResult:
         root_task_record = self._get_root_task_by_trace(trace_id)
         root_task = root_task_record.envelope
         root_instance_id = self._ensure_root_instance(
@@ -187,16 +232,34 @@ class CoordinatorGraph(BaseModel):
                 role_id=root_role_id,
                 task=root_task,
             )
+            if result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
+                return CoordinatorRunResult(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                    output=result.output,
+                    completion_reason=result.completion_reason,
+                    error_code=result.error_code,
+                    error_message=result.error_message,
+                )
             verification = verify_task(
                 self.task_repo, self.event_bus, root_task.task_id
             )
-            status = self._terminal_status_from_verification(
+            verification_result = self._terminal_status_from_verification(
                 trace_id=trace_id,
                 root_task=root_task,
                 verification=verification,
-                output=result,
+                output=result.output,
+                root_instance_id=root_instance_id,
+                root_role_id=root_role_id,
             )
-            return trace_id, root_task.task_id, status, result
+            return CoordinatorRunResult(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+                output=verification_result.output,
+                completion_reason=verification_result.completion_reason,
+                error_code=verification_result.error_code,
+                error_message=verification_result.error_message,
+            )
         runtime = self.run_runtime_repo.get(trace_id)
         coordinator_first = not self._has_resumable_delegated_work(
             trace_id=trace_id,
@@ -214,14 +277,33 @@ class CoordinatorGraph(BaseModel):
             coordinator_first=coordinator_first,
             initial_result=root_task_record.result or "",
         )
+        result = self._coerce_task_execution_result(result)
+        if result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
+            return CoordinatorRunResult(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+                output=result.output,
+                completion_reason=result.completion_reason,
+                error_code=result.error_code,
+                error_message=result.error_message,
+            )
         verification = verify_task(self.task_repo, self.event_bus, root_task.task_id)
-        status = self._terminal_status_from_verification(
+        verification_result = self._terminal_status_from_verification(
             trace_id=trace_id,
             root_task=root_task,
             verification=verification,
-            output=result,
+            output=result.output,
+            root_instance_id=root_instance_id,
+            root_role_id=root_role_id,
         )
-        return trace_id, root_task.task_id, status, result
+        return CoordinatorRunResult(
+            trace_id=trace_id,
+            root_task_id=root_task.task_id,
+            output=verification_result.output,
+            completion_reason=verification_result.completion_reason,
+            error_code=verification_result.error_code,
+            error_message=verification_result.error_message,
+        )
 
     def _initialize_manual_mode(self, *, trace_id: str, root_task: TaskEnvelope) -> str:
         result = (
@@ -261,8 +343,8 @@ class CoordinatorGraph(BaseModel):
         coordinator_instance_id: str,
         coordinator_first: bool = True,
         initial_result: str = "",
-    ) -> str:
-        coordinator_result = initial_result
+    ) -> TaskExecutionResult:
+        coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
             coordinator_result = await self._task_executor(
@@ -639,10 +721,12 @@ class CoordinatorGraph(BaseModel):
         root_task: TaskEnvelope,
         verification: VerificationResult,
         output: str,
-    ) -> Literal["completed", "failed"]:
+        root_instance_id: str | None,
+        root_role_id: str,
+    ) -> TaskExecutionResult:
         passed = bool(getattr(verification, "passed", False))
         if passed:
-            return "completed"
+            return TaskExecutionResult(output=output)
 
         details = tuple(
             str(item) for item in getattr(verification, "details", ()) if str(item)
@@ -653,36 +737,68 @@ class CoordinatorGraph(BaseModel):
             else (output.strip() if output.strip() else "Verification failed")
         )
         current = self.task_repo.get(root_task.task_id)
-        self.task_repo.update_status(
-            root_task.task_id,
-            TaskStatus.FAILED,
-            assigned_instance_id=current.assigned_instance_id,
-            result=current.result or output or None,
+        assistant_message = build_assistant_error_message(
+            error_code="verification_failed",
             error_message=failure_message,
         )
-        self.event_bus.emit(
-            EventEnvelope(
-                event_type=EventType.TASK_FAILED,
-                trace_id=trace_id,
-                session_id=root_task.session_id,
-                task_id=root_task.task_id,
-                instance_id=current.assigned_instance_id,
-                payload_json=dumps(
-                    {
-                        "reason": "verification_failed",
-                        "details": list(details),
-                    }
-                ),
-            )
+        self.task_repo.update_status(
+            root_task.task_id,
+            TaskStatus.COMPLETED,
+            assigned_instance_id=current.assigned_instance_id,
+            result=assistant_message,
+            error_message=failure_message,
         )
-        return "failed"
+        if root_instance_id is not None:
+            instance = self.agent_repo.get_instance(root_instance_id)
+            self.task_execution_service.message_repo.prune_conversation_history_to_safe_boundary(
+                instance.conversation_id
+            )
+            self.task_execution_service.message_repo.append(
+                session_id=root_task.session_id,
+                workspace_id=instance.workspace_id,
+                conversation_id=instance.conversation_id,
+                agent_role_id=root_role_id,
+                instance_id=root_instance_id,
+                task_id=root_task.task_id,
+                trace_id=trace_id,
+                messages=[ModelResponse(parts=[TextPart(content=assistant_message)])],
+            )
+            if self.run_event_hub is not None:
+                self._publish_run_event(
+                    session_id=root_task.session_id,
+                    run_id=trace_id,
+                    trace_id=trace_id,
+                    task_id=root_task.task_id,
+                    instance_id=root_instance_id,
+                    role_id=root_role_id,
+                    event_type=RunEventType.TEXT_DELTA,
+                    payload={
+                        "text": assistant_message,
+                        "role_id": root_role_id,
+                        "instance_id": root_instance_id,
+                    },
+                )
+        return TaskExecutionResult(
+            output=assistant_message,
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code="verification_failed",
+            error_message=failure_message,
+        )
 
     async def _task_executor(
         self, *, instance_id: str, role_id: str, task: TaskEnvelope
-    ) -> str:
-        return await self.task_execution_service.execute(
+    ) -> TaskExecutionResult:
+        result = await self.task_execution_service.execute(
             instance_id=instance_id, role_id=role_id, task=task
         )
+        return self._coerce_task_execution_result(result)
+
+    def _coerce_task_execution_result(
+        self, result: TaskExecutionResult | str
+    ) -> TaskExecutionResult:
+        if isinstance(result, TaskExecutionResult):
+            return result
+        return TaskExecutionResult(output=result)
 
 
 def _require_task_role_id(task: TaskEnvelope) -> str:

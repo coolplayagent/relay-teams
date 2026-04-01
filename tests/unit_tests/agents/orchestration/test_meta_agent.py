@@ -4,7 +4,9 @@ from __future__ import annotations
 import pytest
 
 from agent_teams.agents.orchestration.meta_agent import MetaAgent
+from agent_teams.agents.orchestration.coordinator import CoordinatorRunResult
 from agent_teams.media import content_parts_from_text
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.sessions.runs.run_models import IntentInput
 
 
@@ -18,13 +20,23 @@ class _CoordinatorStub:
         intent: IntentInput,
         *,
         trace_id: str | None = None,
-    ) -> tuple[str, str, str, str]:
+    ) -> CoordinatorRunResult:
         self.run_calls.append((intent, trace_id))
-        return ("trace-1", "task-1", "completed", "delegated")
+        return CoordinatorRunResult(
+            trace_id="trace-1",
+            root_task_id="task-1",
+            output="delegated",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
 
-    async def resume(self, *, trace_id: str) -> tuple[str, str, str, str]:
+    async def resume(self, *, trace_id: str) -> CoordinatorRunResult:
         self.resume_calls.append(trace_id)
-        return (trace_id, "task-2", "completed", "resumed")
+        return CoordinatorRunResult(
+            trace_id=trace_id,
+            root_task_id="task-2",
+            output="resumed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
 
 
 @pytest.mark.asyncio

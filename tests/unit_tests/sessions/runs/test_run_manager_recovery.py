@@ -18,6 +18,7 @@ from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
@@ -602,17 +603,54 @@ def test_resume_run_rejects_stopping_run(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("result_status", "runtime_status", "terminal_event_type"),
+    (
+        "result_status",
+        "completion_reason",
+        "output_text",
+        "error_message",
+        "runtime_status",
+        "terminal_event_type",
+        "projected_status",
+    ),
     [
-        ("completed", RunRuntimeStatus.COMPLETED, RunEventType.RUN_COMPLETED),
-        ("failed", RunRuntimeStatus.FAILED, RunEventType.RUN_FAILED),
+        (
+            "completed",
+            RunCompletionReason.ASSISTANT_RESPONSE,
+            "done",
+            None,
+            RunRuntimeStatus.COMPLETED,
+            RunEventType.RUN_COMPLETED,
+            "completed",
+        ),
+        (
+            "failed",
+            RunCompletionReason.ASSISTANT_RESPONSE,
+            "",
+            "Task not completed yet",
+            RunRuntimeStatus.FAILED,
+            RunEventType.RUN_FAILED,
+            "failed",
+        ),
+        (
+            "completed",
+            RunCompletionReason.ASSISTANT_ERROR,
+            "assistant error output",
+            "assistant error output",
+            RunRuntimeStatus.FAILED,
+            RunEventType.RUN_FAILED,
+            "failed",
+        ),
     ],
 )
 async def test_worker_terminal_status_matches_run_result(
     tmp_path: Path,
     result_status: str,
+    completion_reason: RunCompletionReason,
+    output_text: str,
+    error_message: str | None,
     runtime_status: RunRuntimeStatus,
     terminal_event_type: RunEventType,
+    projected_status: str,
 ) -> None:
     db_path = tmp_path / f"run_worker_terminal_{result_status}.db"
     manager = _build_manager(db_path)
@@ -634,9 +672,9 @@ async def test_worker_terminal_status_matches_run_result(
             trace_id="run-existing",
             root_task_id="task-root-1",
             status=cast(Literal["completed", "failed"], result_status),
-            output=content_parts_from_text(
-                "Task not completed yet" if result_status == "failed" else "done"
-            ),
+            completion_reason=completion_reason,
+            error_message=error_message,
+            output=content_parts_from_text(output_text),
         )
 
     await manager._worker(
@@ -649,19 +687,57 @@ async def test_worker_terminal_status_matches_run_result(
     assert runtime is not None
     assert runtime.status == runtime_status
     assert runtime.phase == RunRuntimePhase.TERMINAL
-    if result_status == "failed":
-        assert runtime.last_error == "Task not completed yet"
+    if runtime_status == RunRuntimeStatus.FAILED:
+        assert runtime.last_error == (error_message or output_text)
     else:
         assert runtime.last_error is None
 
     state = run_state_repo.get_run_state("run-existing")
     assert state is not None
-    assert state.status.value == result_status
+    assert state.status.value == projected_status
     assert state.phase.value == "terminal"
     assert state.recoverable is False
 
     events = event_log.list_by_session_with_ids("session-1")
     assert events[-1]["event_type"] == terminal_event_type.value
+
+
+@pytest.mark.asyncio
+async def test_worker_preserves_error_output_when_normalizing_failed_result(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_failed_error_output.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._running_run_ids.add("run-existing")
+    manager._injection_manager.activate("run-existing")
+
+    async def _runner() -> RunResult:
+        return RunResult(
+            trace_id="run-existing",
+            root_task_id="task-root-1",
+            status="failed",
+            error_message="Task not completed yet",
+        )
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=_runner,
+    )
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    payload = json.loads(str(events[-1]["payload_json"]))
+    assert str(events[-1]["event_type"]) == RunEventType.RUN_FAILED.value
+    assert "Task not completed yet" in json.dumps(payload["output"])
+    assert payload["error_message"] == "Task not completed yet"
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from agent_teams.media import ContentPart
 from agent_teams.media import ContentPartsAdapter
 from agent_teams.media import content_parts_from_text
 from agent_teams.media import content_parts_to_text
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.sessions.runs.enums import (
     ExecutionMode,
     InjectionSource,
@@ -121,6 +122,9 @@ class RunResult(BaseModel):
     trace_id: RequiredIdentifierStr
     root_task_id: RequiredIdentifierStr
     status: Literal["completed", "failed"]
+    completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
+    error_code: str | None = None
+    error_message: str | None = None
     output: tuple[ContentPart, ...] = Field(default_factory=tuple)
 
     @model_validator(mode="before")

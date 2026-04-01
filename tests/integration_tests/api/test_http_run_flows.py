@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 
@@ -111,18 +112,106 @@ def test_ai_run_continues_after_invalid_tool_args_validation_failure(
     assert "run_paused" not in event_types
     assert "tool_call" in event_types
     assert "tool_result" in event_types
-    assert "tool_input_validation_failed" in event_types
-
-    validation_payloads = [
+    tool_result_payloads = [
         json.loads(str(event["payload_json"]))
         for event in events
-        if str(event.get("event_type") or "") == "tool_input_validation_failed"
+        if str(event.get("event_type") or "") == "tool_result"
     ]
     assert any(
         payload.get("tool_name") == "read"
-        and payload.get("reason") == "Input validation failed before tool execution."
-        for payload in validation_payloads
+        and payload.get("error") is True
+        and '"ok": false' in json.dumps(payload.get("result", {})).lower()
+        for payload in tool_result_payloads
     )
+
+
+def test_ai_run_retries_after_provider_rate_limit_once(
+    api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
+) -> None:
+    before_calls = _get_fake_llm_call_count(integration_env)
+
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-rate-limit"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[rate-limit-once] 请在一次限流后重试，并输出一句确认。",
+        execution_mode="ai",
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "run_paused" not in event_types
+    retry_payloads = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "llm_retry_scheduled"
+    ]
+    if retry_payloads:
+        assert any(payload.get("status_code") == 429 for payload in retry_payloads)
+        assert any(
+            payload.get("error_code") == "rate_limited" for payload in retry_payloads
+        )
+
+    after_calls = _get_fake_llm_call_count(integration_env)
+    assert after_calls >= before_calls + 2
+
+
+def test_ai_run_retries_after_stream_drop_once(api_client: httpx.Client) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-stream-drop"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[stream-drop-once] 请在一次流中断后重试，并输出一句确认。",
+        execution_mode="ai",
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "llm_retry_scheduled" in event_types
+    assert "run_paused" not in event_types
+    retry_payloads = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "llm_retry_scheduled"
+    ]
+    assert any(
+        payload.get("error_code") in {"network_stream_interrupted", "network_error"}
+        for payload in retry_payloads
+    )
+
+
+def test_ai_run_completes_over_slow_stream(api_client: httpx.Client) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-slow-stream"),
+    )
+    started_at = time.monotonic()
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[slow-stream] 请在慢响应链路下输出一句确认。",
+        execution_mode="ai",
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    elapsed = time.monotonic() - started_at
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "llm_retry_scheduled" not in event_types
+    assert "run_paused" not in event_types
+    assert elapsed >= 0.45
 
 
 def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None:
@@ -202,6 +291,7 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
         json=_role_draft_payload(updated_record),
     )
     save_response.raise_for_status()
+    _wait_for_role_tools(api_client, "MainAgent", {"capture_screen", "launch_app"})
 
     try:
         session_id = create_session(
@@ -279,6 +369,11 @@ def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
         json=_role_draft_payload(updated_record),
     )
     save_response.raise_for_status()
+    _wait_for_role_tools(
+        api_client,
+        "MainAgent",
+        {"capture_screen", "launch_app", "wait_for_window"},
+    )
 
     try:
         session_id = create_session(
@@ -354,3 +449,38 @@ def _role_draft_payload(record: dict[str, object]) -> dict[str, object]:
         "memory_profile": record["memory_profile"],
         "system_prompt": record["system_prompt"],
     }
+
+
+def _wait_for_role_tools(
+    client: httpx.Client,
+    role_id: str,
+    expected_tools: set[str],
+    *,
+    timeout_seconds: float = 5.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/roles/configs/{role_id}")
+        response.raise_for_status()
+        payload = response.json()
+        tools = {
+            str(tool)
+            for tool in payload.get("tools", [])
+            if isinstance(tool, str) and tool
+        }
+        if expected_tools.issubset(tools):
+            return
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Role {role_id} did not expose expected tools within {timeout_seconds}s: {sorted(expected_tools)}"
+    )
+
+
+def _get_fake_llm_call_count(integration_env: IntegrationEnvironment) -> int:
+    response = httpx.get(
+        f"{integration_env.fake_llm_admin_url}/metrics",
+        timeout=5.0,
+        trust_env=False,
+    )
+    response.raise_for_status()
+    return int(response.json()["chat_completions_calls"])

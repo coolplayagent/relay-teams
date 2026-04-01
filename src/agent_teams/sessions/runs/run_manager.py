@@ -24,6 +24,7 @@ from agent_teams.agents.instances.models import create_subagent_instance
 from agent_teams.agents.instances.models import AgentRuntimeRecord
 from agent_teams.logger import get_logger, log_event
 from agent_teams.media import MediaAssetService, MediaRefContentPart, TextContentPart
+from agent_teams.media import content_parts_from_text
 from agent_teams.media import content_parts_to_text
 from agent_teams.notifications import (
     NotificationContext,
@@ -43,6 +44,12 @@ from agent_teams.roles.role_registry import RoleRegistry
 from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
+from agent_teams.sessions.runs.assistant_errors import (
+    RunCompletionReason,
+    build_assistant_error_message,
+    build_assistant_error_response,
+    build_auto_recovery_prompt,
+)
 from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
@@ -98,31 +105,33 @@ class AutoRecoveryPolicy(BaseModel):
     prompt: str
 
 
-INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT = (
-    "The previous tool call arguments were not valid JSON. "
-    "Do not repeat already successful tool calls. "
-    "Continue from the latest successful tool results already in the conversation. "
-    "If you call a tool again, output strict JSON only, with double-quoted property names "
-    "and arguments that exactly match the tool schema."
-)
-NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT = (
-    "The previous model stream was interrupted by a transient network or transport failure. "
-    "Continue from the latest successful conversation state already persisted. "
-    "Do not repeat already successful tool calls or restate text that has already been sent. "
-    "If prior work is incomplete, continue from the last confirmed point."
-)
+def _auto_recovery_policy(
+    *,
+    error_code: str,
+    reason: AutoRecoveryReason,
+    max_attempts: int,
+) -> AutoRecoveryPolicy:
+    prompt = build_auto_recovery_prompt(error_code)
+    if prompt is None:
+        raise ValueError(f"Missing auto recovery prompt for error_code={error_code}")
+    return AutoRecoveryPolicy(
+        error_code=error_code,
+        reason=reason,
+        max_attempts=max_attempts,
+        prompt=prompt,
+    )
+
+
 AUTO_RECOVERY_POLICIES = (
-    AutoRecoveryPolicy(
+    _auto_recovery_policy(
         error_code="model_tool_args_invalid_json",
         reason=AutoRecoveryReason.INVALID_TOOL_ARGS_JSON,
         max_attempts=1,
-        prompt=INVALID_TOOL_ARGS_AUTO_RECOVERY_PROMPT,
     ),
-    AutoRecoveryPolicy(
+    _auto_recovery_policy(
         error_code="network_stream_interrupted",
         reason=AutoRecoveryReason.NETWORK_STREAM_INTERRUPTED,
         max_attempts=5,
-        prompt=NETWORK_STREAM_INTERRUPTED_AUTO_RECOVERY_PROMPT,
     ),
 )
 
@@ -327,18 +336,25 @@ class RunManager:
                             last_error=payload.error_message,
                         )
                     raise
+                result = self._build_completed_error_run_result(
+                    run_id=run_id,
+                    session_id=session_id,
+                    error_code="run_start_failed",
+                    error_message=str(exc),
+                )
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
                         run_id,
-                        status=RunRuntimeStatus.FAILED,
+                        root_task_id=result.root_task_id,
+                        status=RunRuntimeStatus.COMPLETED,
                         phase=RunRuntimePhase.TERMINAL,
                         active_instance_id=None,
                         active_task_id=None,
                         active_role_id=None,
                         active_subagent_instance_id=None,
-                        last_error=str(exc),
+                        last_error=result.error_message,
                     )
-                raise
+                return result
             finally:
                 self._injection_manager.deactivate(run_id)
                 self._running_run_ids.discard(run_id)
@@ -827,16 +843,29 @@ class RunManager:
                 trace_id=run_id,
                 root_task_id=root_task.task_id,
                 status="completed",
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
                 output=output,
             )
-        except Exception:
+        except Exception as exc:
+            result = self._build_completed_error_run_result(
+                run_id=run_id,
+                session_id=intent.session_id,
+                root_task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                conversation_id=conversation_id,
+                workspace_id=session.workspace_id,
+                error_code="native_generation_failed",
+                error_message=str(exc),
+            )
             task_repo.update_status(
                 root_task.task_id,
-                TaskStatus.FAILED,
+                TaskStatus.COMPLETED,
                 assigned_instance_id=instance.instance_id,
-                error_message="native_generation_failed",
+                result=result.output_text,
+                error_message=result.error_message,
             )
-            agent_repo.mark_status(instance.instance_id, InstanceStatus.FAILED)
+            agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
             self._publish_generation_progress(
                 run_id=run_id,
                 session_id=intent.session_id,
@@ -844,11 +873,11 @@ class RunManager:
                 instance_id=instance.instance_id,
                 role_id=role_id,
                 run_kind=intent.run_kind.value,
-                phase="failed",
+                phase="completed",
                 progress=1.0,
                 preview_asset_id=None,
             )
-            raise
+            return result
 
     async def _execute_native_generation(
         self,
@@ -899,45 +928,36 @@ class RunManager:
                 message="Run worker started",
             )
         try:
-            result = await self._run_with_auto_recovery(
+            raw_result = await self._run_with_auto_recovery(
                 run_id=run_id,
                 session_id=session_id,
                 runner=runner,
             )
+            result = self._normalize_terminal_run_result(raw_result)
+            completion_reason = result.completion_reason
+            failed = result.status == "failed"
             terminal_status = (
-                RunRuntimeStatus.COMPLETED
-                if result.status == "completed"
-                else RunRuntimeStatus.FAILED
+                RunRuntimeStatus.FAILED if failed else RunRuntimeStatus.COMPLETED
             )
             terminal_event_type = (
-                RunEventType.RUN_COMPLETED
-                if result.status == "completed"
-                else RunEventType.RUN_FAILED
+                RunEventType.RUN_FAILED if failed else RunEventType.RUN_COMPLETED
             )
-            terminal_log_event = (
-                "run.completed" if result.status == "completed" else "run.failed"
-            )
-            terminal_log_level = (
-                logging.INFO if result.status == "completed" else logging.WARNING
-            )
+            terminal_log_event = "run.failed" if failed else "run.completed"
+            terminal_log_level = logging.ERROR if failed else logging.INFO
             notification_type = (
-                NotificationType.RUN_COMPLETED
-                if result.status == "completed"
-                else NotificationType.RUN_FAILED
+                NotificationType.RUN_FAILED
+                if failed
+                else NotificationType.RUN_COMPLETED
             )
-            notification_title = (
-                "Run Completed" if result.status == "completed" else "Run Failed"
-            )
-            output_text = result.output_text
+            notification_title = "Run Failed" if failed else "Run Completed"
+            output_text = result.output_text or str(result.error_message or "").strip()
             notification_body = (
                 output_text
-                if result.status == "completed" and output_text
-                else f"Run {run_id} completed successfully."
-                if result.status == "completed"
+                if output_text
                 else (
-                    f"Run {run_id} failed: {output_text}"
-                    if output_text
-                    else f"Run {run_id} failed."
+                    f"Run {run_id} failed."
+                    if failed
+                    else f"Run {run_id} completed successfully."
                 )
             )
             self._safe_runtime_update(
@@ -949,9 +969,7 @@ class RunManager:
                 active_task_id=None,
                 active_role_id=None,
                 active_subagent_instance_id=None,
-                last_error=output_text
-                if terminal_status == RunRuntimeStatus.FAILED
-                else None,
+                last_error=((result.error_message or output_text) if failed else None),
             )
             self._safe_publish_run_event(
                 RunEvent(
@@ -971,12 +989,11 @@ class RunManager:
                     logger,
                     terminal_log_level,
                     event=terminal_log_event,
-                    message="Run completed"
-                    if result.status == "completed"
-                    else "Run failed",
+                    message="Run failed" if failed else "Run completed",
                     payload={
                         "root_task_id": result.root_task_id,
                         "status": result.status,
+                        "completion_reason": completion_reason.value,
                     },
                 )
             self._emit_notification(
@@ -1059,24 +1076,40 @@ class RunManager:
                 body=f"Run {run_id} was stopped by user.",
             )
         except Exception as exc:
+            result = self._build_completed_error_run_result(
+                run_id=run_id,
+                session_id=session_id,
+                error_code="run_worker_failed",
+                error_message=str(exc),
+            )
+            result = self._normalize_terminal_run_result(result)
+            failed = result.status == "failed"
+            output_text = result.output_text or str(result.error_message or "").strip()
             self._safe_runtime_update(
                 run_id,
-                status=RunRuntimeStatus.FAILED,
+                root_task_id=result.root_task_id,
+                status=RunRuntimeStatus.FAILED
+                if failed
+                else RunRuntimeStatus.COMPLETED,
                 phase=RunRuntimePhase.TERMINAL,
                 active_instance_id=None,
                 active_task_id=None,
                 active_role_id=None,
                 active_subagent_instance_id=None,
-                last_error=str(exc),
+                last_error=((result.error_message or output_text) if failed else None),
             )
             self._safe_publish_run_event(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
-                    trace_id=run_id,
-                    task_id=None,
-                    event_type=RunEventType.RUN_FAILED,
-                    payload_json=dumps({"error": str(exc)}),
+                    trace_id=result.trace_id,
+                    task_id=result.root_task_id,
+                    event_type=(
+                        RunEventType.RUN_FAILED
+                        if failed
+                        else RunEventType.RUN_COMPLETED
+                    ),
+                    payload_json=dumps(result.model_dump()),
                 ),
                 failure_event="run.event.publish_failed",
             )
@@ -1085,18 +1118,31 @@ class RunManager:
             ):
                 log_event(
                     logger,
-                    logging.ERROR,
-                    event="run.failed",
-                    message="Run failed",
+                    logging.ERROR if failed else logging.INFO,
+                    event="run.failed" if failed else "run.completed",
+                    message="Run failed" if failed else "Run completed",
                     exc_info=exc,
+                    payload={
+                        "root_task_id": result.root_task_id,
+                        "status": result.status,
+                        "completion_reason": result.completion_reason.value,
+                    },
                 )
             self._emit_notification(
-                notification_type=NotificationType.RUN_FAILED,
+                notification_type=(
+                    NotificationType.RUN_FAILED
+                    if failed
+                    else NotificationType.RUN_COMPLETED
+                ),
                 session_id=session_id,
                 run_id=run_id,
-                trace_id=run_id,
-                title="Run Failed",
-                body=f"Run {run_id} failed: {exc}",
+                trace_id=result.trace_id,
+                title="Run Failed" if failed else "Run Completed",
+                body=(
+                    output_text
+                    if output_text
+                    else (f"Run {run_id} failed." if failed else "")
+                ),
             )
         finally:
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
@@ -1791,6 +1837,127 @@ class RunManager:
                 ModelResponse(parts=response_parts, model_name="media_generation")
             ],
         )
+
+    def _build_completed_error_run_result(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        error_code: str,
+        error_message: str,
+        root_task_id: str | None = None,
+        instance_id: str | None = None,
+        role_id: str | None = None,
+        conversation_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> RunResult:
+        assistant_message = build_assistant_error_message(
+            error_code=error_code,
+            error_message=error_message,
+        )
+        try:
+            runtime = self._runtime_for_run(run_id)
+        except Exception:
+            runtime = None
+        resolved_root_task_id = (
+            root_task_id
+            or (runtime.root_task_id if runtime is not None else None)
+            or (runtime.active_task_id if runtime is not None else None)
+            or run_id
+        )
+        resolved_instance_id = instance_id or (
+            runtime.active_instance_id if runtime is not None else None
+        )
+        resolved_role_id = role_id or (
+            runtime.active_role_id if runtime is not None else None
+        )
+        resolved_conversation_id = conversation_id
+        resolved_workspace_id = workspace_id
+        if resolved_instance_id and self._agent_repo is not None:
+            try:
+                instance = self._agent_repo.get_instance(resolved_instance_id)
+            except KeyError:
+                instance = None
+            if instance is not None:
+                resolved_conversation_id = (
+                    resolved_conversation_id or instance.conversation_id
+                )
+                resolved_workspace_id = resolved_workspace_id or instance.workspace_id
+                resolved_role_id = resolved_role_id or instance.role_id
+        if resolved_conversation_id is None and resolved_role_id is not None:
+            resolved_conversation_id = build_conversation_id(
+                session_id, resolved_role_id
+            )
+        if resolved_workspace_id is None:
+            try:
+                resolved_workspace_id = self._session_repo.get(session_id).workspace_id
+            except Exception:
+                resolved_workspace_id = "default"
+        if resolved_conversation_id is not None:
+            message_repo = self._require_message_repo()
+            message_repo.prune_conversation_history_to_safe_boundary(
+                resolved_conversation_id
+            )
+            message_repo.append(
+                session_id=session_id,
+                workspace_id=resolved_workspace_id,
+                conversation_id=resolved_conversation_id,
+                agent_role_id=resolved_role_id or "",
+                instance_id=resolved_instance_id or resolved_conversation_id,
+                task_id=resolved_root_task_id,
+                trace_id=run_id,
+                messages=[build_assistant_error_response(assistant_message)],
+            )
+        if resolved_instance_id is not None and resolved_role_id is not None:
+            self._safe_publish_run_event(
+                RunEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=run_id,
+                    task_id=resolved_root_task_id,
+                    instance_id=resolved_instance_id,
+                    role_id=resolved_role_id,
+                    event_type=RunEventType.TEXT_DELTA,
+                    payload_json=dumps(
+                        {
+                            "text": assistant_message,
+                            "role_id": resolved_role_id,
+                            "instance_id": resolved_instance_id,
+                        }
+                    ),
+                ),
+                failure_event="run.event.publish_failed",
+            )
+        return RunResult(
+            trace_id=run_id,
+            root_task_id=resolved_root_task_id,
+            status="failed",
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code=error_code,
+            error_message=error_message,
+            output=content_parts_from_text(assistant_message),
+        )
+
+    def _normalize_terminal_run_result(self, result: RunResult) -> RunResult:
+        error_text = str(result.error_message or result.output_text or "").strip()
+        output = result.output
+        if not output and error_text:
+            output = content_parts_from_text(error_text)
+        if (
+            result.status != "failed"
+            and result.completion_reason != RunCompletionReason.ASSISTANT_ERROR
+        ):
+            if output == result.output:
+                return result
+            return result.model_copy(update={"output": output})
+        updates: dict[str, object] = {
+            "status": "failed",
+            "completion_reason": RunCompletionReason.ASSISTANT_ERROR,
+            "output": output,
+        }
+        if error_text:
+            updates["error_message"] = error_text
+        return result.model_copy(update=updates)
 
     def _run_accepts_followups(self, run_id: str, next_intent: IntentInput) -> bool:
         if next_intent.run_kind != RunKind.CONVERSATION:
