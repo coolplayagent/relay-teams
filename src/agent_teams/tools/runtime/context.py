@@ -85,7 +85,7 @@ class TaskExecutionServiceLike(Protocol):
         role_id: str,
         task: TaskEnvelope,
         user_prompt_override: str | None = None,
-    ) -> str: ...
+    ) -> object: ...
 
 
 class ImToolServiceLike(Protocol):

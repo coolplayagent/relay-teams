@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from agent_teams.sessions.runs.background_tasks.repository import (
         BackgroundTaskRepository,
     )
+    from agent_teams.sessions.runs.assistant_errors import (
+        AssistantRunError,
+        AssistantRunErrorPayload,
+        RunCompletionReason,
+    )
     from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
     from agent_teams.sessions.runs.recoverable_pause import (
@@ -67,12 +72,15 @@ __all__ = [
     "BackgroundTaskStatus",
     "BackgroundTaskManager",
     "BackgroundTaskRepository",
+    "AssistantRunError",
+    "AssistantRunErrorPayload",
     "ExecutionMode",
     "EventLog",
     "InjectionMessage",
     "InjectionSource",
     "IntentInput",
     "RunControlManager",
+    "RunCompletionReason",
     "RunEvent",
     "RunEventHub",
     "RunEventType",
@@ -125,6 +133,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "agent_teams.sessions.runs.background_tasks.models",
         "BackgroundTaskStatus",
     ),
+    "AssistantRunError": (
+        "agent_teams.sessions.runs.assistant_errors",
+        "AssistantRunError",
+    ),
+    "AssistantRunErrorPayload": (
+        "agent_teams.sessions.runs.assistant_errors",
+        "AssistantRunErrorPayload",
+    ),
     "ExecutionMode": ("agent_teams.sessions.runs.enums", "ExecutionMode"),
     "EventLog": ("agent_teams.sessions.runs.event_log", "EventLog"),
     "InjectionMessage": ("agent_teams.sessions.runs.run_models", "InjectionMessage"),
@@ -137,6 +153,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "RunControlManager": (
         "agent_teams.sessions.runs.run_control_manager",
         "RunControlManager",
+    ),
+    "RunCompletionReason": (
+        "agent_teams.sessions.runs.assistant_errors",
+        "RunCompletionReason",
     ),
     "RecoverableRunPauseError": (
         "agent_teams.sessions.runs.recoverable_pause",

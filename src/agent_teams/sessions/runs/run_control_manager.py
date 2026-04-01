@@ -70,7 +70,7 @@ class _RunTaskRegistry:
         self._lock = Lock()
         self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._run_stop_requested: set[str] = set()
-        self._instance_tasks: dict[tuple[str, str], asyncio.Task[str]] = {}
+        self._instance_tasks: dict[tuple[str, str], asyncio.Task[object]] = {}
         self._instance_context: dict[tuple[str, str], tuple[str, str, str | None]] = {}
         self._subagent_stop_requested: set[tuple[str, str]] = set()
 
@@ -106,7 +106,7 @@ class _RunTaskRegistry:
         instance_id: str,
         role_id: str,
         task_id: str | None,
-        task: asyncio.Task[str],
+        task: asyncio.Task[object],
     ) -> None:
         key = (run_id, instance_id)
         with self._lock:
@@ -326,7 +326,7 @@ class RunControlManager:
         instance_id: str,
         role_id: str,
         task_id: str | None,
-        task: asyncio.Task[str],
+        task: asyncio.Task[object],
     ) -> None:
         self._run_tasks.register_instance_task(
             run_id=run_id,

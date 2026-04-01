@@ -17,6 +17,7 @@ from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
+    ModelRequestPart,
     ModelResponse,
     PartDeltaEvent,
     PartEndEvent,
@@ -27,6 +28,7 @@ from pydantic_ai.messages import (
     ThinkingPart,
     ThinkingPartDelta,
     ToolCallPart,
+    ToolCallPartDelta,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -44,6 +46,13 @@ from agent_teams.providers.openai_model_profiles import (
 )
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.sessions.runs.assistant_errors import (
+    AssistantRunError,
+    AssistantRunErrorPayload,
+    build_assistant_error_message,
+    build_assistant_error_response,
+    build_tool_error_result,
+)
 from agent_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
@@ -78,6 +87,10 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
+)
+from agent_teams.agents.execution.tool_args_repair import (
+    ToolArgsRepairResult,
+    repair_tool_args,
 )
 from agent_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
@@ -264,6 +277,7 @@ class AgentLlmSession:
         *,
         retry_number: int = 0,
         total_attempts: int | None = None,
+        skip_initial_user_prompt_persist: bool = False,
     ) -> str:
         resolved_workspace_id = request.workspace_id
         resolved_conversation_id = request.conversation_id or build_conversation_id(
@@ -426,11 +440,12 @@ class AgentLlmSession:
                 "task_id": request.task_id,
             },
         )
-        history = self._persist_user_prompt_if_needed(
-            request=request,
-            history=history,
-            content=request.user_prompt,
-        )
+        if not skip_initial_user_prompt_persist:
+            history = self._persist_user_prompt_if_needed(
+                request=request,
+                history=history,
+                content=request.user_prompt,
+            )
         seen_count = 0
         buffered_messages: list[ModelRequest | ModelResponse] = []
         restarted = False
@@ -441,6 +456,7 @@ class AgentLlmSession:
         request_level_reasoning_output_tokens = 0
         request_level_requests = 0
         saw_request_level_usage = False
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
 
         try:
             while True:
@@ -455,6 +471,7 @@ class AgentLlmSession:
                     async for node in agent_run:
                         control_ctx.raise_if_cancelled()
                         if isinstance(node, ModelRequestNode):
+                            streamed_tool_calls = {}
                             usage_before = deepcopy(agent_run.usage())
                             # Stream text chunks from this model response in real-time
                             async with node.stream(agent_run.ctx) as stream:
@@ -472,6 +489,7 @@ class AgentLlmSession:
                                             text_lengths=text_lengths,
                                             thinking_lengths=thinking_lengths,
                                             started_thinking_parts=started_thinking_parts,
+                                            streamed_tool_calls=streamed_tool_calls,
                                         )
                                         if text_emitted:
                                             printed_any = True
@@ -738,6 +756,17 @@ class AgentLlmSession:
                 },
                 exc_info=exc,
             )
+            recovered = await self._maybe_recover_from_tool_args_parse_failure(
+                request=request,
+                retry_number=retry_number,
+                total_attempts=total_attempts,
+                emitted_text_chunks=emitted_text_chunks,
+                published_tool_call_ids=published_tool_call_ids,
+                streamed_tool_calls=streamed_tool_calls,
+                error_message=self._build_model_api_error_message(exc),
+            )
+            if recovered is not None:
+                return recovered
             retry_error = extract_retry_error_info(exc)
             should_retry = self._should_retry_request(
                 retry_error=retry_error,
@@ -781,19 +810,37 @@ class AgentLlmSession:
                         total_attempts=total_attempts,
                         error=retry_error,
                     )
-                raise self._build_recoverable_pause_error(
+                self._raise_assistant_run_error(
                     request=request,
-                    error=retry_error,
-                    retry_number=retry_number,
-                    total_attempts=total_attempts,
+                    error_code=retry_error.error_code,
                     error_message=self._build_model_api_error_message(exc),
-                ) from exc
-            raise ModelAPIError(
-                model_name=exc.model_name,
-                message=self._build_model_api_error_message(exc),
-            ) from exc
+                )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code=(
+                    retry_error.error_code
+                    if retry_error is not None
+                    else getattr(exc, "model_name", None)
+                ),
+                error_message=self._build_model_api_error_message(exc),
+            )
         except Exception as exc:
             retry_error = extract_retry_error_info(exc)
+            recovered = await self._maybe_recover_from_tool_args_parse_failure(
+                request=request,
+                retry_number=retry_number,
+                total_attempts=total_attempts,
+                emitted_text_chunks=emitted_text_chunks,
+                published_tool_call_ids=published_tool_call_ids,
+                streamed_tool_calls=streamed_tool_calls,
+                error_message=(
+                    retry_error.message
+                    if retry_error is not None
+                    else (str(exc) or exc.__class__.__name__)
+                ),
+            )
+            if recovered is not None:
+                return recovered
             should_retry = self._should_retry_request(
                 retry_error=retry_error,
                 retry_number=retry_number,
@@ -850,13 +897,21 @@ class AgentLlmSession:
                         error=retry_error,
                     )
                 if retry_error.retryable:
-                    raise self._build_recoverable_pause_error(
+                    self._raise_assistant_run_error(
                         request=request,
-                        error=retry_error,
-                        retry_number=retry_number,
-                        total_attempts=total_attempts,
-                    ) from exc
-            raise
+                        error_code=retry_error.error_code,
+                        error_message=retry_error.message,
+                    )
+                self._raise_assistant_run_error(
+                    request=request,
+                    error_code=retry_error.error_code,
+                    error_message=retry_error.message,
+                )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code="internal_execution_error",
+                error_message=str(exc) or exc.__class__.__name__,
+            )
 
         assert result is not None
 
@@ -980,15 +1035,30 @@ class AgentLlmSession:
         attempt_tool_event_emitted: bool,
         attempt_messages_committed: bool,
     ) -> bool:
+        allow_after_text = self._should_retry_after_text_side_effect(
+            retry_error=retry_error
+        )
         return (
             retry_error is not None
             and retry_error.retryable
             and self._retry_config.enabled
             and retry_number < self._retry_config.max_retries
-            and not attempt_text_emitted
+            and (not attempt_text_emitted or allow_after_text)
             and not attempt_tool_event_emitted
             and not attempt_messages_committed
         )
+
+    def _should_retry_after_text_side_effect(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo | None,
+    ) -> bool:
+        if retry_error is None or not retry_error.retryable:
+            return False
+        if retry_error.transport_error:
+            return True
+        status_code = retry_error.status_code
+        return status_code is not None and status_code >= 500
 
     def _build_recoverable_pause_error(
         self,
@@ -1006,6 +1076,45 @@ class AgentLlmSession:
                 retries_used=retry_number,
                 total_attempts=total_attempts,
                 error_message=error_message,
+            )
+        )
+
+    def _raise_assistant_run_error(
+        self,
+        *,
+        request: LLMRequest,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> None:
+        assistant_message = build_assistant_error_message(
+            error_code=error_code,
+            error_message=error_message,
+        )
+        self._message_repo.prune_conversation_history_to_safe_boundary(
+            self._conversation_id(request)
+        )
+        self._message_repo.append(
+            session_id=request.session_id,
+            workspace_id=self._workspace_id(request),
+            conversation_id=self._conversation_id(request),
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            messages=[build_assistant_error_response(assistant_message)],
+        )
+        self._publish_text_delta_event(request=request, text=assistant_message)
+        raise AssistantRunError(
+            AssistantRunErrorPayload(
+                trace_id=request.trace_id,
+                session_id=request.session_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                conversation_id=self._conversation_id(request),
+                assistant_message=assistant_message,
+                error_code=str(error_code or ""),
+                error_message=str(error_message or ""),
             )
         )
 
@@ -1177,6 +1286,183 @@ class AgentLlmSession:
             return ""
         return str(response)
 
+    def _looks_like_tool_args_parse_failure(self, message: str) -> bool:
+        lowered = message.strip().lower()
+        if not lowered:
+            return False
+        indicators = (
+            "expecting ',' delimiter",
+            "expecting ':' delimiter",
+            "expecting property name enclosed in double quotes",
+            "expecting value",
+            "invalid json",
+            "tool arguments",
+            "function.arguments",
+        )
+        return any(indicator in lowered for indicator in indicators)
+
+    def _collect_salvageable_stream_tool_calls(
+        self,
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> list[ToolCallPart]:
+        salvageable: list[ToolCallPart] = []
+        for index in sorted(streamed_tool_calls):
+            item = streamed_tool_calls[index]
+            if isinstance(item, ToolCallPart):
+                salvageable.append(
+                    self._normalize_salvaged_tool_call_for_recovery(item)
+                )
+                continue
+            candidate = item.as_part()
+            if candidate is not None:
+                salvageable.append(
+                    self._normalize_salvaged_tool_call_for_recovery(candidate)
+                )
+        return salvageable
+
+    def _normalize_salvaged_tool_call_for_recovery(
+        self,
+        tool_call: ToolCallPart,
+    ) -> ToolCallPart:
+        repaired = repair_tool_args(tool_call.args)
+        if repaired.repair_applied or repaired.fallback_invalid_json:
+            self._log_salvaged_tool_call_repair(
+                tool_call=tool_call,
+                repaired=repaired,
+            )
+        return ToolCallPart(
+            tool_name=tool_call.tool_name,
+            args=repaired.normalized_args,
+            tool_call_id=str(tool_call.tool_call_id or ""),
+            id=tool_call.id,
+            provider_name=tool_call.provider_name,
+            provider_details=tool_call.provider_details,
+        )
+
+    def _log_salvaged_tool_call_repair(
+        self,
+        *,
+        tool_call: ToolCallPart,
+        repaired: ToolArgsRepairResult,
+    ) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.tool_call_args.salvaged_from_stream",
+            message="Recovered malformed streamed tool arguments for continued execution",
+            payload={
+                "tool_name": tool_call.tool_name,
+                "tool_call_id": str(tool_call.tool_call_id or ""),
+                "repair_applied": repaired.repair_applied,
+                "repair_succeeded": repaired.repair_succeeded,
+                "fallback_invalid_json": repaired.fallback_invalid_json,
+            },
+        )
+
+    async def _maybe_recover_from_tool_args_parse_failure(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        emitted_text_chunks: list[str],
+        published_tool_call_ids: set[str],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        error_message: str,
+    ) -> str | None:
+        if not self._looks_like_tool_args_parse_failure(error_message):
+            return None
+        salvageable_calls = self._collect_salvageable_stream_tool_calls(
+            streamed_tool_calls
+        )
+        if not salvageable_calls:
+            return None
+
+        response_parts: list[TextPart | ToolCallPart] = []
+        partial_text = "".join(emitted_text_chunks).strip()
+        if partial_text:
+            response_parts.append(TextPart(content=partial_text))
+        response_parts.extend(salvageable_calls)
+        assistant_response = ModelResponse(parts=response_parts)
+        tool_error_parts = [
+            ToolReturnPart(
+                tool_name=tool_call.tool_name,
+                tool_call_id=tool_call.tool_call_id,
+                content=build_tool_error_result(
+                    error_code="tool_input_validation_failed",
+                    message=(
+                        "Tool arguments were not valid JSON. "
+                        "The provider rejected the malformed tool call before execution. "
+                        f"Details: {error_message}"
+                    ),
+                ),
+            )
+            for tool_call in salvageable_calls
+        ]
+        tool_error_request = ModelRequest(parts=tool_error_parts)
+        self._message_repo.prune_conversation_history_to_safe_boundary(
+            self._conversation_id(request)
+        )
+        self._message_repo.append(
+            session_id=request.session_id,
+            workspace_id=self._workspace_id(request),
+            conversation_id=self._conversation_id(request),
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            messages=[assistant_response, tool_error_request],
+        )
+        self._publish_tool_call_events_from_messages(
+            request=request,
+            messages=[assistant_response],
+            published_tool_call_ids=published_tool_call_ids,
+        )
+        self._publish_committed_tool_outcome_events_from_messages(
+            request=request,
+            messages=[tool_error_request],
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.tool_args_parse_failure.recovered",
+            message="Recovered from malformed tool arguments by emitting an error tool result",
+            payload={
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "tool_call_ids": [
+                    str(tool_call.tool_call_id or "") for tool_call in salvageable_calls
+                ],
+            },
+        )
+        next_retry_number = retry_number + 1
+        if next_retry_number >= total_attempts:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                event="llm.tool_args_parse_failure.recovery_exhausted",
+                message=(
+                    "Malformed tool argument recovery budget exhausted; failing request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "retry_number": retry_number,
+                    "total_attempts": total_attempts,
+                },
+            )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code="model_tool_args_invalid_json",
+                error_message=error_message,
+            )
+        return await self._generate_async(
+            request,
+            retry_number=next_retry_number,
+            total_attempts=total_attempts,
+            skip_initial_user_prompt_persist=True,
+        )
+
     def _handle_model_stream_event(
         self,
         *,
@@ -1186,6 +1472,7 @@ class AgentLlmSession:
         text_lengths: dict[int, int],
         thinking_lengths: dict[int, int],
         started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
     ) -> bool:
         if isinstance(stream_event, PartStartEvent):
             return self._handle_part_start_event(
@@ -1195,6 +1482,7 @@ class AgentLlmSession:
                 text_lengths=text_lengths,
                 thinking_lengths=thinking_lengths,
                 started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
             )
         if isinstance(stream_event, PartDeltaEvent):
             return self._handle_part_delta_event(
@@ -1204,6 +1492,7 @@ class AgentLlmSession:
                 text_lengths=text_lengths,
                 thinking_lengths=thinking_lengths,
                 started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
             )
         if isinstance(stream_event, PartEndEvent):
             return self._handle_part_end_event(
@@ -1213,6 +1502,7 @@ class AgentLlmSession:
                 text_lengths=text_lengths,
                 thinking_lengths=thinking_lengths,
                 started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
             )
         return False
 
@@ -1225,6 +1515,7 @@ class AgentLlmSession:
         text_lengths: dict[int, int],
         thinking_lengths: dict[int, int],
         started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
     ) -> bool:
         part = event.part
         if isinstance(part, TextPart):
@@ -1250,6 +1541,8 @@ class AgentLlmSession:
                 content=part.content,
                 emitted_lengths=thinking_lengths,
             )
+        if isinstance(part, ToolCallPart):
+            streamed_tool_calls[event.index] = part
         return False
 
     def _handle_part_delta_event(
@@ -1261,6 +1554,7 @@ class AgentLlmSession:
         text_lengths: dict[int, int],
         thinking_lengths: dict[int, int],
         started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
     ) -> bool:
         delta = event.delta
         if isinstance(delta, TextPartDelta):
@@ -1291,6 +1585,17 @@ class AgentLlmSession:
                 text=text,
             )
             return False
+        if isinstance(delta, ToolCallPartDelta):
+            existing = streamed_tool_calls.get(event.index)
+            if existing is None:
+                as_part = delta.as_part()
+                streamed_tool_calls[event.index] = (
+                    as_part if as_part is not None else delta
+                )
+            else:
+                updated = delta.apply(existing)
+                if isinstance(updated, (ToolCallPart, ToolCallPartDelta)):
+                    streamed_tool_calls[event.index] = updated
         return False
 
     def _handle_part_end_event(
@@ -1302,6 +1607,7 @@ class AgentLlmSession:
         text_lengths: dict[int, int],
         thinking_lengths: dict[int, int],
         started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
     ) -> bool:
         part = event.part
         if isinstance(part, TextPart):
@@ -1329,6 +1635,8 @@ class AgentLlmSession:
                 request=request,
                 part_index=event.index,
             )
+        if isinstance(part, ToolCallPart):
+            streamed_tool_calls[event.index] = part
         return False
 
     def _emit_text_suffix_for_part(
@@ -1668,7 +1976,7 @@ class AgentLlmSession:
         safe_index = self._last_committable_index(pending_messages)
         if safe_index <= 0:
             return history, pending_messages, False
-        ready = pending_messages[:safe_index]
+        ready = self._normalize_committable_messages(pending_messages[:safe_index])
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=self._workspace_id(request),
@@ -1724,6 +2032,39 @@ class AgentLlmSession:
             if committed_tool_events_published:
                 tool_events_published = True
         return next_history, remaining, tool_events_published
+
+    def _normalize_committable_messages(
+        self,
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        normalized: list[ModelRequest | ModelResponse] = []
+        for message in messages:
+            if isinstance(message, ModelResponse):
+                normalized.append(message)
+                continue
+            next_parts: list[ModelRequestPart] = []
+            changed = False
+            for part in message.parts:
+                if isinstance(part, RetryPromptPart) and part.tool_name:
+                    next_parts.append(
+                        ToolReturnPart(
+                            tool_name=part.tool_name,
+                            tool_call_id=part.tool_call_id,
+                            content=build_tool_error_result(
+                                error_code="tool_input_validation_failed",
+                                message=str(part.content or "").strip()
+                                or "Tool input validation failed.",
+                            ),
+                        )
+                    )
+                    changed = True
+                    continue
+                next_parts.append(part)
+            if changed:
+                normalized.append(ModelRequest(parts=next_parts))
+                continue
+            normalized.append(message)
+        return normalized
 
     def _last_committable_index(
         self,

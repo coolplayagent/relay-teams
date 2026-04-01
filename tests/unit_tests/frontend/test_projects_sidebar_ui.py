@@ -972,6 +972,11 @@ def _run_sidebar_script(
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
+    mock_stream_path = tmp_path / "mockStream.mjs"
+    mock_recovery_path = tmp_path / "mockRecovery.mjs"
+    mock_message_renderer_path = tmp_path / "mockMessageRenderer.mjs"
+    mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
+    mock_context_indicators_path = tmp_path / "mockContextIndicators.mjs"
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
     runner_path = tmp_path / "runner.mjs"
 
@@ -1447,7 +1452,53 @@ export const state = {
     currentWorkspaceId: "alpha-project",
     currentMainView: "session",
     currentProjectViewWorkspaceId: null,
+    activeEventSource: null,
 };
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_stream_path.write_text(
+        """
+export function detachActiveStreamForSessionSwitch() {
+    globalThis.__detachStreamCalls = (globalThis.__detachStreamCalls || 0) + 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_recovery_path.write_text(
+        """
+export function clearSessionRecovery() {
+    globalThis.__clearSessionRecoveryCalls = (globalThis.__clearSessionRecoveryCalls || 0) + 1;
+}
+
+export function stopSessionContinuity(sessionId) {
+    globalThis.__stoppedSessionContinuity = globalThis.__stoppedSessionContinuity || [];
+    globalThis.__stoppedSessionContinuity.push(sessionId);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_message_renderer_path.write_text(
+        """
+export function clearAllStreamState() {
+    globalThis.__clearAllStreamStateCalls = (globalThis.__clearAllStreamStateCalls || 0) + 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_agent_panel_path.write_text(
+        """
+export function clearAllPanels() {
+    globalThis.__clearAllPanelsCalls = (globalThis.__clearAllPanelsCalls || 0) + 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_context_indicators_path.write_text(
+        """
+export function clearContextIndicators() {
+    globalThis.__clearContextIndicatorsCalls = (globalThis.__clearContextIndicatorsCalls || 0) + 1;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1485,6 +1536,11 @@ export function hideProjectView() {
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("./messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("./projectView.js", "./mockProjectView.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")

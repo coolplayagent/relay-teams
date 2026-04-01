@@ -155,16 +155,11 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         parsed = _parse_message_metadata(str(exc))
         if parsed is None:
             return None
-        retryable = (
-            _is_retryable_status_code(parsed.status_code)
-            if parsed.status_code is not None
-            else True
-        )
         return LlmRetryErrorInfo(
             message=str(exc),
             status_code=parsed.status_code,
             error_code=parsed.error_code,
-            retryable=retryable,
+            retryable=_is_retryable_status_code(parsed.status_code),
         )
     if isinstance(exc, httpx.TimeoutException):
         return LlmRetryErrorInfo(
@@ -210,6 +205,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         status_code = getattr(exc, "status_code", None)
+        retry_override = _explicit_retry_override(headers)
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
             status_code=status_code,
@@ -218,13 +214,18 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             retry_after_ms=_parse_retry_after_ms(headers.get("retry-after"))
             if headers is not None
             else None,
-            retryable=_is_retryable_status_code(status_code),
+            retryable=(
+                retry_override
+                if retry_override is not None
+                else _is_retryable_status_code(status_code)
+            ),
         )
     if APIError is not None and isinstance(exc, APIError):
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         fallback = _parse_message_metadata(str(exc))
         status_code = fallback.status_code if fallback is not None else None
+        retry_override = _explicit_retry_override(getattr(exc, "headers", None))
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
             status_code=status_code,
@@ -233,9 +234,9 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             or (fallback.error_code if fallback is not None else None),
             error_type=error_payload.error_type,
             retryable=(
-                _is_retryable_status_code(status_code)
-                if status_code is not None
-                else True
+                retry_override
+                if retry_override is not None
+                else _is_retryable_status_code(status_code)
             ),
         )
 
@@ -250,7 +251,7 @@ def _extract_invalid_json_error_info(
     return LlmRetryErrorInfo(
         message=str(exc),
         error_code="model_tool_args_invalid_json",
-        retryable=True,
+        retryable=False,
         transport_error=False,
         timeout_error=False,
     )
@@ -331,7 +332,33 @@ def _status_code_error_code(status_code: int | None) -> str | None:
 def _is_retryable_status_code(status_code: int | None) -> bool:
     if status_code is None:
         return False
-    return status_code == 429 or status_code >= 500
+    return status_code in {408, 409, 429} or status_code >= 500
+
+
+def _explicit_retry_override(headers: object) -> bool | None:
+    if headers is None:
+        return None
+    raw_value: object
+    if isinstance(headers, dict):
+        raw_value = headers.get("x-should-retry")
+        if raw_value is None:
+            raw_value = headers.get("X-Should-Retry")
+    else:
+        getter = getattr(headers, "get", None)
+        if getter is None:
+            return None
+        raw_value = getter("x-should-retry")
+        if raw_value is None:
+            raw_value = getter("X-Should-Retry")
+    normalized = _optional_str(raw_value)
+    if normalized is None:
+        return None
+    lowered = normalized.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return None
 
 
 def _parse_retry_after_ms(raw_value: str | None) -> int | None:

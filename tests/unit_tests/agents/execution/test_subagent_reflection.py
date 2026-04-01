@@ -7,7 +7,7 @@ from typing import cast
 
 import httpx
 import pytest
-from openai import APIError
+from openai import APIStatusError
 
 import agent_teams.agents.execution.subagent_reflection as reflection_module
 from agent_teams.agents.execution.message_repository import MessageRepository
@@ -69,12 +69,11 @@ class _FakeStream:
     async def __anext__(self) -> object:
         _FakeAgent.attempts += 1
         if _FakeAgent.attempts < 3:
-            raise APIError(
-                "provider error",
-                request=httpx.Request(
-                    "POST", "https://example.test/v1/chat/completions"
-                ),
-                body={"error": {"code": "2062", "message": "busy"}},
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+            raise APIStatusError(
+                "lock timeout",
+                response=httpx.Response(409, request=request),
+                body={"error": {"code": "conflict", "message": "busy"}},
             )
         raise StopAsyncIteration
 

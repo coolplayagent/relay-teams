@@ -6,6 +6,7 @@ import json
 import httpx
 import pytest
 from openai import APIError, APIStatusError
+from pydantic_ai.exceptions import ModelAPIError
 
 from agent_teams.providers.llm_retry import (
     compute_retry_delay_ms,
@@ -13,6 +14,19 @@ from agent_teams.providers.llm_retry import (
     run_with_llm_retry,
 )
 from agent_teams.providers.model_config import LlmRetryConfig
+
+
+class _HeaderAPIError(APIError):
+    def __init__(
+        self,
+        message: str,
+        request: httpx.Request,
+        *,
+        body: object | None,
+        headers: dict[str, str],
+    ) -> None:
+        super().__init__(message, request=request, body=body)
+        self.headers = headers
 
 
 def test_extract_retry_error_info_reads_status_code_and_retry_after() -> None:
@@ -50,6 +64,64 @@ def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
     assert info.status_code is None
     assert info.error_code == "2062"
     assert info.message == "busy"
+    assert info.retryable is False
+
+
+def test_extract_retry_error_info_marks_408_and_409_as_retryable() -> None:
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    response_408 = httpx.Response(408, request=request)
+    response_409 = httpx.Response(409, request=request)
+
+    info_408 = extract_retry_error_info(
+        APIStatusError("timeout", response=response_408, body={})
+    )
+    info_409 = extract_retry_error_info(
+        APIStatusError("lock timeout", response=response_409, body={})
+    )
+
+    assert info_408 is not None
+    assert info_408.status_code == 408
+    assert info_408.retryable is True
+    assert info_409 is not None
+    assert info_409.status_code == 409
+    assert info_409.retryable is True
+
+
+def test_extract_retry_error_info_obeys_explicit_retry_header() -> None:
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    allow_retry = _HeaderAPIError(
+        "provider error",
+        request=request,
+        body={"error": {"code": "2062", "message": "busy"}},
+        headers={"x-should-retry": "true"},
+    )
+    deny_retry = _HeaderAPIError(
+        "provider error",
+        request=request,
+        body={"error": {"code": "2062", "message": "busy"}},
+        headers={"x-should-retry": "false"},
+    )
+
+    allow_info = extract_retry_error_info(allow_retry)
+    deny_info = extract_retry_error_info(deny_retry)
+
+    assert allow_info is not None
+    assert allow_info.retryable is True
+    assert deny_info is not None
+    assert deny_info.retryable is False
+
+
+def test_extract_retry_error_info_marks_model_api_error_without_status_non_retryable() -> (
+    None
+):
+    info = extract_retry_error_info(
+        ModelAPIError(model_name="gpt-test", message="provider busy code=2062")
+    )
+
+    assert info is not None
+    assert info.status_code is None
+    assert info.error_code == "2062"
+    assert info.retryable is False
 
 
 def test_extract_retry_error_info_marks_remote_protocol_interrupt_as_retryable() -> (
@@ -77,7 +149,7 @@ def test_extract_retry_error_info_marks_invalid_tool_args_json_as_retryable() ->
 
     assert info is not None
     assert info.error_code == "model_tool_args_invalid_json"
-    assert info.retryable is True
+    assert info.retryable is False
     assert info.transport_error is False
     assert info.timeout_error is False
 
@@ -97,7 +169,7 @@ def test_extract_retry_error_info_unwraps_invalid_tool_args_json_cause() -> None
 
     assert info is not None
     assert info.error_code == "model_tool_args_invalid_json"
-    assert info.retryable is True
+    assert info.retryable is False
 
 
 def test_compute_retry_delay_ms_uses_exponential_backoff_without_jitter() -> None:
@@ -123,10 +195,11 @@ async def test_run_with_llm_retry_retries_until_success() -> None:
         attempts["count"] += 1
         if attempts["count"] < 3:
             request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-            raise APIError(
-                "provider error",
-                request=request,
-                body={"error": {"code": "2062", "message": "busy"}},
+            response = httpx.Response(409, request=request)
+            raise APIStatusError(
+                "lock timeout",
+                response=response,
+                body={"error": {"code": "conflict", "message": "busy"}},
             )
         return "ok"
 
@@ -149,13 +222,15 @@ async def test_run_with_llm_retry_reports_exhausted_after_max_retries() -> None:
     exhausted: list[tuple[str, int]] = []
 
     async def operation() -> str:
-        raise APIError(
-            "provider error",
-            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
-            body={"error": {"code": "2062", "message": "busy"}},
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        response = httpx.Response(408, request=request)
+        raise APIStatusError(
+            "timeout",
+            response=response,
+            body={"error": {"code": "request_timeout", "message": "busy"}},
         )
 
-    with pytest.raises(APIError):
+    with pytest.raises(APIStatusError):
         await run_with_llm_retry(
             operation=operation,
             config=LlmRetryConfig(jitter=False, max_retries=2, initial_delay_ms=2000),

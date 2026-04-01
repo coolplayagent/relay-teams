@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.agents.execution.recoverable_openai_chat_model import (
+    RecoverableOpenAIChatModel as OpenAIChatModel,
+)
 from agent_teams.net.llm_client import build_llm_http_client
 from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 from agent_teams.skills.skill_registry import SkillRegistry

@@ -1150,6 +1150,14 @@ def _resolve_playwright_browser_root() -> Path:
     configured_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if configured_root:
         candidates.append(Path(configured_root).expanduser())
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data).expanduser() / "ms-playwright")
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        candidates.append(
+            Path(user_profile).expanduser() / "AppData" / "Local" / "ms-playwright"
+        )
 
     try:
         import pwd
