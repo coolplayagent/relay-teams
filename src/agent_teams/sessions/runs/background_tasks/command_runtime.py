@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from enum import Enum
 import importlib.util
 import os
@@ -293,12 +294,15 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
         except Exception:
             killed = False
         if not killed:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
         try:
             await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
         except asyncio.TimeoutError:
-            proc.kill()
-            await asyncio.wait_for(proc.wait(), timeout=2)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                await asyncio.wait_for(proc.wait(), timeout=2)
         return
 
     try:
