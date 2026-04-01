@@ -1,0 +1,10 @@
+Write full file contents to the workspace tmp directory only.
+
+Usage:
+- `path` is resolved relative to the workspace `tmp/` directory.
+- You may also pass a `tmp/...` path; it will still be constrained to the managed tmp directory.
+- This tool creates a file or fully replaces an existing file under `tmp/`.
+- Prefer `edit` when you only need a targeted change inside an existing tmp file.
+- Avoid using this tool for partial updates; provide the complete desired file content.
+- If the target path is a directory, the tool fails.
+- The result includes a short diff summary of what changed.

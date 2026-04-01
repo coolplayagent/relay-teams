@@ -44,6 +44,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "webfetch",
         "websearch",
         "write",
+        "write_tmp",
     )
 
 

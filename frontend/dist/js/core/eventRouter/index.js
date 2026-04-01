@@ -39,6 +39,8 @@ import {
 } from './humanEvents.js';
 import { handleNotificationRequested } from './notificationEvents.js';
 
+const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 250;
+
 export function routeEvent(evType, payload, eventMeta) {
     if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
     if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
@@ -157,6 +159,17 @@ function scheduleContinuityRefreshForEvent(evType) {
         return;
     }
 
+    if (evType === 'background_task_updated') {
+        scheduleRecoveryContinuityRefresh({
+            sessionId,
+            delayMs: BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS,
+            includeRounds: false,
+            quiet: true,
+            reason: evType,
+        });
+        return;
+    }
+
     if (
         evType === 'llm_retry_scheduled'
         || evType === 'llm_retry_exhausted'
@@ -168,7 +181,6 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'subagent_stopped'
         || evType === 'subagent_resumed'
         || evType === 'background_task_started'
-        || evType === 'background_task_updated'
         || evType === 'background_task_completed'
         || evType === 'background_task_stopped'
         || evType === 'notification_requested'

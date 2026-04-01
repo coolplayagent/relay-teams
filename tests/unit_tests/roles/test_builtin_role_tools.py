@@ -32,9 +32,12 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "webfetch" in main_agent.tools
     assert "websearch" in main_agent.tools
     assert "skill-installer" in main_agent.skills
-    assert "write" in designer.tools
+    assert "write_tmp" in designer.tools
+    assert "write" not in designer.tools
     assert "edit" not in designer.tools
-    assert "write" in explorer.tools
+    assert "write_tmp" in explorer.tools
+    assert "write" not in explorer.tools
     assert "edit" not in explorer.tools
-    assert "write" in gater.tools
+    assert "write_tmp" in gater.tools
+    assert "write" not in gater.tools
     assert "edit" not in gater.tools

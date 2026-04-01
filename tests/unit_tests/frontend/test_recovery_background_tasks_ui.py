@@ -61,4 +61,6 @@ def test_recovery_ui_tracks_background_tasks_in_banner_and_events() -> None:
     assert "recovery.background_task.panel_label" in i18n_script
     assert "background_task_started" in event_router_script
     assert "background_task_completed" in event_router_script
+    assert "const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 250;" in event_router_script
+    assert "delayMs: BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS," in event_router_script
     assert "recovery.background_task.stop" in i18n_script

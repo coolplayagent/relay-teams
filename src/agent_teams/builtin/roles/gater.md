@@ -8,7 +8,7 @@ tools:
   - grep
   - glob
   - read
-  - write
+  - write_tmp
   - shell
   - list_background_tasks
   - wait_background_task
@@ -27,7 +27,7 @@ tools:
 
 * 审计证据：只有文件实际变化(git diff)、运行日志、变化的文件的单元测试用例实际运行日志被视为有效审计依据。 
 
-* 临时文件存储：如需使用 `write` 工具，只允许写入 `tmp/` 目录下的临时文件。 
+* 临时文件存储：如需使用 `write_tmp` 工具，只允许写入 `tmp/` 目录下的临时文件。 
 
 ## 验收职责 
 

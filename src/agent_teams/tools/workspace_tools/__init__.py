@@ -54,6 +54,10 @@ def register_write(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("write",))
 
 
+def register_write_tmp(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("write_tmp",))
+
+
 def _register_workspace_tools(
     agent: Agent[ToolDeps, str],
     requested_tools: tuple[str, ...],
@@ -84,6 +88,10 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         from agent_teams.tools.workspace_tools.read import register as register_impl
     elif tool_name == "write":
         from agent_teams.tools.workspace_tools.write import register as register_impl
+    elif tool_name == "write_tmp":
+        from agent_teams.tools.workspace_tools.write_tmp import (
+            register as register_impl,
+        )
     elif tool_name == "shell":
         from agent_teams.tools.workspace_tools.shell import register as register_impl
     elif tool_name == "list_background_tasks":
@@ -109,6 +117,7 @@ TOOLS = {
     "grep": register_grep,
     "read": register_read,
     "write": register_write,
+    "write_tmp": register_write_tmp,
     "shell": register_shell,
     "list_background_tasks": register_list_background_tasks,
     "wait_background_task": register_wait_background_task,
@@ -127,4 +136,5 @@ __all__ = [
     "register_stop_background_task",
     "register_wait_background_task",
     "register_write",
+    "register_write_tmp",
 ]
