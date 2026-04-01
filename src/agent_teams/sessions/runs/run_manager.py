@@ -355,7 +355,6 @@ class RunManager:
         return self._create_run_local(intent, allow_active_run_attach=True)
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
-        intent.reuse_root_instance = False
         if self._should_delegate_to_bound_loop():
             delegated_intent = intent.model_copy(deep=True)
             return self._call_in_bound_loop(

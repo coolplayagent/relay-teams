@@ -409,7 +409,6 @@ class AutomationBoundSessionQueueService:
             input=content_parts_from_text(prompt),
             execution_mode=run_config.execution_mode,
             yolo=run_config.yolo,
-            reuse_root_instance=False,
             thinking=run_config.thinking,
             conversation_context=RuntimePromptConversationContext(
                 source_provider=FEISHU_PLATFORM,
