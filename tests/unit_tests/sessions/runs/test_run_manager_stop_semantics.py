@@ -12,6 +12,7 @@ from agent_teams.agents.orchestration.meta_agent import MetaAgent
 from agent_teams.media import content_parts_from_text
 from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from agent_teams.sessions.runs.enums import RunEventType
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.sessions.runs.run_manager import RunManager
 from agent_teams.sessions.runs.run_models import IntentInput, RunResult
 from agent_teams.notifications import (
@@ -19,6 +20,7 @@ from agent_teams.notifications import (
     NotificationConfig,
     NotificationRule,
     NotificationService,
+    NotificationType,
 )
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -305,3 +307,71 @@ def test_completed_notification_uses_final_run_output() -> None:
 
     assert notification_payload is not None
     assert notification_payload["body"] == "好"
+
+
+def test_assistant_error_notification_uses_failed_channel() -> None:
+    control = RunControlManager()
+    hub = RunEventHub()
+    injection = RunInjectionManager()
+    control.bind_runtime(
+        run_event_hub=hub,
+        injection_manager=injection,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _AgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _TaskRepo())),
+        message_repo=cast(MessageRepository, cast(object, _MessageRepo())),
+        event_bus=cast(EventLog, cast(object, _EventBus())),
+        run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
+    )
+    manager = RunManager(
+        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
+        injection_manager=injection,
+        run_event_hub=hub,
+        run_control_manager=control,
+        tool_approval_manager=ToolApprovalManager(),
+        session_repo=cast(SessionRepository, cast(object, _SessionRepo())),
+        active_run_registry=ActiveSessionRunRegistry(),
+        notification_service=NotificationService(
+            run_event_hub=hub,
+            get_config=lambda: NotificationConfig(
+                run_failed=NotificationRule(
+                    enabled=True,
+                    channels=(NotificationChannel.TOAST,),
+                ),
+            ),
+        ),
+    )
+
+    run_id = "run-1"
+    queue = hub.subscribe(run_id)
+
+    async def runner() -> RunResult:
+        return RunResult(
+            trace_id=run_id,
+            root_task_id="task-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_message="provider rejected request",
+            output=content_parts_from_text("provider rejected request"),
+        )
+
+    asyncio.run(
+        manager._worker(
+            run_id=run_id,
+            session_id="session-1",
+            runner=runner,
+        )
+    )
+
+    notification_payload: dict[str, object] | None = None
+    while not queue.empty():
+        event = queue.get_nowait()
+        if event.event_type == RunEventType.NOTIFICATION_REQUESTED:
+            notification_payload = json.loads(event.payload_json)
+            break
+
+    assert notification_payload is not None
+    assert (
+        notification_payload["notification_type"] == NotificationType.RUN_FAILED.value
+    )
+    assert notification_payload["title"] == "Run Failed"
+    assert notification_payload["body"] == "provider rejected request"

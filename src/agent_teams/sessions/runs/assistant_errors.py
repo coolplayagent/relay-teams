@@ -65,6 +65,11 @@ def _build_recovery_guidance_message(error_code: str) -> str | None:
         "network_error",
     }:
         return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    if error_code == "auth_invalid":
+        return (
+            "The previous request could not continue because the API key is invalid. "
+            "The conversation state already persisted is still valid."
+        )
     return None
 
 

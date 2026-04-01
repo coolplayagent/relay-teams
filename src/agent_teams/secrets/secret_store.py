@@ -230,10 +230,19 @@ class AppSecretStore:
             )
             if entry.storage == "keyring":
                 value = self._get_from_keyring(config_dir, coordinate)
-                if (
-                    value is not None
-                    and self.has_usable_keyring_backend()
-                    and self._try_set_in_keyring(config_dir, next_coordinate, value)
+                if value is None:
+                    LOGGER.warning(
+                        "Preserving keyring secret mapping during owner rename because the secret value could not be read",
+                        extra={
+                            "namespace": entry.namespace,
+                            "owner_id": entry.owner_id,
+                            "field_name": entry.field_name,
+                        },
+                    )
+                    next_entries.append(entry)
+                    continue
+                if self.has_usable_keyring_backend() and self._try_set_in_keyring(
+                    config_dir, next_coordinate, value
                 ):
                     next_entries.append(
                         SecretIndexEntry(
@@ -243,7 +252,7 @@ class AppSecretStore:
                             storage="keyring",
                         )
                     )
-                elif value is not None:
+                else:
                     next_entries.append(
                         SecretIndexEntry(
                             namespace=next_coordinate.namespace,

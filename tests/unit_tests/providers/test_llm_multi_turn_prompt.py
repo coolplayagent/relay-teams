@@ -10,6 +10,7 @@ from typing import cast
 import httpx
 import pytest
 from openai import APIError, APIStatusError
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -1765,6 +1766,63 @@ async def test_generate_does_not_retry_statusless_api_error_before_side_effects(
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_parsed_provider_error_code_for_non_retryable_model_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "non_retryable_model_api_error.db",
+        fake_hub,
+    )
+    provider._session._retry_config.jitter = False
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=ModelAPIError(
+                    model_name="fake-chat-model",
+                    message="provider rejected request status_code: 401",
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-non-retryable-model-api-error",
+        trace_id="run-non-retryable-model-api-error",
+        task_id="task-non-retryable-model-api-error",
+        session_id="session-non-retryable-model-api-error",
+        workspace_id="default",
+        instance_id="inst-non-retryable-model-api-error",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(AssistantRunError) as exc_info:
+        await provider.generate(request)
+
+    assert exc_info.value.payload.error_code == "auth_invalid"
+    assert (
+        exc_info.value.payload.error_message
+        == "provider rejected request status_code: 401"
+    )
+    history = message_repo.get_history("inst-non-retryable-model-api-error")
+    assert len(history) == 2
+    final_message = history[-1]
+    assert isinstance(final_message, ModelResponse)
+    assert isinstance(final_message.parts[0], TextPart)
+    assert "API key is invalid" in final_message.parts[0].content
+
+
+@pytest.mark.asyncio
 async def test_generate_does_not_retry_after_streamed_text_side_effect_for_non_transport_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2091,6 +2149,100 @@ async def test_generate_salvages_streamed_tool_call_parse_failure_and_continues(
         and any(isinstance(part, ToolReturnPart) for part in message.parts)
         for message in second_history
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_bounds_repeated_streamed_tool_call_parse_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "stream_tool_salvage_bounded.db",
+        fake_hub,
+    )
+    provider._session._retry_config.max_retries = 1
+    provider._session._retry_config.jitter = False
+    usage_after_request = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        requests=1,
+        tool_calls=0,
+        details={"reasoning_tokens": 0},
+    )
+    part_events = [
+        PartStartEvent(
+            index=0,
+            part=ToolCallPart(
+                tool_name="write",
+                args='{"content":"broken"',
+                tool_call_id="call-live-bounded",
+            ),
+        ),
+        PartDeltaEvent(
+            index=0,
+            delta=ToolCallPartDelta(args_delta=', path:"demo.html"}'),
+        ),
+    ]
+    request_error = APIStatusError(
+        "bad request",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={
+            "error": {
+                "message": (
+                    "litellm.BadRequestError: OpenAIException - "
+                    "Expecting property name enclosed in double quotes: "
+                    "line 1 column 2 (char 1)"
+                )
+            }
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_PartEventNode(part_events, usage_after_request)],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[_PartEventNode(part_events, usage_after_request)],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _PartEventNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-stream-tool-salvage-bounded",
+        trace_id="run-stream-tool-salvage-bounded",
+        task_id="task-stream-tool-salvage-bounded",
+        session_id="session-stream-tool-salvage-bounded",
+        workspace_id="default",
+        instance_id="inst-stream-tool-salvage-bounded",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(AssistantRunError) as exc_info:
+        await provider.generate(request)
+
+    assert exc_info.value.payload.error_code == "model_tool_args_invalid_json"
+    assert len(scripted_agent.histories) == 2
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
 
 
 @pytest.mark.asyncio

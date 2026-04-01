@@ -42,3 +42,12 @@ def test_build_auto_recovery_prompt_reuses_network_stream_guidance() -> None:
         == NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
     )
     assert build_auto_recovery_prompt("network_timeout") is None
+
+
+def test_build_assistant_error_message_uses_auth_invalid_code() -> None:
+    message = build_assistant_error_message(
+        error_code="auth_invalid",
+        error_message="provider rejected request status_code: 401",
+    )
+
+    assert "API key is invalid" in message

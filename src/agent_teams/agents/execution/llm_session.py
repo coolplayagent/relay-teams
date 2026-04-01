@@ -813,7 +813,11 @@ class AgentLlmSession:
                 )
             self._raise_assistant_run_error(
                 request=request,
-                error_code=getattr(exc, "model_name", None),
+                error_code=(
+                    retry_error.error_code
+                    if retry_error is not None
+                    else getattr(exc, "model_name", None)
+                ),
                 error_message=self._build_model_api_error_message(exc),
             )
         except Exception as exc:
@@ -1427,9 +1431,30 @@ class AgentLlmSession:
                 ],
             },
         )
+        next_retry_number = retry_number + 1
+        if next_retry_number >= total_attempts:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                event="llm.tool_args_parse_failure.recovery_exhausted",
+                message=(
+                    "Malformed tool argument recovery budget exhausted; failing request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "retry_number": retry_number,
+                    "total_attempts": total_attempts,
+                },
+            )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code="model_tool_args_invalid_json",
+                error_message=error_message,
+            )
         return await self._generate_async(
             request,
-            retry_number=retry_number,
+            retry_number=next_retry_number,
             total_attempts=total_attempts,
             skip_initial_user_prompt_persist=True,
         )

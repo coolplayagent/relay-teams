@@ -29,6 +29,7 @@ from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.sessions.runs.event_log import EventLog
+from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -51,6 +52,7 @@ from agent_teams.workspace import (
     build_conversation_id,
 )
 from agent_teams.agents.tasks.enums import TaskStatus
+from agent_teams.agents.tasks.events import EventType
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
@@ -78,6 +80,12 @@ class _InterruptingProvider:
     async def generate(self, request: object) -> str:
         _ = request
         raise asyncio.CancelledError
+
+
+class _ExplodingProvider:
+    async def generate(self, request: object) -> str:
+        _ = request
+        raise RuntimeError("boom")
 
 
 class _RecoverablePauseProvider:
@@ -779,6 +787,86 @@ async def test_execute_marks_run_stop_as_stopped_idle_not_paused_followup(
 
 
 @pytest.mark.asyncio
+async def test_execute_marks_non_user_cancellation_as_failed(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        agent_repo,
+        message_repo,
+        run_runtime_repo,
+        _run_control_manager,
+    ) = _build_service_with_control(
+        tmp_path / "task_execution_service_non_user_cancel.db",
+        _InterruptingProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            instance_id=instance_id,
+            role_id="time",
+            task=task,
+        )
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.FAILED
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert runtime.last_error == "Task cancelled"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "Task cancelled"
+    instance = agent_repo.get_instance(instance_id)
+    assert instance.status == InstanceStatus.FAILED
+    events = EventLog(
+        tmp_path / "task_execution_service_non_user_cancel.db"
+    ).list_by_session("session-1")
+    assert str(events[-1]["event_type"]) == EventType.TASK_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_execute_marks_unmanaged_cancellation_as_failed(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_unmanaged_cancel.db"
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        _InterruptingProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            instance_id=instance_id,
+            role_id="time",
+            task=task,
+        )
+
+    runtime = RunRuntimeRepository(db_path).get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.FAILED
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert runtime.last_error == "Task cancelled"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "Task cancelled"
+    instance = agent_repo.get_instance(instance_id)
+    assert instance.status == InstanceStatus.FAILED
+    events = EventLog(db_path).list_by_session("session-1")
+    assert str(events[-1]["event_type"]) == EventType.TASK_FAILED.value
+
+
+@pytest.mark.asyncio
 async def test_execute_marks_subagent_stop_as_awaiting_followup(
     tmp_path: Path,
 ) -> None:
@@ -862,6 +950,45 @@ async def test_execute_marks_recoverable_pause_as_awaiting_recovery(
     record = task_repo.get(task.task_id)
     assert record.status == TaskStatus.STOPPED
     assert record.error_message == "stream interrupted"
+
+
+@pytest.mark.asyncio
+async def test_execute_marks_assistant_error_path_as_failed(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_assistant_error.db"
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        _ExplodingProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "internal_execution_error"
+    assert result.error_message == "boom"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "boom"
+    assert record.result
+    instance = agent_repo.get_instance(instance_id)
+    assert instance.status == InstanceStatus.FAILED
+    runtime = RunRuntimeRepository(db_path).get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.RUNNING
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert runtime.last_error == "boom"
+    events = EventLog(db_path).list_by_session("session-1")
+    assert str(events[-1]["event_type"]) == EventType.TASK_FAILED.value
 
 
 @pytest.mark.asyncio

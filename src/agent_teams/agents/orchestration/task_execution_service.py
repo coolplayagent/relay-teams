@@ -353,16 +353,16 @@ class TaskExecutionService(BaseModel):
                     and not run_stop_requested
                 )
             else:
-                stopped = True
+                stopped = False
                 self.task_repo.update_status(
                     task.task_id,
-                    TaskStatus.STOPPED,
+                    TaskStatus.FAILED,
                     error_message="Task cancelled",
                 )
-                self.agent_repo.mark_status(instance_id, InstanceStatus.STOPPED)
+                self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
                 self.event_bus.emit(
                     EventEnvelope(
-                        event_type=EventType.TASK_STOPPED,
+                        event_type=EventType.TASK_FAILED,
                         trace_id=task.trace_id,
                         session_id=task.session_id,
                         task_id=task.task_id,
@@ -372,7 +372,9 @@ class TaskExecutionService(BaseModel):
                 )
             self.run_runtime_repo.update(
                 task.trace_id,
-                status=RunRuntimeStatus.STOPPED,
+                status=(
+                    RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
+                ),
                 phase=(
                     RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
                     if paused_subagent
@@ -521,12 +523,12 @@ class TaskExecutionService(BaseModel):
             )
         self.task_repo.update_status(
             task.task_id,
-            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
             assigned_instance_id=instance_id,
             result=assistant_message,
             error_message=error_message or assistant_message,
         )
-        _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
+        _ = self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
         self.run_runtime_repo.update(
             task.trace_id,
             status=RunRuntimeStatus.RUNNING,
@@ -539,7 +541,7 @@ class TaskExecutionService(BaseModel):
         )
         self.event_bus.emit(
             EventEnvelope(
-                event_type=EventType.TASK_COMPLETED,
+                event_type=EventType.TASK_FAILED,
                 trace_id=task.trace_id,
                 session_id=task.session_id,
                 task_id=task.task_id,
@@ -550,8 +552,8 @@ class TaskExecutionService(BaseModel):
         log_event(
             LOGGER,
             logging.WARNING,
-            event="task.execution.completed_with_assistant_error",
-            message="Task execution completed after assistant error message was persisted",
+            event="task.execution.failed_with_assistant_error",
+            message="Task execution failed after assistant error message was persisted",
             payload={
                 "task_id": task.task_id,
                 "instance_id": instance_id,

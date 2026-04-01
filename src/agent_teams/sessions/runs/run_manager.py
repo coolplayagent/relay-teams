@@ -935,19 +935,30 @@ class RunManager:
             )
             result = self._normalize_terminal_run_result(raw_result)
             completion_reason = result.completion_reason
-            terminal_status = RunRuntimeStatus.COMPLETED
-            terminal_event_type = RunEventType.RUN_COMPLETED
-            terminal_log_event = "run.completed"
-            terminal_log_level = (
-                logging.INFO
-                if completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
-                else logging.WARNING
+            failed = result.status == "failed"
+            terminal_status = (
+                RunRuntimeStatus.FAILED if failed else RunRuntimeStatus.COMPLETED
             )
-            notification_type = NotificationType.RUN_COMPLETED
-            notification_title = "Run Completed"
-            output_text = result.output_text
+            terminal_event_type = (
+                RunEventType.RUN_FAILED if failed else RunEventType.RUN_COMPLETED
+            )
+            terminal_log_event = "run.failed" if failed else "run.completed"
+            terminal_log_level = logging.ERROR if failed else logging.INFO
+            notification_type = (
+                NotificationType.RUN_FAILED
+                if failed
+                else NotificationType.RUN_COMPLETED
+            )
+            notification_title = "Run Failed" if failed else "Run Completed"
+            output_text = result.output_text or str(result.error_message or "").strip()
             notification_body = (
-                output_text if output_text else f"Run {run_id} completed successfully."
+                output_text
+                if output_text
+                else (
+                    f"Run {run_id} failed."
+                    if failed
+                    else f"Run {run_id} completed successfully."
+                )
             )
             self._safe_runtime_update(
                 run_id,
@@ -958,7 +969,7 @@ class RunManager:
                 active_task_id=None,
                 active_role_id=None,
                 active_subagent_instance_id=None,
-                last_error=result.error_message,
+                last_error=((result.error_message or output_text) if failed else None),
             )
             self._safe_publish_run_event(
                 RunEvent(
@@ -978,10 +989,10 @@ class RunManager:
                     logger,
                     terminal_log_level,
                     event=terminal_log_event,
-                    message="Run completed",
+                    message="Run failed" if failed else "Run completed",
                     payload={
                         "root_task_id": result.root_task_id,
-                        "status": "completed",
+                        "status": result.status,
                         "completion_reason": completion_reason.value,
                     },
                 )
@@ -1071,16 +1082,21 @@ class RunManager:
                 error_code="run_worker_failed",
                 error_message=str(exc),
             )
+            result = self._normalize_terminal_run_result(result)
+            failed = result.status == "failed"
+            output_text = result.output_text or str(result.error_message or "").strip()
             self._safe_runtime_update(
                 run_id,
                 root_task_id=result.root_task_id,
-                status=RunRuntimeStatus.COMPLETED,
+                status=RunRuntimeStatus.FAILED
+                if failed
+                else RunRuntimeStatus.COMPLETED,
                 phase=RunRuntimePhase.TERMINAL,
                 active_instance_id=None,
                 active_task_id=None,
                 active_role_id=None,
                 active_subagent_instance_id=None,
-                last_error=result.error_message,
+                last_error=((result.error_message or output_text) if failed else None),
             )
             self._safe_publish_run_event(
                 RunEvent(
@@ -1088,7 +1104,11 @@ class RunManager:
                     run_id=run_id,
                     trace_id=result.trace_id,
                     task_id=result.root_task_id,
-                    event_type=RunEventType.RUN_COMPLETED,
+                    event_type=(
+                        RunEventType.RUN_FAILED
+                        if failed
+                        else RunEventType.RUN_COMPLETED
+                    ),
                     payload_json=dumps(result.model_dump()),
                 ),
                 failure_event="run.event.publish_failed",
@@ -1098,18 +1118,31 @@ class RunManager:
             ):
                 log_event(
                     logger,
-                    logging.ERROR,
-                    event="run.completed_with_assistant_error",
-                    message="Run completed after assistant error message was persisted",
+                    logging.ERROR if failed else logging.INFO,
+                    event="run.failed" if failed else "run.completed",
+                    message="Run failed" if failed else "Run completed",
                     exc_info=exc,
+                    payload={
+                        "root_task_id": result.root_task_id,
+                        "status": result.status,
+                        "completion_reason": result.completion_reason.value,
+                    },
                 )
             self._emit_notification(
-                notification_type=NotificationType.RUN_COMPLETED,
+                notification_type=(
+                    NotificationType.RUN_FAILED
+                    if failed
+                    else NotificationType.RUN_COMPLETED
+                ),
                 session_id=session_id,
                 run_id=run_id,
                 trace_id=result.trace_id,
-                title="Run Completed",
-                body=result.output_text,
+                title="Run Failed" if failed else "Run Completed",
+                body=(
+                    output_text
+                    if output_text
+                    else (f"Run {run_id} failed." if failed else "")
+                ),
             )
         finally:
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
@@ -1898,7 +1931,7 @@ class RunManager:
         return RunResult(
             trace_id=run_id,
             root_task_id=resolved_root_task_id,
-            status="completed",
+            status="failed",
             completion_reason=RunCompletionReason.ASSISTANT_ERROR,
             error_code=error_code,
             error_message=error_message,
@@ -1906,15 +1939,25 @@ class RunManager:
         )
 
     def _normalize_terminal_run_result(self, result: RunResult) -> RunResult:
-        if result.status == "completed":
-            return result
-        return result.model_copy(
-            update={
-                "status": "completed",
-                "completion_reason": RunCompletionReason.ASSISTANT_ERROR,
-                "error_message": result.error_message or result.output_text,
-            }
-        )
+        error_text = str(result.error_message or result.output_text or "").strip()
+        output = result.output
+        if not output and error_text:
+            output = content_parts_from_text(error_text)
+        if (
+            result.status != "failed"
+            and result.completion_reason != RunCompletionReason.ASSISTANT_ERROR
+        ):
+            if output == result.output:
+                return result
+            return result.model_copy(update={"output": output})
+        updates: dict[str, object] = {
+            "status": "failed",
+            "completion_reason": RunCompletionReason.ASSISTANT_ERROR,
+            "output": output,
+        }
+        if error_text:
+            updates["error_message"] = error_text
+        return result.model_copy(update=updates)
 
     def _run_accepts_followups(self, run_id: str, next_intent: IntentInput) -> bool:
         if next_intent.run_kind != RunKind.CONVERSATION:
