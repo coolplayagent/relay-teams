@@ -17,8 +17,13 @@ from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     LlmRetryConfig,
     ModelEndpointConfig,
+    ModelRequestHeader,
     ProviderType,
     SamplingConfig,
+)
+from agent_teams.providers.model_header_utils import (
+    model_header_secret_field_name,
+    normalize_model_request_headers_payload,
 )
 from agent_teams.providers.known_model_context_windows import (
     infer_known_context_window,
@@ -170,12 +175,18 @@ def load_llm_profile_state(
             raw_value=cfg.get("api_key"),
             env_values=env_values,
         )
+        headers = _resolve_profile_headers(
+            config_dir=config_dir,
+            profile_name=name,
+            raw_value=cfg.get("headers"),
+            env_values=env_values,
+        )
         provider_raw = cfg.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
         provider = ProviderType(provider_raw)
 
-        if not model or not base_url or not api_key:
+        if not model or not base_url or (not api_key and not headers):
             raise ValueError(
-                f"Invalid profile '{name}': missing required fields (model, base_url, api_key)."
+                f"Invalid profile '{name}': missing required fields (model, base_url, api_key or headers)."
             )
 
         temperature = cfg.get("temperature", 0.2)
@@ -196,7 +207,8 @@ def load_llm_profile_state(
             provider=provider,
             model=model,
             base_url=base_url,
-            api_key=api_key,
+            api_key=api_key or None,
+            headers=headers,
             ssl_verify=ssl_verify,
             context_window=(
                 int(context_window_raw)
@@ -315,6 +327,50 @@ def _resolve_profile_api_key(
     if secret_value is None:
         return ""
     return secret_value
+
+
+def _resolve_profile_headers(
+    *,
+    config_dir: Path,
+    profile_name: str,
+    raw_value: object,
+    env_values: Mapping[str, str],
+) -> tuple[ModelRequestHeader, ...]:
+    bindings = normalize_model_request_headers_payload(raw_value)
+    resolved_bindings: list[ModelRequestHeader] = []
+    for binding in bindings:
+        value = binding.value
+        if value is not None:
+            value = _resolve_required_config_value(
+                value,
+                env_values,
+                profile_name=profile_name,
+                field_name=f"headers.{binding.name}",
+            )
+        elif binding.secret:
+            value = get_secret_store().get_secret(
+                config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=profile_name,
+                field_name=model_header_secret_field_name(binding.name),
+            )
+        elif binding.configured:
+            raise ValueError(
+                f"Invalid profile '{profile_name}': header '{binding.name}' is marked configured but has no value."
+            )
+        if not binding.secret and value is None:
+            raise ValueError(
+                f"Invalid profile '{profile_name}': non-secret header '{binding.name}' requires a value."
+            )
+        resolved_bindings.append(
+            binding.model_copy(
+                update={
+                    "value": value,
+                    "configured": value is not None,
+                }
+            )
+        )
+    return tuple(resolved_bindings)
 
 
 def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | None:

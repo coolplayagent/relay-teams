@@ -320,6 +320,7 @@ class AgentLlmSession:
             model_name=self._config.model,
             base_url=self._config.base_url,
             api_key=self._config.api_key,
+            headers=self._config.headers,
             system_prompt=agent_system_prompt,
             allowed_tools=_resolve_allowed_tools(
                 self._tool_registry,

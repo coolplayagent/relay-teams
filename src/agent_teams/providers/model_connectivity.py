@@ -16,9 +16,11 @@ from agent_teams.providers.known_model_context_windows import (
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
+    ModelRequestHeader,
     ProviderType,
     SamplingConfig,
 )
+from agent_teams.providers.openai_support import build_model_request_headers
 from agent_teams.sessions.runs.runtime_config import RuntimeConfig
 
 
@@ -41,6 +43,7 @@ class ModelConnectivityProbeOverride(BaseModel):
     model: str | None = Field(default=None, min_length=1)
     base_url: str | None = Field(default=None, min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] = ()
     ssl_verify: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -122,7 +125,8 @@ class ModelDiscoveryResolvedConfig(BaseModel):
 
     provider: ProviderType
     base_url: str = Field(min_length=1)
-    api_key: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] = ()
     ssl_verify: bool | None = None
     connect_timeout_seconds: float = Field(gt=0.0, le=300.0)
 
@@ -219,8 +223,8 @@ class ModelConnectivityProbeService:
                 missing_fields.append("model")
             if override.base_url is None:
                 missing_fields.append("base_url")
-            if override.api_key is None:
-                missing_fields.append("api_key")
+            if override.api_key is None and not override.headers:
+                missing_fields.append("api_key or headers")
             if missing_fields:
                 joined_fields = ", ".join(missing_fields)
                 raise ValueError(
@@ -228,12 +232,12 @@ class ModelConnectivityProbeService:
                 )
             override_model = cast(str, override.model)
             override_base_url = cast(str, override.base_url)
-            override_api_key = cast(str, override.api_key)
             return ModelEndpointConfig(
                 provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
                 model=override_model,
                 base_url=override_base_url,
-                api_key=override_api_key,
+                api_key=override.api_key,
+                headers=override.headers,
                 ssl_verify=override.ssl_verify,
                 sampling=SamplingConfig(
                     temperature=(
@@ -283,8 +287,8 @@ class ModelConnectivityProbeService:
             missing_fields: list[str] = []
             if override.base_url is None:
                 missing_fields.append("base_url")
-            if override.api_key is None:
-                missing_fields.append("api_key")
+            if override.api_key is None and not override.headers:
+                missing_fields.append("api_key or headers")
             if missing_fields:
                 joined_fields = ", ".join(missing_fields)
                 raise ValueError(
@@ -293,7 +297,8 @@ class ModelConnectivityProbeService:
             return ModelDiscoveryResolvedConfig(
                 provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
                 base_url=cast(str, override.base_url),
-                api_key=cast(str, override.api_key),
+                api_key=override.api_key,
+                headers=override.headers,
                 ssl_verify=override.ssl_verify,
                 connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
             )
@@ -303,6 +308,7 @@ class ModelConnectivityProbeService:
             provider=resolved_override.provider or base_config.provider,
             base_url=resolved_override.base_url or base_config.base_url,
             api_key=resolved_override.api_key or base_config.api_key,
+            headers=resolved_override.headers or base_config.headers,
             ssl_verify=(
                 resolved_override.ssl_verify
                 if resolved_override.ssl_verify is not None
@@ -324,6 +330,7 @@ class ModelConnectivityProbeService:
             model=override.model or base_config.model,
             base_url=override.base_url or base_config.base_url,
             api_key=override.api_key or base_config.api_key,
+            headers=override.headers or base_config.headers,
             ssl_verify=(
                 override.ssl_verify
                 if override.ssl_verify is not None
@@ -398,10 +405,10 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> ModelConnectivityProbeResult:
         endpoint = f"{config.base_url.rstrip('/')}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = build_model_request_headers(
+            config,
+            extra_headers={"Content-Type": "application/json"},
+        )
         payload = {
             "model": config.model,
             "messages": [{"role": "user", "content": "reply with pong"}],
@@ -510,10 +517,17 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> ModelDiscoveryResult:
         endpoint = f"{config.base_url.rstrip('/')}/models"
-        headers = {
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = build_model_request_headers(
+            ModelEndpointConfig(
+                provider=config.provider,
+                model="discovery",
+                base_url=config.base_url,
+                api_key=config.api_key,
+                headers=config.headers,
+                ssl_verify=config.ssl_verify,
+            ),
+            extra_headers={"Content-Type": "application/json"},
+        )
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:

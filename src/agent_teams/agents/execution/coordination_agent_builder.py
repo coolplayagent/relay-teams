@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModelSettings
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 
 from agent_teams.mcp.mcp_registry import McpRegistry
@@ -11,7 +10,11 @@ from agent_teams.agents.execution.recoverable_openai_chat_model import (
     RecoverableOpenAIChatModel as OpenAIChatModel,
 )
 from agent_teams.net.llm_client import build_llm_http_client
-from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from agent_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    ModelRequestHeader,
+)
+from agent_teams.providers.openai_support import build_openai_provider_for_endpoint
 from agent_teams.skills.skill_registry import SkillRegistry
 from agent_teams.tools.registry import ToolRegistry
 from agent_teams.tools.runtime import ToolDeps
@@ -21,7 +24,8 @@ def build_coordination_agent(
     *,
     model_name: str,
     base_url: str,
-    api_key: str,
+    api_key: str | None,
+    headers: tuple[ModelRequestHeader, ...] = (),
     system_prompt: str,
     allowed_tools: tuple[str, ...],
     model_settings: OpenAIChatModelSettings | None = None,
@@ -63,9 +67,10 @@ def build_coordination_agent(
     )
     model = OpenAIChatModel(
         model_name,
-        provider=OpenAIProvider(
+        provider=build_openai_provider_for_endpoint(
             base_url=base_url,
             api_key=api_key,
+            headers=headers,
             http_client=llm_http_client,
         ),
         profile=model_profile,

@@ -1707,6 +1707,7 @@ async def test_session_new_stores_model_profile_override_without_persisting_api_
         "provider": "openai_compatible",
         "model": "gpt-4.1",
         "baseUrl": "https://api.openai.com/v1",
+        "headers": [],
         "sslVerify": None,
         "temperature": 0.2,
         "topP": None,
@@ -1722,6 +1723,154 @@ async def test_session_new_stores_model_profile_override_without_persisting_api_
     assert runtime_override.base_url == "https://api.openai.com/v1"
     assert runtime_override.api_key == "sk-secret"
     assert notifications == []
+
+
+@pytest.mark.asyncio
+async def test_session_new_stores_redacted_model_profile_override_headers(
+    tmp_path: Path,
+) -> None:
+    session_service = FakeSessionService()
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    session_model_profile_store = GatewaySessionModelProfileStore()
+    gateway_session_service = GatewaySessionService(
+        repository=repository,
+        session_service=cast(SessionService, session_service),
+        session_model_profile_store=session_model_profile_store,
+    )
+
+    async def notify(_message: dict[str, JsonValue]) -> None:
+        return None
+
+    server = AcpGatewayServer(
+        gateway_session_service=gateway_session_service,
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, FakeRunManager()),
+        media_asset_service=cast(MediaAssetService, object()),
+        notify=notify,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {
+                "modelProfileOverride": {
+                    "name": "default",
+                    "provider": "openai_compatible",
+                    "model": "gpt-4.1",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "headers": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer acp-override",
+                        },
+                        {
+                            "name": "anthropic-version",
+                            "value": "2023-06-01",
+                        },
+                    ],
+                }
+            },
+        }
+    )
+
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    record = repository.get(session_id)
+    public_override = record.channel_state["acp_model_profile_override"]
+    assert isinstance(public_override, dict)
+    assert public_override["headers"] == [
+        {
+            "name": "Authorization",
+            "value": None,
+            "secret": False,
+            "configured": True,
+        },
+        {
+            "name": "anthropic-version",
+            "value": None,
+            "secret": False,
+            "configured": True,
+        },
+    ]
+
+    runtime_override = session_model_profile_store.get(record.internal_session_id)
+    assert runtime_override is not None
+    assert runtime_override.api_key is None
+    assert runtime_override.headers[0].value == "Bearer acp-override"
+    assert runtime_override.headers[1].value == "2023-06-01"
+
+
+@pytest.mark.asyncio
+async def test_session_new_accepts_model_profile_override_headers_object_shorthand(
+    tmp_path: Path,
+) -> None:
+    session_service = FakeSessionService()
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    session_model_profile_store = GatewaySessionModelProfileStore()
+    gateway_session_service = GatewaySessionService(
+        repository=repository,
+        session_service=cast(SessionService, session_service),
+        session_model_profile_store=session_model_profile_store,
+    )
+
+    async def notify(_message: dict[str, JsonValue]) -> None:
+        return None
+
+    server = AcpGatewayServer(
+        gateway_session_service=gateway_session_service,
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, FakeRunManager()),
+        media_asset_service=cast(MediaAssetService, object()),
+        notify=notify,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {
+                "modelProfileOverride": {
+                    "name": "default",
+                    "provider": "openai_compatible",
+                    "model": "gpt-4.1",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "headers": {
+                        "Authorization": "Bearer acp-override",
+                        "anthropic-version": "2023-06-01",
+                    },
+                }
+            },
+        }
+    )
+
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    record = repository.get(session_id)
+    public_override = record.channel_state["acp_model_profile_override"]
+    assert isinstance(public_override, dict)
+    assert public_override["headers"] == [
+        {
+            "name": "Authorization",
+            "value": None,
+            "secret": False,
+            "configured": True,
+        },
+        {
+            "name": "anthropic-version",
+            "value": None,
+            "secret": False,
+            "configured": True,
+        },
+    ]
+
+    runtime_override = session_model_profile_store.get(record.internal_session_id)
+    assert runtime_override is not None
+    assert runtime_override.api_key is None
+    assert runtime_override.headers[0].name == "Authorization"
+    assert runtime_override.headers[0].value == "Bearer acp-override"
+    assert runtime_override.headers[1].name == "anthropic-version"
+    assert runtime_override.headers[1].value == "2023-06-01"
 
 
 def test_acp_trace_messages_require_explicit_env(
