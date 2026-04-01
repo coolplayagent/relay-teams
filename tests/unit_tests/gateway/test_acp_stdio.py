@@ -615,6 +615,71 @@ async def test_session_prompt_rejects_busy_active_run(
 
 
 @pytest.mark.asyncio
+async def test_session_prompt_via_ingress_preserves_root_instance_reuse(
+    tmp_path: Path,
+) -> None:
+    session_service = FakeSessionService()
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    gateway_session_service = GatewaySessionService(
+        repository=repository,
+        session_service=cast(SessionService, session_service),
+    )
+    run_manager = FakeRunManager()
+    run_manager.events_by_run["run-1"] = (
+        _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
+    )
+    ingress_service = GatewaySessionIngressService(
+        run_service=cast(RunManager, run_manager),
+        run_runtime_repo=RunRuntimeRepository(tmp_path / "gateway.db"),
+    )
+    notifications: list[dict[str, JsonValue]] = []
+
+    async def notify(message: dict[str, JsonValue]) -> None:
+        notifications.append(message)
+
+    server = AcpGatewayServer(
+        gateway_session_service=gateway_session_service,
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, run_manager),
+        media_asset_service=cast(MediaAssetService, object()),
+        notify=notify,
+        session_ingress_service=ingress_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "remember this"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-1",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
+    assert len(run_manager.create_calls) == 1
+    assert run_manager.create_calls[0].reuse_root_instance is True
+    assert _session_update_name(notifications[0]) == "user_message_chunk"
+
+
+@pytest.mark.asyncio
 async def test_session_resume_restarts_active_run_and_returns_result(
     tmp_path: Path,
 ) -> None:

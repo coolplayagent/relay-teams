@@ -81,10 +81,7 @@ class GatewaySessionIngressService:
                 blocking_run_id=blocking_run_id,
                 busy_policy=request.busy_policy,
             )
-        safe_intent = request.intent.model_copy(
-            deep=True,
-            update={"reuse_root_instance": False},
-        )
+        safe_intent = request.intent.model_copy(deep=True)
         try:
             run_id, _ = self._create_detached_run(safe_intent)
             self._ensure_run_started(run_id)

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import StrEnum
 import asyncio
+from html import unescape
 import hashlib
 import ipaddress
 import math
@@ -60,12 +61,29 @@ RANGE_RESET_ERROR_TYPES = {"range_response_invalid", "range_resume_mismatch"}
 REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 REDIRECT_REQUIRED_ERROR_TYPE = "redirect_required"
 MAX_REDIRECTS = 10
+MAX_REDIRECT_BODY_BYTES = 64 * 1024
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 )
 FALLBACK_USER_AGENT = "agent-teams"
 DESCRIPTION = load_tool_description(__file__)
+META_REFRESH_REDIRECT_PATTERN = re.compile(
+    r"""<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]+content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""",
+    re.IGNORECASE,
+)
+WINDOW_LOCATION_REDIRECT_PATTERN = re.compile(
+    r"""window\.location(?:\.href)?\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+LOCATION_REPLACE_REDIRECT_PATTERN = re.compile(
+    r"""location\.replace\(\s*["']([^"']+)["']\s*\)""",
+    re.IGNORECASE,
+)
+ANCHOR_REDIRECT_PATTERN = re.compile(
+    r"""<a[^>]+href\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
 
 
 class WebFetchExtractMode(StrEnum):
@@ -446,6 +464,14 @@ async def fetch_url(
         while response.status_code in REDIRECT_STATUS_CODES:
             location = response.headers.get("location")
             if not location:
+                try:
+                    location = await _extract_redirect_location_from_response_body(
+                        response
+                    )
+                except ToolExecutionError:
+                    await response.aclose()
+                    raise
+            if not location:
                 await response.aclose()
                 raise ToolExecutionError(
                     error_type="upstream_error",
@@ -544,6 +570,80 @@ async def fetch_url(
             },
         )
     return response
+
+
+async def _extract_redirect_location_from_response_body(
+    response: httpx.Response,
+) -> str | None:
+    url_host = urlparse(str(response.request.url)).netloc
+    content_type = normalize_content_type(response.headers.get("content-type", ""))
+    if content_type and content_type not in {"text/html", "application/xhtml+xml"}:
+        return None
+    body = bytearray()
+    try:
+        async for chunk in response.aiter_bytes():
+            if not chunk:
+                continue
+            remaining = MAX_REDIRECT_BODY_BYTES - len(body)
+            if remaining <= 0:
+                break
+            body.extend(chunk[:remaining])
+            if len(body) >= MAX_REDIRECT_BODY_BYTES:
+                break
+    except httpx.TimeoutException as exc:
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"Web fetch timed out for {url_host or response.request.url}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"Web fetch request failed for {url_host or response.request.url}: {exc}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
+    if not body:
+        return None
+    text = body.decode("utf-8", errors="replace")
+    return _extract_redirect_location_from_html(text)
+
+
+def _extract_redirect_location_from_html(body: str) -> str | None:
+    patterns = (
+        META_REFRESH_REDIRECT_PATTERN,
+        WINDOW_LOCATION_REDIRECT_PATTERN,
+        LOCATION_REPLACE_REDIRECT_PATTERN,
+        ANCHOR_REDIRECT_PATTERN,
+    )
+    for pattern in patterns:
+        match = pattern.search(body)
+        if match is None:
+            continue
+        location = _normalize_redirect_location_candidate(match.group(1))
+        if location:
+            return location
+    return None
+
+
+def _normalize_redirect_location_candidate(value: str) -> str | None:
+    candidate = unescape(value).strip()
+    if not candidate:
+        return None
+    if candidate.lower().startswith("url="):
+        candidate = candidate[4:].strip()
+    candidate = candidate.strip("\"' \t\r\n")
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if parsed.scheme and not parsed.netloc:
+        return None
+    return candidate
 
 
 async def _perform_request(
