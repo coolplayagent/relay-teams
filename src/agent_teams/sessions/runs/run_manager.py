@@ -1423,6 +1423,7 @@ class RunManager:
             return
 
         session_id = self._ensure_session(record.session_id)
+        active_run_before = self._active_run_registry.get_active_run_id(session_id)
         self._run_control_manager.assert_session_allows_main_input(session_id)
         _ = self._session_repo.mark_started(session_id)
         intent = IntentInput(
@@ -1431,6 +1432,27 @@ class RunManager:
         )
         new_run_id, _ = self.create_run(intent)
         self.ensure_run_started(new_run_id)
+        if active_run_before in {
+            None,
+            record.run_id,
+        } and self._has_active_background_tasks(record.run_id):
+            self._remember_active_run(session_id, record.run_id)
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.source_run_retained",
+                    message="Source run remains active while sibling background tasks are still running",
+                    payload={
+                        "background_task_id": record.background_task_id,
+                        "source_run_id": record.run_id,
+                        "target_run_id": new_run_id,
+                    },
+                )
         with bind_trace_context(
             trace_id=new_run_id,
             run_id=new_run_id,
@@ -1447,6 +1469,16 @@ class RunManager:
                     "target_run_id": new_run_id,
                 },
             )
+
+    def _has_active_background_tasks(self, run_id: str) -> bool:
+        records: tuple["BackgroundTaskRecord", ...]
+        if self._background_task_service is not None:
+            records = self._background_task_service.list_for_run(run_id)
+        elif self._background_task_manager is not None:
+            records = self._background_task_manager.list_for_run(run_id)
+        else:
+            return False
+        return any(record.is_active for record in records)
 
     def _should_delegate_to_bound_loop(self) -> bool:
         loop = self._event_loop

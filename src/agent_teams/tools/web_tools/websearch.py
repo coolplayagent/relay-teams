@@ -425,7 +425,10 @@ def extract_search_response(response_text: str) -> ExtractedSearchResponse:
         payload = line[5:].strip()
         if not payload:
             continue
-        event = _parse_search_event(payload)
+        try:
+            event = _parse_search_event(payload)
+        except Exception:
+            continue
         result = event.get("result")
         if not isinstance(result, dict):
             continue

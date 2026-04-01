@@ -345,6 +345,94 @@ def test_background_task_completion_attaches_to_existing_active_run_via_create_r
 
 
 @pytest.mark.asyncio
+async def test_background_task_completion_keeps_source_run_active_when_siblings_remain(
+    tmp_path: Path,
+) -> None:
+    class _BlockingMetaAgent:
+        def __init__(self) -> None:
+            self.intent: IntentInput | None = None
+            self.trace_id: str | None = None
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def handle_intent(
+            self,
+            intent: IntentInput,
+            trace_id: str | None = None,
+        ) -> RunResult:
+            self.intent = intent
+            self.trace_id = trace_id
+            self.started.set()
+            await self.release.wait()
+            return RunResult(
+                trace_id=trace_id or "run-new",
+                root_task_id="task-root-new",
+                status="completed",
+                output=content_parts_from_text(intent.intent),
+            )
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:  # pragma: no cover
+            raise AssertionError(f"not expected: {trace_id}")
+
+    class _ListingBackgroundTaskService:
+        def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            assert run_id == "run-existing"
+            return (
+                _build_background_record(),
+                _build_background_record().model_copy(
+                    update={
+                        "background_task_id": "exec-2",
+                        "status": BackgroundTaskStatus.RUNNING,
+                    }
+                ),
+            )
+
+    db_path = tmp_path / "run_background_keep_source_active.db"
+    meta_agent = _BlockingMetaAgent()
+    manager = _build_manager(
+        db_path,
+        meta_agent=meta_agent,
+        background_task_service=cast(
+            BackgroundTaskService, _ListingBackgroundTaskService()
+        ),
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-worker",
+        role_id="writer",
+        status=InstanceStatus.COMPLETED,
+        conversation_id="conv-worker",
+    )
+    _create_root_task(TaskRepository(db_path))
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    manager.handle_background_task_completion(
+        record=_build_background_record(),
+        message="background task finished",
+    )
+    await asyncio.wait_for(meta_agent.started.wait(), timeout=1)
+
+    assert meta_agent.trace_id is not None
+    assert meta_agent.trace_id != "run-existing"
+    assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
+
+    meta_agent.release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_background_task_completion_starts_new_run_when_live_delivery_is_unavailable(
     tmp_path: Path,
 ) -> None:
