@@ -891,7 +891,12 @@ class ExecSessionManager:
         stream_name: str,
         chunk: str,
     ) -> None:
-        self._append_log(runtime.log_file_path, stream_name=stream_name, chunk=chunk)
+        await asyncio.to_thread(
+            self._append_log,
+            runtime.log_file_path,
+            stream_name=stream_name,
+            chunk=chunk,
+        )
         runtime.recent_output.feed(chunk)
         runtime.output_buffer.append(chunk)
         runtime.record = self._repository.upsert(

@@ -81,3 +81,23 @@ def test_exec_session_repo_marks_transient_terminals_interrupted(
     assert interrupted.completed_at is not None
     assert finished is not None
     assert finished.status == ExecSessionStatus.COMPLETED
+
+
+def test_exec_session_repo_can_delete_records_by_session(tmp_path: Path) -> None:
+    db_path = tmp_path / "background-terminals-delete-session.db"
+    repo = ExecSessionRepository(db_path)
+    record = ExecSessionRecord(
+        exec_session_id="exec-1",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=ExecSessionStatus.RUNNING,
+        log_path="tmp/exec_sessions/exec-1.log",
+    )
+    repo.upsert(record)
+
+    repo.delete_by_session("session-1")
+
+    assert repo.get("exec-1") is None
+    assert repo.list_by_session("session-1") == ()

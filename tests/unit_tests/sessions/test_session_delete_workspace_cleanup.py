@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.sessions.runs.exec_session_models import (
+    ExecSessionRecord,
+    ExecSessionStatus,
+)
+from agent_teams.sessions.runs.exec_session_repo import ExecSessionRepository
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.session_service import SessionService
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -50,6 +55,7 @@ def _build_service(
         message_repo=MessageRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
+        exec_session_repo=ExecSessionRepository(db_path),
         event_log=EventLog(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_event_hub=RunEventHub(),
@@ -94,6 +100,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
 
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
+    exec_session_repo = ExecSessionRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     workspace_manager = WorkspaceManager(
         project_root=project_root,
@@ -190,6 +197,20 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     )
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "artifact.txt").write_text("artifact", encoding="utf-8")
+    exec_record = exec_session_repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="time",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd=str(project_root),
+            status=ExecSessionStatus.RUNNING,
+            log_path="tmp/exec_sessions/exec-1.log",
+        )
+    )
 
     service.delete_session("session-1")
 
@@ -239,6 +260,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         )
         == ()
     )
+    assert exec_session_repo.get(exec_record.exec_session_id) is None
     assert not session_dir.exists()
     assert project_root.exists()
     with pytest.raises(KeyError):

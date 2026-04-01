@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import time
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -197,6 +197,55 @@ async def test_exec_session_manager_completes_and_publishes_events(
     assert updated_payload["delta"] == "hello\n"
     assert completed_payload is not None
     assert completed_payload["output_excerpt"] == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_exec_session_manager_writes_logs_via_to_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs import exec_session_manager as manager_module
+
+    repo = ExecSessionRepository(tmp_path / "background-terminal-log-thread.db")
+    hub = RunEventHub()
+    manager = ExecSessionManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        ExecSessionRecord(
+            exec_session_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            command="printf ready",
+            cwd=str(tmp_path),
+            status=ExecSessionStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    runtime = manager_module._ExecSessionRuntime(
+        record=record,
+        transport=cast(manager_module._ExecSessionTransport, _FakeTransport()),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+    calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    async def _fake_to_thread(
+        func: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        calls.append((func, args, kwargs))
+        func(*args, **kwargs)
+
+    monkeypatch.setattr(manager_module.asyncio, "to_thread", _fake_to_thread)
+
+    await manager._handle_output_chunk(
+        runtime,
+        stream_name="stdout",
+        chunk="hello\n",
+    )
+
+    assert calls
+    assert runtime.log_file_path.read_text(encoding="utf-8") == "hello\n"
 
 
 @pytest.mark.asyncio

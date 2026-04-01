@@ -643,6 +643,7 @@ def _build_provider(
         run_runtime_repo=RunRuntimeRepository(db_path),
         run_intent_repo=RunIntentRepository(db_path),
         exec_session_manager=None,
+        background_task_service=None,
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),

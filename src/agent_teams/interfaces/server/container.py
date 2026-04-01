@@ -137,6 +137,7 @@ from agent_teams.agents.execution.subagent_reflection import SubagentReflectionS
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
 )
+from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 from agent_teams.sessions.runs.exec_session_repo import (
     ExecSessionRepository,
 )
@@ -385,6 +386,10 @@ class ServerContainer:
             repository=self.exec_session_repo,
             run_event_hub=self.run_event_hub,
         )
+        self.background_task_service = BackgroundTaskService(
+            exec_session_manager=self.exec_session_manager,
+            repository=self.exec_session_repo,
+        )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
         self.wechat_inbound_queue_repo = WeChatInboundQueueRepository(
@@ -452,6 +457,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             exec_session_manager=self.exec_session_manager,
+            background_task_service=self.background_task_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
@@ -530,6 +536,7 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
         )
+        self.background_task_service.bind_completion_sink(self.run_service)
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
             task_repo=self.task_repo,
@@ -741,6 +748,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             exec_session_manager=self.exec_session_manager,
+            background_task_service=self.background_task_service,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
             computer_runtime=self.computer_runtime,

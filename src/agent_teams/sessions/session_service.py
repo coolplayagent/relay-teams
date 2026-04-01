@@ -384,6 +384,8 @@ class SessionService:
                 workspace_ids=[],
             )
         self._approval_ticket_repo.delete_by_session(session_id)
+        if self._exec_session_repo is not None:
+            self._exec_session_repo.delete_by_session(session_id)
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)

@@ -55,6 +55,7 @@ async def _run_stdio_server() -> None:
         run_runtime_repo=container.run_runtime_repo,
         run_intent_repo=container.run_intent_repo,
         exec_session_manager=container.exec_session_manager,
+        background_task_service=container.background_task_service,
         workspace_manager=container.workspace_manager,
         media_asset_service=container.media_asset_service,
         role_memory_service=container.role_memory_service,

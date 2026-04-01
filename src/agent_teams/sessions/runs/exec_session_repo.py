@@ -182,6 +182,19 @@ class ExecSessionRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    def list_by_session(self, session_id: str) -> tuple[ExecSessionRecord, ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM exec_sessions
+                WHERE session_id=?
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (session_id,),
+            ).fetchall()
+        return tuple(_row_to_record(row) for row in rows)
+
     def list_all(self) -> tuple[ExecSessionRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -204,6 +217,19 @@ class ExecSessionRepository:
             lock=self._lock,
             repository_name="ExecSessionRepository",
             operation_name="delete",
+        )
+
+    def delete_by_session(self, session_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM exec_sessions WHERE session_id=?",
+                (session_id,),
+            ),
+            lock=self._lock,
+            repository_name="ExecSessionRepository",
+            operation_name="delete_by_session",
         )
 
     def mark_transient_exec_sessions_interrupted(self) -> int:

@@ -38,6 +38,7 @@ from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
 from agent_teams.sessions.runs.run_control_manager import RunControlManager
+from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
 )
@@ -119,6 +120,7 @@ class ExternalAcpHostToolBridge:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         exec_session_manager: ExecSessionManager | None,
+        background_task_service: BackgroundTaskService | None,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
@@ -147,6 +149,7 @@ class ExternalAcpHostToolBridge:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._exec_session_manager = exec_session_manager
+        self._background_task_service = background_task_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -470,6 +473,7 @@ class ExternalAcpHostToolBridge:
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
             exec_session_manager=self._exec_session_manager,
+            background_task_service=self._background_task_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

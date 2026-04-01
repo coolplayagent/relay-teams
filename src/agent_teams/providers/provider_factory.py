@@ -41,6 +41,7 @@ from agent_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 from agent_teams.sessions.runs.exec_session_manager import (
     ExecSessionManager,
 )
@@ -69,6 +70,7 @@ def create_provider_factory(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     exec_session_manager: ExecSessionManager | None,
+    background_task_service: BackgroundTaskService | None,
     workspace_manager: WorkspaceManager,
     media_asset_service: MediaAssetService,
     role_memory_service: RoleMemoryService | None = None,
@@ -139,6 +141,7 @@ def create_provider_factory(
                 run_runtime_repo=run_runtime_repo,
                 run_intent_repo=run_intent_repo,
                 exec_session_manager=exec_session_manager,
+                background_task_service=background_task_service,
                 workspace_manager=workspace_manager,
                 media_asset_service=media_asset_service,
                 computer_runtime=computer_runtime,
