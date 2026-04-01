@@ -519,6 +519,52 @@ console.log(JSON.stringify({
     assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
 
 
+def test_role_settings_preserves_skill_checkbox_handlers_after_advisory_removal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
+toolOptions[2].checked = true;
+await toolOptions[2].onchange();
+const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML.includes(
+    "Roles that use skills usually work better with the shell tool enabled."
+);
+
+const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+skillOptions[1].checked = true;
+await skillOptions[1].onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    advisoryRemoved,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert payload["advisoryRemoved"] is True
+    assert save_payload["tools"] == ["read_file", "write_file", "shell"]
+    assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
+
+
 def test_role_settings_keeps_skill_selection_state_across_multiple_changes(
     tmp_path: Path,
 ) -> None:
@@ -1171,16 +1217,25 @@ function createElement(initialDisplay = "block") {{
         return matches;
     }}
 
-    function buildCheckboxes(source) {{
+    function buildCheckboxes(source, previousInputs = []) {{
         const matches = [];
         const pattern = /<input type="checkbox" data-option-value="([^"]+)"( checked)?>/g;
+        const previousInputsByValue = new Map(
+            previousInputs.map(input => [input.dataset.optionValue, input]),
+        );
         let match = pattern.exec(source);
         while (match) {{
-            matches.push({{
-                dataset: {{ optionValue: match[1] }},
-                checked: Boolean(match[2]),
-                onchange: null,
-            }});
+            const existingInput = previousInputsByValue.get(match[1]);
+            if (existingInput) {{
+                existingInput.checked = Boolean(match[2]);
+                matches.push(existingInput);
+            }} else {{
+                matches.push({{
+                    dataset: {{ optionValue: match[1] }},
+                    checked: Boolean(match[2]),
+                    onchange: null,
+                }});
+            }}
             match = pattern.exec(source);
         }}
         return matches;
@@ -1206,7 +1261,32 @@ function createElement(initialDisplay = "block") {{
             cachedRoleRecordsSource = html;
             cachedRoleEditButtonsSource = html;
             cachedRoleDeleteButtonsSource = html;
-            cachedInputsSource = html;
+            cachedInputsSource = "";
+        }},
+        querySelector(selector) {{
+            if (selector === ".role-option-advisory") {{
+                const advisoryPattern = /<div class="role-option-empty role-option-advisory">[\\s\\S]*?<\\/div>/;
+                if (!advisoryPattern.test(html)) {{
+                    return null;
+                }}
+                return {{
+                    parentNode: element,
+                    remove() {{
+                        html = html.replace(advisoryPattern, "");
+                        cachedRoleRecordsSource = html;
+                        cachedRoleEditButtonsSource = html;
+                        cachedRoleDeleteButtonsSource = html;
+                        cachedInputsSource = "";
+                    }},
+                }};
+            }}
+            return null;
+        }},
+        removeChild(child) {{
+            if (child && typeof child.remove === "function") {{
+                child.remove();
+            }}
+            return child;
         }},
         querySelectorAll(selector) {{
             if (selector === ".role-record") {{
@@ -1229,16 +1309,16 @@ function createElement(initialDisplay = "block") {{
                     cachedRoleDeleteButtonsSource = html;
                 }}
                 return cachedRoleDeleteButtons;
-            }}
-            if (selector === 'input[type="checkbox"]') {{
-                if (cachedInputsSource !== html) {{
-                    cachedInputs = buildCheckboxes(html);
-                    cachedInputsSource = html;
                 }}
-                return cachedInputs;
-            }}
-            return [];
-        }},
+                if (selector === 'input[type="checkbox"]') {{
+                    if (cachedInputsSource !== html) {{
+                        cachedInputs = buildCheckboxes(html, cachedInputs);
+                        cachedInputsSource = html;
+                    }}
+                    return cachedInputs;
+                }}
+                return [];
+            }},
     }};
 
     Object.defineProperty(element, "innerHTML", {{

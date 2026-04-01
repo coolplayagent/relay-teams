@@ -552,15 +552,15 @@ function renderSkillsShellAdvisory() {
     const advisoryHtml = `
         <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
     `;
-    const advisoryPattern = /<div class="role-option-empty role-option-advisory">[\s\S]*?<\/div>/g;
     const existingAdvisory = typeof container.querySelector === 'function'
         ? container.querySelector('.role-option-advisory')
         : null;
-    if (existingAdvisory && typeof existingAdvisory.remove === 'function') {
-        existingAdvisory.remove();
-    } else if (typeof container.innerHTML === 'string' && advisoryPattern.test(container.innerHTML)) {
-        advisoryPattern.lastIndex = 0;
-        container.innerHTML = container.innerHTML.replace(advisoryPattern, '');
+    if (existingAdvisory) {
+        if (typeof existingAdvisory.remove === 'function') {
+            existingAdvisory.remove();
+        } else if (existingAdvisory.parentNode && typeof existingAdvisory.parentNode.removeChild === 'function') {
+            existingAdvisory.parentNode.removeChild(existingAdvisory);
+        }
     }
     const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
     const hasShell = Array.isArray(currentSelections.tools) && currentSelections.tools.includes('shell');
