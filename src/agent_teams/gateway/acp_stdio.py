@@ -46,9 +46,6 @@ type AcpNotifier = Callable[[dict[str, JsonValue]], Awaitable[None]]
 
 
 LOGGER = get_logger(__name__)
-RECOVERABLE_PAUSED_RUN_MESSAGE = (
-    "Session has a recoverable paused run; use session/resume or session/cancel"
-)
 
 
 class AcpProtocolError(ValueError):
@@ -315,9 +312,7 @@ class AcpGatewayServer:
         prompt_blocks = _required_list(params, "prompt")
         record = self._gateway_session_service.get_session(gateway_session_id)
         session = self._session_service.get_session(record.internal_session_id)
-        paused_run_id = self._recoverable_paused_run_id(record.internal_session_id)
-        if paused_run_id is not None:
-            raise AcpProtocolError(-32000, RECOVERABLE_PAUSED_RUN_MESSAGE)
+        recoverable_run_id = self._recoverable_run_id(record.internal_session_id)
         prompt_input = self._prompt_blocks_to_content_parts(
             prompt_blocks=prompt_blocks,
             session_id=record.internal_session_id,
@@ -334,7 +329,10 @@ class AcpGatewayServer:
         )
         with self._mcp_relay.session_scope(gateway_session_id):
             try:
-                run_id = self._start_prompt_run(intent)
+                run_id = self._start_prompt_run(
+                    intent,
+                    force_attach_recoverable=recoverable_run_id is not None,
+                )
             except GatewaySessionBusyError as exc:
                 raise AcpProtocolError(
                     -32000,
@@ -358,9 +356,18 @@ class AcpGatewayServer:
                             "content": content,
                         },
                     )
+            after_event_id = 0
+            text_suppressor: _ResumeTextSuppressor | None = None
+            if recoverable_run_id is not None and run_id == recoverable_run_id:
+                after_event_id, text_suppressor = self._resume_stream_state(
+                    internal_session_id=record.internal_session_id,
+                    run_id=run_id,
+                )
             result = await self._await_run_stop(
                 gateway_session_id=gateway_session_id,
                 run_id=run_id,
+                after_event_id=after_event_id,
+                text_suppressor=text_suppressor,
             )
 
         self._finalize_active_run_binding(
@@ -377,8 +384,15 @@ class AcpGatewayServer:
             "recoverable": result.recoverable,
         }
 
-    def _start_prompt_run(self, intent: IntentInput) -> str:
-        if self._session_ingress_service is not None:
+    def _start_prompt_run(
+        self,
+        intent: IntentInput,
+        *,
+        force_attach_recoverable: bool = False,
+    ) -> str:
+        # ACP follow-up prompts should be able to resume a recoverable run even
+        # when the gateway ingress layer would otherwise treat the session as busy.
+        if self._session_ingress_service is not None and not force_attach_recoverable:
             result = self._session_ingress_service.require_started(
                 GatewaySessionIngressRequest(
                     intent=intent,
@@ -401,15 +415,9 @@ class AcpGatewayServer:
         run_id = str(record.active_run_id or "").strip()
         if not run_id:
             raise AcpProtocolError(-32602, "Session has no active run to resume")
-        after_event_id = self._resume_after_event_id(
+        after_event_id, text_suppressor = self._resume_stream_state(
             internal_session_id=record.internal_session_id,
             run_id=run_id,
-        )
-        text_suppressor = _ResumeTextSuppressor(
-            self._resume_text_prefix(
-                internal_session_id=record.internal_session_id,
-                run_id=run_id,
-            )
         )
         with self._mcp_relay.session_scope(gateway_session_id):
             self._run_service.resume_run(run_id)
@@ -478,7 +486,7 @@ class AcpGatewayServer:
             )
         raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
 
-    def _recoverable_paused_run_id(self, internal_session_id: str) -> str | None:
+    def _recoverable_run_id(self, internal_session_id: str) -> str | None:
         recovery_snapshot = self._session_service.get_recovery_snapshot(
             internal_session_id
         )
@@ -496,6 +504,22 @@ class AcpGatewayServer:
         if phase == "awaiting_recovery" or status == "paused" or should_show_recover:
             return run_id
         return None
+
+    def _resume_stream_state(
+        self, *, internal_session_id: str, run_id: str
+    ) -> tuple[int, _ResumeTextSuppressor]:
+        return (
+            self._resume_after_event_id(
+                internal_session_id=internal_session_id,
+                run_id=run_id,
+            ),
+            _ResumeTextSuppressor(
+                self._resume_text_prefix(
+                    internal_session_id=internal_session_id,
+                    run_id=run_id,
+                )
+            ),
+        )
 
     def _resume_after_event_id(self, *, internal_session_id: str, run_id: str) -> int:
         recovery_snapshot = self._session_service.get_recovery_snapshot(

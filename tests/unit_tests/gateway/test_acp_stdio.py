@@ -13,7 +13,6 @@ from pydantic import JsonValue
 
 import agent_teams.gateway.acp_stdio as acp_stdio_module
 from agent_teams.gateway.acp_stdio import (
-    RECOVERABLE_PAUSED_RUN_MESSAGE,
     AcpGatewayServer,
     AcpStdioRuntime,
 )
@@ -139,6 +138,7 @@ class FakeRunManager:
     def __init__(self) -> None:
         self._counter = 0
         self.events_by_run: dict[str, tuple[RunEvent, ...]] = {}
+        self.create_run_results: list[tuple[str, str]] = []
         self.create_calls: list[IntentInput] = []
         self.ensure_started_calls: list[str] = []
         self.resume_calls: list[str] = []
@@ -146,9 +146,11 @@ class FakeRunManager:
         self.stream_calls: list[tuple[str, int]] = []
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        self.create_calls.append(intent.model_copy(deep=True))
+        if self.create_run_results:
+            return self.create_run_results.pop(0)
         self._counter += 1
         run_id = f"run-{self._counter}"
-        self.create_calls.append(intent.model_copy(deep=True))
         return run_id, run_id
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
@@ -491,7 +493,7 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
 
 
 @pytest.mark.asyncio
-async def test_session_prompt_rejects_recoverable_paused_run(
+async def test_session_prompt_resumes_recoverable_run_from_any_message(
     tmp_path: Path,
 ) -> None:
     server, session_service, run_manager, notifications = _build_server(tmp_path)
@@ -504,6 +506,9 @@ async def test_session_prompt_rejects_recoverable_paused_run(
         }
     )
     session_id = _require_str(_require_result_object(created), "sessionId")
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-paused"}))
     session_service.recovery_snapshot_by_session["session-1"] = {
         "active_run": {
             "run_id": "run-paused",
@@ -511,11 +516,50 @@ async def test_session_prompt_rejects_recoverable_paused_run(
             "phase": "awaiting_recovery",
             "is_recoverable": True,
             "should_show_recover": True,
+            "last_event_id": 3,
         },
         "pending_tool_approvals": [],
         "paused_subagent": None,
         "round_snapshot": None,
     }
+    session_service.global_events_by_session["session-1"] = [
+        {
+            "trace_id": "run-paused",
+            "event_type": RunEventType.TEXT_DELTA.value,
+            "payload_json": json.dumps({"text": "OLD"}),
+        }
+    ]
+    run_manager.create_run_results.append(("run-paused", "session-1"))
+    run_manager.events_by_run["run-paused"] = (
+        _event(
+            "session-1",
+            "run-paused",
+            RunEventType.RUN_RESUMED,
+            {"reason": "resume"},
+            event_id=4,
+        ),
+        _event(
+            "session-1",
+            "run-paused",
+            RunEventType.TEXT_DELTA,
+            {"text": "OLD"},
+            event_id=5,
+        ),
+        _event(
+            "session-1",
+            "run-paused",
+            RunEventType.TEXT_DELTA,
+            {"text": "NEW"},
+            event_id=6,
+        ),
+        _event(
+            "session-1",
+            "run-paused",
+            RunEventType.RUN_COMPLETED,
+            {},
+            event_id=7,
+        ),
+    )
 
     response = await server.handle_jsonrpc_message(
         {
@@ -524,21 +568,31 @@ async def test_session_prompt_rejects_recoverable_paused_run(
             "method": "session/prompt",
             "params": {
                 "sessionId": session_id,
-                "prompt": [{"type": "text", "text": "keep going"}],
+                "prompt": [{"type": "text", "text": "not necessarily continue"}],
             },
         }
     )
 
-    assert response == {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "error": {
-            "code": -32000,
-            "message": RECOVERABLE_PAUSED_RUN_MESSAGE,
-        },
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-paused",
+        "runStatus": "completed",
+        "recoverable": False,
     }
-    assert run_manager.create_calls == []
-    assert notifications == []
+    assert len(run_manager.create_calls) == 1
+    assert run_manager.create_calls[0].input == content_parts_from_text(
+        "not necessarily continue"
+    )
+    assert run_manager.ensure_started_calls == ["run-paused"]
+    assert run_manager.resume_calls == []
+    assert run_manager.stream_calls == [("run-paused", 3)]
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == ["user_message_chunk", "agent_message_chunk"]
+    update = _session_update_payload(notifications[1])
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert content["text"] == "NEW"
+    assert repository.get(session_id).active_run_id is None
 
 
 @pytest.mark.asyncio
@@ -677,6 +731,118 @@ async def test_session_prompt_via_ingress_preserves_root_instance_reuse(
     assert len(run_manager.create_calls) == 1
     assert run_manager.create_calls[0].reuse_root_instance is True
     assert _session_update_name(notifications[0]) == "user_message_chunk"
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
+    tmp_path: Path,
+) -> None:
+    session_service = FakeSessionService()
+    repository = GatewaySessionRepository(tmp_path / "gateway.db")
+    gateway_session_service = GatewaySessionService(
+        repository=repository,
+        session_service=cast(SessionService, session_service),
+    )
+    run_manager = FakeRunManager()
+    run_manager.create_run_results.append(("run-stopped", "session-1"))
+    run_manager.events_by_run["run-stopped"] = (
+        _event(
+            "session-1",
+            "run-stopped",
+            RunEventType.TEXT_DELTA,
+            {"text": "recovered"},
+            event_id=3,
+        ),
+        _event(
+            "session-1",
+            "run-stopped",
+            RunEventType.RUN_COMPLETED,
+            {},
+            event_id=4,
+        ),
+    )
+    run_runtime_repo = RunRuntimeRepository(tmp_path / "gateway.db")
+    ingress_service = GatewaySessionIngressService(
+        run_service=cast(RunManager, run_manager),
+        run_runtime_repo=run_runtime_repo,
+    )
+    notifications: list[dict[str, JsonValue]] = []
+
+    async def notify(message: dict[str, JsonValue]) -> None:
+        notifications.append(message)
+
+    server = AcpGatewayServer(
+        gateway_session_service=gateway_session_service,
+        session_service=cast(SessionService, session_service),
+        run_service=cast(RunManager, run_manager),
+        media_asset_service=cast(MediaAssetService, object()),
+        notify=notify,
+        session_ingress_service=ingress_service,
+    )
+
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path), "mcpServers": []},
+        }
+    )
+    session_id = _require_str(_require_result_object(created), "sessionId")
+    record = repository.get(session_id)
+    repository.update(record.model_copy(update={"active_run_id": "run-stopped"}))
+    _ = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-stopped",
+            session_id=record.internal_session_id,
+            status=RunRuntimeStatus.STOPPED,
+            phase=RunRuntimePhase.IDLE,
+        )
+    )
+    session_service.recovery_snapshot_by_session["session-1"] = {
+        "active_run": {
+            "run_id": "run-stopped",
+            "status": "stopped",
+            "phase": "stopped",
+            "is_recoverable": True,
+            "should_show_recover": True,
+            "last_event_id": 2,
+        },
+        "pending_tool_approvals": [],
+        "paused_subagent": None,
+        "round_snapshot": None,
+    }
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "new question after stop"}],
+            },
+        }
+    )
+
+    assert _require_result_object(response) == {
+        "stopReason": "end_turn",
+        "runId": "run-stopped",
+        "runStatus": "completed",
+        "recoverable": False,
+    }
+    assert len(run_manager.create_calls) == 1
+    assert run_manager.create_calls[0].input == content_parts_from_text(
+        "new question after stop"
+    )
+    assert run_manager.ensure_started_calls == ["run-stopped"]
+    assert run_manager.stream_calls == [("run-stopped", 2)]
+    session_updates = [_session_update_name(item) for item in notifications]
+    assert session_updates == ["user_message_chunk", "agent_message_chunk"]
+    update = _session_update_payload(notifications[1])
+    content = update["content"]
+    assert isinstance(content, dict)
+    assert content["text"] == "recovered"
 
 
 @pytest.mark.asyncio
