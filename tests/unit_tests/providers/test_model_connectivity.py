@@ -289,7 +289,10 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
 
     assert result.ok is True
     assert result.provider == ProviderType.BIGMODEL
-    assert captured["url"] == "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+    assert (
+        captured["url"]
+        == "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+    )
 
 
 def test_probe_allows_header_only_override(monkeypatch) -> None:
