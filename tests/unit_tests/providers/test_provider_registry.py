@@ -35,7 +35,7 @@ def test_create_default_provider_registry_has_bigmodel_support() -> None:
         ModelEndpointConfig(
             provider=ProviderType.BIGMODEL,
             model="glm-4.5",
-            base_url="https://open.bigmodel.cn/api/paas/v4",
+            base_url="https://open.bigmodel.cn/api/coding/paas/v4",
             api_key="unused",
         )
     )
