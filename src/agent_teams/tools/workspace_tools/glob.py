@@ -7,6 +7,7 @@ from pydantic import JsonValue
 
 from pydantic_ai import Agent
 
+from agent_teams.paths import path_exists
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -51,7 +52,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 pattern,
             )
 
-            if not root.exists():
+            if not path_exists(root):
                 return _project_glob_result(
                     output="No files found",
                     truncated=False,

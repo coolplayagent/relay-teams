@@ -9,6 +9,7 @@ from typing import Generator
 
 from pydantic_ai import Agent
 
+from agent_teams.paths import open_text_file, path_exists, path_is_dir
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
@@ -380,7 +381,7 @@ def replace_content(
 
 
 def read_text_preserve_line_endings(file_path: Path) -> str:
-    with file_path.open("r", encoding="utf-8", newline="") as handle:
+    with open_text_file(file_path, newline="") as handle:
         return handle.read()
 
 
@@ -397,7 +398,7 @@ def apply_edit(
         )
 
     if old_string == "":
-        if file_path.exists():
+        if path_exists(file_path):
             raise ValueError(
                 "Empty old_string is only allowed when creating a new file."
             )
@@ -414,9 +415,9 @@ def apply_edit(
             "diff_summary": format_diff_summary("", new_content),
         }
 
-    if not file_path.exists():
+    if not path_exists(file_path):
         raise ValueError(f"File not found: {file_path}")
-    if file_path.is_dir():
+    if path_is_dir(file_path):
         raise ValueError(f"Path is a directory: {file_path}")
 
     old_content = read_text_preserve_line_endings(file_path)
@@ -454,9 +455,9 @@ def edit_file_with_guard(
     replace_all: bool = False,
 ) -> dict[str, str]:
     if old_string != "":
-        if not file_path.exists():
+        if not path_exists(file_path):
             raise ValueError(f"File not found: {file_path}")
-        if file_path.is_dir():
+        if path_is_dir(file_path):
             raise ValueError(f"Path is a directory: {file_path}")
     if old_string != "":
         assert_file_unchanged_since_read(
