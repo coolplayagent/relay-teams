@@ -75,6 +75,7 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
+    ConversationTokenEstimator,
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -306,13 +307,35 @@ class AgentLlmSession:
                 instance_id=request.instance_id,
                 role_id=request.role_id,
             )
+        history: list[ModelRequest | ModelResponse] = (
+            self._truncate_history_to_safe_boundary(
+                self._filter_model_messages(
+                    self._message_repo.get_history_for_conversation(
+                        resolved_conversation_id
+                    )
+                )
+            )
+        )
+        history = await self._maybe_compact_history(
+            request=request,
+            history=history,
+            conversation_id=resolved_conversation_id,
+        )
+        agent_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=resolved_conversation_id,
+            system_prompt=agent_system_prompt,
+        )
         model_settings: OpenAIChatModelSettings = {
             # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
             "openai_continuous_usage_stats": True,
             "temperature": self._config.sampling.temperature,
             "top_p": self._config.sampling.top_p,
-            "max_tokens": self._config.sampling.max_tokens,
+            "max_tokens": self._safe_max_output_tokens(
+                history=history,
+                system_prompt=agent_system_prompt,
+            ),
         }
         if request.thinking.enabled and request.thinking.effort is not None:
             model_settings["openai_reasoning_effort"] = request.thinking.effort
@@ -393,25 +416,6 @@ class AgentLlmSession:
         attempt_tool_event_emitted = False
         attempt_messages_committed = False
         published_tool_call_ids: set[str] = set()
-        history: list[ModelRequest | ModelResponse] = (
-            self._truncate_history_to_safe_boundary(
-                self._filter_model_messages(
-                    self._message_repo.get_history_for_conversation(
-                        resolved_conversation_id
-                    )
-                )
-            )
-        )
-        history = await self._maybe_compact_history(
-            request=request,
-            history=history,
-            conversation_id=resolved_conversation_id,
-        )
-        agent_system_prompt = self._inject_compaction_summary(
-            session_id=request.session_id,
-            conversation_id=resolved_conversation_id,
-            system_prompt=agent_system_prompt,
-        )
         log_event(
             LOGGER,
             logging.DEBUG,
@@ -1832,6 +1836,27 @@ class AgentLlmSession:
         messages = list(history)
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
+
+    def _safe_max_output_tokens(
+        self,
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+        system_prompt: str,
+    ) -> int:
+        configured_max_tokens = self._config.sampling.max_tokens
+        context_window = self._config.context_window
+        if context_window is None or context_window <= 0:
+            return configured_max_tokens
+        estimator = ConversationTokenEstimator()
+        estimated_history_tokens = estimator.estimate_history_tokens(history)
+        estimated_system_prompt_tokens = max(
+            1, (len(system_prompt.encode("utf-8")) // 4) + 8
+        )
+        reserved_tokens = estimated_history_tokens + estimated_system_prompt_tokens + 32
+        available_output_tokens = context_window - reserved_tokens
+        if available_output_tokens <= 0:
+            return 1
+        return max(1, min(configured_max_tokens, available_output_tokens))
 
     async def _maybe_compact_history(
         self,

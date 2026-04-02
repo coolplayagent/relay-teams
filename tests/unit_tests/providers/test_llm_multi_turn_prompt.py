@@ -38,7 +38,7 @@ from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
-from agent_teams.providers.model_config import ModelEndpointConfig
+from agent_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
 from agent_teams.roles import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.roles.role_registry import RoleRegistry
@@ -880,6 +880,69 @@ async def test_generate_enables_continuous_stream_usage_stats(
     assert settings_obj.get("temperature") == provider._config.sampling.temperature
     assert settings_obj.get("top_p") == provider._config.sampling.top_p
     assert settings_obj.get("max_tokens") == provider._config.sampling.max_tokens
+
+
+@pytest.mark.asyncio
+async def test_generate_caps_max_tokens_to_remaining_context_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(tmp_path / "context_budget.db", fake_hub)
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": 128_000,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+    captured_kwargs: dict[str, object] = {}
+    conversation_id = build_conversation_id("session-context-budget", "Coordinator")
+    oversized_prompt = "x" * 124_200
+    message_repo.append(
+        session_id="session-context-budget",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="Coordinator",
+        instance_id="inst-context-budget",
+        task_id="task-context-budget-prev",
+        trace_id="run-context-budget-prev",
+        messages=[ModelRequest(parts=[UserPromptPart(content=oversized_prompt)])],
+    )
+
+    def _fake_builder(**kwargs: object) -> _FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-context-budget",
+        trace_id="run-context-budget",
+        task_id="task-context-budget",
+        session_id="session-context-budget",
+        workspace_id="default",
+        instance_id="inst-context-budget",
+        role_id="Coordinator",
+        conversation_id=conversation_id,
+        system_prompt="system",
+        user_prompt="current turn",
+    )
+
+    _ = await provider.generate(request)
+
+    settings_obj = captured_kwargs.get("model_settings")
+    assert isinstance(settings_obj, dict)
+    bounded_max_tokens = settings_obj.get("max_tokens")
+    assert isinstance(bounded_max_tokens, int)
+    assert 1 <= bounded_max_tokens < provider._config.sampling.max_tokens
 
 
 @pytest.mark.asyncio
