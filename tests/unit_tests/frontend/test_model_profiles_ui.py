@@ -306,7 +306,7 @@ document.getElementById("add-profile-btn").onclick();
 document.getElementById("profile-name").value = "glm-profile";
 document.getElementById("profile-provider").value = "bigmodel";
 document.getElementById("profile-model").value = "glm-4.5";
-document.getElementById("profile-base-url").value = "https://open.bigmodel.cn/api/paas/v4";
+document.getElementById("profile-base-url").value = "https://open.bigmodel.cn/api/coding/paas/v4";
 document.getElementById("profile-api-key").value = "test-api-key";
 
 await document.getElementById("save-profile-btn").onclick();
@@ -346,7 +346,7 @@ console.log(JSON.stringify({
     )
 
     assert payload["providerValue"] == "bigmodel"
-    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
 
 
 def test_selecting_bigmodel_does_not_override_existing_base_url(tmp_path: Path) -> None:

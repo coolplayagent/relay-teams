@@ -281,7 +281,7 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
-                base_url="https://open.bigmodel.cn/api/paas/v4",
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
                 api_key="draft-api-key",
             )
         )
@@ -289,7 +289,7 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
 
     assert result.ok is True
     assert result.provider == ProviderType.BIGMODEL
-    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    assert captured["url"] == "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
 
 
 def test_probe_allows_header_only_override(monkeypatch) -> None:
@@ -486,7 +486,7 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.BIGMODEL,
-                base_url="https://open.bigmodel.cn/api/paas/v4",
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
                 api_key="draft-api-key",
             )
         )
@@ -495,7 +495,7 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     assert result.ok is True
     assert result.provider == ProviderType.BIGMODEL
     assert result.models == ("glm-4.5",)
-    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/models"
+    assert captured["url"] == "https://open.bigmodel.cn/api/coding/paas/v4/models"
 
 
 def test_discover_models_allows_header_only_override(monkeypatch) -> None:
