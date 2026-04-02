@@ -23,33 +23,43 @@ bindWebSettingsHandlers();
 await loadWebSettingsPanel();
 
 document.getElementById("web-provider").value = "exa";
+document.getElementById("web-fallback-provider").value = "searxng";
 document.getElementById("web-api-key").value = "secret";
 document.getElementById("web-api-key").oninput();
+document.getElementById("web-searxng-instance-url").value = "https://search.example.test";
 
 await document.getElementById("save-web-btn").onclick();
 
 console.log(JSON.stringify({
     notifications,
     provider: document.getElementById("web-provider").value,
+    fallbackProvider: document.getElementById("web-fallback-provider").value,
     apiKey: document.getElementById("web-api-key").value,
     apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
     apiKeyType: document.getElementById("web-api-key").type,
     toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
+    searxngInstanceUrl: document.getElementById("web-searxng-instance-url").value,
     savePayload: globalThis.__saveWebPayload,
+    providerSiteHref: document.getElementById("web-provider-site-link").href,
 }));
 """.strip(),
     )
 
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert payload["provider"] == "exa"
+    assert payload["fallbackProvider"] == "searxng"
     assert payload["apiKey"] == ""
     assert payload["apiKeyPlaceholder"] == "************"
     assert payload["apiKeyType"] == "password"
     assert payload["toggleDisplay"] == "inline-flex"
+    assert payload["searxngInstanceUrl"] == "https://search.example.test"
     assert payload["savePayload"] == {
         "provider": "exa",
         "api_key": "secret",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test",
     }
+    assert payload["providerSiteHref"] == "https://exa.ai"
     assert notifications == [
         {
             "title": "Web Settings Saved",
@@ -67,6 +77,8 @@ def test_web_settings_panel_preserves_saved_api_key_when_left_unchanged(
         fetch_config={
             "provider": "exa",
             "api_key": "saved-secret",
+            "fallback_provider": None,
+            "searxng_instance_url": None,
         },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
@@ -97,6 +109,8 @@ console.log(JSON.stringify({
     assert payload["savePayload"] == {
         "provider": "exa",
         "api_key": "saved-secret",
+        "fallback_provider": None,
+        "searxng_instance_url": None,
     }
 
 
@@ -108,6 +122,8 @@ def test_web_settings_panel_reveals_and_clears_saved_api_key(
         fetch_config={
             "provider": "exa",
             "api_key": "saved-secret",
+            "fallback_provider": None,
+            "searxng_instance_url": None,
         },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
@@ -152,6 +168,8 @@ console.log(JSON.stringify({
     assert payload["savePayload"] == {
         "provider": "exa",
         "api_key": None,
+        "fallback_provider": None,
+        "searxng_instance_url": None,
     }
     assert notifications == [
         {
@@ -168,6 +186,8 @@ def test_web_settings_panel_renders_provider_website_card(tmp_path: Path) -> Non
         fetch_config={
             "provider": "exa",
             "api_key": None,
+            "fallback_provider": None,
+            "searxng_instance_url": None,
         },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
@@ -196,6 +216,57 @@ console.log(JSON.stringify({
     assert payload["providerSiteUrl"] == "https://exa.ai"
 
 
+def test_web_settings_panel_syncs_searxng_state_without_exposing_saved_api_key(
+    tmp_path: Path,
+) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "searxng",
+            "api_key": "saved-secret",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test",
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+await document.getElementById("save-web-btn").onclick();
+
+console.log(JSON.stringify({
+    apiKeyDisabled: document.getElementById("web-api-key").disabled,
+    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
+    apiKeyType: document.getElementById("web-api-key").type,
+    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
+    searxngInstanceDisabled: document.getElementById("web-searxng-instance-url").disabled,
+    providerSiteHref: document.getElementById("web-provider-site-link").href,
+    providerSiteBadge: document.getElementById("web-provider-site-badge").textContent,
+    savePayload: globalThis.__saveWebPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["apiKeyDisabled"] is True
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["apiKeyType"] == "password"
+    assert payload["toggleDisplay"] == "none"
+    assert payload["searxngInstanceDisabled"] is False
+    assert payload["providerSiteHref"] == "https://docs.searxng.org/"
+    assert payload["providerSiteBadge"] == "SearXNG"
+    assert payload["savePayload"] == {
+        "provider": "searxng",
+        "api_key": "saved-secret",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test",
+    }
+
+
 def _run_web_settings_script(
     tmp_path: Path,
     runner_source: str,
@@ -222,6 +293,8 @@ def _run_web_settings_script(
     fetch_web_config = fetch_config or {
         "provider": "exa",
         "api_key": None,
+        "fallback_provider": None,
+        "searxng_instance_url": None,
     }
     fetch_web_config_json = json.dumps(fetch_web_config)
 
@@ -323,8 +396,10 @@ function createElement(initialDisplay = "block") {{
 function createElements() {{
     return new Map([
         ["web-provider", createElement("block")],
+        ["web-fallback-provider", createElement("block")],
         ["web-api-key", createElement("block")],
         ["toggle-web-api-key-btn", createElement("none")],
+        ["web-searxng-instance-url", createElement("block")],
         ["web-provider-site-link", createElement("block")],
         ["web-provider-site-badge", createElement("block")],
         ["web-provider-site-url", createElement("block")],

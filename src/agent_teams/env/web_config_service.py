@@ -4,10 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_teams.env.runtime_env import load_env_file, sync_app_env_to_process_env
-from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.env.web_secret_store import WebSecretStore, get_web_secret_store
 
 _PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_PROVIDER"
+_FALLBACK_PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_FALLBACK_PROVIDER"
+_SEARXNG_INSTANCE_URL_ENV_KEY = "AGENT_TEAMS_WEB_SEARXNG_INSTANCE_URL"
 _API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_API_KEY"
 
 
@@ -26,26 +32,55 @@ class WebConfigService:
     def get_web_config(self) -> WebConfig:
         env_values = load_env_file(self._config_dir / ".env")
         provider = _parse_provider(env_values.get(_PROVIDER_ENV_KEY))
+        fallback_provider = _parse_fallback_provider(
+            env_values.get(_FALLBACK_PROVIDER_ENV_KEY)
+        )
+        searxng_instance_url = _normalize_text(
+            env_values.get(_SEARXNG_INSTANCE_URL_ENV_KEY)
+        )
         api_key = self._secret_store.get_api_key(self._config_dir)
         if api_key is None:
             api_key = _normalize_text(env_values.get(_API_KEY_ENV_KEY))
             if api_key is not None:
                 self._secret_store.set_api_key(self._config_dir, api_key)
-                self._write_env_file(provider=provider)
-        return WebConfig(provider=provider, api_key=api_key)
+                self._write_env_file(
+                    provider=provider,
+                    fallback_provider=fallback_provider,
+                    searxng_instance_url=searxng_instance_url,
+                )
+        return WebConfig(
+            provider=provider,
+            api_key=api_key,
+            fallback_provider=fallback_provider,
+            searxng_instance_url=searxng_instance_url,
+        )
 
     def save_web_config(self, config: WebConfig) -> None:
-        self._write_env_file(provider=config.provider)
+        self._write_env_file(
+            provider=config.provider,
+            fallback_provider=config.fallback_provider,
+            searxng_instance_url=config.searxng_instance_url,
+        )
         self._secret_store.set_api_key(self._config_dir, config.api_key)
         sync_app_env_to_process_env(self._config_dir / ".env")
 
     def resolve_runtime_config(self) -> WebConfig:
         return self.get_web_config()
 
-    def _write_env_file(self, *, provider: WebProvider) -> None:
+    def _write_env_file(
+        self,
+        *,
+        provider: WebProvider,
+        fallback_provider: WebFallbackProvider | None,
+        searxng_instance_url: str | None,
+    ) -> None:
         env_file_path = self._config_dir / ".env"
         managed_values = {
             _PROVIDER_ENV_KEY: provider.value,
+            _FALLBACK_PROVIDER_ENV_KEY: (
+                fallback_provider.value if fallback_provider is not None else None
+            ),
+            _SEARXNG_INSTANCE_URL_ENV_KEY: searxng_instance_url,
             _API_KEY_ENV_KEY: None,
         }
         managed_keys = tuple(managed_values.keys())
@@ -102,6 +137,18 @@ def _parse_provider(value: str | None) -> WebProvider:
         return WebProvider(normalized_value.lower())
     except ValueError as exc:
         raise ValueError(f"Unsupported web provider: {normalized_value}") from exc
+
+
+def _parse_fallback_provider(value: str | None) -> WebFallbackProvider | None:
+    normalized_value = _normalize_text(value)
+    if normalized_value is None:
+        return None
+    try:
+        return WebFallbackProvider(normalized_value.lower())
+    except ValueError as exc:
+        raise ValueError(
+            f"Unsupported web fallback provider: {normalized_value}"
+        ) from exc
 
 
 def _normalize_text(value: str | None) -> str | None:

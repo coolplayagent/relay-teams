@@ -761,6 +761,14 @@ function createModal() {
                                                 <label for="web-provider" data-i18n="settings.web.provider">提供商</label>
                                                 <select id="web-provider">
                                                     <option value="exa">Exa</option>
+                                                    <option value="searxng">SearXNG</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="web-fallback-provider" data-i18n="settings.web.fallback_provider">回退提供商</label>
+                                                <select id="web-fallback-provider">
+                                                    <option value="">Disabled</option>
+                                                    <option value="searxng">SearXNG</option>
                                                 </select>
                                             </div>
                                             <div class="form-group proxy-inline-field">
@@ -774,6 +782,10 @@ function createModal() {
                                                         </svg>
                                                     </button>
                                                 </div>
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="web-searxng-instance-url" data-i18n="settings.web.searxng_instance_url">SearXNG 实例 URL</label>
+                                                <input type="text" id="web-searxng-instance-url" placeholder="留空时使用内置公共实例池" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
                                             </div>
                                         </div>
                                         <div class="form-group proxy-inline-field web-provider-inline-field">

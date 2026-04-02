@@ -11,10 +11,16 @@ import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const MASKED_SECRET_PLACEHOLDER = '************';
+const WEB_PROVIDER_EXA = 'exa';
+const WEB_PROVIDER_SEARXNG = 'searxng';
 const WEB_PROVIDER_DETAILS = {
-    exa: {
+    [WEB_PROVIDER_EXA]: {
         label: 'Exa',
         website: 'https://exa.ai',
+    },
+    [WEB_PROVIDER_SEARXNG]: {
+        label: 'SearXNG',
+        website: 'https://docs.searxng.org/',
     },
 };
 
@@ -33,9 +39,14 @@ export function bindWebSettingsHandlers() {
         saveBtn.onclick = handleSaveWeb;
     }
 
-    const providerSelect = document.getElementById('web-provider');
-    if (providerSelect) {
-        providerSelect.onchange = handleWebProviderChange;
+    const providerInput = document.getElementById('web-provider');
+    if (providerInput) {
+        providerInput.onchange = syncWebFormState;
+    }
+
+    const fallbackProviderInput = document.getElementById('web-fallback-provider');
+    if (fallbackProviderInput) {
+        fallbackProviderInput.onchange = syncWebFormState;
     }
 
     const apiKeyInput = document.getElementById('web-api-key');
@@ -87,17 +98,19 @@ async function handleSaveWeb() {
 }
 
 function writeWebFormValues(config) {
-    const provider = config.provider || 'exa';
-    setInputValue('web-provider', provider);
-    renderWebProviderSite(provider);
+    setInputValue('web-provider', config.provider || WEB_PROVIDER_EXA);
+    setInputValue('web-fallback-provider', config.fallback_provider);
+    setInputValue('web-searxng-instance-url', config.searxng_instance_url);
     webApiKeyState = createWebApiKeyState(config.api_key);
-    renderWebApiKeyField();
+    syncWebFormState();
 }
 
 function readWebFormValues() {
     return {
-        provider: readInputValue('web-provider') || 'exa',
+        provider: readInputValue('web-provider') || WEB_PROVIDER_EXA,
         api_key: readWebApiKeyValue(),
+        fallback_provider: readInputValue('web-fallback-provider') || null,
+        searxng_instance_url: readInputValue('web-searxng-instance-url') || null,
     };
 }
 
@@ -128,8 +141,28 @@ function createWebApiKeyState(persistedValue = null) {
     };
 }
 
-function handleWebProviderChange() {
-    renderWebProviderSite(readInputValue('web-provider') || 'exa');
+function syncWebFormState() {
+    const provider = readInputValue('web-provider') || WEB_PROVIDER_EXA;
+    const fallbackProvider = readInputValue('web-fallback-provider');
+    const apiKeyInput = document.getElementById('web-api-key');
+    const isApiKeyEditable = provider === WEB_PROVIDER_EXA;
+
+    if (apiKeyInput) {
+        apiKeyInput.disabled = !isApiKeyEditable;
+    }
+    if (!isApiKeyEditable) {
+        webApiKeyState.revealed = false;
+    }
+
+    const searxngInstanceInput = document.getElementById('web-searxng-instance-url');
+    if (searxngInstanceInput) {
+        searxngInstanceInput.disabled = !(
+            provider === WEB_PROVIDER_SEARXNG || fallbackProvider === WEB_PROVIDER_SEARXNG
+        );
+    }
+
+    renderWebProviderSite(provider);
+    renderWebApiKeyField();
 }
 
 function handleWebApiKeyInput() {
@@ -161,6 +194,7 @@ function renderWebProviderSite(providerValue) {
     const siteLink = document.getElementById('web-provider-site-link');
     const siteBadge = document.getElementById('web-provider-site-badge');
     const siteUrl = document.getElementById('web-provider-site-url');
+
     if (siteLink) {
         siteLink.href = providerDetails.website;
         siteLink.title = providerDetails.website;
@@ -170,9 +204,11 @@ function renderWebProviderSite(providerValue) {
             siteLink.ariaLabel = providerDetails.website;
         }
     }
+
     if (siteBadge) {
         siteBadge.textContent = providerDetails.label;
     }
+
     if (siteUrl) {
         siteUrl.textContent = providerDetails.website;
     }
@@ -217,11 +253,14 @@ function renderWebApiKeyField() {
 
 function renderWebApiKeyToggle() {
     const toggleApiKeyBtn = document.getElementById('toggle-web-api-key-btn');
+    const apiKeyInput = document.getElementById('web-api-key');
     if (!toggleApiKeyBtn) {
         return;
     }
 
-    toggleApiKeyBtn.style.display = hasWebApiKeyValue() ? 'inline-flex' : 'none';
+    const canReveal = apiKeyInput ? apiKeyInput.disabled !== true : true;
+    toggleApiKeyBtn.style.display = canReveal && hasWebApiKeyValue() ? 'inline-flex' : 'none';
+    toggleApiKeyBtn.disabled = !canReveal;
     toggleApiKeyBtn.className = webApiKeyState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
     toggleApiKeyBtn.title = webApiKeyState.revealed
         ? t('settings.model.hide_api_key')
