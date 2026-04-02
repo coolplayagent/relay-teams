@@ -33,6 +33,7 @@ from agent_teams.agents.orchestration.task_orchestration_service import (
 )
 from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from agent_teams.media import MediaAssetService
+from agent_teams.mcp.mcp_models import McpToolSchema
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
 from agent_teams.agents.execution.conversation_compaction import (
@@ -159,6 +160,34 @@ class _FakeSkillRegistry:
     ) -> tuple[PromptSkillInstruction, ...]:
         self.requested.append(skill_names)
         return self._entries
+
+
+class _FakeMcpSchemaRegistry:
+    def __init__(
+        self,
+        schemas_by_server: dict[str, tuple[McpToolSchema, ...]],
+    ) -> None:
+        self._schemas_by_server = schemas_by_server
+
+    def resolve_server_names(
+        self,
+        server_names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        _ = (strict, consumer)
+        return tuple(
+            server_name
+            for server_name in server_names
+            if server_name in self._schemas_by_server
+        )
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        return self._schemas_by_server[name]
+
+    def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
+        return tuple(object() for _ in server_names)
 
 
 class _FakeSubagentReflectionService:
@@ -626,8 +655,10 @@ def _build_provider(
     hub: _FakeRunEventHub,
     *,
     allowed_tools: tuple[str, ...] = (),
+    allowed_mcp_servers: tuple[str, ...] = (),
     allowed_skills: tuple[str, ...] = (),
     skill_registry: object | None = None,
+    mcp_registry: object | None = None,
     run_control_manager: object | None = None,
     subagent_reflection_service: object | None = None,
     task_execution_service: object | None = None,
@@ -636,6 +667,11 @@ def _build_provider(
         cast(SkillRegistry, skill_registry)
         if skill_registry is not None
         else cast(SkillRegistry, object())
+    )
+    resolved_mcp_registry = (
+        cast(McpRegistry, mcp_registry)
+        if mcp_registry is not None
+        else cast(McpRegistry, object())
     )
     shared_store = SharedStateRepository(db_path)
     role_registry = RoleRegistry()
@@ -690,10 +726,10 @@ def _build_provider(
             subagent_reflection_service,
         ),
         tool_registry=cast(ToolRegistry, object()),
-        mcp_registry=cast(McpRegistry, object()),
+        mcp_registry=resolved_mcp_registry,
         skill_registry=registry,
         allowed_tools=allowed_tools,
-        allowed_mcp_servers=(),
+        allowed_mcp_servers=allowed_mcp_servers,
         allowed_skills=allowed_skills,
         message_repo=message_repo,
         session_history_marker_repo=session_history_marker_repo,
@@ -1319,6 +1355,115 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
     )
     assert capped_with_tools < uncapped_without_tools
     assert bounded_max_tokens == capped_with_tools
+
+
+@pytest.mark.asyncio
+async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    fake_registry = _FakeMcpSchemaRegistry(
+        {
+            "small": (
+                McpToolSchema(
+                    name="small_read",
+                    description="Read a file.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                ),
+            ),
+            "large": tuple(
+                McpToolSchema(
+                    name=f"large_tool_{index}",
+                    description="Tool with a larger schema payload.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            f"field_{field_index}": {
+                                "type": "string",
+                                "description": "x" * 400,
+                            }
+                            for field_index in range(8)
+                        },
+                    },
+                )
+                for index in range(10)
+            ),
+        }
+    )
+    provider_small, _ = _build_provider(
+        tmp_path / "mcp_budget_small.db",
+        fake_hub,
+        allowed_mcp_servers=("small",),
+        mcp_registry=fake_registry,
+    )
+    provider_large, _ = _build_provider(
+        tmp_path / "mcp_budget_large.db",
+        fake_hub,
+        allowed_mcp_servers=("large",),
+        mcp_registry=fake_registry,
+    )
+    for provider in (provider_small, provider_large):
+        updated_config = provider._config.model_copy(
+            update={
+                "context_window": 100_300,
+                "sampling": SamplingConfig(
+                    temperature=provider._config.sampling.temperature,
+                    top_p=provider._config.sampling.top_p,
+                    max_tokens=100_000,
+                    top_k=provider._config.sampling.top_k,
+                ),
+            }
+        )
+        provider._config_ref = updated_config
+        provider._session._config = updated_config
+
+    captured_settings: list[dict[str, object]] = []
+
+    def _fake_builder(**kwargs: object) -> _FakeAgent:
+        model_settings = kwargs.get("model_settings")
+        assert isinstance(model_settings, dict)
+        captured_settings.append(dict(model_settings))
+        return _FakeAgent()
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    await provider_small.generate(
+        LLMRequest(
+            run_id="run-mcp-budget-small",
+            trace_id="run-mcp-budget-small",
+            task_id="task-mcp-budget-small",
+            session_id="session-mcp-budget-small",
+            workspace_id="default",
+            instance_id="inst-mcp-budget-small",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="current turn",
+        )
+    )
+    await provider_large.generate(
+        LLMRequest(
+            run_id="run-mcp-budget-large",
+            trace_id="run-mcp-budget-large",
+            task_id="task-mcp-budget-large",
+            session_id="session-mcp-budget-large",
+            workspace_id="default",
+            instance_id="inst-mcp-budget-large",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="current turn",
+        )
+    )
+
+    assert len(captured_settings) == 2
+    small_budget = captured_settings[0]["max_tokens"]
+    large_budget = captured_settings[1]["max_tokens"]
+    assert isinstance(small_budget, int)
+    assert isinstance(large_budget, int)
+    assert large_budget < small_budget
 
 
 @pytest.mark.asyncio
