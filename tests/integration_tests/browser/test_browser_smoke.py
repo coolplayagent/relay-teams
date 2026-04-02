@@ -200,7 +200,7 @@ def test_browser_shell_settings_and_session_management(
     _emit_gateway_observability_probe()
     _open_app(page, integration_env)
 
-    baseline_count = len(_session_ids(page))
+    baseline_session_ids = set(_session_ids(page))
     session_id = _create_session_via_sidebar(page)
     renamed_title = "Browser Smoke Session"
 
@@ -407,7 +407,7 @@ def test_browser_shell_settings_and_session_management(
     expect(
         page.locator(f'.session-item[data-session-id="{session_id}"]')
     ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
-    assert len(_session_ids(page)) == baseline_count
+    assert set(_session_ids(page)) == baseline_session_ids
 
 
 def test_browser_environment_variables_and_session_topology(
