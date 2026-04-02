@@ -3,6 +3,7 @@ Write full file contents to the workspace.
 Usage:
 - `path` is resolved relative to the workspace root.
 - Use `tmp/...` to write into the managed workspace tmp directory.
+- Writes must stay within the configured workspace writable roots.
 - This tool creates a file or fully replaces an existing file.
 - Prefer `edit` when you only need a targeted change inside an existing file.
 - Avoid using this tool for partial updates; provide the complete desired file content.

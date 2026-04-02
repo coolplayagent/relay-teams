@@ -175,7 +175,7 @@ def test_resolve_workspace_glob_scope_keeps_execution_root_for_normal_patterns(
     assert logical_prefix is None
 
 
-def test_resolve_workspace_glob_scope_rejects_execution_root_outside_read_scope(
+def test_resolve_workspace_glob_scope_allows_execution_root_outside_read_scope(
     tmp_path: Path,
 ) -> None:
     scope_root = tmp_path / "project"
@@ -191,5 +191,11 @@ def test_resolve_workspace_glob_scope_rejects_execution_root_outside_read_scope(
         ),
     )
 
-    with pytest.raises(ValueError, match="outside workspace read scope"):
-        resolve_workspace_glob_scope(workspace, "**/*.md")
+    root, pattern, logical_prefix = resolve_workspace_glob_scope(
+        workspace,
+        "**/*.md",
+    )
+
+    assert root == execution_root.resolve()
+    assert pattern == "**/*.md"
+    assert logical_prefix is None

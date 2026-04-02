@@ -126,6 +126,7 @@ def test_kill_process_tree_by_pid_waits_for_posix_exit_before_success(
         runtime_module.os,
         "killpg",
         lambda pid, sig: signals.append(sig),
+        raising=False,
     )
 
     assert kill_process_tree_by_pid(3210) is True
@@ -153,8 +154,38 @@ def test_kill_process_tree_by_pid_requires_posix_exit_after_sigkill(
         runtime_module.os,
         "killpg",
         lambda pid, sig: signals.append(sig),
+        raising=False,
     )
 
     assert kill_process_tree_by_pid(3210) is False
-    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert signals == [signal.SIGTERM, runtime_module._SIGKILL_SIGNAL]
     assert wait_calls == [runtime_module._SIGKILL_GRACE_SECONDS, 2]
+
+
+@pytest.mark.asyncio
+async def test_threaded_process_writer_defers_blocking_write_to_drain() -> None:
+    writes: list[bytes] = []
+    flush_count = 0
+
+    class _FakeStream:
+        def write(self, data: bytes) -> None:
+            writes.append(data)
+
+        def flush(self) -> None:
+            nonlocal flush_count
+            flush_count += 1
+
+        def close(self) -> None:
+            return None
+
+    writer = runtime_module._ThreadedProcessWriter(_FakeStream())
+    writer.write(b"hello ")
+    writer.write(b"world")
+
+    assert writes == []
+    assert flush_count == 0
+
+    await writer.drain()
+
+    assert writes == [b"hello world"]
+    assert flush_count == 1

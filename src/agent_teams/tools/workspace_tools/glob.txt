@@ -2,6 +2,7 @@ Find workspace files by path pattern.
 
 Usage:
 - `pattern` is a glob matched relative to the workspace execution root.
+- Use `../...` segments in the pattern when you need to search outside the workspace execution root.
 - Use `tmp/...` to search inside the managed workspace tmp directory.
 - Use this tool to discover candidate files when you know naming or directory conventions.
 - Results are returned as relative workspace paths.
