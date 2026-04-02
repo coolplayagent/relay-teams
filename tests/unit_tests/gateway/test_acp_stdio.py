@@ -1787,6 +1787,7 @@ async def test_session_new_stores_model_profile_override_without_persisting_api_
     assert runtime_override.model == "gpt-4.1"
     assert runtime_override.base_url == "https://api.openai.com/v1"
     assert runtime_override.api_key == "sk-secret"
+    assert runtime_override.sampling.max_tokens is None
     assert notifications == []
 
 

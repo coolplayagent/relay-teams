@@ -71,7 +71,7 @@ class ModelConfigManager:
                 "ssl_verify": normalized_profile.get("ssl_verify"),
                 "temperature": normalized_profile.get("temperature", 0.7),
                 "top_p": normalized_profile.get("top_p", 1.0),
-                "max_tokens": normalized_profile.get("max_tokens", 100000),
+                "max_tokens": normalized_profile.get("max_tokens"),
                 "context_window": normalized_profile.get("context_window"),
                 "is_default": name == default_profile_name,
                 "connect_timeout_seconds": normalized_profile.get(
@@ -116,6 +116,8 @@ class ModelConfigManager:
             next_profile=cast(dict[str, JsonValue], config[name]),
             source_name=source_name,
         )
+        if cast(dict[str, JsonValue], config[name]).get("max_tokens") is None:
+            cast(dict[str, JsonValue], config[name]).pop("max_tokens", None)
         if source_name is not None and source_name != name:
             config.pop(source_name, None)
         _normalize_default_profile_flags(config, preferred_name=name)

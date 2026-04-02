@@ -261,7 +261,10 @@ class SubagentReflectionService:
         )
 
     def _model_settings(self) -> OpenAIChatModelSettings:
-        max_tokens = min(self._config.sampling.max_tokens, 400)
+        configured_max_tokens = self._config.sampling.max_tokens
+        max_tokens = (
+            400 if configured_max_tokens is None else min(configured_max_tokens, 400)
+        )
         return {
             "temperature": min(self._config.sampling.temperature, 0.2),
             "top_p": self._config.sampling.top_p,

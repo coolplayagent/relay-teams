@@ -314,7 +314,8 @@ console.log(JSON.stringify({
         "Fetch the endpoint catalog for quick selection, or enter a model name manually."
         not in modal_html
     )
-    assert 'value="100000"' in modal_html
+    assert 'id="profile-max-tokens" value=""' in modal_html
+    assert 'placeholder="Optional"' in modal_html
     assert "Max Tokens</label>" not in modal_html
     assert ">Test</button>" in modal_html
     assert ">Test URL</button>" in modal_html

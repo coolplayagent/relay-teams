@@ -182,6 +182,7 @@ def test_get_model_profiles_uses_default_connect_timeout_when_missing(
         profiles["default"]["connect_timeout_seconds"]
         == DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
     )
+    assert profiles["default"]["max_tokens"] is None
 
 
 def test_get_model_profiles_infers_known_context_window_when_missing(
@@ -206,6 +207,28 @@ def test_get_model_profiles_infers_known_context_window_when_missing(
     profiles = manager.get_model_profiles()
 
     assert profiles["default"]["context_window"] == 128000
+
+
+def test_save_model_profile_omits_max_tokens_when_unset(tmp_path: Path) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4.1",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret-key",
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": None,
+        },
+    )
+
+    config = manager.get_model_config()
+    saved_profile = cast(dict[str, JsonValue], config["default"])
+
+    assert "max_tokens" not in saved_profile
 
 
 def test_delete_model_profile_removes_entry(tmp_path: Path) -> None:

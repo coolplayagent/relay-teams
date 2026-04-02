@@ -301,7 +301,7 @@ function createModal() {
                                                 </div>
                                                 <div class="form-group">
                                                     <label for="profile-max-tokens" data-i18n="settings.model.max_output_tokens">Max Output Tokens</label>
-                                                    <input type="number" id="profile-max-tokens" value="100000" min="1" autocomplete="off">
+                                                    <input type="number" id="profile-max-tokens" value="" min="1" autocomplete="off" placeholder="Optional" data-i18n-placeholder="settings.model.optional">
                                                 </div>
                                                 <div class="form-group">
                                                     <label for="profile-context-window" data-i18n="settings.model.context_window">Context Window</label>
