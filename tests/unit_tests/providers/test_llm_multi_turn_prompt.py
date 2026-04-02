@@ -166,8 +166,12 @@ class _FakeMcpSchemaRegistry:
     def __init__(
         self,
         schemas_by_server: dict[str, tuple[McpToolSchema, ...]],
+        *,
+        fail_on_list: bool = False,
     ) -> None:
         self._schemas_by_server = schemas_by_server
+        self._fail_on_list = fail_on_list
+        self.list_calls = 0
 
     def resolve_server_names(
         self,
@@ -184,6 +188,9 @@ class _FakeMcpSchemaRegistry:
         )
 
     async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        self.list_calls += 1
+        if self._fail_on_list:
+            raise AssertionError("list_tool_schemas should not be called")
         return self._schemas_by_server[name]
 
     def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
@@ -1464,6 +1471,66 @@ async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
     assert isinstance(small_budget, int)
     assert isinstance(large_budget, int)
     assert large_budget < small_budget
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_mcp_schema_probe_when_context_window_unset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    fake_registry = _FakeMcpSchemaRegistry(
+        {
+            "slow": (
+                McpToolSchema(
+                    name="slow_tool",
+                    description="Would be expensive to probe.",
+                    input_schema={"type": "object"},
+                ),
+            )
+        },
+        fail_on_list=True,
+    )
+    provider, _ = _build_provider(
+        tmp_path / "mcp_budget_unset_context.db",
+        fake_hub,
+        allowed_mcp_servers=("slow",),
+        mcp_registry=fake_registry,
+    )
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": None,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+
+    monkeypatch.setattr(
+        llm_module, "build_coordination_agent", lambda **_: _FakeAgent()
+    )
+
+    result = await provider.generate(
+        LLMRequest(
+            run_id="run-mcp-budget-unset-context",
+            trace_id="run-mcp-budget-unset-context",
+            task_id="task-mcp-budget-unset-context",
+            session_id="session-mcp-budget-unset-context",
+            workspace_id="default",
+            instance_id="inst-mcp-budget-unset-context",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="current turn",
+        )
+    )
+
+    assert result == "ok"
+    assert fake_registry.list_calls == 0
 
 
 @pytest.mark.asyncio

@@ -1896,9 +1896,11 @@ class AgentLlmSession:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
     ) -> OpenAIChatModelSettings:
-        estimated_mcp_context_tokens = await self._estimated_mcp_context_tokens(
-            allowed_mcp_servers=allowed_mcp_servers
-        )
+        estimated_mcp_context_tokens: int | None = None
+        if self._config.context_window is not None and self._config.context_window > 0:
+            estimated_mcp_context_tokens = await self._estimated_mcp_context_tokens(
+                allowed_mcp_servers=allowed_mcp_servers
+            )
         model_settings: OpenAIChatModelSettings = {
             # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
