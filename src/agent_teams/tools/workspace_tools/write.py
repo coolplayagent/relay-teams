@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 import difflib
 import tempfile
 from pathlib import Path
 
+from pydantic import JsonValue
 from pydantic_ai import Agent
 
+from agent_teams.paths import (
+    make_dirs,
+    path_exists,
+    path_is_dir,
+    read_text_file,
+    replace_path,
+    to_filesystem_path,
+    unlink_path,
+)
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -61,13 +69,13 @@ def atomic_write(
     encoding: str = "utf-8",
     newline: str | None = None,
 ) -> None:
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(file_path.parent, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding=encoding,
         newline=newline,
         delete=False,
-        dir=file_path.parent,
+        dir=to_filesystem_path(file_path.parent),
         prefix=f".{file_path.name}.",
         suffix=".tmp",
     ) as temp_file:
@@ -75,9 +83,9 @@ def atomic_write(
         temp_path = Path(temp_file.name)
 
     try:
-        temp_path.replace(file_path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
+        replace_path(temp_path, file_path)
+    except OSError:
+        unlink_path(temp_path, missing_ok=True)
         raise
 
 
@@ -121,11 +129,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
 
             old_content = ""
-            created = not file_path.exists()
-            if file_path.exists():
-                if file_path.is_dir():
+            created = not path_exists(file_path)
+            if path_exists(file_path):
+                if path_is_dir(file_path):
                     raise ValueError(f"Path is a directory: {path}")
-                old_content = file_path.read_text(encoding="utf-8")
+                old_content = read_text_file(file_path)
 
             diff_summary = format_diff_summary(old_content, content)
             atomic_write(file_path, content, encoding="utf-8")

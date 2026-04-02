@@ -11,17 +11,14 @@ from openai.types.chat.chat_completion_message_function_tool_call_param import (
 from pydantic_ai._utils import guard_tool_call_id
 from pydantic_ai.messages import (
     ModelMessage,
-    ModelRequest,
     ModelRequestPart,
-    ModelResponse,
-    RetryPromptPart,
     ToolCallPart,
-    ToolReturnPart,
 )
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
 
 from agent_teams.logger import get_logger, log_event
+from agent_teams.agents.execution.tool_call_history import normalize_replayed_messages
 from agent_teams.agents.execution.tool_args_repair import repair_tool_args
 
 LOGGER = get_logger(__name__)
@@ -68,53 +65,27 @@ class RecoverableOpenAIChatModel(OpenAIChatModel):
         cls,
         messages: Sequence[ModelMessage],
     ) -> list[ModelMessage]:
-        sanitized_messages: list[ModelMessage] = []
-        seen_tool_call_ids: set[str] = set()
-        for message in messages:
-            if isinstance(message, ModelResponse):
-                for part in message.parts:
-                    if isinstance(part, ToolCallPart):
-                        tool_call_id = str(part.tool_call_id or "").strip()
-                        if tool_call_id:
-                            seen_tool_call_ids.add(tool_call_id)
-                sanitized_messages.append(message)
-                continue
-            if isinstance(message, ModelRequest):
-                next_parts = cls._sanitize_request_parts(
-                    parts=message.parts,
-                    seen_tool_call_ids=seen_tool_call_ids,
-                )
-                if next_parts:
-                    sanitized_messages.append(ModelRequest(parts=next_parts))
-                continue
-            sanitized_messages.append(message)
-        return sanitized_messages
+        return normalize_replayed_messages(
+            messages, on_drop=cls._log_dropped_tool_result
+        )
 
     @staticmethod
-    def _sanitize_request_parts(
-        *,
-        parts: Sequence[ModelRequestPart],
-        seen_tool_call_ids: set[str],
-    ) -> list[ModelRequestPart]:
-        sanitized_parts: list[ModelRequestPart] = []
-        for part in parts:
-            tool_call_id = str(getattr(part, "tool_call_id", "") or "").strip()
-            is_tool_result = isinstance(part, (ToolReturnPart, RetryPromptPart))
-            if (
-                is_tool_result
-                and tool_call_id
-                and tool_call_id not in seen_tool_call_ids
-            ):
-                log_event(
-                    LOGGER,
-                    logging.WARNING,
-                    event="llm.tool_call_args.dropped_orphan_tool_result",
-                    message="Dropped replayed tool result without a matching tool call",
-                    payload={
-                        "tool_call_id": tool_call_id,
-                        "tool_name": str(getattr(part, "tool_name", "") or ""),
-                    },
-                )
-                continue
-            sanitized_parts.append(part)
-        return sanitized_parts
+    def _log_dropped_tool_result(part: ModelRequestPart, is_duplicate: bool) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event=(
+                "llm.tool_call_args.dropped_duplicate_tool_result"
+                if is_duplicate
+                else "llm.tool_call_args.dropped_orphan_tool_result"
+            ),
+            message=(
+                "Dropped replayed duplicate tool result after the tool call was already closed"
+                if is_duplicate
+                else "Dropped replayed tool result without a matching tool call"
+            ),
+            payload={
+                "tool_call_id": str(getattr(part, "tool_call_id", "") or ""),
+                "tool_name": str(getattr(part, "tool_name", "") or ""),
+            },
+        )

@@ -16,7 +16,7 @@ def _register_beta(_: object) -> None:
 
 def _register_unavailable(_: object) -> None:
     raise ModuleNotFoundError(
-        "No module named 'agent_teams.tools.workspace_tools.write_tmp'"
+        "No module named 'agent_teams.tools.workspace_tools.legacy_tool'"
     )
 
 
@@ -99,28 +99,54 @@ def test_registry_resolve_known_ignores_unknown_tools_when_strict_is_false() -> 
     assert resolved == ("beta", "alpha")
 
 
+def test_registry_resolve_known_applies_legacy_aliases_when_strict_is_false() -> None:
+    registry = ToolRegistry(
+        {
+            "exec_command": _register_alpha,
+        },
+        legacy_aliases={"shell": "exec_command"},
+    )
+
+    resolved = registry.resolve_known(("shell",), strict=False)
+
+    assert resolved == ("exec_command",)
+
+
+def test_registry_resolve_known_deduplicates_after_legacy_aliases() -> None:
+    registry = ToolRegistry(
+        {
+            "write": _register_alpha,
+        },
+        legacy_aliases={"write_tmp": "write"},
+    )
+
+    resolved = registry.resolve_known(("write_tmp", "write"), strict=False)
+
+    assert resolved == ("write",)
+
+
 def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resolution() -> (
     None
 ):
     registry = ToolRegistry(
         {
             "alpha": _register_alpha,
-            "write_tmp": _register_unavailable,
+            "legacy": _register_unavailable,
         }
     )
 
     assert registry.list_names() == ("alpha",)
     unavailable_tools = registry.list_unavailable_tools()
     assert len(unavailable_tools) == 1
-    assert unavailable_tools[0].name == "write_tmp"
+    assert unavailable_tools[0].name == "legacy"
     assert unavailable_tools[0].error_type == "ModuleNotFoundError"
-    assert "write_tmp" in unavailable_tools[0].message
+    assert "legacy_tool" in unavailable_tools[0].message
 
     with pytest.raises(ValueError, match="Unavailable tools"):
-        registry.validate_known(("write_tmp",))
+        registry.validate_known(("legacy",))
 
     resolved = registry.resolve_known(
-        ("write_tmp", "alpha"),
+        ("legacy", "alpha"),
         strict=False,
         consumer="tests.unit_tests.tools.registry.test_registry",
     )

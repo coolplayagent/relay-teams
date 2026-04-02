@@ -103,6 +103,30 @@ export async function resumeRun(runId) {
     );
 }
 
+export async function fetchRunBackgroundTasks(runId) {
+    return requestJson(
+        `/api/runs/${runId}/background-tasks`,
+        undefined,
+        'Failed to fetch background tasks',
+    );
+}
+
+export async function fetchRunBackgroundTask(runId, backgroundTaskId) {
+    return requestJson(
+        `/api/runs/${runId}/background-tasks/${backgroundTaskId}`,
+        undefined,
+        'Failed to fetch background task',
+    );
+}
+
+export async function stopBackgroundTask(runId, backgroundTaskId) {
+    return requestJson(
+        `/api/runs/${runId}/background-tasks/${backgroundTaskId}:stop`,
+        { method: 'POST' },
+        'Failed to stop background task',
+    );
+}
+
 export async function injectSubagentMessage(runId, instanceId, content) {
     return requestJson(
         `/api/runs/${runId}/subagents/${instanceId}/inject`,

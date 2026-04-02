@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from agent_teams.providers.model_config import (
         LlmRetryConfig,
         ModelEndpointConfig,
+        ModelRequestHeader,
         ProviderModelInfo,
         ProviderType,
         SamplingConfig,
@@ -57,6 +58,7 @@ __all__ = [
     "LlmRetryErrorInfo",
     "LlmRetrySchedule",
     "ModelEndpointConfig",
+    "ModelRequestHeader",
     "ModelConfigManager",
     "ModelConfigService",
     "ModelDiscoveryEntry",
@@ -100,6 +102,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelEndpointConfig": (
         "agent_teams.providers.model_config",
         "ModelEndpointConfig",
+    ),
+    "ModelRequestHeader": (
+        "agent_teams.providers.model_config",
+        "ModelRequestHeader",
     ),
     "ModelConfigManager": (
         "agent_teams.providers.model_config_manager",

@@ -68,6 +68,7 @@ from agent_teams.gateway.im import (
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
+from agent_teams.logger import get_logger
 from agent_teams.interfaces.server.config_status_service import ConfigStatusService
 from agent_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from agent_teams.mcp.mcp_config_manager import McpConfigManager
@@ -134,6 +135,16 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
+from agent_teams.sessions.runs.background_tasks.manager import (
+    BackgroundTaskManager,
+)
+from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    kill_process_tree_by_pid,
+)
+from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
@@ -162,6 +173,9 @@ from agent_teams.workspace import (
     WorkspaceRepository,
     WorkspaceService,
 )
+
+
+LOGGER = get_logger(__name__)
 
 
 class ServerContainer:
@@ -279,6 +293,9 @@ class ServerContainer:
         self.run_intent_repo: RunIntentRepository = RunIntentRepository(
             runtime.paths.db_path
         )
+        self.background_task_repository: BackgroundTaskRepository = (
+            BackgroundTaskRepository(runtime.paths.db_path)
+        )
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
         )
@@ -362,6 +379,7 @@ class ServerContainer:
         if manage_runtime_state:
             self.agent_repo.mark_running_instances_failed()
             _ = self.run_runtime_repo.mark_transient_runs_interrupted()
+            self._interrupt_transient_background_tasks()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
@@ -370,6 +388,14 @@ class ServerContainer:
         self.run_event_hub: RunEventHub = RunEventHub(
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
+        )
+        self.background_task_manager = BackgroundTaskManager(
+            repository=self.background_task_repository,
+            run_event_hub=self.run_event_hub,
+        )
+        self.background_task_service = BackgroundTaskService(
+            background_task_manager=self.background_task_manager,
+            repository=self.background_task_repository,
         )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
@@ -437,6 +463,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
+            background_task_service=self.background_task_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
@@ -509,6 +536,8 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             run_state_repo=self.run_state_repo,
+            background_task_manager=self.background_task_manager,
+            background_task_service=self.background_task_service,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
@@ -522,6 +551,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
+            background_task_repository=self.background_task_repository,
             run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
             active_run_registry=self.active_run_registry,
@@ -723,6 +753,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
+            background_task_service=self.background_task_service,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
             computer_runtime=self.computer_runtime,
@@ -822,6 +853,7 @@ class ServerContainer:
 
     async def start(self) -> None:
         self.run_service.bind_event_loop(asyncio.get_running_loop())
+        self.background_task_service.bind_completion_sink(self.run_service)
         self.wechat_gateway_service.start()
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
@@ -838,6 +870,7 @@ class ServerContainer:
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()
         await self.external_acp_session_manager.close()
+        await self.background_task_manager.close()
         return None
 
     def _sanitize_role_registry(self, role_registry: RoleRegistry) -> RoleRegistry:
@@ -957,6 +990,34 @@ class ServerContainer:
         _ = self.workspace_service.create_workspace(
             workspace_id="default",
             root_path=Path.cwd(),
+        )
+
+    def _interrupt_transient_background_tasks(self) -> int:
+        interrupted = self.background_task_repository.list_interruptible()
+        interrupted_ids: list[str] = []
+        for record in interrupted:
+            if record.pid is None:
+                LOGGER.warning(
+                    "Persisted background task lost pid before interruption cleanup",
+                    extra={"background_task_id": record.background_task_id},
+                )
+                interrupted_ids.append(record.background_task_id)
+                continue
+            killed = kill_process_tree_by_pid(record.pid)
+            if not killed:
+                LOGGER.warning(
+                    "Failed to terminate interrupted background task process",
+                    extra={
+                        "background_task_id": record.background_task_id,
+                        "pid": record.pid,
+                    },
+                )
+                continue
+            interrupted_ids.append(record.background_task_id)
+        return (
+            self.background_task_repository.mark_transient_background_tasks_interrupted(
+                background_task_ids=tuple(interrupted_ids)
+            )
         )
 
     def _build_skill_runtime_service(

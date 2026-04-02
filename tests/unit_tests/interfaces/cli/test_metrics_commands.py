@@ -65,3 +65,42 @@ def test_metrics_breakdowns_command_requires_scope_id() -> None:
     normalized_output = _normalized_output(result.output)
     assert result.exit_code == 2
     assert "--scope-id is required when scope is session or run" in normalized_output
+
+
+def test_metrics_breakdowns_command_renders_gateway_rows(monkeypatch) -> None:
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, method, path, payload, timeout_seconds)
+        return {
+            "scope": "global",
+            "scope_id": "",
+            "rows": [],
+            "gateway_rows": [
+                {
+                    "gateway_operation": "session_prompt",
+                    "gateway_phase": "request",
+                    "gateway_transport": "stdio",
+                    "calls": 2,
+                    "success_rate": 1.0,
+                    "avg_duration_ms": 123,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+
+    result = runner.invoke(
+        cli_app.app, ["metrics", "breakdowns", "--format", "prettylog"]
+    )
+
+    assert result.exit_code == 0
+    assert "gateway_operation=session_prompt" in result.output

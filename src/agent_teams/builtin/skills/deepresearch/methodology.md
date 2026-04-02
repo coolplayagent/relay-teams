@@ -68,7 +68,8 @@
 
 **选项 A：使用 WebSearch（内置，无需 MCP）**
 - 使用简单查询字符串进行标准网络搜索
-- 参数：`query`（必填）
+- 参数：`query`（必填），可选 `num_results`、`allowed_domains`、`blocked_domains`
+- 返回结构化命中结果；直接使用命中里的 URL 作为来源，不要再从纯文本摘要里猜链接
 - 例如：`WebSearch(query="quantum computing 2025")`
 
 **方案B：使用MCP（如有，功能更强大）**
@@ -249,7 +250,6 @@
 - 评估信息来源的可信度
 处理相互冲突的信息来源
 生成规范的参考文献
-
 
 
 

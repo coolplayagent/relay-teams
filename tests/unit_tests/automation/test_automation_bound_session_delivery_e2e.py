@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agent_teams.automation import (
@@ -251,7 +251,8 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
     _ = queue_repo.update(
         waiting_record.model_copy(
             update={
-                "resume_next_attempt_at": datetime.now(tz=timezone.utc),
+                "updated_at": waiting_record.updated_at - timedelta(seconds=1),
+                "resume_next_attempt_at": waiting_record.updated_at,
             }
         )
     )

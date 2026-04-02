@@ -9,7 +9,12 @@ from typing import cast
 
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    ModelRequestHeader,
     ProviderType,
+)
+from agent_teams.providers.model_header_utils import (
+    model_header_secret_field_name,
+    normalize_model_request_headers_payload,
 )
 from agent_teams.providers.known_model_context_windows import (
     infer_known_context_window,
@@ -55,12 +60,14 @@ class ModelConfigManager:
                 continue
             api_key, has_api_key = self._resolve_api_key(name, profile)
             normalized_profile = _normalize_profile_context_window(profile)
+            headers = self._resolve_headers(name, normalized_profile)
             result[name] = {
                 "provider": normalized_profile.get("provider", "openai_compatible"),
                 "model": normalized_profile.get("model", ""),
                 "base_url": normalized_profile.get("base_url", ""),
                 "api_key": api_key,
                 "has_api_key": has_api_key,
+                "headers": [binding.model_dump(mode="json") for binding in headers],
                 "ssl_verify": normalized_profile.get("ssl_verify"),
                 "temperature": normalized_profile.get("temperature", 0.7),
                 "top_p": normalized_profile.get("top_p", 1.0),
@@ -103,6 +110,12 @@ class ModelConfigManager:
                 current_secret=current_secret,
             )
         )
+        config[name] = self._prepare_profile_headers_for_storage(
+            profile_name=name,
+            existing_profile=existing_profile,
+            next_profile=cast(dict[str, JsonValue], config[name]),
+            source_name=source_name,
+        )
         if source_name is not None and source_name != name:
             config.pop(source_name, None)
         _normalize_default_profile_flags(config, preferred_name=name)
@@ -113,18 +126,24 @@ class ModelConfigManager:
             next_secret=next_secret,
             preserve_secret=preserve_secret,
         )
+        self._sync_profile_header_secrets(
+            profile_name=name,
+            existing_profile=existing_profile,
+            next_profile=_normalize_profile_context_window(profile),
+            source_name=source_name,
+        )
 
     def delete_model_profile(self, name: str) -> None:
         model_file = self._config_dir / "model.json"
         if not model_file.exists():
-            self._delete_profile_secret(name)
+            self._delete_profile_secret_owner(name)
             return
         config = _load_json_object(model_file)
         if name in config:
             del config[name]
             _normalize_default_profile_flags(config)
             _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
-        self._delete_profile_secret(name)
+        self._delete_profile_secret_owner(name)
 
     def save_model_config(self, config: dict[str, JsonValue]) -> None:
         model_file = self._config_dir / "model.json"
@@ -150,7 +169,12 @@ class ModelConfigManager:
                     current_secret=current_secret,
                 )
             )
-            next_config[name] = next_profile
+            next_config[name] = self._prepare_profile_headers_for_storage(
+                profile_name=name,
+                existing_profile=existing_config.get(name),
+                next_profile=next_profile,
+                source_name=None,
+            )
             secret_updates[name] = (next_secret, preserve_secret)
         _normalize_default_profile_flags(next_config)
         _ = model_file.write_text(dumps(next_config, indent=2), encoding="utf-8")
@@ -165,14 +189,24 @@ class ModelConfigManager:
             if isinstance(profile, dict)
         }
         for removed_name in sorted(existing_profile_names - next_profile_names):
-            self._delete_profile_secret(removed_name)
+            self._delete_profile_secret_owner(removed_name)
         for profile_name, (next_secret, preserve_secret) in secret_updates.items():
             if next_secret is not None:
                 self._set_profile_secret(profile_name, next_secret)
-                continue
-            if preserve_secret:
-                continue
-            self._delete_profile_secret(profile_name)
+            elif not preserve_secret:
+                self._delete_profile_secret(profile_name)
+            next_profile = next_config.get(profile_name)
+            if isinstance(next_profile, dict) and isinstance(
+                config.get(profile_name), dict
+            ):
+                self._sync_profile_header_secrets(
+                    profile_name=profile_name,
+                    existing_profile=existing_config.get(profile_name),
+                    next_profile=_normalize_profile_context_window(
+                        cast(dict[str, JsonValue], config[profile_name])
+                    ),
+                    source_name=None,
+                )
 
     def _hydrate_model_config(
         self,
@@ -188,6 +222,11 @@ class ModelConfigManager:
             api_key, has_api_key = self._resolve_api_key(name, profile)
             if has_api_key:
                 next_profile["api_key"] = api_key
+            headers = self._resolve_headers(name, profile)
+            if headers:
+                next_profile["headers"] = [
+                    binding.model_dump(mode="json") for binding in headers
+                ]
             hydrated[name] = next_profile
         return hydrated
 
@@ -203,6 +242,253 @@ class ModelConfigManager:
         if secret_value is None:
             return "", False
         return secret_value, True
+
+    def _resolve_headers(
+        self,
+        profile_name: str,
+        profile: dict[str, JsonValue],
+    ) -> tuple[ModelRequestHeader, ...]:
+        raw_headers = profile.get("headers")
+        bindings = normalize_model_request_headers_payload(raw_headers)
+        resolved_bindings: list[ModelRequestHeader] = []
+        for binding in bindings:
+            value = binding.value
+            if value is None and binding.secret:
+                value = self._secret_store.get_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=model_header_secret_field_name(binding.name),
+                )
+            resolved_bindings.append(
+                binding.model_copy(
+                    update={
+                        "value": value,
+                        "configured": value is not None,
+                    }
+                )
+            )
+        return tuple(resolved_bindings)
+
+    def _prepare_profile_headers_for_storage(
+        self,
+        *,
+        profile_name: str,
+        existing_profile: object,
+        next_profile: dict[str, JsonValue],
+        source_name: str | None,
+    ) -> dict[str, JsonValue]:
+        merged_profile = dict(next_profile)
+        if "headers" not in merged_profile:
+            if isinstance(existing_profile, dict) and "headers" in existing_profile:
+                merged_profile["headers"] = existing_profile["headers"]
+            return merged_profile
+
+        incoming_headers = normalize_model_request_headers_payload(
+            merged_profile.get("headers")
+        )
+        stored_headers: list[dict[str, JsonValue]] = []
+        current_owner = (
+            source_name
+            if source_name is not None and source_name != profile_name
+            else profile_name
+        )
+        existing_bindings = (
+            self._resolve_headers(current_owner, existing_profile)
+            if isinstance(existing_profile, dict)
+            else ()
+        )
+        existing_by_name = {
+            binding.name.casefold(): binding for binding in existing_bindings
+        }
+        for binding in incoming_headers:
+            if binding.secret:
+                existing_binding = existing_by_name.get(binding.name.casefold())
+                if (
+                    binding.value is None
+                    and binding.configured is not False
+                    and (existing_binding is None or existing_binding.value is None)
+                ):
+                    raise ValueError(
+                        f"Header '{binding.name}' requires a value the first time it is configured."
+                    )
+                stored_headers.append(
+                    {
+                        "name": binding.name,
+                        "secret": True,
+                        "configured": False,
+                    }
+                )
+                continue
+            if binding.value is None:
+                raise ValueError(
+                    f"Non-secret header '{binding.name}' requires a value."
+                )
+            stored_headers.append(
+                {
+                    "name": binding.name,
+                    "value": binding.value,
+                    "secret": False,
+                    "configured": True,
+                }
+            )
+        merged_profile["headers"] = cast(JsonValue, stored_headers)
+        return merged_profile
+
+    def _sync_profile_header_secrets(
+        self,
+        *,
+        profile_name: str,
+        existing_profile: object,
+        next_profile: dict[str, JsonValue],
+        source_name: str | None,
+    ) -> None:
+        current_owner = (
+            source_name
+            if source_name is not None and source_name != profile_name
+            else profile_name
+        )
+        if not isinstance(existing_profile, dict):
+            existing_bindings: tuple[ModelRequestHeader, ...] = ()
+        else:
+            existing_bindings = self._resolve_headers(current_owner, existing_profile)
+            if (
+                not existing_bindings
+                and source_name is not None
+                and source_name != profile_name
+            ):
+                existing_bindings = self._resolve_headers(
+                    profile_name, existing_profile
+                )
+
+        if "headers" not in next_profile:
+            if source_name is not None and source_name != profile_name:
+                self._rename_profile_header_secrets(
+                    from_owner_id=source_name,
+                    to_owner_id=profile_name,
+                )
+            return
+
+        next_bindings = normalize_model_request_headers_payload(
+            next_profile.get("headers")
+        )
+        existing_by_name = {
+            binding.name.casefold(): binding for binding in existing_bindings
+        }
+        kept_names: set[str] = set()
+        for binding in next_bindings:
+            normalized_name = binding.name.casefold()
+            kept_names.add(normalized_name)
+            field_name = model_header_secret_field_name(binding.name)
+            if not binding.secret:
+                self._secret_store.delete_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=field_name,
+                )
+                continue
+            if binding.value is not None:
+                self._secret_store.set_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=field_name,
+                    value=binding.value,
+                )
+                continue
+            existing_binding = existing_by_name.get(normalized_name)
+            if existing_binding is not None and existing_binding.value is not None:
+                self._secret_store.set_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=field_name,
+                    value=existing_binding.value,
+                )
+                continue
+            if binding.configured is False:
+                self._secret_store.delete_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=field_name,
+                )
+                continue
+            raise ValueError(
+                f"Header '{binding.name}' requires a value the first time it is configured."
+            )
+
+        for binding in existing_bindings:
+            if binding.name.casefold() in kept_names:
+                continue
+            self._secret_store.delete_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=current_owner,
+                field_name=model_header_secret_field_name(binding.name),
+            )
+        if source_name is not None and source_name != profile_name:
+            self._delete_profile_header_secrets(source_name)
+
+    def _rename_profile_header_secrets(
+        self,
+        *,
+        from_owner_id: str,
+        to_owner_id: str,
+    ) -> None:
+        if from_owner_id == to_owner_id:
+            return
+        existing_fields = self._secret_store.list_owner_fields(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=from_owner_id,
+        )
+        header_fields = tuple(
+            field_name
+            for field_name in existing_fields
+            if field_name.startswith("header:")
+        )
+        if not header_fields:
+            return
+        for field_name in header_fields:
+            value = self._secret_store.get_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=from_owner_id,
+                field_name=field_name,
+            )
+            if value is None:
+                continue
+            self._secret_store.set_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=to_owner_id,
+                field_name=field_name,
+                value=value,
+            )
+        for field_name in header_fields:
+            self._secret_store.delete_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=from_owner_id,
+                field_name=field_name,
+            )
+
+    def _delete_profile_header_secrets(self, profile_name: str) -> None:
+        for field_name in self._secret_store.list_owner_fields(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+        ):
+            if not field_name.startswith("header:"):
+                continue
+            self._secret_store.delete_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=profile_name,
+                field_name=field_name,
+            )
 
     def _migrate_legacy_profile_api_keys(
         self,
@@ -258,6 +544,13 @@ class ModelConfigManager:
             namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
             owner_id=profile_name,
             field_name=_MODEL_PROFILE_SECRET_FIELD,
+        )
+
+    def _delete_profile_secret_owner(self, profile_name: str) -> None:
+        self._secret_store.delete_owner(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
         )
 
     def _apply_profile_secret_update(

@@ -117,7 +117,7 @@ class SystemPromptSectionsInput(BaseModel):
 
 def build_environment_info_prompt(*, working_directory: Path | None = None) -> str:
     """Gather current runtime environment information for the system prompt.
-    Linked with shell tool implementation to ensure consistency.
+    Linked with the workspace command runtime to ensure consistency.
     """
     system = platform.system()
     release = platform.release()
@@ -128,40 +128,17 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
         else os.getcwd()
     )
 
-    from agent_teams.tools.workspace_tools.shell_executor import resolve_bash_path
+    from agent_teams.tools.workspace_tools.shell_executor import describe_runtime_shell
 
-    bash_path = "Unknown"
-    try:
-        bash_path = resolve_bash_path()
-    except Exception:
-        pass
-
-    shell_info = "Unknown"
-    if system == "Windows":
-        if "MSYSTEM" in os.environ:
-            shell_info = f"Git Bash ({os.environ['MSYSTEM']})"
-        elif "bash.exe" in bash_path.lower() and "git" in bash_path.lower():
-            shell_info = "Git Bash (Resolved)"
-        elif "PSModulePath" in os.environ:
-            shell_info = "PowerShell"
-        else:
-            shell_info = "Command Prompt (cmd.exe)"
-    elif system == "Linux":
-        if (
-            "microsoft" in platform.release().lower()
-            or "microsoft" in platform.version().lower()
-        ):
-            shell_info = "WSL (Linux Bash)"
-        else:
-            shell_info = "Native Linux Bash"
-    elif system == "Darwin":
-        shell_info = "macOS Terminal (zsh/bash)"
+    runtime_shell = describe_runtime_shell()
+    shell_info = runtime_shell.shell_info
+    shell_path = runtime_shell.shell_path
 
     lines = [
         "## Runtime Environment Information",
         f"- Operating System: {system} ({release}) {machine}",
         f"- Working Directory: {cwd}",
-        f"- Shell Type: {shell_info} (Path: {bash_path})",
+        f"- Shell Type: {shell_info} (Path: {shell_path})",
     ]
     github_line = _build_github_cli_environment_line()
     if github_line:

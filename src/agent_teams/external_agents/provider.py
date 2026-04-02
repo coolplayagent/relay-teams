@@ -46,6 +46,7 @@ from agent_teams.logger import get_logger, log_event
 from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
+from agent_teams.providers.openai_support import build_model_request_headers
 from agent_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from agent_teams.roles.role_models import RoleDefinition
 from agent_teams.sessions.runs.enums import RunEventType
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
     from agent_teams.persistence.shared_state_repo import SharedStateRepository
     from agent_teams.roles.memory_service import RoleMemoryService
     from agent_teams.roles.role_registry import RoleRegistry
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
     from agent_teams.sessions.runs.event_log import EventLog
     from agent_teams.sessions.runs.injection_queue import RunInjectionManager
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -137,6 +139,7 @@ class ExternalAcpSessionManager:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        background_task_service: BackgroundTaskService | None,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         get_mcp_registry: Callable[[], McpRegistry],
@@ -171,6 +174,7 @@ class ExternalAcpSessionManager:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
+        self._background_task_service = background_task_service
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._get_mcp_registry = get_mcp_registry
@@ -923,6 +927,7 @@ class ExternalAcpSessionManager:
             approval_ticket_repo=self._approval_ticket_repo,
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
+            background_task_service=self._background_task_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
             role_memory_service=self._role_memory_service,
@@ -1205,14 +1210,32 @@ def _upsert_env_binding(
 def _build_opencode_runtime_config(
     model_config: ModelEndpointConfig,
 ) -> tuple[str, tuple[tuple[str, str], ...]]:
+    custom_headers = _opencode_custom_headers(model_config)
+    should_emit_api_key = _opencode_should_emit_api_key(model_config)
     if _should_use_opencode_zai_provider(model_config):
         return (
-            _build_opencode_zai_config_content(model_config),
-            ((_OPENCODE_ZAI_API_KEY_ENV, model_config.api_key),),
+            _build_opencode_zai_config_content(
+                model_config,
+                custom_headers=custom_headers,
+                include_api_key=should_emit_api_key,
+            ),
+            (
+                ((_OPENCODE_ZAI_API_KEY_ENV, model_config.api_key),)
+                if should_emit_api_key and model_config.api_key is not None
+                else ()
+            ),
         )
     return (
-        _build_opencode_custom_config_content(model_config),
-        ((_OPENCODE_CUSTOM_API_KEY_ENV, model_config.api_key),),
+        _build_opencode_custom_config_content(
+            model_config,
+            custom_headers=custom_headers,
+            include_api_key=should_emit_api_key,
+        ),
+        (
+            ((_OPENCODE_CUSTOM_API_KEY_ENV, model_config.api_key),)
+            if should_emit_api_key and model_config.api_key is not None
+            else ()
+        ),
     )
 
 
@@ -1223,7 +1246,12 @@ def _should_use_opencode_zai_provider(model_config: ModelEndpointConfig) -> bool
     return "bigmodel.cn" in normalized_base_url or "z.ai" in normalized_base_url
 
 
-def _build_opencode_custom_config_content(model_config: ModelEndpointConfig) -> str:
+def _build_opencode_custom_config_content(
+    model_config: ModelEndpointConfig,
+    *,
+    custom_headers: dict[str, str],
+    include_api_key: bool,
+) -> str:
     model_entry = _build_opencode_model_entry(model_config)
     payload = {
         "$schema": "https://opencode.ai/config.json",
@@ -1231,7 +1259,12 @@ def _build_opencode_custom_config_content(model_config: ModelEndpointConfig) -> 
         "provider": {
             _OPENCODE_CUSTOM_PROVIDER_ID: {
                 "api": model_config.base_url,
-                "env": [_OPENCODE_CUSTOM_API_KEY_ENV],
+                **(
+                    {"env": [_OPENCODE_CUSTOM_API_KEY_ENV]}
+                    if include_api_key and model_config.api_key is not None
+                    else {}
+                ),
+                **({"options": {"headers": custom_headers}} if custom_headers else {}),
                 "npm": "@ai-sdk/openai-compatible",
                 "models": {
                     model_config.model: model_entry,
@@ -1242,7 +1275,12 @@ def _build_opencode_custom_config_content(model_config: ModelEndpointConfig) -> 
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _build_opencode_zai_config_content(model_config: ModelEndpointConfig) -> str:
+def _build_opencode_zai_config_content(
+    model_config: ModelEndpointConfig,
+    *,
+    custom_headers: dict[str, str],
+    include_api_key: bool,
+) -> str:
     model_entry = _build_opencode_zai_model_entry(model_config)
     payload = {
         "$schema": "https://opencode.ai/config.json",
@@ -1250,7 +1288,12 @@ def _build_opencode_zai_config_content(model_config: ModelEndpointConfig) -> str
         "provider": {
             _OPENCODE_ZAI_PROVIDER_ID: {
                 "api": model_config.base_url,
-                "env": [_OPENCODE_ZAI_API_KEY_ENV],
+                **(
+                    {"env": [_OPENCODE_ZAI_API_KEY_ENV]}
+                    if include_api_key and model_config.api_key is not None
+                    else {}
+                ),
+                **({"options": {"headers": custom_headers}} if custom_headers else {}),
                 "npm": "@ai-sdk/openai-compatible",
                 "models": {
                     model_config.model: model_entry,
@@ -1311,6 +1354,32 @@ def _build_opencode_limit(
         "context": context_window,
         "output": model_config.sampling.max_tokens,
     }
+
+
+def _opencode_custom_headers(model_config: ModelEndpointConfig) -> dict[str, str]:
+    headers = build_model_request_headers(model_config)
+    if model_config.api_key is not None and "Authorization" in headers:
+        authorization_override = next(
+            (
+                header.value
+                for header in model_config.headers
+                if header.value is not None
+                and header.name.casefold() == "authorization"
+            ),
+            None,
+        )
+        if authorization_override is None:
+            headers.pop("Authorization", None)
+    return headers
+
+
+def _opencode_should_emit_api_key(model_config: ModelEndpointConfig) -> bool:
+    if model_config.api_key is None:
+        return False
+    return not any(
+        header.value is not None and header.name.casefold() == "authorization"
+        for header in model_config.headers
+    )
 
 
 def _opencode_model_supports_attachments(model_name: str) -> bool:

@@ -33,6 +33,11 @@ class MetricTagSet(BaseModel):
     retrieval_backend: str = ""
     retrieval_scope_kind: str = ""
     retrieval_operation: str = ""
+    gateway_channel: str = ""
+    gateway_operation: str = ""
+    gateway_phase: str = ""
+    gateway_transport: str = ""
+    gateway_cold_start: str = ""
     status: str = ""
 
     def normalized_items(self) -> tuple[tuple[str, str], ...]:
@@ -48,6 +53,11 @@ class MetricTagSet(BaseModel):
             ("retrieval_backend", self.retrieval_backend),
             ("retrieval_scope_kind", self.retrieval_scope_kind),
             ("retrieval_operation", self.retrieval_operation),
+            ("gateway_channel", self.gateway_channel),
+            ("gateway_operation", self.gateway_operation),
+            ("gateway_phase", self.gateway_phase),
+            ("gateway_transport", self.gateway_transport),
+            ("gateway_cold_start", self.gateway_cold_start),
             ("status", self.status),
         )
         return tuple((key, value) for key, value in items if value)
@@ -98,6 +108,13 @@ class ObservabilityKpiSet(BaseModel):
     retrieval_failure_rate: float = 0
     retrieval_avg_duration_ms: float = 0
     retrieval_document_count: float = 0
+    gateway_calls: float = 0
+    gateway_failure_rate: float = 0
+    gateway_avg_duration_ms: float = 0
+    gateway_prompt_avg_start_ms: float = 0
+    gateway_prompt_avg_first_update_ms: float = 0
+    gateway_mcp_calls: float = 0
+    gateway_cold_start_calls: float = 0
 
 
 class ObservabilityTrendPoint(BaseModel):
@@ -136,6 +153,19 @@ class ObservabilityRoleBreakdownRow(BaseModel):
     cached_token_ratio: float = 0
 
 
+class ObservabilityGatewayBreakdownRow(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gateway_operation: str = Field(min_length=1)
+    gateway_phase: str = Field(min_length=1)
+    gateway_transport: str = Field(min_length=1)
+    calls: float = 0
+    failures: float = 0
+    success_rate: float = 0
+    avg_duration_ms: float = 0
+    cold_start_calls: float = 0
+
+
 class ObservabilityOverview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -156,3 +186,4 @@ class ObservabilityBreakdown(BaseModel):
     updated_at: str | None = None
     rows: tuple[ObservabilityBreakdownRow, ...] = ()
     role_rows: tuple[ObservabilityRoleBreakdownRow, ...] = ()
+    gateway_rows: tuple[ObservabilityGatewayBreakdownRow, ...] = ()

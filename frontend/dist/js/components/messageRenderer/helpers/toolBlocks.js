@@ -10,7 +10,6 @@ const TOOL_SUMMARY_MAP = {
     shell:     { key: 'tool.summary.shell',     fields: ['command', 'cmd'], detailKind: 'command' },
     read:      { key: 'tool.summary.read',      fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'read' },
     write:     { key: 'tool.summary.write',     fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'write' },
-    write_tmp: { key: 'tool.summary.write',     fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'write' },
     edit:      { key: 'tool.summary.edit',      fields: ['path', 'file_path', 'filepath', 'target_path'], detailKind: 'edit' },
     grep:      { key: 'tool.summary.grep',      fields: ['pattern', 'query'], detailKind: 'value' },
     glob:      { key: 'tool.summary.glob',      fields: ['pattern', 'glob'], detailKind: 'value' },

@@ -6,13 +6,24 @@ from pydantic import JsonValue
 import json
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    ToolCallPart,
+)
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.agents.execution.tool_args_repair import repair_tool_args
+from agent_teams.agents.execution.tool_call_history import (
+    collect_safe_row_ids,
+    normalize_replayed_messages_to_safe_boundary,
+)
 from agent_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
 from agent_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
 from agent_teams.sessions.session_history_marker_repository import (
@@ -543,13 +554,14 @@ class MessageRepository:
                 instance_id,
                 task_id,
                 trace_id,
-                _role(msg),
+                _role(normalized_message),
                 _sanitize_message_json(
-                    ModelMessagesTypeAdapter.dump_json([msg]).decode()
+                    ModelMessagesTypeAdapter.dump_json([normalized_message]).decode()
                 ),
                 now,
             )
             for msg in messages
+            for normalized_message in [_normalize_message_for_persistence(msg)]
         ]
         self._conn.executemany(
             "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
@@ -742,11 +754,7 @@ def _truncate_message_rows_to_safe_boundary(
 def _truncate_model_history_to_safe_boundary(
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    last_safe_index = 0
-    for idx in range(1, len(messages) + 1):
-        if not _collect_pending_tool_call_ids(messages[:idx]):
-            last_safe_index = idx
-    return messages[:last_safe_index]
+    return normalize_replayed_messages_to_safe_boundary(messages)
 
 
 def _history_ends_with_user_prompt(
@@ -770,52 +778,35 @@ def _history_ends_with_user_prompt(
     return combined == target
 
 
-def _collect_pending_tool_call_ids(messages: list[ModelMessage]) -> set[str]:
-    from pydantic_ai.messages import (
-        ModelRequest,
-        ModelResponse,
-        RetryPromptPart,
-        ToolCallPart,
-        ToolReturnPart,
-    )
-
-    pending: set[str] = set()
-    for message in messages:
-        if isinstance(message, ModelResponse):
-            for part in message.parts:
-                if not isinstance(part, ToolCallPart):
-                    continue
-                tool_call_id = str(part.tool_call_id or "").strip()
-                if tool_call_id:
-                    pending.add(tool_call_id)
+def _normalize_message_for_persistence(message: ModelMessage) -> ModelMessage:
+    if not isinstance(message, ModelResponse):
+        return message
+    next_parts = list(message.parts)
+    changed = False
+    for index, part in enumerate(message.parts):
+        if not isinstance(part, ToolCallPart) or not isinstance(part.args, str):
             continue
-        if not isinstance(message, ModelRequest):
+        repaired = repair_tool_args(part.args)
+        if not repaired.repair_applied and not repaired.fallback_invalid_json:
             continue
-        for part in message.parts:
-            tool_call_id = str(getattr(part, "tool_call_id", "") or "").strip()
-            if not tool_call_id:
-                continue
-            if isinstance(part, (ToolReturnPart, RetryPromptPart)):
-                pending.discard(tool_call_id)
-    return pending
+        next_parts[index] = replace(part, args=repaired.arguments_json)
+        changed = True
+    if not changed:
+        return message
+    return replace(message, parts=next_parts)
 
 
 def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
-    last_safe_index = 0
-    history: list[ModelMessage] = []
-    for idx, row in enumerate(rows, start=1):
-        msgs = ModelMessagesTypeAdapter.validate_json(
+    history_rows: list[tuple[int, Sequence[ModelMessage]]] = []
+    for row in rows:
+        row_id = row["id"]
+        if not isinstance(row_id, int):
+            continue
+        messages = ModelMessagesTypeAdapter.validate_json(
             _sanitize_message_json(str(row["message_json"]))
         )
-        history.extend(msgs)
-        if not _collect_pending_tool_call_ids(history):
-            last_safe_index = idx
-    safe_ids: set[int] = set()
-    for row in rows[:last_safe_index]:
-        row_id = row["id"]
-        if isinstance(row_id, int):
-            safe_ids.add(row_id)
-    return safe_ids
+        history_rows.append((row_id, messages))
+    return collect_safe_row_ids(history_rows)
 
 
 def _ensure_after_iso_value(candidate: datetime, raw_value: str | None) -> datetime:

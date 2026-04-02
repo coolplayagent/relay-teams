@@ -72,7 +72,6 @@ Response fields:
     - `name`
     - `error_type`
     - `message`
-  - `has_write_tmp`
 
 Notes:
 - Health stays `200 ok` for a reachable server even when builtin roles or local
@@ -97,23 +96,25 @@ Request field:
 ### `GET /system/configs/model`
 
 Returns the persisted model config with secret-backed profile API keys rehydrated for UI editing.
-Literal profile `api_key` values are migrated out of `model.json` into the unified secret store on read.
+Literal profile `api_key` values and secret header values are migrated out of `model.json` into the unified secret store on read.
 
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
 `provider` currently supports `openai_compatible`, `bigmodel`, and the internal/testing-only `echo`.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
 Upserts a model profile.
-Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
+Request body may include optional `source_name` to rename an existing profile while preserving its stored API key and secret headers when `api_key` and `headers` are omitted.
 `provider` accepts `openai_compatible`, `bigmodel`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
+Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
+Profiles must provide at least one auth source: `api_key` or one configured header.
 When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
 
 ### `DELETE /system/configs/model/profiles/{name}`
@@ -124,19 +125,20 @@ If the deleted profile was the current default and other profiles remain, the ba
 ### `PUT /system/configs/model`
 
 Replaces the full model config object.
-Literal profile `api_key` values are moved into the unified secret store before `model.json` is written.
+Literal profile `api_key` values and secret header values are moved into the unified secret store before `model.json` is written.
 
 ### `POST /system/configs/model:probe`
 
 Tests model connectivity for a saved profile and/or draft override.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
+Draft overrides may include `headers[]` and may omit `api_key` when headers are provided.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:discover`
 
 Fetches the available model catalog for a saved profile and/or draft override.
-Draft overrides may omit `model`, but must provide `base_url` and `api_key` when `profile_name` is omitted.
-When `profile_name` is provided, the request may override `base_url`, `api_key`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
+Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted.
+When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 `openai_compatible` and `bigmodel` both map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
@@ -177,7 +179,7 @@ Fields:
 - `provider`: currently only `exa`
 - `api_key`: optional value rehydrated from the unified secret store
 
-The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
+The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `websearch` uses Exa's advanced MCP search tool internally, returns structured search hits, and accepts optional allow/block domain filters at tool-call time; persisted tool state stores only sanitized Exa host/tool metadata and must not retain API-key-bearing URLs. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
 
 ### `PUT /system/configs/web`
 
@@ -514,17 +516,40 @@ Gets one round projection.
 
 ### `GET /sessions/{session_id}/recovery`
 
-Returns active run recovery state, pending tool approvals, paused subagent state, and round snapshot.
+Returns active run recovery state, pending tool approvals, managed background task state, paused subagent state, and round snapshot.
 
 `active_run` also includes:
 - `last_event_id`
 - `checkpoint_event_id`
+- `background_task_count`
 - `stream_connected`
 - `should_show_recover`
 - `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
 `round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
+`round_snapshot.background_task_count` mirrors the current managed background task count for the active run.
+
+`background_tasks[]` entries include:
+- `background_task_id`
+- `run_id`
+- `session_id`
+- `instance_id`
+- `role_id`
+- `tool_call_id`
+- `command`
+- `cwd`
+- `execution_mode = "background"`
+- `status`: `running | blocked | stopped | failed | completed`
+- `tty`
+- `timeout_ms`
+- `exit_code`
+- `recent_output[]`
+- `output_excerpt`
+- `log_path`
+- `created_at`
+- `updated_at`
+- `completed_at`
 
 ### `GET /sessions/{session_id}/agents`
 
@@ -709,6 +734,12 @@ Retry events:
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
 - `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`. For `model_tool_args_invalid_json`, the payload also includes `auto_recovery_exhausted`, `attempt`, and `max_attempts`.
 - `run_resumed`: payload always includes `session_id` and `reason`. When the backend auto-recovers a malformed tool-arguments response, `reason="auto_recovery_invalid_tool_args_json"` and the payload also includes `attempt` and `max_attempts`.
+- Background task lifecycle events:
+  - `background_task_started`
+  - `background_task_updated`
+  - `background_task_completed`
+  - `background_task_stopped`
+  Each payload is the current background task snapshot, including `background_task_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
@@ -718,6 +749,7 @@ Frontend behavior:
 - If a model emits malformed tool arguments JSON after a safe checkpoint, the backend may emit `run_resumed` with `reason="auto_recovery_invalid_tool_args_json"` and continue the same stream without surfacing `run_paused`.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
+- Background task events are operator/UI continuity signals only. They update recovery state and `/ps`-style UI surfaces, but do not become model-visible conversation messages.
 
 ### `POST /runs/{run_id}/inject`
 
@@ -726,6 +758,52 @@ Injects follow-up content to active agents in a run.
 ### `GET /runs/{run_id}/tool-approvals`
 
 Lists pending tool approvals.
+
+### `GET /runs/{run_id}/background-tasks`
+
+Lists managed background tasks bound to the run.
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "background_task_id": "exec_a1b2c3d4e5f6",
+      "run_id": "run-1",
+      "session_id": "session-1",
+      "command": "sleep 30",
+      "cwd": "/workspace/project",
+      "execution_mode": "background",
+      "status": "running",
+      "tty": false,
+      "timeout_ms": 1800000,
+      "exit_code": null,
+      "recent_output": [],
+      "output_excerpt": "",
+      "log_path": "tmp/background_tasks/exec_a1b2c3d4e5f6.log",
+      "created_at": "2026-03-31T10:00:00Z",
+      "updated_at": "2026-03-31T10:00:00Z",
+      "completed_at": null
+    }
+  ]
+}
+```
+
+### `GET /runs/{run_id}/background-tasks/{background_task_id}`
+
+Returns one managed background task snapshot for the run.
+
+### `POST /runs/{run_id}/background-tasks/{background_task_id}:stop`
+
+Stops one managed background task and returns its final snapshot.
+
+Notes:
+- Background tasks are scoped to the owning run. Cross-run access returns `404`.
+- The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
+- Runtime shell selection is internal, not part of the REST contract. Linux/macOS use the managed bash path; Windows prefers Git Bash and falls back to PowerShell when Git Bash is unavailable.
+- `tty=true` background tasks use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY background tasks remain available.
+- Unlike Codex's stricter unified-exec contract, Agent Teams keeps non-TTY `write_stdin` enabled for compatibility with existing pipe-style workflows.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
 
@@ -1497,6 +1575,13 @@ Overview KPIs include:
 - `retrieval_failure_rate`
 - `retrieval_avg_duration_ms`
 - `retrieval_document_count`
+- `gateway_calls`
+- `gateway_failure_rate`
+- `gateway_avg_duration_ms`
+- `gateway_prompt_avg_start_ms`
+- `gateway_prompt_avg_first_update_ms`
+- `gateway_mcp_calls`
+- `gateway_cold_start_calls`
 
 ### `GET /observability/breakdowns`
 
@@ -1505,6 +1590,7 @@ Returns tool-level breakdown rows for `scope=global|session|run`. Non-global sco
 Breakdown payload includes:
 - `rows`: tool-level call/failure/latency breakdown
 - `role_rows`: role-level token/cache/tool-failure breakdown
+- `gateway_rows`: gateway ACP and MCP operation call/failure/latency breakdown grouped by operation, phase, and transport
 
 ## Automation APIs
 

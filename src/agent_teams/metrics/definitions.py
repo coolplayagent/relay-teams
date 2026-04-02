@@ -93,6 +93,24 @@ RETRIEVAL_DOCUMENT_COUNT = MetricDefinition(
     description="Current document count tracked by a retrieval scope.",
     unit="documents",
 )
+GATEWAY_OPERATIONS = MetricDefinition(
+    name="agent_teams.gateway.operations",
+    kind=MetricKind.COUNTER,
+    description="Count of gateway ACP and MCP operations observed by the runtime.",
+    unit="calls",
+)
+GATEWAY_OPERATION_DURATION_MS = MetricDefinition(
+    name="agent_teams.gateway.operation_duration_ms",
+    kind=MetricKind.HISTOGRAM,
+    description="Observed duration of gateway ACP and MCP operations in milliseconds.",
+    unit="ms",
+)
+GATEWAY_OPERATION_FAILURES = MetricDefinition(
+    name="agent_teams.gateway.operation_failures",
+    kind=MetricKind.COUNTER,
+    description="Count of failed gateway ACP and MCP operations.",
+    unit="calls",
+)
 
 DEFAULT_DEFINITIONS = (
     SESSION_STEPS,
@@ -110,4 +128,7 @@ DEFAULT_DEFINITIONS = (
     RETRIEVAL_REBUILDS,
     RETRIEVAL_REBUILD_DURATION_MS,
     RETRIEVAL_DOCUMENT_COUNT,
+    GATEWAY_OPERATIONS,
+    GATEWAY_OPERATION_DURATION_MS,
+    GATEWAY_OPERATION_FAILURES,
 )

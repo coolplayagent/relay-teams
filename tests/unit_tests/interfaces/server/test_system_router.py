@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import cast
+
+from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -88,6 +91,7 @@ class _FakeSystemService:
                 "base_url": "https://example.test/v1",
                 "api_key": "secret",
                 "has_api_key": True,
+                "headers": [],
                 "is_default": True,
                 "context_window": 128000,
             }
@@ -236,7 +240,7 @@ class _FakeSystemService:
                 profile="glm",
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
-                base_url="https://open.bigmodel.cn/api/paas/v4",
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
             ),
             ProviderModelInfo(
                 profile="echo",
@@ -381,8 +385,7 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
-    assert "write_tmp" in tool_registry_sanity["available_tool_names"]
-    assert tool_registry_sanity["has_write_tmp"] is True
+    assert "write" in tool_registry_sanity["available_tool_names"]
 
 
 def test_get_notification_config() -> None:
@@ -888,7 +891,7 @@ def test_save_model_profile_accepts_bigmodel_provider() -> None:
         json={
             "provider": ProviderType.BIGMODEL.value,
             "model": "glm-4.5",
-            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
             "api_key": "secret",
             "temperature": 0.2,
             "top_p": 0.9,
@@ -973,6 +976,40 @@ def test_save_model_profile_includes_default_flag_when_present() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, _ = service.saved_model_profile
     assert saved_profile["is_default"] is True
+
+
+def test_save_model_profile_forwards_headers() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "claude-proxy",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "value": "Bearer from-header",
+                    "secret": True,
+                }
+            ],
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": 2048,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    saved_headers = saved_profile["headers"]
+    assert isinstance(saved_headers, list)
+    first_header = saved_headers[0]
+    assert isinstance(first_header, dict)
+    first_header_payload = first_header
+    assert cast(dict[str, JsonValue], first_header_payload)["name"] == "Authorization"
 
 
 class _FakeEnvironmentVariableService:

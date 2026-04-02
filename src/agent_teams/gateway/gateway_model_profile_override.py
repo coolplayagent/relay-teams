@@ -6,9 +6,31 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from agent_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     ModelEndpointConfig,
+    ModelRequestHeader,
     ProviderType,
     SamplingConfig,
 )
+from agent_teams.providers.model_header_utils import (
+    normalize_model_request_headers_payload,
+)
+
+
+def _normalize_acp_model_profile_headers(
+    raw_value: JsonValue | None,
+) -> tuple[ModelRequestHeader, ...]:
+    if raw_value is None:
+        return ()
+    if isinstance(raw_value, dict):
+        shorthand_headers: list[dict[str, JsonValue]] = []
+        for raw_name, raw_header_value in raw_value.items():
+            shorthand_headers.append(
+                {
+                    "name": str(raw_name),
+                    "value": raw_header_value,
+                }
+            )
+        return normalize_model_request_headers_payload(shorthand_headers)
+    return normalize_model_request_headers_payload(raw_value)
 
 
 class GatewayModelProfileOverride(BaseModel):
@@ -18,7 +40,8 @@ class GatewayModelProfileOverride(BaseModel):
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    api_key: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] = ()
     ssl_verify: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -48,8 +71,11 @@ class GatewayModelProfileOverride(BaseModel):
         base_url = _pick_str("baseUrl", "base_url")
         api_key = _pick_str("apiKey", "api_key")
         model = _pick_str("model")
-        if not base_url or not api_key or not model:
-            raise ValueError("modelProfileOverride requires model, baseUrl, and apiKey")
+        headers = _normalize_acp_model_profile_headers(payload.get("headers"))
+        if not base_url or not model or (not api_key and not headers):
+            raise ValueError(
+                "modelProfileOverride requires model, baseUrl, and apiKey or headers"
+            )
 
         ssl_verify_value = payload.get("sslVerify", payload.get("ssl_verify"))
         ssl_verify: bool | None
@@ -64,6 +90,7 @@ class GatewayModelProfileOverride(BaseModel):
             model=model,
             base_url=base_url,
             api_key=api_key,
+            headers=headers,
             ssl_verify=ssl_verify,
             temperature=_pick_number("temperature"),
             top_p=_pick_number("topP", "top_p"),
@@ -97,6 +124,7 @@ class GatewayModelProfileOverride(BaseModel):
             model=self.model,
             base_url=self.base_url,
             api_key=self.api_key,
+            headers=self.headers,
             ssl_verify=self.ssl_verify,
             context_window=self.context_window,
             connect_timeout_seconds=(
@@ -126,6 +154,12 @@ class GatewayModelProfileOverride(BaseModel):
             "provider": self.provider.value,
             "model": self.model,
             "baseUrl": self.base_url,
+            "headers": [
+                header.model_copy(
+                    update={"value": None, "configured": True}
+                ).model_dump(mode="json")
+                for header in self.headers
+            ],
             "sslVerify": self.ssl_verify,
             "temperature": self.temperature,
             "topP": self.top_p,
