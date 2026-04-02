@@ -139,11 +139,7 @@ class GatewayModelProfileOverride(BaseModel):
                     else sampling_defaults.temperature
                 ),
                 top_p=self.top_p if self.top_p is not None else sampling_defaults.top_p,
-                max_tokens=(
-                    self.max_tokens
-                    if self.max_tokens is not None
-                    else sampling_defaults.max_tokens
-                ),
+                max_tokens=self.max_tokens,
                 top_k=sampling_defaults.top_k,
             ),
         )

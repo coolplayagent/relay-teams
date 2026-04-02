@@ -882,6 +882,50 @@ def test_save_model_profile_allows_missing_api_key_for_edit() -> None:
     assert source_name is None
 
 
+def test_save_model_profile_omits_max_tokens_when_not_provided() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert "max_tokens" not in saved_profile
+
+
+def test_save_model_profile_allows_clearing_max_tokens_with_null() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert "max_tokens" in saved_profile
+    assert saved_profile["max_tokens"] is None
+
+
 def test_save_model_profile_accepts_bigmodel_provider() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)

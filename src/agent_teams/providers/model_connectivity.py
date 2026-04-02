@@ -246,9 +246,7 @@ class ModelConnectivityProbeService:
                         else 0.2
                     ),
                     top_p=override.top_p if override.top_p is not None else 1.0,
-                    max_tokens=(
-                        override.max_tokens if override.max_tokens is not None else 1
-                    ),
+                    max_tokens=override.max_tokens,
                 ),
             )
 

@@ -1346,13 +1346,14 @@ def _build_opencode_limit(
     fallback_context_window: int | None = None,
 ) -> dict[str, int] | None:
     context_window = model_config.context_window
+    max_tokens = model_config.sampling.max_tokens
     if context_window is None:
         context_window = fallback_context_window
-    if context_window is None or model_config.sampling.max_tokens <= 0:
+    if context_window is None or max_tokens is None or max_tokens <= 0:
         return None
     return {
         "context": context_window,
-        "output": model_config.sampling.max_tokens,
+        "output": max_tokens,
     }
 
 

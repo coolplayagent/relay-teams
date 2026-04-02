@@ -1907,17 +1907,19 @@ class AgentLlmSession:
             "openai_continuous_usage_stats": True,
             "temperature": self._config.sampling.temperature,
             "top_p": self._config.sampling.top_p,
-            "max_tokens": self._safe_max_output_tokens(
-                request=request,
-                history=history,
-                system_prompt=system_prompt,
-                reserve_user_prompt_tokens=reserve_user_prompt_tokens,
-                allowed_tools=allowed_tools,
-                allowed_mcp_servers=allowed_mcp_servers,
-                allowed_skills=allowed_skills,
-                estimated_mcp_context_tokens=estimated_mcp_context_tokens,
-            ),
         }
+        max_tokens = self._safe_max_output_tokens(
+            request=request,
+            history=history,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+            estimated_mcp_context_tokens=estimated_mcp_context_tokens,
+        )
+        if max_tokens is not None:
+            model_settings["max_tokens"] = max_tokens
         if request.thinking.enabled and request.thinking.effort is not None:
             model_settings["openai_reasoning_effort"] = request.thinking.effort
         return model_settings
@@ -1933,8 +1935,10 @@ class AgentLlmSession:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
         estimated_mcp_context_tokens: int | None = None,
-    ) -> int:
+    ) -> int | None:
         configured_max_tokens = self._config.sampling.max_tokens
+        if configured_max_tokens is None:
+            return None
         context_window = self._config.context_window
         if context_window is None or context_window <= 0:
             return configured_max_tokens

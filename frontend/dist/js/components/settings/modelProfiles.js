@@ -171,7 +171,7 @@ function handleAddProfile() {
     document.getElementById('profile-is-default').checked = Object.keys(profiles).length === 0;
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
-    document.getElementById('profile-max-tokens').value = '100000';
+    document.getElementById('profile-max-tokens').value = '';
     document.getElementById('profile-context-window').value = '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = '15';
@@ -207,7 +207,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-is-default').checked = profile.is_default === true;
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
-    document.getElementById('profile-max-tokens').value = profile.max_tokens || 100000;
+    document.getElementById('profile-max-tokens').value = profile.max_tokens || '';
     document.getElementById('profile-context-window').value = profile.context_window || '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
@@ -240,7 +240,8 @@ async function handleSaveProfile() {
     const isDefault = document.getElementById('profile-is-default').checked;
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
-    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 100000;
+    const maxTokensValue = String(document.getElementById('profile-max-tokens').value || '').trim();
+    const maxTokens = maxTokensValue ? parseInt(maxTokensValue) || null : null;
     const contextWindowValue = String(
         document.getElementById('profile-context-window').value || '',
     ).trim();
@@ -275,10 +276,12 @@ async function handleSaveProfile() {
         is_default: isDefault,
         temperature: temperature,
         top_p: topP,
-        max_tokens: maxTokens,
         context_window: contextWindow,
         connect_timeout_seconds: connectTimeoutSeconds,
     };
+    if (maxTokens !== null) {
+        profile.max_tokens = maxTokens;
+    }
     if (sslVerify !== null) {
         profile.ssl_verify = sslVerify;
     }
@@ -430,7 +433,8 @@ function buildDraftProbePayload() {
     const apiKey = readDraftApiKeyValue();
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
-    const maxTokens = parseInt(document.getElementById('profile-max-tokens').value) || 100000;
+    const maxTokensValue = String(document.getElementById('profile-max-tokens').value || '').trim();
+    const maxTokens = maxTokensValue ? parseInt(maxTokensValue) || null : null;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
@@ -449,8 +453,10 @@ function buildDraftProbePayload() {
         base_url: baseUrl,
         temperature: temperature,
         top_p: topP,
-        max_tokens: maxTokens,
     };
+    if (maxTokens !== null) {
+        override.max_tokens = maxTokens;
+    }
     if (sslVerify !== null) {
         override.ssl_verify = sslVerify;
     }

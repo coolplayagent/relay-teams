@@ -144,7 +144,7 @@ class ModelProfileRequest(BaseModel):
     ssl_verify: bool | None = None
     temperature: float = 0.7
     top_p: float = 1.0
-    max_tokens: int = 100000
+    max_tokens: int | None = None
     context_window: int | None = None
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
@@ -162,10 +162,11 @@ def save_model_profile(
             "base_url": req.base_url,
             "temperature": req.temperature,
             "top_p": req.top_p,
-            "max_tokens": req.max_tokens,
             "context_window": req.context_window,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
+        if "max_tokens" in req.model_fields_set:
+            profile["max_tokens"] = req.max_tokens
         if req.is_default is not None:
             profile["is_default"] = req.is_default
         if req.ssl_verify is not None:

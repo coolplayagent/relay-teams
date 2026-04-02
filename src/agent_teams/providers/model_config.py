@@ -25,7 +25,7 @@ class SamplingConfig(BaseModel):
 
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    max_tokens: int = Field(default=1024, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
     top_k: int | None = Field(default=None, ge=1)
 
 

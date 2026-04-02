@@ -191,7 +191,7 @@ def load_llm_profile_state(
 
         temperature = cfg.get("temperature", 0.2)
         top_p = cfg.get("top_p", 1.0)
-        max_tokens = cfg.get("max_tokens", 1024)
+        max_tokens = cfg.get("max_tokens")
         top_k = cfg.get("top_k")
         context_window_raw = cfg.get("context_window")
         ssl_verify = _coerce_optional_ssl_verify(

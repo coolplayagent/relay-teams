@@ -863,7 +863,9 @@ async def test_generate_counts_current_user_prompt_in_context_budget(
     assert isinstance(settings_obj, dict)
     bounded_max_tokens = settings_obj.get("max_tokens")
     assert isinstance(bounded_max_tokens, int)
-    assert 1 <= bounded_max_tokens < provider._config.sampling.max_tokens
+    configured_max_tokens = provider._config.sampling.max_tokens
+    assert isinstance(configured_max_tokens, int)
+    assert 1 <= bounded_max_tokens < configured_max_tokens
 
 
 def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
@@ -1041,6 +1043,8 @@ async def test_generate_recomputes_budget_after_injection_restart(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
+    assert isinstance(first_budget, int)
+    assert isinstance(second_budget, int)
     assert second_budget < first_budget
 
 
@@ -1187,6 +1191,8 @@ async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
         allowed_skills=(),
     )
 
+    assert isinstance(expected_without_rereserve, int)
+    assert isinstance(expected_with_rereserve, int)
     assert captured_model_settings[1]["max_tokens"] == expected_without_rereserve
     assert expected_without_rereserve > expected_with_rereserve
 
@@ -1360,6 +1366,8 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
+    assert isinstance(capped_with_tools, int)
+    assert isinstance(uncapped_without_tools, int)
     assert capped_with_tools < uncapped_without_tools
     assert bounded_max_tokens == capped_with_tools
 
@@ -1567,6 +1575,55 @@ async def test_generate_passes_reasoning_effort_when_thinking_enabled(
     settings_obj = captured_kwargs.get("model_settings")
     assert isinstance(settings_obj, dict)
     assert settings_obj.get("openai_reasoning_effort") == "high"
+
+
+@pytest.mark.asyncio
+async def test_generate_omits_max_tokens_when_config_unset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "unset_max_tokens.db", fake_hub
+    )
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_builder(**kwargs: object) -> _FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-unset-max-tokens",
+        trace_id="run-unset-max-tokens",
+        task_id="task-unset-max-tokens",
+        session_id="session-unset-max-tokens",
+        workspace_id="default",
+        instance_id="inst-unset-max-tokens",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="current turn",
+    )
+
+    _ = await provider.generate(request)
+
+    settings_obj = captured_kwargs.get("model_settings")
+    assert isinstance(settings_obj, dict)
+    assert "max_tokens" not in settings_obj
+    assert (
+        provider._session._safe_max_output_tokens(
+            request=request,
+            history=[],
+            system_prompt="system",
+            reserve_user_prompt_tokens=True,
+            allowed_tools=(),
+            allowed_mcp_servers=(),
+            allowed_skills=(),
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

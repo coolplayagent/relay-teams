@@ -112,7 +112,7 @@ Request body may include optional `source_name` to rename an existing profile wh
 `provider` accepts `openai_compatible`, `bigmodel`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
-Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
+Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap when explicitly set. If `max_tokens` is omitted, the backend preserves that unset state and lets the provider decide the default output cap for primary LLM requests.
 Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
 Profiles must provide at least one auth source: `api_key` or one configured header.
 When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
