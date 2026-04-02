@@ -1217,25 +1217,16 @@ function createElement(initialDisplay = "block") {{
         return matches;
     }}
 
-    function buildCheckboxes(source, previousInputs = []) {{
+    function buildCheckboxes(source) {{
         const matches = [];
         const pattern = /<input type="checkbox" data-option-value="([^"]+)"( checked)?>/g;
-        const previousInputsByValue = new Map(
-            previousInputs.map(input => [input.dataset.optionValue, input]),
-        );
         let match = pattern.exec(source);
         while (match) {{
-            const existingInput = previousInputsByValue.get(match[1]);
-            if (existingInput) {{
-                existingInput.checked = Boolean(match[2]);
-                matches.push(existingInput);
-            }} else {{
-                matches.push({{
-                    dataset: {{ optionValue: match[1] }},
-                    checked: Boolean(match[2]),
-                    onchange: null,
-                }});
-            }}
+            matches.push({{
+                dataset: {{ optionValue: match[1] }},
+                checked: Boolean(match[2]),
+                onchange: null,
+            }});
             match = pattern.exec(source);
         }}
         return matches;
@@ -1257,11 +1248,16 @@ function createElement(initialDisplay = "block") {{
             if (position !== "beforeend") {{
                 throw new Error(`Unsupported insertAdjacentHTML position: ${{position}}`);
             }}
-            html += String(value);
+            const appendedHtml = String(value);
+            html += appendedHtml;
             cachedRoleRecordsSource = html;
             cachedRoleEditButtonsSource = html;
             cachedRoleDeleteButtonsSource = html;
-            cachedInputsSource = "";
+            if (appendedHtml.includes("role-option-advisory")) {{
+                cachedInputsSource = html;
+            }} else {{
+                cachedInputsSource = "";
+            }}
         }},
         querySelector(selector) {{
             if (selector === ".role-option-advisory") {{
@@ -1276,7 +1272,7 @@ function createElement(initialDisplay = "block") {{
                         cachedRoleRecordsSource = html;
                         cachedRoleEditButtonsSource = html;
                         cachedRoleDeleteButtonsSource = html;
-                        cachedInputsSource = "";
+                        cachedInputsSource = html;
                     }},
                 }};
             }}
@@ -1312,7 +1308,7 @@ function createElement(initialDisplay = "block") {{
                 }}
                 if (selector === 'input[type="checkbox"]') {{
                     if (cachedInputsSource !== html) {{
-                        cachedInputs = buildCheckboxes(html, cachedInputs);
+                        cachedInputs = buildCheckboxes(html);
                         cachedInputsSource = html;
                     }}
                     return cachedInputs;
@@ -1337,7 +1333,8 @@ function createElement(initialDisplay = "block") {{
             cachedRoleRecordsSource = "";
             cachedRoleEditButtonsSource = "";
             cachedRoleDeleteButtonsSource = "";
-            cachedInputsSource = "";
+            cachedInputs = buildCheckboxes(html);
+            cachedInputsSource = html;
         }},
     }});
 
