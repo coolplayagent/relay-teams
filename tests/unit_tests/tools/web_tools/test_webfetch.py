@@ -861,6 +861,110 @@ async def test_fetch_url_classifies_egress_blocked_proxy_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_classifies_source_access_denied() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            request=request,
+            text="Forbidden",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/forbidden",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "source_access_denied"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "status_code": 403,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_enterprise_proxy_blocks() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            text="HIS Proxy Notification",
+            headers={"content-type": "text/html"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url=(
+                    "http://114.114.114.114:9421/proxycontrolwarn/httpwarning_2907.html"
+                ),
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "proxy_blocked"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "114.114.114.114:9421",
+        "blocked_url": (
+            "http://114.114.114.114:9421/proxycontrolwarn/httpwarning_2907.html"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_tunnel_failures() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("ERR_TUNNEL_CONNECTION_FAILED", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/protected",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "tunnel_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {"url_host": "example.com"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_generic_proxy_failures() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("proxy refused connection", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/protected",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "proxy_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {"url_host": "example.com"}
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_classifies_upstream_status_errors() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, request=request, text="unavailable")

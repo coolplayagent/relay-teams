@@ -71,6 +71,17 @@ FALLBACK_USER_AGENT = "agent-teams"
 READER_FALLBACK_BASE_URL = "https://r.jina.ai/"
 ANTI_BOT_STATUS_CODES = {403, 429, 503}
 TEXTUAL_CHALLENGE_CONTENT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
+ENTERPRISE_PROXY_BLOCK_URL_MARKERS = ("proxycontrolwarn", "httpwarning_2907")
+ENTERPRISE_PROXY_BLOCK_MARKERS = (
+    "his proxy notification",
+    "proxy notification",
+    "proxycontrolwarn",
+)
+TUNNEL_ERROR_MARKERS = (
+    "err_tunnel_connection_failed",
+    "tunnel connection failed",
+    "tunnel_connection_failed",
+)
 ANTI_BOT_CHALLENGE_MARKERS = (
     "checking your browser before accessing",
     "enable javascript and cookies to continue",
@@ -112,6 +123,7 @@ class ParsedDocumentKind(StrEnum):
 class AutomatedFetchBlockKind(StrEnum):
     CLOUDFLARE_CHALLENGE = "cloudflare_challenge"
     CHALLENGE_PAGE = "challenge_page"
+    ENTERPRISE_PROXY_BLOCK = "enterprise_proxy_block"
 
 
 class FeedEntry(BaseModel):
@@ -555,6 +567,17 @@ async def fetch_url(
                 "proxy_error": "blocked-by-allowlist",
             },
         )
+    if block_kind == AutomatedFetchBlockKind.ENTERPRISE_PROXY_BLOCK:
+        await response.aclose()
+        raise ToolExecutionError(
+            error_type="proxy_blocked",
+            message=f"Web fetch was blocked by the enterprise proxy for {url_host or url}",
+            retryable=False,
+            details={
+                "url_host": url_host,
+                "blocked_url": current_url,
+            },
+        )
     if block_kind is not None:
         await response.aclose()
         return await fetch_with_reader_fallback(
@@ -603,6 +626,8 @@ async def detect_automated_fetch_block(
 ) -> AutomatedFetchBlockKind | None:
     if is_cloudflare_challenge_response(response):
         return AutomatedFetchBlockKind.CLOUDFLARE_CHALLENGE
+    if is_enterprise_proxy_block_response(response):
+        return AutomatedFetchBlockKind.ENTERPRISE_PROXY_BLOCK
     if await is_textual_challenge_response(response):
         return AutomatedFetchBlockKind.CHALLENGE_PAGE
     return None
@@ -615,6 +640,11 @@ def is_cloudflare_challenge_response(response: httpx.Response) -> bool:
     )
 
 
+def is_enterprise_proxy_block_response(response: httpx.Response) -> bool:
+    final_url = str(response.url).lower()
+    return any(marker in final_url for marker in ENTERPRISE_PROXY_BLOCK_URL_MARKERS)
+
+
 async def is_textual_challenge_response(response: httpx.Response) -> bool:
     content_type = normalize_content_type(response.headers.get("content-type", ""))
     if content_type not in TEXTUAL_CHALLENGE_CONTENT_TYPES:
@@ -625,6 +655,8 @@ async def is_textual_challenge_response(response: httpx.Response) -> bool:
     ):
         return False
     body_text = (await response.aread()).decode("utf-8", errors="replace").lower()
+    if any(marker in body_text for marker in ENTERPRISE_PROXY_BLOCK_MARKERS):
+        return False
     return any(marker in body_text for marker in ANTI_BOT_CHALLENGE_MARKERS)
 
 
@@ -780,9 +812,22 @@ async def _perform_request(
             retryable=True,
             details={"url_host": url_host},
         ) from exc
-    except httpx.RequestError as exc:
+    except httpx.ProxyError as exc:
+        error_type = (
+            "tunnel_error" if is_tunnel_error_message(str(exc)) else "proxy_error"
+        )
         raise ToolExecutionError(
-            error_type="network_error",
+            error_type=error_type,
+            message=f"Web fetch request failed for {url_host or url}: {exc}",
+            retryable=True,
+            details={"url_host": url_host},
+        ) from exc
+    except httpx.RequestError as exc:
+        error_type = (
+            "tunnel_error" if is_tunnel_error_message(str(exc)) else "network_error"
+        )
+        raise ToolExecutionError(
+            error_type=error_type,
             message=f"Web fetch request failed for {url_host or url}: {exc}",
             retryable=True,
             details={"url_host": url_host},
@@ -925,6 +970,11 @@ async def read_response_body(response: httpx.Response) -> bytes:
             )
     return bytes(body)
     return body
+
+
+def is_tunnel_error_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in TUNNEL_ERROR_MARKERS)
 
 
 def _webfetch_status_error_type(status_code: int) -> str:
