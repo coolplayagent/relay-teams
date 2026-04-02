@@ -571,6 +571,7 @@ class AgentLlmSession:
                                 history,
                                 buffered_messages,
                                 committed_tool_events_published,
+                                committed_tool_validation_failures,
                             ) = self._commit_ready_messages(
                                 request=request,
                                 history=history,
@@ -580,6 +581,23 @@ class AgentLlmSession:
                                 attempt_tool_event_emitted = True
                             if len(history) > previous_history_size:
                                 attempt_messages_committed = True
+                            if committed_tool_validation_failures:
+                                log_event(
+                                    LOGGER,
+                                    logging.INFO,
+                                    event="llm.tool_input_validation.continue_after_failure",
+                                    message=(
+                                        "Restarting agent iteration after tool input validation failure"
+                                    ),
+                                    payload={
+                                        "role_id": request.role_id,
+                                        "instance_id": request.instance_id,
+                                    },
+                                )
+                                seen_count = 0
+                                buffered_messages = []
+                                restarted = True
+                                break
                         seen_count += len(new_batch)
 
                         # Drain pending user injections at this boundary (already handled in previous version, check if needed here)
@@ -698,6 +716,7 @@ class AgentLlmSession:
                         history,
                         buffered_messages,
                         committed_tool_events_published,
+                        _committed_tool_validation_failures,
                     ) = self._commit_all_safe_messages(
                         request=request,
                         history=history,
@@ -2217,11 +2236,16 @@ class AgentLlmSession:
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
         bool,
+        bool,
     ]:
         safe_index = self._last_committable_index(pending_messages)
         if safe_index <= 0:
-            return history, pending_messages, False
-        ready = self._normalize_committable_messages(pending_messages[:safe_index])
+            return history, pending_messages, False, False
+        raw_ready = pending_messages[:safe_index]
+        committed_tool_validation_failures = self._has_tool_input_validation_failures(
+            raw_ready
+        )
+        ready = self._normalize_committable_messages(raw_ready)
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=self._workspace_id(request),
@@ -2245,6 +2269,7 @@ class AgentLlmSession:
             next_history,
             pending_messages[safe_index:],
             self._has_tool_side_effect_messages(ready),
+            committed_tool_validation_failures,
         )
 
     def _commit_all_safe_messages(
@@ -2257,10 +2282,12 @@ class AgentLlmSession:
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
         bool,
+        bool,
     ]:
         next_history = history
         remaining = list(pending_messages)
         tool_events_published = False
+        tool_validation_failures_committed = False
         while remaining:
             safe_index = self._last_committable_index(remaining)
             if safe_index <= 0:
@@ -2269,6 +2296,7 @@ class AgentLlmSession:
                 next_history,
                 remaining,
                 committed_tool_events_published,
+                committed_tool_validation_failures,
             ) = self._commit_ready_messages(
                 request=request,
                 history=next_history,
@@ -2276,7 +2304,26 @@ class AgentLlmSession:
             )
             if committed_tool_events_published:
                 tool_events_published = True
-        return next_history, remaining, tool_events_published
+            if committed_tool_validation_failures:
+                tool_validation_failures_committed = True
+        return (
+            next_history,
+            remaining,
+            tool_events_published,
+            tool_validation_failures_committed,
+        )
+
+    @staticmethod
+    def _has_tool_input_validation_failures(
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> bool:
+        for message in messages:
+            if not isinstance(message, ModelRequest):
+                continue
+            for part in message.parts:
+                if isinstance(part, RetryPromptPart) and part.tool_name:
+                    return True
+        return False
 
     def _normalize_committable_messages(
         self,

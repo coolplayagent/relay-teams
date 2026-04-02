@@ -283,7 +283,7 @@ def _error_payload(exc: Exception) -> ToolError:
 
     if isinstance(exc, ValueError):
         err_type = "validation_error"
-        retryable = True
+        retryable = False
     elif isinstance(exc, KeyError):
         err_type = "not_found"
         retryable = True
