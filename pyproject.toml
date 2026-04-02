@@ -83,7 +83,12 @@ default-groups = ["evals"]
 [tool.pyright]
 extraPaths = ["src", "tests"]
 typeCheckingMode = "standard"
-exclude = ["src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
+exclude = [
+  ".venv",
+  "**/__pycache__",
+  "**/node_modules",
+  "src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx",
+]
 
 [tool.ruff]
 extend-exclude = ["src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
