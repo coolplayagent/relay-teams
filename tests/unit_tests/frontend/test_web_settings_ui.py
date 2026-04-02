@@ -162,6 +162,40 @@ console.log(JSON.stringify({
     ]
 
 
+def test_web_settings_panel_renders_provider_website_card(tmp_path: Path) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "api_key": None,
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+console.log(JSON.stringify({
+    providerSiteHref: document.getElementById("web-provider-site-link").href,
+    providerSiteTitle: document.getElementById("web-provider-site-link").title,
+    providerSiteAriaLabel: document.getElementById("web-provider-site-link").ariaLabel,
+    providerSiteBadge: document.getElementById("web-provider-site-badge").textContent,
+    providerSiteUrl: document.getElementById("web-provider-site-url").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["providerSiteHref"] == "https://exa.ai"
+    assert payload["providerSiteTitle"] == "https://exa.ai"
+    assert payload["providerSiteAriaLabel"] == "https://exa.ai"
+    assert payload["providerSiteBadge"] == "Exa"
+    assert payload["providerSiteUrl"] == "https://exa.ai"
+
+
 def _run_web_settings_script(
     tmp_path: Path,
     runner_source: str,
@@ -265,10 +299,24 @@ function createElement(initialDisplay = "block") {{
         style: {{ display: initialDisplay }},
         value: "",
         disabled: false,
+        href: "",
+        title: "",
+        placeholder: "",
+        type: "text",
+        ariaLabel: "",
         textContent: "",
         innerHTML: "",
         className: "",
         onclick: null,
+        onchange: null,
+        oninput: null,
+        setAttribute(name, value) {{
+            if (name === "aria-label") {{
+                this.ariaLabel = value;
+                return;
+            }}
+            this[name] = value;
+        }},
     }};
 }}
 
@@ -277,6 +325,9 @@ function createElements() {{
         ["web-provider", createElement("block")],
         ["web-api-key", createElement("block")],
         ["toggle-web-api-key-btn", createElement("none")],
+        ["web-provider-site-link", createElement("block")],
+        ["web-provider-site-badge", createElement("block")],
+        ["web-provider-site-url", createElement("block")],
         ["save-web-btn", createElement("block")],
     ]);
 }}

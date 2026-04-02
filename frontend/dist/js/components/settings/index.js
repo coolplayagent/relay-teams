@@ -776,10 +776,22 @@ function createModal() {
                                                 </div>
                                             </div>
                                         </div>
-                                        <p class="notifications-help">
-                                            <span data-i18n="settings.web.provider_site">提供商网站：</span>
-                                            <a href="https://exa.ai" target="_blank" rel="noreferrer">https://exa.ai</a>
-                                        </p>
+                                        <div class="form-group proxy-inline-field web-provider-inline-field">
+                                            <span class="web-provider-inline-label" data-i18n="settings.web.provider_site">提供商网站：</span>
+                                            <a class="web-provider-link-card" id="web-provider-site-link" href="https://exa.ai" target="_blank" rel="noreferrer" title="https://exa.ai" aria-label="https://exa.ai">
+                                                <span class="web-provider-link-copy">
+                                                    <span class="web-provider-link-badge" id="web-provider-site-badge">Exa</span>
+                                                    <span class="web-provider-link-url" id="web-provider-site-url">https://exa.ai</span>
+                                                    <span class="web-provider-link-note" data-i18n="settings.web.provider_site_help">官方文档与账户概览</span>
+                                                </span>
+                                                <span class="web-provider-link-arrow" aria-hidden="true">
+                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                                        <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                        <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                    </svg>
+                                                </span>
+                                            </a>
+                                        </div>
                                     </section>
                                 </div>
                             </div>

@@ -69,6 +69,8 @@ console.log(JSON.stringify({
         not in modal_html
     )
     assert "notifications-actions" not in modal_html
+    assert 'id="web-provider-site-link"' in modal_html
+    assert 'class="web-provider-link-card"' in modal_html
     assert payload["modalDisplay"] == "flex"
     assert "settings-modal-visible" in str(payload["modalClassName"])
     assert payload["panelTitle"] == "Notifications"

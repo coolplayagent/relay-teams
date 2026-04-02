@@ -11,6 +11,12 @@ import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const MASKED_SECRET_PLACEHOLDER = '************';
+const WEB_PROVIDER_DETAILS = {
+    exa: {
+        label: 'Exa',
+        website: 'https://exa.ai',
+    },
+};
 
 let webApiKeyState = createWebApiKeyState();
 
@@ -25,6 +31,11 @@ export function bindWebSettingsHandlers() {
     const saveBtn = document.getElementById('save-web-btn');
     if (saveBtn) {
         saveBtn.onclick = handleSaveWeb;
+    }
+
+    const providerSelect = document.getElementById('web-provider');
+    if (providerSelect) {
+        providerSelect.onchange = handleWebProviderChange;
     }
 
     const apiKeyInput = document.getElementById('web-api-key');
@@ -76,7 +87,9 @@ async function handleSaveWeb() {
 }
 
 function writeWebFormValues(config) {
-    setInputValue('web-provider', config.provider);
+    const provider = config.provider || 'exa';
+    setInputValue('web-provider', provider);
+    renderWebProviderSite(provider);
     webApiKeyState = createWebApiKeyState(config.api_key);
     renderWebApiKeyField();
 }
@@ -115,6 +128,10 @@ function createWebApiKeyState(persistedValue = null) {
     };
 }
 
+function handleWebProviderChange() {
+    renderWebProviderSite(readInputValue('web-provider') || 'exa');
+}
+
 function handleWebApiKeyInput() {
     const apiKeyInput = document.getElementById('web-api-key');
     const nextValue = apiKeyInput ? apiKeyInput.value : '';
@@ -134,6 +151,31 @@ function toggleWebApiKeyVisibility() {
     }
     webApiKeyState.revealed = !webApiKeyState.revealed;
     renderWebApiKeyField();
+}
+
+function renderWebProviderSite(providerValue) {
+    const providerDetails = WEB_PROVIDER_DETAILS[providerValue] || {
+        label: providerValue || 'Provider',
+        website: '',
+    };
+    const siteLink = document.getElementById('web-provider-site-link');
+    const siteBadge = document.getElementById('web-provider-site-badge');
+    const siteUrl = document.getElementById('web-provider-site-url');
+    if (siteLink) {
+        siteLink.href = providerDetails.website;
+        siteLink.title = providerDetails.website;
+        if (typeof siteLink.setAttribute === 'function') {
+            siteLink.setAttribute('aria-label', providerDetails.website);
+        } else {
+            siteLink.ariaLabel = providerDetails.website;
+        }
+    }
+    if (siteBadge) {
+        siteBadge.textContent = providerDetails.label;
+    }
+    if (siteUrl) {
+        siteUrl.textContent = providerDetails.website;
+    }
 }
 
 function readWebApiKeyValue() {
