@@ -439,7 +439,7 @@ def _build_model_config(
     *,
     provider: ProviderType = ProviderType.BIGMODEL,
     model: str = "glm-4.6v",
-    base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+    base_url: str = "https://open.bigmodel.cn/api/coding/paas/v4",
     api_key: str = "sk-test",
     headers: tuple[ModelRequestHeader, ...] = (),
     context_window: int | None = 128000,
@@ -764,7 +764,7 @@ async def test_external_acp_injects_runtime_model_profile_into_opencode_transpor
     assert config_content["model"] == "zai/glm-4v-flash"
     provider_config = config_content["provider"]["zai"]
     assert provider_config["npm"] == "@ai-sdk/openai-compatible"
-    assert provider_config["api"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert provider_config["api"] == "https://open.bigmodel.cn/api/coding/paas/v4"
     assert provider_config["env"] == ["ZHIPU_API_KEY"]
     model_entry = provider_config["models"]["glm-4v-flash"]
     assert model_entry["attachment"] is True

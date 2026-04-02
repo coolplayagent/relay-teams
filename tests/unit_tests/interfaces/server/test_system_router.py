@@ -240,7 +240,7 @@ class _FakeSystemService:
                 profile="glm",
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
-                base_url="https://open.bigmodel.cn/api/paas/v4",
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
             ),
             ProviderModelInfo(
                 profile="echo",
@@ -891,7 +891,7 @@ def test_save_model_profile_accepts_bigmodel_provider() -> None:
         json={
             "provider": ProviderType.BIGMODEL.value,
             "model": "glm-4.5",
-            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
             "api_key": "secret",
             "temperature": 0.2,
             "top_p": 0.9,
