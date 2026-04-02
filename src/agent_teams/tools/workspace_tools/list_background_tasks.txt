@@ -1,0 +1,5 @@
+List background tasks started by the current run.
+
+- Returns only managed background tasks, not arbitrary OS processes.
+- Use this to discover task ids before waiting for or stopping a task.
+- Each item includes status, recent output, and the log file path.

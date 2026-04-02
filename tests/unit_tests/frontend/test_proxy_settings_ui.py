@@ -44,6 +44,40 @@ console.log(JSON.stringify({
     assert payload["sslVerify"] == "true"
 
 
+def test_proxy_settings_panel_defaults_ssl_verify_to_skip_verify(
+    tmp_path: Path,
+) -> None:
+    payload = _run_proxy_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "http_proxy": "",
+            "https_proxy": "",
+            "all_proxy": "",
+            "no_proxy": "",
+            "proxy_username": "",
+            "proxy_password": "",
+            "ssl_verify": None,
+        },
+        runner_source="""
+import { loadProxyStatusPanel } from "./proxySettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+await loadProxyStatusPanel();
+
+console.log(JSON.stringify({
+    notifications,
+    sslVerify: document.getElementById("proxy-ssl-verify").value,
+}));
+""".strip(),
+    )
+
+    assert payload["notifications"] == []
+    assert payload["sslVerify"] == "false"
+
+
 def test_proxy_probe_and_save_actions_use_current_inputs(tmp_path: Path) -> None:
     payload = _run_proxy_settings_script(
         tmp_path=tmp_path,
@@ -171,7 +205,12 @@ def test_proxy_settings_styles_keep_a_single_editor_surface() -> None:
     assert "border-radius: 6px;" in probe_rule
 
 
-def _run_proxy_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def _run_proxy_settings_script(
+    tmp_path: Path,
+    runner_source: str,
+    *,
+    fetch_config: dict[str, JsonValue] | None = None,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root
@@ -190,18 +229,21 @@ def _run_proxy_settings_script(tmp_path: Path, runner_source: str) -> dict[str, 
     module_under_test_path = tmp_path / "proxySettings.mjs"
     runner_path = tmp_path / "runner.mjs"
 
+    fetch_proxy_config = fetch_config or {
+        "http_proxy": "http://proxy.example:8080",
+        "https_proxy": "http://proxy.example:8443",
+        "all_proxy": "",
+        "no_proxy": "localhost,127.0.0.1",
+        "proxy_username": "alice",
+        "proxy_password": "secret",
+        "ssl_verify": True,
+    }
+    fetch_proxy_config_json = json.dumps(fetch_proxy_config)
+
     mock_api_path.write_text(
         """
 export async function fetchProxyConfig() {
-    return {
-        http_proxy: "http://proxy.example:8080",
-        https_proxy: "http://proxy.example:8443",
-        all_proxy: "",
-        no_proxy: "localhost,127.0.0.1",
-        proxy_username: "alice",
-        proxy_password: "secret",
-        ssl_verify: true,
-    };
+    return __FETCH_PROXY_CONFIG__;
 }
 
 export async function saveProxyConfig(payload) {
@@ -223,7 +265,7 @@ export async function probeWebConnectivity(payload) {
         },
     };
 }
-""".strip(),
+""".replace("__FETCH_PROXY_CONFIG__", fetch_proxy_config_json).strip(),
         encoding="utf-8",
     )
     mock_feedback_path.write_text(

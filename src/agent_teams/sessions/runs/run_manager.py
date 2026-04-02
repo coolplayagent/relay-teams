@@ -6,7 +6,7 @@ import logging
 from concurrent.futures import Future as ThreadFuture
 from enum import StrEnum
 from json import dumps, loads
-from typing import Awaitable, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import (
@@ -54,6 +54,10 @@ from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.runs.ids import new_trace_id
 from agent_teams.sessions.runs.injection_queue import RunInjectionManager
+from agent_teams.sessions.runs.background_tasks.manager import (
+    BackgroundTaskManager,
+)
+from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from agent_teams.sessions.runs.run_models import (
     IntentInput,
     RunEvent,
@@ -86,6 +90,9 @@ from agent_teams.agents.tasks.enums import TaskStatus
 from agent_teams.agents.tasks.ids import new_task_id
 from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from agent_teams.workspace import build_conversation_id
+
+if TYPE_CHECKING:
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
@@ -158,6 +165,8 @@ class RunManager:
         run_runtime_repo: RunRuntimeRepository | None = None,
         run_intent_repo: RunIntentRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
+        background_task_manager: BackgroundTaskManager | None = None,
+        background_task_service: BackgroundTaskService | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
@@ -184,6 +193,8 @@ class RunManager:
         self._run_runtime_repo: RunRuntimeRepository | None = run_runtime_repo
         self._run_intent_repo: RunIntentRepository | None = run_intent_repo
         self._run_state_repo: RunStateRepository | None = run_state_repo
+        self._background_task_manager = background_task_manager
+        self._background_task_service = background_task_service
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
@@ -359,16 +370,26 @@ class RunManager:
                 self._injection_manager.deactivate(run_id)
                 self._running_run_ids.discard(run_id)
 
-    def create_run(self, intent: IntentInput) -> tuple[str, str]:
+    def create_run(
+        self,
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
         if self._should_delegate_to_bound_loop():
             delegated_intent = intent.model_copy(deep=True)
             return self._call_in_bound_loop(
                 lambda: self._create_run_local(
                     delegated_intent,
                     allow_active_run_attach=True,
+                    source=source,
                 )
             )
-        return self._create_run_local(intent, allow_active_run_attach=True)
+        return self._create_run_local(
+            intent,
+            allow_active_run_attach=True,
+            source=source,
+        )
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         if self._should_delegate_to_bound_loop():
@@ -377,15 +398,21 @@ class RunManager:
                 lambda: self._create_run_local(
                     delegated_intent,
                     allow_active_run_attach=False,
+                    source=InjectionSource.USER,
                 )
             )
-        return self._create_run_local(intent, allow_active_run_attach=False)
+        return self._create_run_local(
+            intent,
+            allow_active_run_attach=False,
+            source=InjectionSource.USER,
+        )
 
     def _create_run_local(
         self,
         intent: IntentInput,
         *,
         allow_active_run_attach: bool,
+        source: InjectionSource,
     ) -> tuple[str, str]:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
@@ -436,7 +463,10 @@ class RunManager:
                 or self._injection_manager.is_active(active_run_id)
             ):
                 self._append_followup_to_coordinator(
-                    active_run_id, intent.intent, enqueue=True
+                    active_run_id,
+                    intent.intent,
+                    enqueue=True,
+                    source=source,
                 )
                 with bind_trace_context(
                     trace_id=active_run_id,
@@ -451,7 +481,12 @@ class RunManager:
                         payload={"mode": "active_enqueue"},
                     )
                 return active_run_id, session_id
-            if runtime is not None and runtime.is_recoverable:
+            if (
+                runtime is not None
+                and runtime.is_recoverable
+                and runtime.status
+                in {RunRuntimeStatus.PAUSED, RunRuntimeStatus.STOPPED}
+            ):
                 self._append_followup_to_coordinator(
                     active_run_id, intent.intent, enqueue=False
                 )
@@ -475,6 +510,17 @@ class RunManager:
                     )
                 return active_run_id, session_id
 
+        return self._queue_new_run(
+            session_id=session_id,
+            intent=intent,
+        )
+
+    def _queue_new_run(
+        self,
+        *,
+        session_id: str,
+        intent: IntentInput,
+    ) -> tuple[str, str]:
         run_id = new_trace_id().value
         self._pending_runs[run_id] = intent
         if self._run_runtime_repo is not None:
@@ -486,7 +532,9 @@ class RunManager:
             )
         if self._run_intent_repo is not None:
             self._run_intent_repo.upsert(
-                run_id=run_id, session_id=session_id, intent=intent
+                run_id=run_id,
+                session_id=session_id,
+                intent=intent,
             )
         self._remember_active_run(session_id, run_id)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
@@ -1145,6 +1193,26 @@ class RunManager:
                 ),
             )
         finally:
+            if self._background_task_manager is not None:
+                try:
+                    await self._background_task_manager.stop_all_for_run(
+                        run_id=run_id,
+                        reason="run_finalized",
+                        execution_mode="foreground",
+                    )
+                except Exception as exc:
+                    with bind_trace_context(
+                        trace_id=run_id,
+                        run_id=run_id,
+                        session_id=session_id,
+                    ):
+                        log_event(
+                            logger,
+                            logging.ERROR,
+                            event="background_task.cleanup_failed",
+                            message="Failed to clean up background tasks",
+                            exc_info=exc,
+                        )
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
 
     def _finalize_run(self, *, run_id: str, session_id: str) -> None:
@@ -1271,6 +1339,23 @@ class RunManager:
             content=content,
         )
 
+    def handle_background_task_completion(
+        self,
+        *,
+        record: "BackgroundTaskRecord",
+        message: str,
+    ) -> None:
+        if self._should_delegate_to_bound_loop():
+            record_copy = record.model_copy(deep=True)
+            self._call_in_bound_loop(
+                lambda: self._handle_background_task_completion_local(
+                    record=record_copy,
+                    message=message,
+                )
+            )
+            return
+        self._handle_background_task_completion_local(record=record, message=message)
+
     def stop_run(self, run_id: str) -> None:
         if self._should_delegate_to_bound_loop():
             self._call_in_bound_loop(lambda: self._stop_run_local(run_id))
@@ -1340,6 +1425,126 @@ class RunManager:
                 message="Run stop requested",
                 payload={"was_running": requested},
             )
+
+    def _handle_background_task_completion_local(
+        self,
+        *,
+        record: "BackgroundTaskRecord",
+        message: str,
+    ) -> None:
+        task_id = self._find_task_for_instance(
+            run_id=record.run_id,
+            instance_id=record.instance_id or "",
+        )
+        if (
+            record.instance_id
+            and self._can_enqueue_followup_to_instance(
+                run_id=record.run_id,
+                instance_id=record.instance_id,
+            )
+            and self._append_followup_to_instance(
+                run_id=record.run_id,
+                instance_id=record.instance_id,
+                task_id=task_id or "background-task-notification",
+                content=message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+        ):
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+                instance_id=record.instance_id,
+                role_id=record.role_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.enqueued",
+                    message="Background task notification enqueued to originating instance",
+                    payload={"background_task_id": record.background_task_id},
+                )
+            return
+        if self._can_enqueue_followup_to_coordinator(record.run_id) and (
+            self._append_followup_to_coordinator(
+                record.run_id,
+                message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+        ):
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.enqueued",
+                    message="Background task notification enqueued to coordinator",
+                    payload={"background_task_id": record.background_task_id},
+                )
+            return
+
+        session_id = self._ensure_session(record.session_id)
+        active_run_before = self._active_run_registry.get_active_run_id(session_id)
+        self._run_control_manager.assert_session_allows_main_input(session_id)
+        _ = self._session_repo.mark_started(session_id)
+        intent = IntentInput(
+            session_id=session_id,
+            input=(TextContentPart(text=message),),
+        )
+        new_run_id, _ = self.create_run(intent, source=InjectionSource.SYSTEM)
+        self.ensure_run_started(new_run_id)
+        if active_run_before in {
+            None,
+            record.run_id,
+        } and self._has_active_background_tasks(record.run_id):
+            self._remember_active_run(session_id, record.run_id)
+            with bind_trace_context(
+                trace_id=record.run_id,
+                run_id=record.run_id,
+                session_id=record.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="background_task.notification.source_run_retained",
+                    message="Source run remains active while sibling background tasks are still running",
+                    payload={
+                        "background_task_id": record.background_task_id,
+                        "source_run_id": record.run_id,
+                        "target_run_id": new_run_id,
+                    },
+                )
+        with bind_trace_context(
+            trace_id=new_run_id,
+            run_id=new_run_id,
+            session_id=record.session_id,
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event="background_task.notification.spawned",
+                message="Background task notification routed through create_run",
+                payload={
+                    "background_task_id": record.background_task_id,
+                    "source_run_id": record.run_id,
+                    "target_run_id": new_run_id,
+                },
+            )
+
+    def _has_active_background_tasks(self, run_id: str) -> bool:
+        records: tuple["BackgroundTaskRecord", ...]
+        if self._background_task_service is not None:
+            records = self._background_task_service.list_for_run(run_id)
+        elif self._background_task_manager is not None:
+            records = self._background_task_manager.list_for_run(run_id)
+        else:
+            return False
+        return any(record.is_active for record in records)
 
     def _should_delegate_to_bound_loop(self) -> bool:
         loop = self._event_loop
@@ -1418,6 +1623,67 @@ class RunManager:
             run_id=run_id,
             instance_id=instance_id,
         )
+
+    def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
+        if self._background_task_service is not None:
+            return tuple(
+                record.model_dump(mode="json")
+                for record in self._background_task_service.list_for_run(run_id)
+            )
+        if self._background_task_manager is None:
+            return ()
+        return tuple(
+            record.model_dump(mode="json")
+            for record in self._background_task_manager.list_for_run(run_id)
+            if record.execution_mode == "background"
+        )
+
+    def get_background_task(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> dict[str, object]:
+        if self._background_task_service is not None:
+            return self._background_task_service.get_for_run(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            ).model_dump(mode="json")
+        if self._background_task_manager is None:
+            raise KeyError(f"Background task {background_task_id} not found")
+        record = self._background_task_manager.get_for_run(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        if record.execution_mode != "background":
+            raise KeyError(f"Background task {background_task_id} not found")
+        return record.model_dump(mode="json")
+
+    async def stop_background_task(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> dict[str, object]:
+        if self._background_task_service is not None:
+            record = await self._background_task_service.stop_for_run(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            )
+            return record.model_dump(mode="json")
+        if self._background_task_manager is None:
+            raise KeyError(f"Background task {background_task_id} not found")
+        record = self._background_task_manager.get_for_run(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        if record.execution_mode != "background":
+            raise KeyError(f"Background task {background_task_id} not found")
+        record = await self._background_task_manager.stop_for_run(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        return record.model_dump(mode="json")
 
     def inject_subagent_message(
         self,
@@ -1560,6 +1826,43 @@ class RunManager:
                 return record
         raise KeyError(f"No root task found for run_id={run_id}")
 
+    def _find_task_for_instance(self, *, run_id: str, instance_id: str) -> str | None:
+        if not instance_id:
+            return None
+        task_repo = self._require_task_repo()
+        for record in task_repo.list_by_trace(run_id):
+            if record.assigned_instance_id == instance_id:
+                return record.envelope.task_id
+        return None
+
+    def _can_enqueue_followup_to_instance(
+        self, *, run_id: str, instance_id: str
+    ) -> bool:
+        if not self._injection_manager.is_active(run_id):
+            return False
+        try:
+            record = self._require_agent_repo().get_instance(instance_id)
+        except KeyError:
+            return False
+        return record.run_id == run_id and record.status == InstanceStatus.RUNNING
+
+    def _can_enqueue_followup_to_coordinator(self, run_id: str) -> bool:
+        if not self._injection_manager.is_active(run_id):
+            return False
+        try:
+            root = self._root_task_for_run(run_id)
+            session_id = root.envelope.session_id
+            instance_id = self._run_control_manager.get_coordinator_instance_id(
+                run_id=run_id,
+                session_id=session_id,
+            )
+            if not instance_id:
+                return False
+            record = self._require_agent_repo().get_instance(instance_id)
+        except KeyError:
+            return False
+        return record.run_id == run_id and record.status == InstanceStatus.RUNNING
+
     def _append_followup_to_instance(
         self,
         *,
@@ -1628,7 +1931,8 @@ class RunManager:
         content: str,
         *,
         enqueue: bool,
-    ) -> None:
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
         try:
             root = self._root_task_for_run(run_id)
             session_id = root.envelope.session_id
@@ -1653,7 +1957,7 @@ class RunManager:
                 created = self._injection_manager.enqueue(
                     run_id=run_id,
                     recipient_instance_id=instance_id,
-                    source=InjectionSource.USER,
+                    source=source,
                     content=content,
                 )
                 self._publish_injection_event(
@@ -1675,14 +1979,16 @@ class RunManager:
                     message="Follow-up appended to root agent conversation",
                     payload={
                         "enqueue": enqueue,
+                        "source": source.value,
                         "length": len(content),
                     },
                 )
-            return
+            return True
         except KeyError:
             if self._run_intent_repo is None:
                 raise
             self._run_intent_repo.append_followup(run_id=run_id, content=content)
+            return False
 
     def _update_run_yolo(
         self,
@@ -2067,6 +2373,7 @@ class RunManager:
             payload.run_id,
             policy.prompt,
             enqueue=False,
+            source=InjectionSource.SYSTEM,
         )
 
     def _build_run_resumed_payload(

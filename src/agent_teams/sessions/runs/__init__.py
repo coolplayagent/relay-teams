@@ -5,6 +5,17 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
+    from agent_teams.sessions.runs.background_tasks.manager import (
+        BackgroundTaskManager,
+    )
+    from agent_teams.sessions.runs.background_tasks.models import (
+        BackgroundTaskRecord,
+        BackgroundTaskStatus,
+    )
+    from agent_teams.sessions.runs.background_tasks.repository import (
+        BackgroundTaskRepository,
+    )
     from agent_teams.sessions.runs.assistant_errors import (
         AssistantRunError,
         AssistantRunErrorPayload,
@@ -56,6 +67,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActiveSessionRunRegistry",
+    "BackgroundTaskRecord",
+    "BackgroundTaskService",
+    "BackgroundTaskStatus",
+    "BackgroundTaskManager",
+    "BackgroundTaskRepository",
     "AssistantRunError",
     "AssistantRunErrorPayload",
     "ExecutionMode",
@@ -96,6 +112,26 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActiveSessionRunRegistry": (
         "agent_teams.sessions.runs.active_run_registry",
         "ActiveSessionRunRegistry",
+    ),
+    "BackgroundTaskService": (
+        "agent_teams.sessions.runs.background_tasks",
+        "BackgroundTaskService",
+    ),
+    "BackgroundTaskManager": (
+        "agent_teams.sessions.runs.background_tasks.manager",
+        "BackgroundTaskManager",
+    ),
+    "BackgroundTaskRecord": (
+        "agent_teams.sessions.runs.background_tasks.models",
+        "BackgroundTaskRecord",
+    ),
+    "BackgroundTaskRepository": (
+        "agent_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+    ),
+    "BackgroundTaskStatus": (
+        "agent_teams.sessions.runs.background_tasks.models",
+        "BackgroundTaskStatus",
     ),
     "AssistantRunError": (
         "agent_teams.sessions.runs.assistant_errors",

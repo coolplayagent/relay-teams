@@ -97,7 +97,7 @@ async def test_rewrite_reflection_summary_retries_provider_errors(
             base_url="https://example.test/v1",
             api_key="secret",
         ),
-        retry_config=LlmRetryConfig(jitter=False, max_retries=5, initial_delay_ms=1000),
+        retry_config=LlmRetryConfig(jitter=False, max_retries=5, initial_delay_ms=1),
         message_repo=MessageRepository(tmp_path / "reflection.db"),
         role_memory_service=cast(RoleMemoryService, _FakeRoleMemoryService()),
     )

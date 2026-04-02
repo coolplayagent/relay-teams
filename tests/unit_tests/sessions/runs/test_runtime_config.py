@@ -165,7 +165,7 @@ def test_load_llm_configs_reads_bigmodel_provider_field(tmp_path: Path) -> None:
                 "default": {
                     "provider": "bigmodel",
                     "model": "glm-4.5",
-                    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+                    "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
                     "api_key": "plain-text-key",
                 }
             }

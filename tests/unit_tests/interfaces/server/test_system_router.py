@@ -240,7 +240,7 @@ class _FakeSystemService:
                 profile="glm",
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
-                base_url="https://open.bigmodel.cn/api/paas/v4",
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
             ),
             ProviderModelInfo(
                 profile="echo",
@@ -385,8 +385,7 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
-    assert "write_tmp" in tool_registry_sanity["available_tool_names"]
-    assert tool_registry_sanity["has_write_tmp"] is True
+    assert "write" in tool_registry_sanity["available_tool_names"]
 
 
 def test_get_notification_config() -> None:
@@ -892,7 +891,7 @@ def test_save_model_profile_accepts_bigmodel_provider() -> None:
         json={
             "provider": ProviderType.BIGMODEL.value,
             "model": "glm-4.5",
-            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
             "api_key": "secret",
             "temperature": 0.2,
             "top_p": 0.9,
