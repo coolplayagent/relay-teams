@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 from pathlib import Path
 
+from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from agent_teams.agents.execution.prompt_instruction_state import (
@@ -12,6 +11,15 @@ from agent_teams.agents.execution.prompt_instruction_state import (
     record_prompt_instruction_paths_loaded,
 )
 from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
+from agent_teams.paths import (
+    iter_dir_paths,
+    open_binary_file,
+    open_text_file,
+    path_exists,
+    path_is_dir,
+    path_is_file,
+    path_stat,
+)
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
     ToolContext,
@@ -83,8 +91,8 @@ def is_binary_file(file_path: Path, file_size: int = 0) -> bool:
         return False
 
     try:
-        with open(file_path, "rb") as f:
-            sample = f.read(4096)
+        with open_binary_file(file_path) as handle:
+            sample = handle.read(4096)
 
         if not sample:
             return False
@@ -96,7 +104,7 @@ def is_binary_file(file_path: Path, file_size: int = 0) -> bool:
         if non_printable / len(sample) > 0.3:
             return True
 
-    except Exception:
+    except OSError:
         pass
 
     return False
@@ -116,8 +124,8 @@ async def read_file_content(
     truncated_by_bytes = False
     start_offset = offset - 1
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
+    with open_text_file(file_path) as handle:
+        for line in handle:
             total_lines += 1
 
             if total_lines <= start_offset:
@@ -149,9 +157,9 @@ def read_directory(
     """Read directory entries with offset and limit pagination."""
     entries = []
 
-    for entry in dir_path.iterdir():
+    for entry in iter_dir_paths(dir_path):
         name = entry.name
-        if entry.is_dir():
+        if path_is_dir(entry):
             name += "/"
         entries.append(name)
 
@@ -227,10 +235,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         async def _action() -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
-            if not file_path.exists():
+            if not path_exists(file_path):
                 raise ValueError(f"File not found: {path}")
 
-            if file_path.is_dir():
+            if path_is_dir(file_path):
                 entries, total, truncated = read_directory(file_path, offset, limit)
 
                 output = [f"<path>{file_path}</path>"]
@@ -255,10 +263,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     next_offset=next_offset,
                 )
 
-            if not file_path.is_file():
+            if not path_is_file(file_path):
                 raise ValueError(f"Not a file: {path}")
 
-            if is_binary_file(file_path, file_path.stat().st_size):
+            if is_binary_file(file_path, path_stat(file_path).st_size):
                 raise ValueError(f"Cannot read binary file: {path}")
 
             (

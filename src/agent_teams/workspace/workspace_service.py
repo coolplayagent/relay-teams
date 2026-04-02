@@ -9,7 +9,13 @@ import subprocess
 from pathlib import Path
 
 from agent_teams.logger import get_logger, log_event
-from agent_teams.paths import get_project_config_dir
+from agent_teams.paths import (
+    get_project_config_dir,
+    path_exists,
+    path_is_dir,
+    path_is_file,
+    read_bytes_file,
+)
 from agent_teams.workspace.git_worktree import GitWorktreeClient
 from agent_teams.workspace.workspace_models import (
     BranchBinding,
@@ -132,7 +138,7 @@ class WorkspaceService:
         target_path = self._resolve_tree_path(
             root_path=root_path, directory_path=directory_path
         )
-        if not target_path.is_dir() or target_path.is_symlink():
+        if not path_is_dir(target_path) or target_path.is_symlink():
             raise ValueError(f"Workspace path is not a directory: {directory_path}")
         children = tuple(
             self._build_tree_node(
@@ -246,7 +252,7 @@ class WorkspaceService:
             root_path=root_path,
             file_path=path,
         )
-        if not resolved_path.exists() or not resolved_path.is_file():
+        if not path_exists(resolved_path) or not path_is_file(resolved_path):
             raise FileNotFoundError(f"Workspace file not found: {path}")
 
         media_type, _ = mimetypes.guess_type(resolved_path.name)
@@ -311,7 +317,7 @@ class WorkspaceService:
             resolved_start_ref,
         )
         target_path = self._workspace_storage_dir(normalized_workspace_id) / "worktree"
-        if target_path.exists():
+        if path_exists(target_path):
             raise ValueError(f"Workspace root already exists: {target_path}")
 
         branch_name = f"fork/{normalized_workspace_id}"
@@ -354,9 +360,9 @@ class WorkspaceService:
 
     def _validate_root(self, root_path: Path) -> Path:
         resolved_root = root_path.resolve()
-        if not resolved_root.exists():
+        if not path_exists(resolved_root):
             raise ValueError(f"Workspace root does not exist: {resolved_root}")
-        if not resolved_root.is_dir():
+        if not path_is_dir(resolved_root):
             raise ValueError(f"Workspace root is not a directory: {resolved_root}")
         return resolved_root
 
@@ -409,7 +415,7 @@ class WorkspaceService:
         path_text = "."
         if current_path != root_path:
             path_text = current_path.relative_to(root_path).as_posix()
-        is_directory = current_path.is_dir() and not current_path.is_symlink()
+        is_directory = path_is_dir(current_path) and not current_path.is_symlink()
         has_children = False
         children: tuple[WorkspaceTreeNode, ...] = ()
         if is_directory:
@@ -497,7 +503,7 @@ class WorkspaceService:
             sorted(
                 entries,
                 key=lambda child: (
-                    0 if child.is_dir() and not child.is_symlink() else 1,
+                    0 if path_is_dir(child) and not child.is_symlink() else 1,
                     child.name.casefold(),
                 ),
             )
@@ -729,10 +735,10 @@ class WorkspaceService:
         return completed.stdout if isinstance(completed.stdout, bytes) else None
 
     def _read_workspace_bytes(self, path: Path) -> bytes | None:
-        if not path.exists() or not path.is_file():
+        if not path_exists(path) or not path_is_file(path):
             return None
         try:
-            return path.read_bytes()
+            return read_bytes_file(path)
         except OSError as exc:
             log_event(
                 _logger,
