@@ -27,6 +27,20 @@ def test_map_tool_call_keeps_valid_json_arguments() -> None:
     assert mapped["function"]["arguments"] == '{"content":"hello","path":"demo.txt"}'
 
 
+def test_map_tool_call_keeps_valid_json_arguments_with_null_fields() -> None:
+    tool_call = ToolCallPart(
+        tool_name="shell",
+        args='{"command":"pwd","background":true,"yield_time_ms":null}',
+        tool_call_id="call-valid-null",
+    )
+
+    mapped = RecoverableOpenAIChatModel._map_tool_call(tool_call)
+
+    assert mapped["function"]["arguments"] == (
+        '{"command":"pwd","background":true,"yield_time_ms":null}'
+    )
+
+
 def test_map_tool_call_repairs_invalid_json_arguments_for_replay() -> None:
     tool_call = ToolCallPart(
         tool_name="write",
@@ -38,6 +52,22 @@ def test_map_tool_call_repairs_invalid_json_arguments_for_replay() -> None:
 
     parsed = json.loads(mapped["function"]["arguments"])
     assert parsed == {"content": "hello", "path": "demo.txt"}
+
+
+def test_map_tool_call_repairs_invalid_string_escape_arguments_for_replay() -> None:
+    tool_call = ToolCallPart(
+        tool_name="shell",
+        args=('{"command":"python -c \\"print(\\\'hello\\\')\\"","background":true}'),
+        tool_call_id="call-invalid-escape",
+    )
+
+    mapped = RecoverableOpenAIChatModel._map_tool_call(tool_call)
+
+    parsed = json.loads(mapped["function"]["arguments"])
+    assert parsed == {
+        "command": "python -c \"print('hello')\"",
+        "background": True,
+    }
 
 
 def test_map_tool_call_wraps_non_object_json_arguments_for_replay() -> None:

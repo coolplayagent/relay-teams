@@ -76,7 +76,7 @@ class RoleSettingsService:
     def get_role_document(self, role_id: str) -> RoleDocumentRecord:
         role_path, source = self._find_role_record(role_id)
         content = role_path.read_text(encoding="utf-8")
-        role = self._canonicalize_role_skills_for_record(
+        role = self._canonicalize_role_capabilities_for_record(
             self._loader.load_from_text(content, source_name=role_path.name),
             consumer=f"roles.settings_service.get_role_document.role:{role_id}",
         )
@@ -373,12 +373,26 @@ class RoleSettingsService:
                 )
         return definition
 
-    def _canonicalize_role_skills_for_record(
+    def _canonicalize_role_capabilities_for_record(
         self,
         definition: RoleDefinition,
         *,
         consumer: str,
     ) -> RoleDefinition:
+        normalized_tools: list[str] = []
+        for tool_name in definition.tools:
+            normalized_tool_name = tool_name.strip()
+            if not normalized_tool_name:
+                continue
+            resolved_tools = self._get_tool_registry().resolve_known(
+                (normalized_tool_name,),
+                strict=False,
+                consumer=consumer,
+            )
+            if resolved_tools:
+                normalized_tools.append(resolved_tools[0])
+            else:
+                normalized_tools.append(normalized_tool_name)
         normalized_skills: list[str] = []
         for skill_name in definition.skills:
             normalized_skill_name = skill_name.strip()
@@ -393,7 +407,12 @@ class RoleSettingsService:
                 normalized_skills.append(resolved[0])
             else:
                 normalized_skills.append(normalized_skill_name)
-        return definition.model_copy(update={"skills": tuple(normalized_skills)})
+        return definition.model_copy(
+            update={
+                "tools": tuple(normalized_tools),
+                "skills": tuple(normalized_skills),
+            }
+        )
 
     def _validate_reserved_role_mutation(
         self,

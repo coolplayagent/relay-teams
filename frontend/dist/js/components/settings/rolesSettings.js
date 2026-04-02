@@ -563,8 +563,12 @@ function renderSkillsShellAdvisory() {
         }
     }
     const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
-    const hasShell = Array.isArray(currentSelections.tools) && currentSelections.tools.includes('shell');
-    if (!hasSkills || hasShell) {
+    const hasExecCommand = Array.isArray(currentSelections.tools)
+        && (
+            currentSelections.tools.includes('shell')
+            || currentSelections.tools.includes('shell')
+        );
+    if (!hasSkills || hasExecCommand) {
         return;
     }
     container.insertAdjacentHTML('beforeend', advisoryHtml);

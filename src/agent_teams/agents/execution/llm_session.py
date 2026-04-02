@@ -78,6 +78,7 @@ from agent_teams.agents.execution.conversation_compaction import (
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
 from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
@@ -205,6 +206,7 @@ class AgentLlmSession:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        background_task_service: BackgroundTaskService | None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
         role_memory_service: RoleMemoryService | None,
@@ -240,6 +242,7 @@ class AgentLlmSession:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
+        self._background_task_service = background_task_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -360,6 +363,7 @@ class AgentLlmSession:
             role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
+            background_task_service=self._background_task_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,
@@ -555,6 +559,7 @@ class AgentLlmSession:
                             )
                             if tool_call_events_emitted:
                                 attempt_tool_event_emitted = True
+                            self._normalize_tool_call_args_for_replay(new_to_process)
                             buffered_messages.extend(new_to_process)
                             previous_history_size = len(history)
                             (
@@ -640,6 +645,7 @@ class AgentLlmSession:
                         )
                         if tool_call_events_emitted:
                             attempt_tool_event_emitted = True
+                        self._normalize_tool_call_args_for_replay(to_save)
                         buffered_messages.extend(to_save)
                     previous_history_size = len(history)
                     (
@@ -2062,6 +2068,21 @@ class AgentLlmSession:
                 continue
             normalized.append(message)
         return normalized
+
+    @staticmethod
+    def _normalize_tool_call_args_for_replay(
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> None:
+        for message in messages:
+            if not isinstance(message, ModelResponse):
+                continue
+            for part in message.parts:
+                if not isinstance(part, ToolCallPart) or not isinstance(part.args, str):
+                    continue
+                repaired = repair_tool_args(part.args)
+                if not repaired.repair_applied and not repaired.fallback_invalid_json:
+                    continue
+                part.args = repaired.arguments_json
 
     def _last_committable_index(
         self,

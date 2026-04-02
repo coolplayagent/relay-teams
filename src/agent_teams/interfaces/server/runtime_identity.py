@@ -59,7 +59,6 @@ class ToolRegistrySanity(BaseModel):
     available_tool_names: tuple[str, ...] = Field(default_factory=tuple)
     unavailable_tool_count: int = 0
     unavailable_tools: tuple[ToolAvailabilityRecord, ...] = Field(default_factory=tuple)
-    has_write_tmp: bool
 
 
 class ServerHealthPayload(BaseModel):
@@ -158,7 +157,6 @@ def build_tool_registry_sanity(
         available_tool_names=available_tool_names,
         unavailable_tool_count=len(unavailable_tools),
         unavailable_tools=unavailable_tools,
-        has_write_tmp="write_tmp" in available_tool_names,
     )
 
 

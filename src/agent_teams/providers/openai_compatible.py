@@ -59,6 +59,7 @@ if TYPE_CHECKING:
         SessionHistoryMarkerRepository,
     )
     from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
     from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
     from agent_teams.persistence.shared_state_repo import SharedStateRepository
     from agent_teams.agents.tasks.task_repository import TaskRepository
@@ -87,6 +88,7 @@ class OpenAICompatibleProvider(LLMProvider):
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        background_task_service: BackgroundTaskService | None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService,
         role_memory_service: RoleMemoryService | None,
@@ -125,6 +127,7 @@ class OpenAICompatibleProvider(LLMProvider):
             approval_ticket_repo=approval_ticket_repo,
             run_runtime_repo=run_runtime_repo,
             run_intent_repo=run_intent_repo,
+            background_task_service=background_task_service,
             workspace_manager=workspace_manager,
             media_asset_service=media_asset_service,
             role_memory_service=role_memory_service,

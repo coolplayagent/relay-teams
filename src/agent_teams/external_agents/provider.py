@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from agent_teams.persistence.shared_state_repo import SharedStateRepository
     from agent_teams.roles.memory_service import RoleMemoryService
     from agent_teams.roles.role_registry import RoleRegistry
+    from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
     from agent_teams.sessions.runs.event_log import EventLog
     from agent_teams.sessions.runs.injection_queue import RunInjectionManager
     from agent_teams.sessions.runs.run_control_manager import RunControlManager
@@ -138,6 +139,7 @@ class ExternalAcpSessionManager:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
+        background_task_service: BackgroundTaskService | None,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         get_mcp_registry: Callable[[], McpRegistry],
@@ -172,6 +174,7 @@ class ExternalAcpSessionManager:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
+        self._background_task_service = background_task_service
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._get_mcp_registry = get_mcp_registry
@@ -924,6 +927,7 @@ class ExternalAcpSessionManager:
             approval_ticket_repo=self._approval_ticket_repo,
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
+            background_task_service=self._background_task_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
             role_memory_service=self._role_memory_service,

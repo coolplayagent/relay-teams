@@ -303,13 +303,15 @@ def _round_intent(
         envelope = getattr(root_task, "envelope", None)
         objective = getattr(envelope, "objective", None)
         if isinstance(objective, str) and objective.strip():
-            return objective
+            summarized = _summarize_background_task_prompt(objective)
+            return summarized or objective
     for message in run_messages:
         if str(message.get("role") or "") != "user":
             continue
         prompt = _extract_user_prompt(cast(object, message.get("message")))
         if prompt:
-            return prompt
+            summarized = _summarize_background_task_prompt(prompt)
+            return summarized or prompt
     return None
 
 
@@ -331,6 +333,18 @@ def _extract_user_prompt(message: object) -> str | None:
     if not chunks:
         return None
     return "\n".join(chunks).strip() or None
+
+
+def _summarize_background_task_prompt(prompt: str) -> str | None:
+    if "<background-task-notification>" not in prompt:
+        return None
+    if "<status>failed</status>" in prompt:
+        return "Background task failed"
+    if "<status>stopped</status>" in prompt:
+        return "Background task stopped"
+    if "<status>completed</status>" in prompt:
+        return "Background task completed"
+    return "Background task update"
 
 
 def _is_round_coordinator_message(

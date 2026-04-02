@@ -266,7 +266,7 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
             name="Tmp Writer",
             description="Handles a run-specific writing format.",
             system_prompt="You are a temporary writer.",
-            tools=("read", "write_tmp"),
+            tools=("read", "write"),
         ),
     )
 
@@ -296,7 +296,7 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
     assert "### tmp_writer" in prompt
     assert "- Source: temporary" in prompt
     assert "- Description: Handles a run-specific writing format." in prompt
-    assert "- Tools: read, write_tmp" in prompt
+    assert "- Tools: read, write" in prompt
 
 
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
@@ -351,6 +351,32 @@ def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists
     )
 
     assert "- GitHub CLI: token configured; gh will be resolved on demand" in prompt
+
+
+def test_runtime_environment_prompt_uses_runtime_shell_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_teams.tools.workspace_tools.shell_executor import ShellRuntimeSummary
+
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
+    monkeypatch.setattr(
+        "agent_teams.tools.workspace_tools.shell_executor.describe_runtime_shell",
+        lambda: ShellRuntimeSummary(
+            shell_info="PowerShell",
+            shell_path=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "Shell Type: PowerShell" in prompt
+    assert "powershell.exe" in prompt
 
 
 def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_context() -> (

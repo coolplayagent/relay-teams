@@ -1,4 +1,6 @@
-Search the web with the configured provider and return a text summary for the query.
+Search the web with the configured provider and return structured search hits for the query.
 
 Use this when you need fresh external information that is not available in the workspace.
-Keep arguments minimal: provide the query and optionally the number of results. Provider-specific search knobs are handled internally.
+Keep arguments minimal: provide the query and optionally the number of results.
+You may also pass `allowed_domains` or `blocked_domains` to constrain sources, but never both in the same call.
+Provider-specific search knobs are handled internally.

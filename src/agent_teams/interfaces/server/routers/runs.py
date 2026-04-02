@@ -78,6 +78,12 @@ class InjectSubagentRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class StopBackgroundTaskResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    background_task: dict[str, object]
+
+
 @router.post(
     "",
     response_model=CreateRunResponse,
@@ -246,6 +252,53 @@ def list_tool_approvals(
             payload={"count": len(result)},
         )
         return result
+
+
+@router.get("/{run_id}/background-tasks")
+def list_background_tasks(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {"items": list(service.list_background_tasks(run_id))}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{run_id}/background-tasks/{background_task_id}")
+def get_background_task(
+    run_id: RequiredIdentifierStr,
+    background_task_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {
+            "background_task": service.get_background_task(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{run_id}/background-tasks/{background_task_id}:stop",
+    response_model=StopBackgroundTaskResponse,
+)
+async def stop_background_task(
+    run_id: RequiredIdentifierStr,
+    background_task_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> StopBackgroundTaskResponse:
+    try:
+        result = await service.stop_background_task(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        return StopBackgroundTaskResponse(background_task=result)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")

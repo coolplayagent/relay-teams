@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 from agent_teams.agents.execution.llm_session import AgentLlmSession
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.mcp_registry import McpRegistry
+from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 
 def test_maybe_enrich_tool_result_payload_wraps_builtin_computer_results() -> None:
@@ -50,3 +53,29 @@ def test_maybe_enrich_tool_result_payload_wraps_session_mcp_results() -> None:
     assert isinstance(computer, dict)
     assert computer["source"] == "mcp"
     assert computer["runtime_kind"] == "session_mcp_acp"
+
+
+def test_normalize_tool_call_args_for_replay_updates_live_messages() -> None:
+    response = ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="shell",
+                args=(
+                    '{"command":"python -c \\"print(\\\'hello\\\')\\""'
+                    ',"background":true,"yield_time_ms":null}'
+                ),
+                tool_call_id="call-live",
+            )
+        ]
+    )
+
+    AgentLlmSession._normalize_tool_call_args_for_replay([response])
+
+    tool_call = response.parts[0]
+    assert isinstance(tool_call, ToolCallPart)
+    assert isinstance(tool_call.args, str)
+    assert json.loads(tool_call.args) == {
+        "command": "python -c \"print('hello')\"",
+        "background": True,
+        "yield_time_ms": None,
+    }
