@@ -44,6 +44,9 @@ from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConf
 from agent_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
+from agent_teams.agents.execution.tool_call_history import (
+    clone_model_request_with_parts,
+)
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.sessions.runs.assistant_errors import (
@@ -2353,7 +2356,7 @@ class AgentLlmSession:
                     continue
                 next_parts.append(part)
             if changed:
-                normalized.append(ModelRequest(parts=next_parts))
+                normalized.append(clone_model_request_with_parts(message, next_parts))
                 continue
             normalized.append(message)
         return normalized
