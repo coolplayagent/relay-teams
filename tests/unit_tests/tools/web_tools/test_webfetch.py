@@ -328,6 +328,52 @@ async def test_fetch_url_retries_cloudflare_challenge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_uses_reader_fallback_for_anti_bot_challenge() -> None:
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://example.com/protected":
+            return httpx.Response(
+                403,
+                request=request,
+                text="<html><body>Enable JavaScript and cookies to continue</body></html>",
+                headers={"content-type": "text/html"},
+            )
+        assert str(request.url) == webfetch.build_reader_fallback_url(
+            "https://example.com/protected"
+        )
+        assert request.headers["X-Respond-With"] == "markdown"
+        return httpx.Response(
+            200,
+            request=request,
+            text="# Reader Result",
+            headers={"content-type": "text/plain; charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/protected",
+            response_format="markdown",
+        )
+    finally:
+        await client.aclose()
+
+    assert response.text == "# Reader Result"
+    assert (
+        webfetch.resolve_webfetch_response_url(response)
+        == "https://example.com/protected"
+    )
+    assert requested_urls == [
+        "https://example.com/protected",
+        webfetch.build_reader_fallback_url("https://example.com/protected"),
+    ]
+    await response.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fetch_url_follows_same_host_redirect() -> None:
     requested_urls: list[str] = []
 
@@ -651,12 +697,19 @@ async def test_fetch_url_classifies_invalid_redirect_port_as_upstream_error() ->
 
 
 @pytest.mark.asyncio
-async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
+async def test_fetch_url_raises_anti_bot_challenge_when_reader_fallback_fails() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://example.com":
+            return httpx.Response(
+                403,
+                request=request,
+                headers={"cf-mitigated": "challenge"},
+            )
         return httpx.Response(
-            403,
+            502,
             request=request,
-            headers={"cf-mitigated": "challenge"},
+            text="bad gateway",
+            headers={"content-type": "text/plain"},
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
@@ -674,8 +727,8 @@ async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
     assert exc_info.value.retryable is False
     assert exc_info.value.details == {
         "url_host": "example.com",
-        "status_code": 403,
-        "mitigation": "cloudflare_challenge",
+        "mitigation": "reader_fallback_failed",
+        "fallback_status_code": 502,
     }
 
 

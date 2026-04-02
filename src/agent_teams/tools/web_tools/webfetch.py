@@ -60,6 +60,7 @@ WEBFETCH_DOWNLOAD_PREFIX = "webfetch_download"
 RANGE_RESET_ERROR_TYPES = {"range_response_invalid", "range_resume_mismatch"}
 REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 REDIRECT_REQUIRED_ERROR_TYPE = "redirect_required"
+WEBFETCH_FINAL_URL_EXTENSION_KEY = "agent_teams_final_url"
 MAX_REDIRECTS = 10
 MAX_REDIRECT_BODY_BYTES = 64 * 1024
 BROWSER_USER_AGENT = (
@@ -67,6 +68,17 @@ BROWSER_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 )
 FALLBACK_USER_AGENT = "agent-teams"
+READER_FALLBACK_BASE_URL = "https://r.jina.ai/"
+ANTI_BOT_STATUS_CODES = {403, 429, 503}
+TEXTUAL_CHALLENGE_CONTENT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
+ANTI_BOT_CHALLENGE_MARKERS = (
+    "checking your browser before accessing",
+    "enable javascript and cookies to continue",
+    "sorry, you have been blocked",
+    "verify you are human",
+    "captcha",
+    "attention required!",
+)
 DESCRIPTION = load_tool_description(__file__)
 META_REFRESH_REDIRECT_PATTERN = re.compile(
     r"""<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]+content\s*=\s*["'][^"']*url\s*=\s*([^"'>\s]+)""",
@@ -95,6 +107,11 @@ class WebFetchExtractMode(StrEnum):
 class ParsedDocumentKind(StrEnum):
     FEED = "feed"
     OPML = "opml"
+
+
+class AutomatedFetchBlockKind(StrEnum):
+    CLOUDFLARE_CHALLENGE = "cloudflare_challenge"
+    CHALLENGE_PAGE = "challenge_page"
 
 
 class FeedEntry(BaseModel):
@@ -353,7 +370,7 @@ async def fetch_webfetch_projection(
             workspace_dir=workspace_dir,
             tool_call_id=tool_call_id,
             requested_url=requested_url,
-            final_url=str(response.url),
+            final_url=resolve_webfetch_response_url(response),
             response_format=response_format,
             content_type=content_type,
             body=body,
@@ -447,13 +464,11 @@ async def fetch_url(
     allowed_error_status_codes: set[int] | None = None,
 ) -> httpx.Response:
     url_host = urlparse(url).netloc
-    headers = {
-        "User-Agent": BROWSER_USER_AGENT,
-        "Accept": build_accept_header(response_format),
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    if extra_headers is not None:
-        headers.update(extra_headers)
+    headers = build_direct_fetch_headers(
+        response_format=response_format,
+        user_agent=BROWSER_USER_AGENT,
+        extra_headers=extra_headers,
+    )
     current_url = url
     redirect_count = 0
     used_fallback_user_agent = False
@@ -512,35 +527,22 @@ async def fetch_url(
             response = await _perform_request(
                 client=client, url=current_url, headers=headers
             )
+        block_kind = detect_automated_fetch_block(response)
         if (
-            response.status_code == 403
-            and response.headers.get("cf-mitigated") == "challenge"
+            block_kind == AutomatedFetchBlockKind.CLOUDFLARE_CHALLENGE
             and not used_fallback_user_agent
         ):
             await response.aclose()
-            headers = dict(headers)
-            headers["User-Agent"] = FALLBACK_USER_AGENT
+            headers = build_direct_fetch_headers(
+                response_format=response_format,
+                user_agent=FALLBACK_USER_AGENT,
+                extra_headers=extra_headers,
+            )
             used_fallback_user_agent = True
             continue
         break
-    if (
-        response.status_code == 403
-        and response.headers.get("cf-mitigated") == "challenge"
-    ):
-        await response.aclose()
-        raise ToolExecutionError(
-            error_type="anti_bot_challenge",
-            message=f"Website blocked automated fetch with an anti-bot challenge: {url_host or url}",
-            retryable=False,
-            details={
-                "url_host": url_host,
-                "status_code": response.status_code,
-                "mitigation": "cloudflare_challenge",
-            },
-        )
-    if (
-        response.status_code == 403
-        and response.headers.get("x-proxy-error") == "blocked-by-allowlist"
+    if response.status_code == 403 and (
+        response.headers.get("x-proxy-error") == "blocked-by-allowlist"
     ):
         await response.aclose()
         raise ToolExecutionError(
@@ -552,6 +554,14 @@ async def fetch_url(
                 "status_code": response.status_code,
                 "proxy_error": "blocked-by-allowlist",
             },
+        )
+    if block_kind is not None:
+        await response.aclose()
+        return await fetch_with_reader_fallback(
+            client=client,
+            url=current_url,
+            response_format=response_format,
+            url_host=url_host,
         )
     if response.status_code >= 400 and (
         allowed_error_status_codes is None
@@ -570,6 +580,113 @@ async def fetch_url(
             },
         )
     return response
+
+
+def build_direct_fetch_headers(
+    *,
+    response_format: str,
+    user_agent: str,
+    extra_headers: dict[str, str] | None,
+) -> dict[str, str]:
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": build_accept_header(response_format),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if extra_headers is not None:
+        headers.update(extra_headers)
+    return headers
+
+
+def detect_automated_fetch_block(
+    response: httpx.Response,
+) -> AutomatedFetchBlockKind | None:
+    if is_cloudflare_challenge_response(response):
+        return AutomatedFetchBlockKind.CLOUDFLARE_CHALLENGE
+    if is_textual_challenge_response(response):
+        return AutomatedFetchBlockKind.CHALLENGE_PAGE
+    return None
+
+
+def is_cloudflare_challenge_response(response: httpx.Response) -> bool:
+    return (
+        response.status_code == 403
+        and response.headers.get("cf-mitigated") == "challenge"
+    )
+
+
+def is_textual_challenge_response(response: httpx.Response) -> bool:
+    content_type = normalize_content_type(response.headers.get("content-type", ""))
+    if content_type not in TEXTUAL_CHALLENGE_CONTENT_TYPES:
+        return False
+    if (
+        response.status_code >= 400
+        and response.status_code not in ANTI_BOT_STATUS_CODES
+    ):
+        return False
+    body_text = response.text.lower()
+    return any(marker in body_text for marker in ANTI_BOT_CHALLENGE_MARKERS)
+
+
+async def fetch_with_reader_fallback(
+    *,
+    client: httpx.AsyncClient,
+    url: str,
+    response_format: str,
+    url_host: str,
+) -> httpx.Response:
+    try:
+        fallback_response = await _perform_request(
+            client=client,
+            url=build_reader_fallback_url(url),
+            headers=build_reader_fallback_headers(response_format),
+        )
+    except ToolExecutionError as exc:
+        raise _build_anti_bot_challenge_error(
+            url=url,
+            url_host=url_host,
+            details={"fallback_error_type": exc.error_type},
+        ) from exc
+    if fallback_response.status_code >= 400:
+        await fallback_response.aclose()
+        raise _build_anti_bot_challenge_error(
+            url=url,
+            url_host=url_host,
+            details={"fallback_status_code": fallback_response.status_code},
+        )
+    fallback_response.extensions[WEBFETCH_FINAL_URL_EXTENSION_KEY] = url
+    return fallback_response
+
+
+def build_reader_fallback_url(url: str) -> str:
+    return f"{READER_FALLBACK_BASE_URL}{url}"
+
+
+def build_reader_fallback_headers(response_format: str) -> dict[str, str]:
+    return {
+        "User-Agent": FALLBACK_USER_AGENT,
+        "Accept": build_accept_header(response_format),
+        "X-Respond-With": response_format,
+        "X-No-Cache": "true",
+    }
+
+
+def _build_anti_bot_challenge_error(
+    *,
+    url: str,
+    url_host: str,
+    details: dict[str, JsonValue],
+) -> ToolExecutionError:
+    return ToolExecutionError(
+        error_type="anti_bot_challenge",
+        message=f"Website blocked automated fetch with an anti-bot challenge: {url_host or url}",
+        retryable=False,
+        details={
+            "url_host": url_host,
+            "mitigation": "reader_fallback_failed",
+            **details,
+        },
+    )
 
 
 async def _extract_redirect_location_from_response_body(
@@ -835,6 +952,13 @@ def _webfetch_status_error_message(
 
 def normalize_content_type(content_type_header: str) -> str:
     return content_type_header.split(";", 1)[0].strip().lower()
+
+
+def resolve_webfetch_response_url(response: httpx.Response) -> str:
+    stored_url = response.extensions.get(WEBFETCH_FINAL_URL_EXTENSION_KEY)
+    if isinstance(stored_url, str) and stored_url:
+        return stored_url
+    return str(response.url)
 
 
 def build_webfetch_projection(
@@ -1341,7 +1465,7 @@ async def save_non_resumable_binary_response(
         finalized_manifest = finalize_non_resumable_manifest(
             manifest=manifest,
             download_dir=download_dir,
-            final_url=str(response.url),
+            final_url=resolve_webfetch_response_url(response),
             mime_type=normalize_content_type(response.headers.get("content-type", "")),
             size_bytes=bytes_written,
         )
