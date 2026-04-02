@@ -11,6 +11,7 @@ from pathlib import Path
 from agent_teams.logger import get_logger, log_event
 from agent_teams.paths import (
     get_project_config_dir,
+    iter_dir_paths,
     path_exists,
     path_is_dir,
     path_is_file,
@@ -485,7 +486,9 @@ class WorkspaceService:
     def _iter_tree_entries(self, current_path: Path) -> tuple[Path, ...]:
         try:
             entries = tuple(
-                child for child in current_path.iterdir() if child.name not in {".git"}
+                child
+                for child in iter_dir_paths(current_path)
+                if child.name not in {".git"}
             )
         except OSError as exc:
             log_event(
