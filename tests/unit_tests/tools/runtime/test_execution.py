@@ -373,6 +373,29 @@ def test_execute_tool_preserves_custom_tool_error_details() -> None:
     }
 
 
+def test_execute_tool_marks_value_error_as_non_retryable() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-validation-error-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="write",
+            args_summary={"path": "notes.txt"},
+            action=lambda: (_ for _ in ()).throw(ValueError("missing path")),
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    assert result["ok"] is False
+    assert error["type"] == "validation_error"
+    assert error["retryable"] is False
+
+
 def _raise_tool_execution_error() -> object:
     raise ToolExecutionError(
         error_type="source_access_denied",

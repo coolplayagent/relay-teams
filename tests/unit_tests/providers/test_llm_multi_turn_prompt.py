@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
     PartDeltaEvent,
     PartEndEvent,
     PartStartEvent,
+    RetryPromptPart,
     TextPartDelta,
     TextPart,
     ThinkingPart,
@@ -2951,6 +2952,102 @@ async def test_generate_bounds_repeated_streamed_tool_call_parse_recovery(
     assert len(scripted_agent.histories) == 2
     event_types = [event.event_type for event in fake_hub.events]
     assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+
+
+@pytest.mark.asyncio
+async def test_generate_continues_after_tool_input_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "tool_input_validation_continue.db",
+        fake_hub,
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="write",
+                                    args={"content": "broken"},
+                                    tool_call_id="call-invalid-write",
+                                )
+                            ]
+                        ),
+                        ModelRequest(
+                            parts=[
+                                RetryPromptPart(
+                                    tool_name="write",
+                                    tool_call_id="call-invalid-write",
+                                    content="Field required: path",
+                                )
+                            ]
+                        ),
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="continued")]),
+                    messages=[ModelResponse(parts=[TextPart(content="continued")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-tool-input-validation-continue",
+        trace_id="run-tool-input-validation-continue",
+        task_id="task-tool-input-validation-continue",
+        session_id="session-tool-input-validation-continue",
+        workspace_id="default",
+        instance_id="inst-tool-input-validation-continue",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="continue",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "continued"
+    assert len(scripted_agent.histories) == 2
+    second_history = scripted_agent.histories[1]
+    normalized_tool_errors = [
+        part
+        for message in second_history
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    assert len(normalized_tool_errors) == 1
+    assert normalized_tool_errors[0].tool_call_id == "call-invalid-write"
+    assert isinstance(normalized_tool_errors[0].content, dict)
+    error_result = cast(dict[str, object], normalized_tool_errors[0].content)
+    assert error_result["ok"] is False
+    error_payload = cast(dict[str, object], error_result["error"])
+    assert error_payload["code"] == "tool_input_validation_failed"
+    assert error_payload["message"] == "Field required: path"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.TOOL_RESULT in event_types
+    assert RunEventType.TOOL_INPUT_VALIDATION_FAILED not in event_types
+    history = message_repo.get_history("inst-tool-input-validation-continue")
+    assert any(
+        isinstance(message, ModelRequest)
+        and any(isinstance(part, ToolReturnPart) for part in message.parts)
+        for message in history
+    )
 
 
 @pytest.mark.asyncio
