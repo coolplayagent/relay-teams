@@ -559,6 +559,7 @@ class AgentLlmSession:
                             )
                             if tool_call_events_emitted:
                                 attempt_tool_event_emitted = True
+                            self._normalize_tool_call_args_for_replay(new_to_process)
                             buffered_messages.extend(new_to_process)
                             previous_history_size = len(history)
                             (
@@ -644,6 +645,7 @@ class AgentLlmSession:
                         )
                         if tool_call_events_emitted:
                             attempt_tool_event_emitted = True
+                        self._normalize_tool_call_args_for_replay(to_save)
                         buffered_messages.extend(to_save)
                     previous_history_size = len(history)
                     (
@@ -2066,6 +2068,21 @@ class AgentLlmSession:
                 continue
             normalized.append(message)
         return normalized
+
+    @staticmethod
+    def _normalize_tool_call_args_for_replay(
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> None:
+        for message in messages:
+            if not isinstance(message, ModelResponse):
+                continue
+            for part in message.parts:
+                if not isinstance(part, ToolCallPart) or not isinstance(part.args, str):
+                    continue
+                repaired = repair_tool_args(part.args)
+                if not repaired.repair_applied and not repaired.fallback_invalid_json:
+                    continue
+                part.args = repaired.arguments_json
 
     def _last_committable_index(
         self,

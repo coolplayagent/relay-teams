@@ -6,13 +6,20 @@ from pydantic import JsonValue
 import json
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    ToolCallPart,
+)
 
 from agent_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from agent_teams.agents.execution.tool_args_repair import repair_tool_args
 from agent_teams.agents.execution.tool_call_history import (
     collect_safe_row_ids,
     normalize_replayed_messages_to_safe_boundary,
@@ -547,13 +554,14 @@ class MessageRepository:
                 instance_id,
                 task_id,
                 trace_id,
-                _role(msg),
+                _role(normalized_message),
                 _sanitize_message_json(
-                    ModelMessagesTypeAdapter.dump_json([msg]).decode()
+                    ModelMessagesTypeAdapter.dump_json([normalized_message]).decode()
                 ),
                 now,
             )
             for msg in messages
+            for normalized_message in [_normalize_message_for_persistence(msg)]
         ]
         self._conn.executemany(
             "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
@@ -769,7 +777,22 @@ def _history_ends_with_user_prompt(
     ).strip()
     return combined == target
 
-
+def _normalize_message_for_persistence(message: ModelMessage) -> ModelMessage:
+    if not isinstance(message, ModelResponse):
+        return message
+    next_parts = list(message.parts)
+    changed = False
+    for index, part in enumerate(message.parts):
+        if not isinstance(part, ToolCallPart) or not isinstance(part.args, str):
+            continue
+        repaired = repair_tool_args(part.args)
+        if not repaired.repair_applied and not repaired.fallback_invalid_json:
+            continue
+        next_parts[index] = replace(part, args=repaired.arguments_json)
+        changed = True
+    if not changed:
+        return message
+    return replace(message, parts=next_parts)
 def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
     history_rows: list[tuple[int, Sequence[ModelMessage]]] = []
     for row in rows:
