@@ -549,6 +549,19 @@ function renderExecutionSurfaceSelect(selectedSurface) {
 function renderSkillsShellAdvisory() {
     const container = document.getElementById('role-skills-picker');
     if (!container) return;
+    const advisoryHtml = `
+        <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
+    `;
+    const existingAdvisory = typeof container.querySelector === 'function'
+        ? container.querySelector('.role-option-advisory')
+        : null;
+    if (existingAdvisory) {
+        if (typeof existingAdvisory.remove === 'function') {
+            existingAdvisory.remove();
+        } else if (existingAdvisory.parentNode && typeof existingAdvisory.parentNode.removeChild === 'function') {
+            existingAdvisory.parentNode.removeChild(existingAdvisory);
+        }
+    }
     const hasSkills = Array.isArray(currentSelections.skills) && currentSelections.skills.length > 0;
     const hasExecCommand = Array.isArray(currentSelections.tools)
         && (
@@ -558,14 +571,28 @@ function renderSkillsShellAdvisory() {
     if (!hasSkills || hasExecCommand) {
         return;
     }
-    container.insertAdjacentHTML('beforeend', `
-        <div class="role-option-empty role-option-advisory">${escapeHtml(t('settings.roles.skills_shell_advisory'))}</div>
-    `);
+    container.insertAdjacentHTML('beforeend', advisoryHtml);
+}
+
+function pickerHasInvalidOptions(container) {
+    return typeof container?.innerHTML === 'string'
+        && container.innerHTML.includes('role-option-item-invalid');
+}
+
+function refreshOptionPicker(containerId) {
+    if (containerId === 'role-tools-picker') {
+        renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+        return;
+    }
+    if (containerId === 'role-skills-picker') {
+        renderSkillOptionPicker(currentSelections.skills, t('settings.roles.no_skills'));
+    }
 }
 
 function syncOptionSelection(containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
+    const shouldRefreshPicker = pickerHasInvalidOptions(container);
     const nextValues = [];
     container.querySelectorAll('input[type="checkbox"]').forEach(input => {
         if (input.checked) {
@@ -579,8 +606,11 @@ function syncOptionSelection(containerId) {
     } else if (containerId === 'role-skills-picker') {
         currentSelections.skills = nextValues;
     }
+    if (shouldRefreshPicker) {
+        refreshOptionPicker(containerId);
+    }
     if (containerId === 'role-tools-picker' || containerId === 'role-skills-picker') {
-        renderRoleOptionPickers();
+        renderSkillsShellAdvisory();
     }
 }
 

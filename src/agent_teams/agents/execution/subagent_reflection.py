@@ -19,7 +19,6 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.profiles.openai import OpenAIModelProfile
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.logger import get_logger, log_event
@@ -29,6 +28,7 @@ from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConf
 from agent_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
+from agent_teams.providers.openai_support import build_openai_provider
 from agent_teams.roles.memory_models import RoleMemoryRecord
 from agent_teams.roles.memory_service import RoleMemoryService
 from agent_teams.roles.role_models import RoleDefinition
@@ -250,9 +250,8 @@ class SubagentReflectionService:
         )
         return OpenAIChatModel(
             self._config.model,
-            provider=OpenAIProvider(
-                base_url=self._config.base_url,
-                api_key=self._config.api_key,
+            provider=build_openai_provider(
+                config=self._config,
                 http_client=build_llm_http_client(
                     connect_timeout_seconds=self._config.connect_timeout_seconds,
                     ssl_verify=self._config.ssl_verify,

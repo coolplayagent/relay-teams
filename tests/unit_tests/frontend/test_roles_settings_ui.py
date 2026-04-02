@@ -496,27 +496,262 @@ const initialSkillsHtml = document.getElementById("role-skills-picker").innerHTM
 const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
 initialSkillOptions[1].checked = true;
 await initialSkillOptions[1].onchange();
-const updatedSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+const advisoryStillPresent = document.getElementById("role-skills-picker").innerHTML.includes(
+    "Roles that use skills usually work better with the shell tool enabled."
+);
 
 await document.getElementById("save-role-btn").onclick();
 
 console.log(JSON.stringify({
     initialSkillsHtml,
-    updatedSkillsHtml,
+    advisoryStillPresent,
     savePayload: globalThis.__saveCalls[0].payload,
 }));
 """.strip(),
     )
 
     initial_skills_html = cast(str, payload["initialSkillsHtml"])
-    updated_skills_html = cast(str, payload["updatedSkillsHtml"])
     save_payload = cast(dict[str, JsonValue], payload["savePayload"])
     assert (
         "Roles that use skills usually work better with the exec command tool enabled."
         in (initial_skills_html)
     )
-    assert "checked" in updated_skills_html
+    assert payload["advisoryStillPresent"] is True
     assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
+
+
+def test_role_settings_preserves_skill_checkbox_handlers_after_advisory_removal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
+toolOptions[2].checked = true;
+await toolOptions[2].onchange();
+const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML.includes(
+    "Roles that use skills usually work better with the shell tool enabled."
+);
+
+const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+skillOptions[1].checked = true;
+await skillOptions[1].onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    advisoryRemoved,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert payload["advisoryRemoved"] is True
+    assert save_payload["tools"] == ["read_file", "write_file", "shell"]
+    assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
+
+
+def test_role_settings_keeps_skill_selection_state_across_multiple_changes(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+    writer: {
+        source_role_id: "writer",
+        role_id: "writer",
+        name: "Writer",
+        description: "Drafts user-facing content.",
+        version: "1.0.0",
+        bound_agent_id: "codex_local",
+        execution_surface: "desktop",
+        tools: ["read_file"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Write the first draft.",
+        file_name: "writer.md",
+        content: "---\\nrole_id: writer\\n---\\n\\nWrite the first draft.\\n",
+        deletable: true,
+    },
+    reviewer: {
+        source_role_id: "reviewer",
+        role_id: "reviewer",
+        name: "Reviewer",
+        description: "Reviews delivered work.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "browser",
+        tools: ["read_file", "write_file"],
+        mcp_servers: ["docs"],
+        skills: ["builtin:diff"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Review the delivered work.",
+        file_name: "reviewer.md",
+        content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
+        deletable: true,
+    },
+    Coordinator: {
+        source_role_id: "Coordinator",
+        role_id: "Coordinator",
+        name: "Coordinator",
+        description: "Coordinates delegated work.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["create_tasks", "dispatch_task"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Coordinate the run.",
+        file_name: "coordinator.md",
+        content: "---\\nrole_id: Coordinator\\n---\\n\\nCoordinate the run.\\n",
+        deletable: false,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+initialSkillOptions[0].checked = true;
+await initialSkillOptions[0].onchange();
+initialSkillOptions[1].checked = true;
+await initialSkillOptions[1].onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    savePayload: globalThis.__saveCalls[0].payload,
+    savedRecordSkills: globalThis.__roleRecordsOverride.MainAgent.skills,
+}));
+""".strip(),
+    )
+
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
+    assert payload["savedRecordSkills"] == ["builtin:diff", "builtin:time"]
+
+
+def test_role_settings_removes_unavailable_skill_after_unchecking(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+const staleSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+const invalidSkillOption = Array.from(
+    document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.optionValue === "builtin:diff");
+invalidSkillOption.checked = false;
+await invalidSkillOption.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    staleSkillsHtml,
+    refreshedSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    assert "builtin:diff <em>Unavailable</em>" in cast(str, payload["staleSkillsHtml"])
+    assert "Unavailable" not in cast(str, payload["refreshedSkillsHtml"])
+    assert cast(dict[str, JsonValue], payload["savePayload"])["skills"] == []
+
+
+def test_role_settings_removes_unavailable_tool_after_unchecking(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    tools: ["shell"],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const staleToolsHtml = document.getElementById("role-tools-picker").innerHTML;
+const invalidToolOption = Array.from(
+    document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.optionValue === "read_file");
+invalidToolOption.checked = false;
+await invalidToolOption.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    staleToolsHtml,
+    refreshedToolsHtml: document.getElementById("role-tools-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    assert "read_file <em>Unavailable</em>" in cast(str, payload["staleToolsHtml"])
+    assert "Unavailable" not in cast(str, payload["refreshedToolsHtml"])
+    assert cast(dict[str, JsonValue], payload["savePayload"])["tools"] == []
 
 
 def test_role_settings_marks_main_agent_and_keeps_reserved_prompt_editable(
@@ -1014,11 +1249,41 @@ function createElement(initialDisplay = "block") {{
             if (position !== "beforeend") {{
                 throw new Error(`Unsupported insertAdjacentHTML position: ${{position}}`);
             }}
-            html += String(value);
+            const appendedHtml = String(value);
+            html += appendedHtml;
             cachedRoleRecordsSource = html;
             cachedRoleEditButtonsSource = html;
             cachedRoleDeleteButtonsSource = html;
-            cachedInputsSource = html;
+            if (appendedHtml.includes("role-option-advisory")) {{
+                cachedInputsSource = html;
+            }} else {{
+                cachedInputsSource = "";
+            }}
+        }},
+        querySelector(selector) {{
+            if (selector === ".role-option-advisory") {{
+                const advisoryPattern = /<div class="role-option-empty role-option-advisory">[\\s\\S]*?<\\/div>/;
+                if (!advisoryPattern.test(html)) {{
+                    return null;
+                }}
+                return {{
+                    parentNode: element,
+                    remove() {{
+                        html = html.replace(advisoryPattern, "");
+                        cachedRoleRecordsSource = html;
+                        cachedRoleEditButtonsSource = html;
+                        cachedRoleDeleteButtonsSource = html;
+                        cachedInputsSource = html;
+                    }},
+                }};
+            }}
+            return null;
+        }},
+        removeChild(child) {{
+            if (child && typeof child.remove === "function") {{
+                child.remove();
+            }}
+            return child;
         }},
         querySelectorAll(selector) {{
             if (selector === ".role-record") {{
@@ -1041,16 +1306,16 @@ function createElement(initialDisplay = "block") {{
                     cachedRoleDeleteButtonsSource = html;
                 }}
                 return cachedRoleDeleteButtons;
-            }}
-            if (selector === 'input[type="checkbox"]') {{
-                if (cachedInputsSource !== html) {{
-                    cachedInputs = buildCheckboxes(html);
-                    cachedInputsSource = html;
                 }}
-                return cachedInputs;
-            }}
-            return [];
-        }},
+                if (selector === 'input[type="checkbox"]') {{
+                    if (cachedInputsSource !== html) {{
+                        cachedInputs = buildCheckboxes(html);
+                        cachedInputsSource = html;
+                    }}
+                    return cachedInputs;
+                }}
+                return [];
+            }},
     }};
 
     Object.defineProperty(element, "innerHTML", {{
@@ -1069,7 +1334,8 @@ function createElement(initialDisplay = "block") {{
             cachedRoleRecordsSource = "";
             cachedRoleEditButtonsSource = "";
             cachedRoleDeleteButtonsSource = "";
-            cachedInputsSource = "";
+            cachedInputs = buildCheckboxes(html);
+            cachedInputsSource = html;
         }},
     }});
 

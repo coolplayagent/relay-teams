@@ -96,23 +96,25 @@ Request field:
 ### `GET /system/configs/model`
 
 Returns the persisted model config with secret-backed profile API keys rehydrated for UI editing.
-Literal profile `api_key` values are migrated out of `model.json` into the unified secret store on read.
+Literal profile `api_key` values and secret header values are migrated out of `model.json` into the unified secret store on read.
 
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
 `provider` currently supports `openai_compatible`, `bigmodel`, and the internal/testing-only `echo`.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
 Upserts a model profile.
-Request body may include optional `source_name` to rename an existing profile while preserving its stored API key when `api_key` is omitted.
+Request body may include optional `source_name` to rename an existing profile while preserving its stored API key and secret headers when `api_key` and `headers` are omitted.
 `provider` accepts `openai_compatible`, `bigmodel`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap.
+Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
+Profiles must provide at least one auth source: `api_key` or one configured header.
 When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
 
 ### `DELETE /system/configs/model/profiles/{name}`
@@ -123,19 +125,20 @@ If the deleted profile was the current default and other profiles remain, the ba
 ### `PUT /system/configs/model`
 
 Replaces the full model config object.
-Literal profile `api_key` values are moved into the unified secret store before `model.json` is written.
+Literal profile `api_key` values and secret header values are moved into the unified secret store before `model.json` is written.
 
 ### `POST /system/configs/model:probe`
 
 Tests model connectivity for a saved profile and/or draft override.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
+Draft overrides may include `headers[]` and may omit `api_key` when headers are provided.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:discover`
 
 Fetches the available model catalog for a saved profile and/or draft override.
-Draft overrides may omit `model`, but must provide `base_url` and `api_key` when `profile_name` is omitted.
-When `profile_name` is provided, the request may override `base_url`, `api_key`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
+Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted.
+When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 `openai_compatible` and `bigmodel` both map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated.
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:

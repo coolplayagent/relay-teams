@@ -46,6 +46,7 @@ from agent_teams.notifications import NotificationService
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.providers.model_config import (
     ModelEndpointConfig,
+    ModelRequestHeader,
     ProviderType,
     SamplingConfig,
 )
@@ -440,6 +441,7 @@ def _build_model_config(
     model: str = "glm-4.6v",
     base_url: str = "https://open.bigmodel.cn/api/paas/v4",
     api_key: str = "sk-test",
+    headers: tuple[ModelRequestHeader, ...] = (),
     context_window: int | None = 128000,
     max_tokens: int = 4096,
 ) -> ModelEndpointConfig:
@@ -448,6 +450,7 @@ def _build_model_config(
         model=model,
         base_url=base_url,
         api_key=api_key,
+        headers=headers,
         context_window=context_window,
         sampling=SamplingConfig(max_tokens=max_tokens),
     )
@@ -891,6 +894,66 @@ async def test_external_acp_falls_back_to_custom_provider_for_generic_openai_com
     assert provider_config["env"] == ["AGENT_TEAMS_OPENCODE_API_KEY"]
     assert provider_config["npm"] == "@ai-sdk/openai-compatible"
     assert provider_config["models"]["gpt-4o-mini"]["name"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_external_acp_injects_custom_headers_into_opencode_provider_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    manager = _build_manager(
+        prompt_text="Answer briefly.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=_build_agent(command="opencode", args=("acp",)),
+        resolve_model_config=lambda _role, _request: _build_model_config(
+            provider=ProviderType.OPENAI_COMPATIBLE,
+            model="gpt-4o-mini",
+            base_url="https://example.test/v1",
+            api_key="sk-ignored",
+            headers=(
+                ModelRequestHeader(
+                    name="Authorization",
+                    value="Bearer header-override",
+                ),
+                ModelRequestHeader(
+                    name="anthropic-version",
+                    value="2023-06-01",
+                ),
+            ),
+        ),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+
+    _ = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    runtime_agent = cast(ExternalAgentConfig, captured["config"])
+    runtime_transport = runtime_agent.transport
+    assert isinstance(runtime_transport, StdioTransportConfig)
+    env_by_name = {binding.name: binding.value for binding in runtime_transport.env}
+    assert "AGENT_TEAMS_OPENCODE_API_KEY" not in env_by_name
+    config_content = json.loads(cast(str, env_by_name["OPENCODE_CONFIG_CONTENT"]))
+    provider_config = config_content["provider"]["agent_teams"]
+    assert "env" not in provider_config
+    assert provider_config["options"]["headers"] == {
+        "Authorization": "Bearer header-override",
+        "anthropic-version": "2023-06-01",
+    }
 
 
 @pytest.mark.asyncio
