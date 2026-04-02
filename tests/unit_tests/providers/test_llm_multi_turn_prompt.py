@@ -864,6 +864,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         request=request,
         history=history,
         system_prompt="system",
+        reserve_user_prompt_tokens=False,
         allowed_tools=(),
         allowed_mcp_servers=(),
         allowed_skills=(),
@@ -873,6 +874,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         request=deduped_request,
         history=history,
         system_prompt="system",
+        reserve_user_prompt_tokens=False,
         allowed_tools=(),
         allowed_mcp_servers=(),
         allowed_skills=(),
@@ -982,6 +984,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[0]),
         system_prompt="system",
+        reserve_user_prompt_tokens=True,
         allowed_tools=(),
         allowed_mcp_servers=(),
         allowed_skills=(),
@@ -990,11 +993,159 @@ async def test_generate_recomputes_budget_after_injection_restart(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[-1]),
         system_prompt="system",
+        reserve_user_prompt_tokens=False,
         allowed_tools=(),
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
     assert second_budget < first_budget
+
+
+@pytest.mark.asyncio
+async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "recovery_prompt_budget.db",
+        fake_hub,
+    )
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": 128_000,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+
+    usage_after_request = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        requests=1,
+        tool_calls=0,
+        details={"reasoning_tokens": 0},
+    )
+    part_events = [
+        PartStartEvent(
+            index=0,
+            part=ToolCallPart(
+                tool_name="write",
+                args='{"content":"broken"',
+                tool_call_id="call-live-recovery-budget",
+            ),
+        ),
+        PartDeltaEvent(
+            index=0,
+            delta=ToolCallPartDelta(args_delta=', path:"demo.html"}'),
+        ),
+    ]
+    request_error = APIStatusError(
+        "bad request",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={
+            "error": {
+                "message": (
+                    "litellm.BadRequestError: OpenAIException - "
+                    "Expecting property name enclosed in double quotes: "
+                    "line 1 column 2 (char 1)"
+                )
+            }
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[cast(object, _PartEventNode(part_events, usage_after_request))],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="recovered done")]),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="recovered done")])
+                    ],
+                ),
+            ),
+        ]
+    )
+    captured_model_settings: list[dict[str, object]] = []
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _PartEventNode)
+
+    def _fake_builder(**kwargs: object) -> _SequentialAgent:
+        model_settings = kwargs.get("model_settings")
+        assert isinstance(model_settings, dict)
+        captured_model_settings.append(dict(model_settings))
+        return scripted_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-recovery-prompt-budget",
+        trace_id="run-recovery-prompt-budget",
+        task_id="task-recovery-prompt-budget",
+        session_id="session-recovery-prompt-budget",
+        workspace_id="default",
+        instance_id="inst-recovery-prompt-budget",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="x" * 124_200,
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "recovered done"
+    assert len(captured_model_settings) == 2
+    second_history = cast(
+        list[ModelRequest | ModelResponse],
+        scripted_agent.histories[1],
+    )
+    assert any(
+        isinstance(message, ModelRequest)
+        and provider._session._extract_user_prompt_text(message) == request.user_prompt
+        for message in second_history
+    )
+    assert not provider._session._history_ends_with_user_prompt(
+        second_history,
+        cast(str, request.user_prompt),
+    )
+    expected_without_rereserve = provider._session._safe_max_output_tokens(
+        request=request,
+        history=second_history,
+        system_prompt="system",
+        reserve_user_prompt_tokens=False,
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+    expected_with_rereserve = provider._session._safe_max_output_tokens(
+        request=request,
+        history=second_history,
+        system_prompt="system",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert captured_model_settings[1]["max_tokens"] == expected_without_rereserve
+    assert expected_without_rereserve > expected_with_rereserve
 
 
 @pytest.mark.asyncio
@@ -1152,6 +1303,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         request=request,
         history=[],
         system_prompt="system",
+        reserve_user_prompt_tokens=True,
         allowed_tools=("dispatch_task",),
         allowed_mcp_servers=(),
         allowed_skills=("time",),
@@ -1160,6 +1312,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         request=request,
         history=[],
         system_prompt="system",
+        reserve_user_prompt_tokens=True,
         allowed_tools=(),
         allowed_mcp_servers=(),
         allowed_skills=(),

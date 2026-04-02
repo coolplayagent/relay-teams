@@ -338,6 +338,9 @@ class AgentLlmSession:
             request=request,
             history=history,
             system_prompt=agent_system_prompt,
+            reserve_user_prompt_tokens=(
+                not skip_initial_user_prompt_persist and retry_number == 0
+            ),
             allowed_tools=allowed_tools,
             allowed_mcp_servers=self._allowed_mcp_servers,
             allowed_skills=self._allowed_skills,
@@ -634,6 +637,7 @@ class AgentLlmSession:
                                 request=request,
                                 history=history,
                                 system_prompt=agent_system_prompt,
+                                reserve_user_prompt_tokens=False,
                                 allowed_tools=allowed_tools,
                                 allowed_mcp_servers=self._allowed_mcp_servers,
                                 allowed_skills=self._allowed_skills,
@@ -1885,6 +1889,7 @@ class AgentLlmSession:
         request: LLMRequest,
         history: Sequence[ModelRequest | ModelResponse],
         system_prompt: str,
+        reserve_user_prompt_tokens: bool,
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
@@ -1899,6 +1904,7 @@ class AgentLlmSession:
                 request=request,
                 history=history,
                 system_prompt=system_prompt,
+                reserve_user_prompt_tokens=reserve_user_prompt_tokens,
                 allowed_tools=allowed_tools,
                 allowed_mcp_servers=allowed_mcp_servers,
                 allowed_skills=allowed_skills,
@@ -1914,6 +1920,7 @@ class AgentLlmSession:
         request: LLMRequest,
         history: Sequence[ModelRequest | ModelResponse],
         system_prompt: str,
+        reserve_user_prompt_tokens: bool,
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
@@ -1928,14 +1935,11 @@ class AgentLlmSession:
             1, (len(system_prompt.encode("utf-8")) // 4) + 8
         )
         user_prompt = str(request.user_prompt or "").strip()
-        should_reserve_user_prompt_tokens = bool(user_prompt) and (
-            not self._history_ends_with_user_prompt(history, user_prompt)
-        )
         estimated_user_prompt_tokens = (
             estimator.estimate_message_tokens(
                 ModelRequest(parts=[UserPromptPart(content=user_prompt)])
             )
-            if should_reserve_user_prompt_tokens
+            if reserve_user_prompt_tokens and user_prompt
             else 0
         )
         reserved_tokens = (
