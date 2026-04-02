@@ -302,7 +302,7 @@ await flushTasks();
 console.log(JSON.stringify({
     createPayload: globalThis.__createAutomationPayload,
     formOptions: globalThis.__showFormDialogCalls[0],
-    runCalls: globalThis.__runAutomationProjectCalls,
+    runCalls: globalThis.__runAutomationProjectCalls || null,
 }));
 """.strip(),
         mock_api_source="""
@@ -423,7 +423,7 @@ export async function runAutomationProject(projectId) {
     ]
     assert binding_options[1]["label"] == "feishu_main - Release Updates"
     assert binding_options[1]["description"] == "Feishu Main - group"
-    assert payload["runCalls"] == ["aut_created"]
+    assert payload["runCalls"] is None
 
 
 def test_projects_sidebar_aliases_reused_im_session_into_automation_group(

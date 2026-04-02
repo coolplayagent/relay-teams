@@ -5,6 +5,7 @@ import asyncio
 import os
 from pathlib import Path
 import subprocess
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -189,6 +190,60 @@ def test_resolve_bash_path_uses_system_bash_on_non_windows(monkeypatch) -> None:
     assert shell_executor.resolve_bash_path() == "/bin/bash"
 
 
+def test_resolve_exec_shell_falls_back_to_powershell_on_windows(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        shell_executor,
+        "resolve_bash_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing bash")),
+    )
+    monkeypatch.setattr(
+        shell_executor.shutil,
+        "which",
+        lambda name: (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if name == "powershell"
+            else None
+        ),
+    )
+
+    shell = shell_executor.resolve_exec_shell()
+
+    assert shell.kind == shell_executor.ShellKind.POWERSHELL
+    assert shell.executable.endswith("powershell.exe")
+
+
+def test_describe_runtime_shell_reports_powershell_when_git_bash_is_missing(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        shell_executor,
+        "resolve_bash_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing bash")),
+    )
+    monkeypatch.setattr(
+        shell_executor.shutil,
+        "which",
+        lambda name: (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if name == "powershell"
+            else None
+        ),
+    )
+
+    summary = shell_executor.describe_runtime_shell()
+
+    assert summary.shell_info == "PowerShell"
+    assert summary.shell_path.endswith("powershell.exe")
+
+
 # ---------------------------------------------------------------------------
 # spawn_shell: exit code + process group
 # ---------------------------------------------------------------------------
@@ -219,6 +274,30 @@ class _FakeProcess:
         await self._wait_event.wait()
         assert self.returncode is not None
         return self.returncode
+
+
+@pytest.mark.asyncio
+async def test_kill_process_tree_windows_falls_back_to_proc_kill_when_taskkill_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    proc = _FakeProcess()
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        assert pid == proc.pid
+        return False
+
+    monkeypatch.setattr(
+        shell_executor,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    await shell_executor._kill_process_tree(cast(asyncio.subprocess.Process, proc))
+
+    assert proc.returncode == -9
 
 
 def _make_fake_factory(
@@ -505,6 +584,68 @@ async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
     assert "BASH_FUNC_module%%" not in env
 
 
+@pytest.mark.asyncio
+async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
+    monkeypatch,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    captured_args: list[object] = []
+    captured_kwargs: dict[str, object] = {}
+
+    async def capturing_factory(*args: object, **kwargs: object) -> _FakeProcess:
+        captured_args.extend(args)
+        captured_kwargs.update(kwargs)
+        proc = _FakeProcess()
+        proc.stdout.feed_eof()
+        proc.stderr.feed_eof()
+        proc.returncode = 0
+        proc._wait_event.set()
+        return proc
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor.asyncio,
+        "create_subprocess_exec",
+        capturing_factory,
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {
+            "PATH": r"C:\Windows\System32",
+            "BASH_ENV": r"C:\tmp\bashrc",
+        },
+    )
+
+    _ = await shell_executor.create_shell_subprocess(
+        command="Write-Output 'hello'",
+        cwd=Path("."),
+        shell=shell,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    assert captured_args[0] == "powershell.exe"
+    assert captured_args[1] == "-NoProfile"
+    assert captured_args[2] == "-Command"
+    assert "OutputEncoding" in str(captured_args[3])
+    env = captured_kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env["BASH_ENV"] == r"C:\tmp\bashrc"
+
+
 def test_run_git_bash_strips_bash_startup_env(monkeypatch, tmp_path: Path) -> None:
     from agent_teams.tools.workspace_tools import shell_executor
 
@@ -590,92 +731,6 @@ class TestValidateShellCommand:
         cmd = "echo " + "x" * (MAX_COMMAND_LENGTH + 1)
         with pytest.raises(ValueError, match=str(MAX_COMMAND_LENGTH)):
             validate_shell_command(cmd)
-
-
-# ---------------------------------------------------------------------------
-# _save_overflow_output
-# ---------------------------------------------------------------------------
-
-
-class TestSaveOverflowOutput:
-    def test_returns_none_when_within_limit(self, tmp_path: Path) -> None:
-        from agent_teams.tools.workspace_tools.shell import (
-            MAX_OUTPUT_CHARS,
-            _save_overflow_output,
-        )
-
-        workspace = self._make_workspace(tmp_path)
-        content = "x" * MAX_OUTPUT_CHARS
-        assert _save_overflow_output(workspace, content, "stdout") is None
-
-    def test_creates_file_when_exceeding_limit(self, tmp_path: Path) -> None:
-        from agent_teams.tools.workspace_tools.shell import (
-            MAX_OUTPUT_CHARS,
-            _save_overflow_output,
-        )
-
-        workspace = self._make_workspace(tmp_path)
-        content = "x" * (MAX_OUTPUT_CHARS + 100)
-        result = _save_overflow_output(workspace, content, "stdout")
-        assert result is not None
-        assert result.exists()
-        assert result.read_text(encoding="utf-8") == content
-        assert result.parent == (tmp_path / "tmp" / "shell_output").resolve()
-
-    @staticmethod
-    def _make_workspace(tmp_path: Path):
-        """Build a minimal WorkspaceHandle-like object for testing."""
-        from unittest.mock import MagicMock
-
-        workspace = MagicMock()
-        workspace.tmp_root = tmp_path / "tmp"
-        return workspace
-
-
-# ---------------------------------------------------------------------------
-# Existing helpers
-# ---------------------------------------------------------------------------
-
-
-def test_format_timeout_metadata_uses_normalized_timeout() -> None:
-    from agent_teams.tools.workspace_tools.shell import _format_timeout_metadata
-
-    metadata = _format_timeout_metadata(30000)
-
-    assert "30000ms" in metadata
-    assert "Nonems" not in metadata
-
-
-def test_project_shell_result_hides_raw_streams_from_visible_payload(
-    tmp_path: Path,
-) -> None:
-    from agent_teams.tools.workspace_tools.shell import _project_shell_result
-
-    stdout_path = tmp_path / "stdout.txt"
-    result = _project_shell_result(
-        exit_code=1,
-        timed_out=False,
-        stdout="stdout text",
-        stderr="stderr text",
-        output="combined output",
-        stdout_overflow=stdout_path,
-        stderr_overflow=None,
-    )
-
-    assert result.visible_data == {
-        "output": "combined output",
-        "exit_code": 1,
-        "timed_out": False,
-        "truncated": True,
-    }
-    assert result.internal_data == {
-        "exit_code": 1,
-        "timed_out": False,
-        "stdout": "stdout text",
-        "stderr": "stderr text",
-        "output": "combined output",
-        "stdout_overflow_path": str(stdout_path),
-    }
 
 
 def test_run_git_bash_uses_current_proxy_env(monkeypatch) -> None:

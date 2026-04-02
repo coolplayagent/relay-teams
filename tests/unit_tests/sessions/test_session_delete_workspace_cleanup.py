@@ -6,6 +6,13 @@ from pathlib import Path
 import pytest
 
 from agent_teams.agents.instances.enums import InstanceStatus
+from agent_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
+)
+from agent_teams.sessions.runs.background_tasks.repository import (
+    BackgroundTaskRepository,
+)
 from agent_teams.sessions.runs.event_stream import RunEventHub
 from agent_teams.sessions.session_service import SessionService
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -50,6 +57,7 @@ def _build_service(
         message_repo=MessageRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
+        background_task_repository=BackgroundTaskRepository(db_path),
         event_log=EventLog(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_event_hub=RunEventHub(),
@@ -94,6 +102,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
 
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
+    background_task_repository = BackgroundTaskRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     workspace_manager = WorkspaceManager(
         project_root=project_root,
@@ -190,6 +199,28 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     )
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "artifact.txt").write_text("artifact", encoding="utf-8")
+    background_log_path = workspace_manager.resolve(
+        session_id="session-1",
+        role_id="time",
+        instance_id="inst-1",
+        workspace_id=session.workspace_id,
+    ).resolve_tmp_path("background_tasks/exec-1.log")
+    background_log_path.parent.mkdir(parents=True, exist_ok=True)
+    background_log_path.write_text("running\n", encoding="utf-8")
+    exec_record = background_task_repository.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="time",
+            tool_call_id="call-1",
+            command="sleep 30",
+            cwd=str(project_root),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path="tmp/background_tasks/exec-1.log",
+        )
+    )
 
     service.delete_session("session-1")
 
@@ -239,6 +270,8 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         )
         == ()
     )
+    assert background_task_repository.get(exec_record.background_task_id) is None
+    assert not background_log_path.exists()
     assert not session_dir.exists()
     assert project_root.exists()
     with pytest.raises(KeyError):

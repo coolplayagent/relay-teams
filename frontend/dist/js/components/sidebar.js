@@ -835,7 +835,6 @@ export async function handleNewAutomationProjectClick() {
         state.currentWorkspaceId = String(project?.workspace_id || '').trim() || AUTOMATION_INTERNAL_WORKSPACE_ID;
         sysLog(formatMessage('sidebar.log.created_automation_project', { project_id: project.automation_project_id }));
         await loadProjects();
-        await handleRunAutomationProject(project, true);
     } catch (error) {
         sysLog(formatMessage('sidebar.error.creating_automation_project', { error: error.message }), 'log-error');
     }
@@ -994,4 +993,3 @@ async function maybeSyncBackgroundStreams(sessions) {
         return;
     }
 }
-

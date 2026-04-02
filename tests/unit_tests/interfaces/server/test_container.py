@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+
+import pytest
 from pathlib import Path
 
 from agent_teams.builtin import get_builtin_roles_dir
@@ -11,6 +13,10 @@ from agent_teams.env.environment_variable_models import (
 )
 from agent_teams.interfaces.server.container import ServerContainer
 from agent_teams.roles import RoleLoader
+from agent_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskRecord,
+    BackgroundTaskStatus,
+)
 
 
 def _clear_proxy_env(monkeypatch) -> None:
@@ -203,6 +209,91 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     assert mcp_reload_calls == ["mcp"]
 
 
+@pytest.mark.asyncio
+async def test_container_binds_background_completion_sink_during_start(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    start_calls: list[str] = []
+    lifecycle_calls: list[str] = []
+    original_bind_event_loop = container.run_service.bind_event_loop
+    original_bind_completion_sink = (
+        container.background_task_service.bind_completion_sink
+    )
+
+    def _record_bind_event_loop(loop) -> None:
+        lifecycle_calls.append("bind_event_loop")
+        original_bind_event_loop(loop)
+
+    def _record_bind_completion_sink(sink) -> None:
+        lifecycle_calls.append("bind_completion_sink")
+        original_bind_completion_sink(sink)
+
+    monkeypatch.setattr(
+        container.run_service, "bind_event_loop", _record_bind_event_loop
+    )
+    monkeypatch.setattr(
+        container.background_task_service,
+        "bind_completion_sink",
+        _record_bind_completion_sink,
+    )
+
+    monkeypatch.setattr(
+        container.wechat_gateway_service,
+        "start",
+        lambda: start_calls.append("wechat"),
+    )
+    monkeypatch.setattr(
+        container.feishu_subscription_service,
+        "start",
+        lambda: start_calls.append("feishu-subscription"),
+    )
+    monkeypatch.setattr(
+        container.feishu_message_pool_service,
+        "start",
+        lambda: start_calls.append("feishu-message-pool"),
+    )
+    monkeypatch.setattr(
+        container.automation_delivery_worker,
+        "start",
+        lambda: start_calls.append("automation-delivery"),
+    )
+    monkeypatch.setattr(
+        container.automation_bound_session_queue_worker,
+        "start",
+        lambda: start_calls.append("automation-bound-session"),
+    )
+
+    async def _fake_scheduler_start() -> None:
+        start_calls.append("scheduler")
+
+    monkeypatch.setattr(
+        container.automation_scheduler_service,
+        "start",
+        _fake_scheduler_start,
+    )
+
+    assert container.background_task_service._completion_sink is None
+
+    await container.start()
+
+    assert lifecycle_calls == ["bind_event_loop", "bind_completion_sink"]
+    assert container.background_task_service._completion_sink is container.run_service
+    assert start_calls == [
+        "wechat",
+        "feishu-subscription",
+        "feishu-message-pool",
+        "automation-delivery",
+        "automation-bound-session",
+        "scheduler",
+    ]
+
+
 def test_container_wires_automation_bound_session_queue_runtime(
     monkeypatch,
     tmp_path: Path,
@@ -219,3 +310,123 @@ def test_container_wires_automation_bound_session_queue_runtime(
         container.automation_bound_session_queue_worker._queue_service
         is container.automation_bound_session_queue_service
     )
+
+
+def test_container_interrupts_persisted_background_processes_before_marking_stopped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    lifecycle: list[str] = []
+    interruptible = (
+        BackgroundTaskRecord(
+            background_task_id="exec-running",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-running.log",
+        ),
+        BackgroundTaskRecord(
+            background_task_id="exec-missing-pid",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 60",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.BLOCKED,
+            log_path="tmp/background_tasks/exec-missing-pid.log",
+        ),
+    )
+
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "list_interruptible",
+        lambda self: interruptible,
+    )
+    monkeypatch.setattr(
+        container_module,
+        "kill_process_tree_by_pid",
+        lambda pid: lifecycle.append(f"kill:{pid}") or True,
+    )
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "mark_transient_background_tasks_interrupted",
+        lambda self, *, background_task_ids=None: (
+            lifecycle.append(f"mark:{background_task_ids}")
+            or len(background_task_ids or ())
+        ),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert lifecycle == [
+        "kill:3210",
+        "mark:('exec-running', 'exec-missing-pid')",
+    ]
+
+
+def test_container_preserves_background_task_rows_when_startup_kill_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    lifecycle: list[str] = []
+    interruptible = (
+        BackgroundTaskRecord(
+            background_task_id="exec-failed-kill",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-failed-kill.log",
+        ),
+        BackgroundTaskRecord(
+            background_task_id="exec-killed",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 60",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.BLOCKED,
+            pid=6543,
+            log_path="tmp/background_tasks/exec-killed.log",
+        ),
+    )
+
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "list_interruptible",
+        lambda self: interruptible,
+    )
+    monkeypatch.setattr(
+        container_module,
+        "kill_process_tree_by_pid",
+        lambda pid: lifecycle.append(f"kill:{pid}") or pid == 6543,
+    )
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "mark_transient_background_tasks_interrupted",
+        lambda self, *, background_task_ids=None: (
+            lifecycle.append(f"mark:{background_task_ids}")
+            or len(background_task_ids or ())
+        ),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert lifecycle == [
+        "kill:3210",
+        "kill:6543",
+        "mark:('exec-killed',)",
+    ]

@@ -322,6 +322,62 @@ def test_message_repo_append_is_thread_safe_under_parallel_writes(
     assert int(row["c"]) == 200
 
 
+def test_message_repo_normalizes_repaired_tool_call_args_before_persist(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_tool_args.db"
+    repo = MessageRepository(db_path)
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args=(
+                            '{"command":"python -c \\"print(\\\'hello\\\')\\""'
+                            ',"background":true,"yield_time_ms":null,'
+                            '"timeout_ms":null,"workdir":null,"tty":false}'
+                        ),
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content={"ok": True},
+                    )
+                ]
+            ),
+        ],
+    )
+
+    history = repo.get_history("inst-1")
+
+    assert len(history) == 2
+    stored_response = history[0]
+    assert isinstance(stored_response, ModelResponse)
+    stored_tool_call = stored_response.parts[0]
+    assert isinstance(stored_tool_call, ToolCallPart)
+    assert isinstance(stored_tool_call.args, str)
+    assert json.loads(stored_tool_call.args) == {
+        "command": "python -c \"print('hello')\"",
+        "background": True,
+        "yield_time_ms": None,
+        "timeout_ms": None,
+        "workdir": None,
+        "tty": False,
+    }
+
+
 def test_message_repo_filters_active_segment_after_clear_marker(tmp_path: Path) -> None:
     db_path = tmp_path / "message_repo_history_markers.db"
     marker_repo = SessionHistoryMarkerRepository(db_path)

@@ -2151,6 +2151,13 @@
     gap: 0.35rem;
 }
 
+.recovery-banner-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
 .recovery-banner-label {
     font-size: 0.72rem;
     font-weight: 700;
@@ -2180,6 +2187,10 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+}
+
+.recovery-banner-body.is-collapsed {
+    display: none;
 }
 
 .recovery-approval-list {
@@ -2275,6 +2286,159 @@
     transform: none;
 }
 
+.recovery-panel-toggle-btn {
+    flex: 0 0 auto;
+    min-width: 5.5rem;
+    height: 2rem;
+    padding: 0 0.8rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: rgba(148, 163, 184, 0.08);
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.recovery-panel-toggle-btn:hover {
+    background: rgba(148, 163, 184, 0.14);
+    border-color: rgba(148, 163, 184, 0.34);
+    color: var(--text-primary);
+}
+
+.background-task-strip-host {
+    flex: 0 0 auto;
+    padding: 0 2rem 0.8rem;
+}
+
+.background-task-strip {
+    width: min(920px, 100%);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-height: 2.75rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 0.95rem;
+    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+}
+
+.background-task-strip-summary {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.background-task-strip-label {
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+
+.background-task-strip-meta {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+}
+
+.background-task-strip-items {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.background-task-chip-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 100%;
+}
+
+.background-task-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    max-width: min(28rem, 72vw);
+    min-height: 2rem;
+    padding: 0.25rem 0.35rem 0.25rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.background-task-chip-idle {
+    border-color: rgba(148, 163, 184, 0.2);
+}
+
+.background-task-chip-running {
+    border-color: color-mix(in srgb, var(--primary) 34%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.background-task-chip-warning {
+    border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.background-task-chip-success {
+    border-color: color-mix(in srgb, var(--success) 34%, transparent);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.background-task-chip-danger {
+    border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.background-task-chip-status {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.background-task-chip-command {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.background-task-chip-stop {
+    flex: 0 0 auto;
+    height: 1.55rem;
+    padding: 0 0.6rem;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.12);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color 0.2s ease, opacity 0.2s ease;
+}
+
+.background-task-chip-stop:hover {
+    background: rgba(15, 23, 42, 0.18);
+}
+
+.background-task-chip-stop:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 .recovery-choice-approve {
     color: var(--text-on-primary);
     background: var(--primary);
@@ -2354,6 +2518,25 @@
         display: none !important;
     }
 
+    .background-task-strip-host {
+        padding: 0 1rem 0.75rem;
+    }
+
+    .background-task-strip {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.55rem;
+        padding: 0.65rem 0.7rem;
+    }
+
+    .background-task-strip-summary {
+        justify-content: space-between;
+    }
+
+    .background-task-chip {
+        max-width: none;
+    }
+
     .recovery-banner-host {
         padding-bottom: 0.75rem;
     }
@@ -2361,6 +2544,12 @@
     .recovery-banner {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .recovery-banner-head {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
     }
 
     .recovery-approval-head,
@@ -2387,6 +2576,10 @@
     }
 
     .recovery-action-btn {
+        width: 100%;
+    }
+
+    .recovery-panel-toggle-btn {
         width: 100%;
     }
 }
