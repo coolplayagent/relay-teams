@@ -11,8 +11,11 @@ import { showToast } from '../../utils/feedback.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const MASKED_SECRET_PLACEHOLDER = '************';
+
 let lastProbeState = null;
 let languageBound = false;
+let proxyPasswordState = createProxyPasswordState();
 
 export function bindProxySettingsHandlers() {
     const saveBtn = document.getElementById('save-proxy-btn');
@@ -24,8 +27,21 @@ export function bindProxySettingsHandlers() {
     if (probeBtn) {
         probeBtn.onclick = handleProbeWeb;
     }
+
+    const passwordInput = document.getElementById('proxy-password');
+    if (passwordInput) {
+        passwordInput.oninput = handleProxyPasswordInput;
+        passwordInput.onchange = handleProxyPasswordInput;
+    }
+
+    const togglePasswordBtn = document.getElementById('toggle-proxy-password-btn');
+    if (togglePasswordBtn) {
+        togglePasswordBtn.onclick = toggleProxyPasswordVisibility;
+    }
+
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
+            renderProxyPasswordField();
             renderProxyProbeState();
         });
         languageBound = true;
@@ -161,7 +177,8 @@ function writeProxyFormValues(config) {
     setInputValue('proxy-all-proxy', config.all_proxy);
     setInputValue('proxy-no-proxy', config.no_proxy);
     setInputValue('proxy-username', config.proxy_username);
-    setInputValue('proxy-password', config.proxy_password);
+    proxyPasswordState = createProxyPasswordState(config.proxy_password);
+    renderProxyPasswordField();
     setInputValue('proxy-ssl-verify', serializeProxySslVerifyValue(config.ssl_verify));
 }
 
@@ -172,7 +189,7 @@ function readProxyFormValues() {
         all_proxy: readInputValue('proxy-all-proxy'),
         no_proxy: readInputValue('proxy-no-proxy'),
         proxy_username: readInputValue('proxy-username'),
-        proxy_password: readInputValue('proxy-password'),
+        proxy_password: readProxyPasswordValue(),
         ssl_verify: parseTriStateValue(readInputValue('proxy-ssl-verify')),
     };
 }
@@ -219,4 +236,100 @@ function serializeTriStateValue(value) {
         return 'false';
     }
     return '';
+}
+
+function createProxyPasswordState(persistedValue = null) {
+    const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
+    return {
+        persistedValue: normalizedValue,
+        draftValue: '',
+        hasPersistedValue: Boolean(normalizedValue.trim()),
+        isDirty: false,
+        revealed: false,
+    };
+}
+
+function handleProxyPasswordInput() {
+    const passwordInput = document.getElementById('proxy-password');
+    const nextValue = passwordInput ? passwordInput.value : '';
+    proxyPasswordState.draftValue = nextValue;
+    proxyPasswordState.isDirty = proxyPasswordState.hasPersistedValue
+        ? nextValue !== proxyPasswordState.persistedValue
+        : nextValue.trim().length > 0;
+    if (!readProxyPasswordValue()) {
+        proxyPasswordState.revealed = false;
+    }
+    renderProxyPasswordField();
+}
+
+function toggleProxyPasswordVisibility() {
+    if (!hasProxyPasswordValue()) {
+        return;
+    }
+    proxyPasswordState.revealed = !proxyPasswordState.revealed;
+    renderProxyPasswordField();
+}
+
+function readProxyPasswordValue() {
+    const passwordInput = document.getElementById('proxy-password');
+    const inputValue = passwordInput ? passwordInput.value.trim() : '';
+    if (!proxyPasswordState.hasPersistedValue) {
+        return inputValue || null;
+    }
+    if (proxyPasswordState.isDirty) {
+        return inputValue || null;
+    }
+    return inputValue || proxyPasswordState.persistedValue || null;
+}
+
+function renderProxyPasswordField() {
+    const passwordInput = document.getElementById('proxy-password');
+    if (!passwordInput) {
+        return;
+    }
+
+    if (proxyPasswordState.revealed) {
+        passwordInput.type = 'text';
+        passwordInput.value = proxyPasswordState.isDirty
+            ? proxyPasswordState.draftValue
+            : proxyPasswordState.persistedValue;
+        passwordInput.placeholder = '';
+    } else if (proxyPasswordState.hasPersistedValue && !proxyPasswordState.isDirty) {
+        passwordInput.type = 'password';
+        passwordInput.value = '';
+        passwordInput.placeholder = MASKED_SECRET_PLACEHOLDER;
+    } else {
+        passwordInput.type = 'password';
+        passwordInput.value = proxyPasswordState.draftValue;
+        passwordInput.placeholder = t('settings.proxy.password_placeholder');
+    }
+
+    renderProxyPasswordToggle();
+}
+
+function renderProxyPasswordToggle() {
+    const togglePasswordBtn = document.getElementById('toggle-proxy-password-btn');
+    if (!togglePasswordBtn) {
+        return;
+    }
+
+    togglePasswordBtn.style.display = hasProxyPasswordValue() ? 'inline-flex' : 'none';
+    togglePasswordBtn.className = proxyPasswordState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    togglePasswordBtn.title = proxyPasswordState.revealed
+        ? t('settings.proxy.hide_password')
+        : t('settings.proxy.show_password');
+    if (typeof togglePasswordBtn.setAttribute === 'function') {
+        togglePasswordBtn.setAttribute('aria-label', togglePasswordBtn.title);
+    } else {
+        togglePasswordBtn.ariaLabel = togglePasswordBtn.title;
+    }
+}
+
+function hasProxyPasswordValue() {
+    const passwordInput = document.getElementById('proxy-password');
+    const inputValue = passwordInput ? passwordInput.value.trim() : '';
+    if (proxyPasswordState.hasPersistedValue && !proxyPasswordState.isDirty) {
+        return Boolean(proxyPasswordState.persistedValue || inputValue);
+    }
+    return Boolean(proxyPasswordState.draftValue.trim() || inputValue);
 }

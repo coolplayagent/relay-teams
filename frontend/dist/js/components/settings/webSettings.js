@@ -10,6 +10,10 @@ import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const MASKED_SECRET_PLACEHOLDER = '************';
+
+let webApiKeyState = createWebApiKeyState();
+
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
@@ -21,6 +25,17 @@ export function bindWebSettingsHandlers() {
     const saveBtn = document.getElementById('save-web-btn');
     if (saveBtn) {
         saveBtn.onclick = handleSaveWeb;
+    }
+
+    const apiKeyInput = document.getElementById('web-api-key');
+    if (apiKeyInput) {
+        apiKeyInput.oninput = handleWebApiKeyInput;
+        apiKeyInput.onchange = handleWebApiKeyInput;
+    }
+
+    const toggleApiKeyBtn = document.getElementById('toggle-web-api-key-btn');
+    if (toggleApiKeyBtn) {
+        toggleApiKeyBtn.onclick = toggleWebApiKeyVisibility;
     }
 }
 
@@ -62,13 +77,14 @@ async function handleSaveWeb() {
 
 function writeWebFormValues(config) {
     setInputValue('web-provider', config.provider);
-    setInputValue('web-api-key', config.api_key);
+    webApiKeyState = createWebApiKeyState(config.api_key);
+    renderWebApiKeyField();
 }
 
 function readWebFormValues() {
     return {
         provider: readInputValue('web-provider') || 'exa',
-        api_key: readInputValue('web-api-key') || null,
+        api_key: readWebApiKeyValue(),
     };
 }
 
@@ -86,4 +102,100 @@ function readInputValue(id) {
         return '';
     }
     return input.value.trim();
+}
+
+function createWebApiKeyState(persistedValue = null) {
+    const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
+    return {
+        persistedValue: normalizedValue,
+        draftValue: '',
+        hasPersistedValue: Boolean(normalizedValue.trim()),
+        isDirty: false,
+        revealed: false,
+    };
+}
+
+function handleWebApiKeyInput() {
+    const apiKeyInput = document.getElementById('web-api-key');
+    const nextValue = apiKeyInput ? apiKeyInput.value : '';
+    webApiKeyState.draftValue = nextValue;
+    webApiKeyState.isDirty = webApiKeyState.hasPersistedValue
+        ? nextValue !== webApiKeyState.persistedValue
+        : nextValue.trim().length > 0;
+    if (!readWebApiKeyValue()) {
+        webApiKeyState.revealed = false;
+    }
+    renderWebApiKeyField();
+}
+
+function toggleWebApiKeyVisibility() {
+    if (!hasWebApiKeyValue()) {
+        return;
+    }
+    webApiKeyState.revealed = !webApiKeyState.revealed;
+    renderWebApiKeyField();
+}
+
+function readWebApiKeyValue() {
+    const apiKeyInput = document.getElementById('web-api-key');
+    const inputValue = apiKeyInput ? apiKeyInput.value.trim() : '';
+    if (!webApiKeyState.hasPersistedValue) {
+        return inputValue || null;
+    }
+    if (webApiKeyState.isDirty) {
+        return inputValue || null;
+    }
+    return inputValue || webApiKeyState.persistedValue || null;
+}
+
+function renderWebApiKeyField() {
+    const apiKeyInput = document.getElementById('web-api-key');
+    if (!apiKeyInput) {
+        return;
+    }
+
+    if (webApiKeyState.revealed) {
+        apiKeyInput.type = 'text';
+        apiKeyInput.value = webApiKeyState.isDirty
+            ? webApiKeyState.draftValue
+            : webApiKeyState.persistedValue;
+        apiKeyInput.placeholder = '';
+    } else if (webApiKeyState.hasPersistedValue && !webApiKeyState.isDirty) {
+        apiKeyInput.type = 'password';
+        apiKeyInput.value = '';
+        apiKeyInput.placeholder = MASKED_SECRET_PLACEHOLDER;
+    } else {
+        apiKeyInput.type = 'password';
+        apiKeyInput.value = webApiKeyState.draftValue;
+        apiKeyInput.placeholder = t('settings.web.api_key_placeholder');
+    }
+
+    renderWebApiKeyToggle();
+}
+
+function renderWebApiKeyToggle() {
+    const toggleApiKeyBtn = document.getElementById('toggle-web-api-key-btn');
+    if (!toggleApiKeyBtn) {
+        return;
+    }
+
+    toggleApiKeyBtn.style.display = hasWebApiKeyValue() ? 'inline-flex' : 'none';
+    toggleApiKeyBtn.className = webApiKeyState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleApiKeyBtn.title = webApiKeyState.revealed
+        ? t('settings.model.hide_api_key')
+        : t('settings.model.show_api_key');
+    if (typeof toggleApiKeyBtn.setAttribute === 'function') {
+        toggleApiKeyBtn.setAttribute('aria-label', toggleApiKeyBtn.title);
+    } else {
+        toggleApiKeyBtn.ariaLabel = toggleApiKeyBtn.title;
+    }
+}
+
+function hasWebApiKeyValue() {
+    const apiKeyInput = document.getElementById('web-api-key');
+    const inputValue = apiKeyInput ? apiKeyInput.value.trim() : '';
+    if (webApiKeyState.hasPersistedValue && !webApiKeyState.isDirty) {
+        return Boolean(webApiKeyState.persistedValue || inputValue);
+    }
+    return Boolean(webApiKeyState.draftValue.trim() || inputValue);
 }

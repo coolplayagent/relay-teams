@@ -703,7 +703,15 @@ function createModal() {
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-password" data-i18n="settings.proxy.password">Password</label>
-                                                <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="current-password">
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-proxy-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-no-proxy" data-i18n="settings.proxy.no_proxy">NO_PROXY</label>
@@ -757,7 +765,15 @@ function createModal() {
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="web-api-key" data-i18n="settings.web.api_key">API Key</label>
-                                                <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key" style="display:none;">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                         <p class="notifications-help">
@@ -780,7 +796,15 @@ function createModal() {
                                         <div class="proxy-form-grid">
                                             <div class="form-group proxy-inline-field">
                                                 <label for="github-token" data-i18n="settings.github.token">GitHub Token</label>
-                                                <input type="password" id="github-token" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="github-token" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-github-token-btn" type="button" title="Show GitHub token" aria-label="Show GitHub token" style="display:none;">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </section>

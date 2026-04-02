@@ -24,6 +24,7 @@ await loadWebSettingsPanel();
 
 document.getElementById("web-provider").value = "exa";
 document.getElementById("web-api-key").value = "secret";
+document.getElementById("web-api-key").oninput();
 
 await document.getElementById("save-web-btn").onclick();
 
@@ -31,6 +32,9 @@ console.log(JSON.stringify({
     notifications,
     provider: document.getElementById("web-provider").value,
     apiKey: document.getElementById("web-api-key").value,
+    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
+    apiKeyType: document.getElementById("web-api-key").type,
+    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
     savePayload: globalThis.__saveWebPayload,
 }));
 """.strip(),
@@ -38,7 +42,10 @@ console.log(JSON.stringify({
 
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert payload["provider"] == "exa"
-    assert payload["apiKey"] == "secret"
+    assert payload["apiKey"] == ""
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["apiKeyType"] == "password"
+    assert payload["toggleDisplay"] == "inline-flex"
     assert payload["savePayload"] == {
         "provider": "exa",
         "api_key": "secret",
@@ -52,7 +59,115 @@ console.log(JSON.stringify({
     ]
 
 
-def _run_web_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+def test_web_settings_panel_preserves_saved_api_key_when_left_unchanged(
+    tmp_path: Path,
+) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "api_key": "saved-secret",
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+await document.getElementById("save-web-btn").onclick();
+
+console.log(JSON.stringify({
+    apiKeyValue: document.getElementById("web-api-key").value,
+    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
+    apiKeyType: document.getElementById("web-api-key").type,
+    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
+    savePayload: globalThis.__saveWebPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["apiKeyValue"] == ""
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["apiKeyType"] == "password"
+    assert payload["toggleDisplay"] == "inline-flex"
+    assert payload["savePayload"] == {
+        "provider": "exa",
+        "api_key": "saved-secret",
+    }
+
+
+def test_web_settings_panel_reveals_and_clears_saved_api_key(
+    tmp_path: Path,
+) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "api_key": "saved-secret",
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+document.getElementById("toggle-web-api-key-btn").onclick();
+const revealedValue = document.getElementById("web-api-key").value;
+const revealedType = document.getElementById("web-api-key").type;
+const toggleTitle = document.getElementById("toggle-web-api-key-btn").title;
+
+document.getElementById("web-api-key").value = "";
+document.getElementById("web-api-key").oninput();
+
+await document.getElementById("save-web-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    revealedValue,
+    revealedType,
+    toggleTitle,
+    clearedValue: document.getElementById("web-api-key").value,
+    clearedPlaceholder: document.getElementById("web-api-key").placeholder,
+    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
+    savePayload: globalThis.__saveWebPayload,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["revealedValue"] == "saved-secret"
+    assert payload["revealedType"] == "text"
+    assert payload["toggleTitle"] == "Hide API key"
+    assert payload["clearedValue"] == ""
+    assert payload["clearedPlaceholder"] == "Optional for higher rate limits"
+    assert payload["toggleDisplay"] == "none"
+    assert payload["savePayload"] == {
+        "provider": "exa",
+        "api_key": None,
+    }
+    assert notifications == [
+        {
+            "title": "Web Settings Saved",
+            "message": "Web settings saved.",
+            "tone": "success",
+        }
+    ]
+
+
+def _run_web_settings_script(
+    tmp_path: Path,
+    runner_source: str,
+    *,
+    fetch_config: dict[str, JsonValue] | None = None,
+) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root
@@ -70,13 +185,15 @@ def _run_web_settings_script(tmp_path: Path, runner_source: str) -> dict[str, ob
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "webSettings.mjs"
     runner_path = tmp_path / "runner.mjs"
+    fetch_web_config = fetch_config or {
+        "provider": "exa",
+        "api_key": None,
+    }
+    fetch_web_config_json = json.dumps(fetch_web_config)
 
     mock_api_path.write_text(
         """
-let currentConfig = {
-    provider: "exa",
-    api_key: null,
-};
+let currentConfig = __FETCH_WEB_CONFIG__;
 
 export async function fetchWebConfig() {
     return currentConfig;
@@ -87,7 +204,7 @@ export async function saveWebConfig(payload) {
     currentConfig = payload;
     return { status: "ok" };
 }
-""".strip(),
+""".replace("__FETCH_WEB_CONFIG__", fetch_web_config_json).strip(),
         encoding="utf-8",
     )
     mock_feedback_path.write_text(
@@ -105,6 +222,9 @@ const translations = {
     "settings.web.saved": "Web Settings Saved",
     "settings.web.saved_message": "Web settings saved.",
     "settings.web.save_failed": "Save Failed",
+    "settings.web.api_key_placeholder": "Optional for higher rate limits",
+    "settings.model.show_api_key": "Show API key",
+    "settings.model.hide_api_key": "Hide API key",
 };
 
 export function t(key) {
@@ -156,6 +276,7 @@ function createElements() {{
     return new Map([
         ["web-provider", createElement("block")],
         ["web-api-key", createElement("block")],
+        ["toggle-web-api-key-btn", createElement("none")],
         ["save-web-btn", createElement("block")],
     ]);
 }}

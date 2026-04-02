@@ -11,8 +11,11 @@ import { showToast } from '../../utils/feedback.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const MASKED_SECRET_PLACEHOLDER = '************';
+
 let lastProbeState = null;
 let languageBound = false;
+let githubTokenState = createGitHubTokenState();
 
 export function bindGitHubSettingsHandlers() {
     const saveBtn = document.getElementById('save-github-btn');
@@ -24,8 +27,21 @@ export function bindGitHubSettingsHandlers() {
     if (probeBtn) {
         probeBtn.onclick = handleProbeGitHub;
     }
+
+    const tokenInput = document.getElementById('github-token');
+    if (tokenInput) {
+        tokenInput.oninput = handleGitHubTokenInput;
+        tokenInput.onchange = handleGitHubTokenInput;
+    }
+
+    const toggleTokenBtn = document.getElementById('toggle-github-token-btn');
+    if (toggleTokenBtn) {
+        toggleTokenBtn.onclick = toggleGitHubTokenVisibility;
+    }
+
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
+            renderGitHubTokenField();
             renderGitHubProbeState();
         });
         languageBound = true;
@@ -70,7 +86,7 @@ async function handleSaveGitHub() {
 }
 
 async function handleProbeGitHub() {
-    const token = readInputValue('github-token');
+    const token = readGitHubTokenValue();
     if (!token) {
         lastProbeState = {
             status: 'failed',
@@ -147,12 +163,13 @@ function renderGitHubProbeState() {
 }
 
 function writeGitHubFormValues(config) {
-    setInputValue('github-token', config.token);
+    githubTokenState = createGitHubTokenState(config.token);
+    renderGitHubTokenField();
 }
 
 function readGitHubFormValues() {
     return {
-        token: readInputValue('github-token') || null,
+        token: readGitHubTokenValue(),
     };
 }
 
@@ -170,4 +187,100 @@ function readInputValue(id) {
         return '';
     }
     return input.value.trim();
+}
+
+function createGitHubTokenState(persistedValue = null) {
+    const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
+    return {
+        persistedValue: normalizedValue,
+        draftValue: '',
+        hasPersistedValue: Boolean(normalizedValue.trim()),
+        isDirty: false,
+        revealed: false,
+    };
+}
+
+function handleGitHubTokenInput() {
+    const tokenInput = document.getElementById('github-token');
+    const nextValue = tokenInput ? tokenInput.value : '';
+    githubTokenState.draftValue = nextValue;
+    githubTokenState.isDirty = githubTokenState.hasPersistedValue
+        ? nextValue !== githubTokenState.persistedValue
+        : nextValue.trim().length > 0;
+    if (!readGitHubTokenValue()) {
+        githubTokenState.revealed = false;
+    }
+    renderGitHubTokenField();
+}
+
+function toggleGitHubTokenVisibility() {
+    if (!hasGitHubTokenValue()) {
+        return;
+    }
+    githubTokenState.revealed = !githubTokenState.revealed;
+    renderGitHubTokenField();
+}
+
+function readGitHubTokenValue() {
+    const tokenInput = document.getElementById('github-token');
+    const inputValue = tokenInput ? tokenInput.value.trim() : '';
+    if (!githubTokenState.hasPersistedValue) {
+        return inputValue || null;
+    }
+    if (githubTokenState.isDirty) {
+        return inputValue || null;
+    }
+    return inputValue || githubTokenState.persistedValue || null;
+}
+
+function renderGitHubTokenField() {
+    const tokenInput = document.getElementById('github-token');
+    if (!tokenInput) {
+        return;
+    }
+
+    if (githubTokenState.revealed) {
+        tokenInput.type = 'text';
+        tokenInput.value = githubTokenState.isDirty
+            ? githubTokenState.draftValue
+            : githubTokenState.persistedValue;
+        tokenInput.placeholder = '';
+    } else if (githubTokenState.hasPersistedValue && !githubTokenState.isDirty) {
+        tokenInput.type = 'password';
+        tokenInput.value = '';
+        tokenInput.placeholder = MASKED_SECRET_PLACEHOLDER;
+    } else {
+        tokenInput.type = 'password';
+        tokenInput.value = githubTokenState.draftValue;
+        tokenInput.placeholder = t('settings.github.token_placeholder');
+    }
+
+    renderGitHubTokenToggle();
+}
+
+function renderGitHubTokenToggle() {
+    const toggleTokenBtn = document.getElementById('toggle-github-token-btn');
+    if (!toggleTokenBtn) {
+        return;
+    }
+
+    toggleTokenBtn.style.display = hasGitHubTokenValue() ? 'inline-flex' : 'none';
+    toggleTokenBtn.className = githubTokenState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleTokenBtn.title = githubTokenState.revealed
+        ? t('settings.github.hide_token')
+        : t('settings.github.show_token');
+    if (typeof toggleTokenBtn.setAttribute === 'function') {
+        toggleTokenBtn.setAttribute('aria-label', toggleTokenBtn.title);
+    } else {
+        toggleTokenBtn.ariaLabel = toggleTokenBtn.title;
+    }
+}
+
+function hasGitHubTokenValue() {
+    const tokenInput = document.getElementById('github-token');
+    const inputValue = tokenInput ? tokenInput.value.trim() : '';
+    if (githubTokenState.hasPersistedValue && !githubTokenState.isDirty) {
+        return Boolean(githubTokenState.persistedValue || inputValue);
+    }
+    return Boolean(githubTokenState.draftValue.trim() || inputValue);
 }

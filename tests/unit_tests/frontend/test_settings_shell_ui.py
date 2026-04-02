@@ -297,6 +297,9 @@ console.log(JSON.stringify({
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert 'id="toggle-web-api-key-btn"' in modal_html
+    assert 'id="toggle-github-token-btn"' in modal_html
+    assert 'id="toggle-proxy-password-btn"' in modal_html
     assert 'id="edit-profile-name-btn"' not in modal_html
     assert 'id="edit-profile-name-input"' not in modal_html
     assert ">Fetch</button>" not in modal_html
