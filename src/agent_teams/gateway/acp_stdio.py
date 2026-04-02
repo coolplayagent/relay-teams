@@ -414,6 +414,8 @@ class AcpGatewayServer:
                     message="ACP gateway request failed",
                     exc=exc,
                 )
+            if message_id is None:
+                return None
             return {
                 "jsonrpc": "2.0",
                 "id": message_id,
@@ -429,6 +431,8 @@ class AcpGatewayServer:
                     message="ACP gateway request failed",
                     exc=exc,
                 )
+            if message_id is None:
+                return None
             return {
                 "jsonrpc": "2.0",
                 "id": message_id,

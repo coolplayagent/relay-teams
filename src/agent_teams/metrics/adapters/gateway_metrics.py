@@ -56,6 +56,7 @@ def record_gateway_operation(
 def _is_failure_status(status: str) -> bool:
     normalized = status.strip().lower()
     return normalized in {
+        "busy",
         "failed",
         "internal_error",
         "protocol_error",

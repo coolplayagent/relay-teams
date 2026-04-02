@@ -614,6 +614,11 @@ async def test_session_prompt_resumes_recoverable_run_from_any_message(
 async def test_session_prompt_rejects_busy_active_run(
     tmp_path: Path,
 ) -> None:
+    sink = _MetricEventSink()
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(sink,),
+    )
     session_service = FakeSessionService()
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     gateway_session_service = GatewaySessionService(
@@ -638,6 +643,7 @@ async def test_session_prompt_rejects_busy_active_run(
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         session_ingress_service=ingress_service,
+        metric_recorder=recorder,
     )
 
     created = await server.handle_jsonrpc_message(
@@ -681,6 +687,50 @@ async def test_session_prompt_rejects_busy_active_run(
     }
     assert run_manager.create_calls == []
     assert notifications == []
+    failure_events = [
+        event
+        for event in sink.events
+        if event.definition_name == "agent_teams.gateway.operation_failures"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0].tags.gateway_operation == "session_prompt"
+    assert failure_events[0].tags.gateway_phase == "request"
+    assert failure_events[0].tags.status == "busy"
+
+
+@pytest.mark.asyncio
+async def test_failed_notification_does_not_emit_jsonrpc_error_response(
+    tmp_path: Path,
+) -> None:
+    sink = _MetricEventSink()
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(sink,),
+    )
+    server, _, _, notifications = _build_server(
+        tmp_path,
+        metric_recorder=recorder,
+    )
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {},
+        }
+    )
+
+    assert response is None
+    assert notifications == []
+    failure_events = [
+        event
+        for event in sink.events
+        if event.definition_name == "agent_teams.gateway.operation_failures"
+    ]
+    assert len(failure_events) == 1
+    assert failure_events[0].tags.gateway_operation == "session_cancel"
+    assert failure_events[0].tags.gateway_phase == "request"
+    assert failure_events[0].tags.status == "protocol_error"
 
 
 @pytest.mark.asyncio
