@@ -1500,6 +1500,13 @@ Overview KPIs include:
 - `retrieval_failure_rate`
 - `retrieval_avg_duration_ms`
 - `retrieval_document_count`
+- `gateway_calls`
+- `gateway_failure_rate`
+- `gateway_avg_duration_ms`
+- `gateway_prompt_avg_start_ms`
+- `gateway_prompt_avg_first_update_ms`
+- `gateway_mcp_calls`
+- `gateway_cold_start_calls`
 
 ### `GET /observability/breakdowns`
 
@@ -1508,6 +1515,7 @@ Returns tool-level breakdown rows for `scope=global|session|run`. Non-global sco
 Breakdown payload includes:
 - `rows`: tool-level call/failure/latency breakdown
 - `role_rows`: role-level token/cache/tool-failure breakdown
+- `gateway_rows`: gateway ACP and MCP operation call/failure/latency breakdown grouped by operation, phase, and transport
 
 ## Automation APIs
 

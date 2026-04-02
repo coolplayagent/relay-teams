@@ -13,6 +13,7 @@ from agent_teams.builtin import ensure_app_config_bootstrap
 from agent_teams.env.runtime_env import sync_app_env_to_process_env
 from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay, GatewayAwareMcpRegistry
 from agent_teams.gateway.acp_stdio import AcpGatewayServer, AcpStdioRuntime
+from agent_teams.gateway.gateway_models import GatewaySessionRecord
 from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from agent_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
@@ -309,14 +310,7 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         container=container,
         role_id=role_id,
     )
-    mcp_relay = AcpMcpRelay()
-    gateway_mcp_registry = GatewayAwareMcpRegistry(
-        base_registry=container.mcp_registry,
-        relay=mcp_relay,
-    )
-    container.mcp_registry = gateway_mcp_registry
-    container.mcp_service.replace_registry(gateway_mcp_registry)
-    container._refresh_coordinator_runtime()
+    metric_recorder = getattr(container, "metric_recorder", None)
     gateway_session_repository = GatewaySessionRepository(
         container.runtime.paths.db_path
     )
@@ -327,6 +321,26 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         session_model_profile_store=session_model_profile_store,
         default_normal_root_role_id=default_normal_root_role_id,
     )
+
+    def lookup_gateway_session(
+        gateway_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        try:
+            return gateway_session_service.get_session(gateway_session_id)
+        except KeyError:
+            return None
+
+    mcp_relay = AcpMcpRelay(
+        metric_recorder=metric_recorder,
+        gateway_session_lookup=lookup_gateway_session,
+    )
+    gateway_mcp_registry = GatewayAwareMcpRegistry(
+        base_registry=container.mcp_registry,
+        relay=mcp_relay,
+    )
+    container.mcp_registry = gateway_mcp_registry
+    container.mcp_service.replace_registry(gateway_mcp_registry)
+    container._refresh_coordinator_runtime()
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=container.session_service,
@@ -335,6 +349,7 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         notify=_noop_notify,
         mcp_relay=mcp_relay,
         session_ingress_service=container.session_ingress_service,
+        metric_recorder=metric_recorder,
     )
     runtime = AcpStdioRuntime(
         server=server,

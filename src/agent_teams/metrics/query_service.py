@@ -6,6 +6,9 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from agent_teams.metrics.definitions import (
+    GATEWAY_OPERATION_DURATION_MS,
+    GATEWAY_OPERATION_FAILURES,
+    GATEWAY_OPERATIONS,
     LLM_CACHED_INPUT_TOKENS,
     LLM_INPUT_TOKENS,
     LLM_OUTPUT_TOKENS,
@@ -26,6 +29,7 @@ from agent_teams.metrics.models import (
     MetricsScopeSelector,
     ObservabilityBreakdown,
     ObservabilityBreakdownRow,
+    ObservabilityGatewayBreakdownRow,
     ObservabilityKpiSet,
     ObservabilityOverview,
     ObservabilityRoleBreakdownRow,
@@ -59,6 +63,7 @@ class MetricsQueryService:
         retrieval_searches = totals[RETRIEVAL_SEARCHES.name]
         retrieval_failures = totals[RETRIEVAL_SEARCH_FAILURES.name]
         retrieval_duration_ms = totals[RETRIEVAL_SEARCH_DURATION_MS.name]
+        gateway_summary = _build_gateway_summary(rows)
         trends = _build_trends(rows)
         return ObservabilityOverview(
             scope=selector.scope,
@@ -105,6 +110,33 @@ class MetricsQueryService:
                         tags.retrieval_scope_kind,
                     ),
                 ),
+                gateway_calls=gateway_summary["request_calls"],
+                gateway_failure_rate=(
+                    gateway_summary["request_failures"]
+                    / gateway_summary["request_calls"]
+                    if gateway_summary["request_calls"] > 0
+                    else 0
+                ),
+                gateway_avg_duration_ms=(
+                    gateway_summary["request_duration_ms"]
+                    / gateway_summary["request_calls"]
+                    if gateway_summary["request_calls"] > 0
+                    else 0
+                ),
+                gateway_prompt_avg_start_ms=(
+                    gateway_summary["prompt_run_start_duration_ms"]
+                    / gateway_summary["prompt_run_start_calls"]
+                    if gateway_summary["prompt_run_start_calls"] > 0
+                    else 0
+                ),
+                gateway_prompt_avg_first_update_ms=(
+                    gateway_summary["prompt_first_update_duration_ms"]
+                    / gateway_summary["prompt_first_update_calls"]
+                    if gateway_summary["prompt_first_update_calls"] > 0
+                    else 0
+                ),
+                gateway_mcp_calls=gateway_summary["mcp_request_calls"],
+                gateway_cold_start_calls=gateway_summary["cold_start_calls"],
             ),
             trends=trends,
         )
@@ -126,6 +158,14 @@ class MetricsQueryService:
                 "output_tokens": 0.0,
                 "tool_calls": 0.0,
                 "tool_failures": 0.0,
+            }
+        )
+        gateway_grouped: dict[tuple[str, str, str], dict[str, float]] = defaultdict(
+            lambda: {
+                "calls": 0.0,
+                "failures": 0.0,
+                "duration_ms": 0.0,
+                "cold_start_calls": 0.0,
             }
         )
         for row in rows:
@@ -150,6 +190,20 @@ class MetricsQueryService:
                 role_grouped[role_id]["tool_calls"] += row.value
             elif row.metric_name == TOOL_FAILURES.name:
                 role_grouped[role_id]["tool_failures"] += row.value
+            if tags.gateway_operation and tags.gateway_phase and tags.gateway_transport:
+                gateway_key = (
+                    tags.gateway_operation,
+                    tags.gateway_phase,
+                    tags.gateway_transport,
+                )
+                if row.metric_name == GATEWAY_OPERATIONS.name:
+                    gateway_grouped[gateway_key]["calls"] += row.value
+                    if tags.gateway_cold_start == "true":
+                        gateway_grouped[gateway_key]["cold_start_calls"] += row.value
+                elif row.metric_name == GATEWAY_OPERATION_FAILURES.name:
+                    gateway_grouped[gateway_key]["failures"] += row.value
+                elif row.metric_name == GATEWAY_OPERATION_DURATION_MS.name:
+                    gateway_grouped[gateway_key]["duration_ms"] += row.value
         ordered_rows = sorted(
             (
                 ObservabilityBreakdownRow(
@@ -203,6 +257,34 @@ class MetricsQueryService:
             ),
             key=lambda item: (-item.input_tokens, -item.tool_calls, item.role_id),
         )
+        ordered_gateway_rows = sorted(
+            (
+                ObservabilityGatewayBreakdownRow(
+                    gateway_operation=gateway_operation,
+                    gateway_phase=gateway_phase,
+                    gateway_transport=gateway_transport,
+                    calls=values["calls"],
+                    failures=values["failures"],
+                    success_rate=(
+                        (values["calls"] - values["failures"]) / values["calls"]
+                        if values["calls"] > 0
+                        else 0
+                    ),
+                    avg_duration_ms=(
+                        values["duration_ms"] / values["calls"]
+                        if values["calls"] > 0
+                        else 0
+                    ),
+                    cold_start_calls=values["cold_start_calls"],
+                )
+                for (
+                    gateway_operation,
+                    gateway_phase,
+                    gateway_transport,
+                ), values in gateway_grouped.items()
+            ),
+            key=lambda item: (-item.calls, item.gateway_operation, item.gateway_phase),
+        )
         return ObservabilityBreakdown(
             scope=selector.scope,
             scope_id=scope_id if selector.scope != MetricScope.GLOBAL else "",
@@ -213,6 +295,7 @@ class MetricsQueryService:
             ),
             rows=tuple(ordered_rows),
             role_rows=tuple(ordered_role_rows),
+            gateway_rows=tuple(ordered_gateway_rows),
         )
 
 
@@ -256,6 +339,38 @@ def _build_trends(
     return tuple(trend_points)
 
 
+def _build_gateway_summary(rows: tuple[MetricPointRecord, ...]) -> dict[str, float]:
+    summary: defaultdict[str, float] = defaultdict(float)
+    for row in rows:
+        tags = _parse_tags(row.tags_json)
+        if tags.gateway_phase == "request":
+            if row.metric_name == GATEWAY_OPERATIONS.name:
+                summary["request_calls"] += row.value
+                if tags.gateway_cold_start == "true":
+                    summary["cold_start_calls"] += row.value
+                if _is_mcp_gateway_operation(tags.gateway_operation):
+                    summary["mcp_request_calls"] += row.value
+            elif row.metric_name == GATEWAY_OPERATION_FAILURES.name:
+                summary["request_failures"] += row.value
+            elif row.metric_name == GATEWAY_OPERATION_DURATION_MS.name:
+                summary["request_duration_ms"] += row.value
+        if tags.gateway_operation != "session_prompt":
+            continue
+        if tags.gateway_phase == "run_start":
+            if row.metric_name == GATEWAY_OPERATIONS.name:
+                summary["prompt_run_start_calls"] += row.value
+            elif row.metric_name == GATEWAY_OPERATION_DURATION_MS.name:
+                summary["prompt_run_start_duration_ms"] += row.value
+            continue
+        if tags.gateway_phase != "first_update":
+            continue
+        if row.metric_name == GATEWAY_OPERATIONS.name:
+            summary["prompt_first_update_calls"] += row.value
+        elif row.metric_name == GATEWAY_OPERATION_DURATION_MS.name:
+            summary["prompt_first_update_duration_ms"] += row.value
+    return summary
+
+
 def _latest_metric_total(
     *,
     rows: tuple[MetricPointRecord, ...],
@@ -282,3 +397,12 @@ def _parse_tags(raw_tags: str) -> MetricTagSet:
         str(key): str(value) for key, value in parsed.items() if isinstance(key, str)
     }
     return MetricTagSet(**normalized)
+
+
+def _is_mcp_gateway_operation(gateway_operation: str) -> bool:
+    return gateway_operation in {
+        "mcp_connect",
+        "mcp_message",
+        "mcp_disconnect",
+        "mcp_bridge_request",
+    }

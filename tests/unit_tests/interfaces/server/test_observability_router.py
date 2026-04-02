@@ -9,6 +9,7 @@ from agent_teams.metrics import (
     MetricScope,
     ObservabilityBreakdown,
     ObservabilityBreakdownRow,
+    ObservabilityGatewayBreakdownRow,
     ObservabilityKpiSet,
     ObservabilityOverview,
     ObservabilityRoleBreakdownRow,
@@ -31,6 +32,8 @@ class _FakeMetricsService:
                 uncached_input_tokens=9,
                 retrieval_searches=4,
                 retrieval_failure_rate=0.25,
+                gateway_calls=5,
+                gateway_avg_duration_ms=120,
             ),
             trends=(
                 ObservabilityTrendPoint(
@@ -62,6 +65,15 @@ class _FakeMetricsService:
                     tool_success_rate=1.0,
                 ),
             ),
+            gateway_rows=(
+                ObservabilityGatewayBreakdownRow(
+                    gateway_operation="session_prompt",
+                    gateway_phase="request",
+                    gateway_transport="stdio",
+                    calls=2,
+                    success_rate=1.0,
+                ),
+            ),
         )
 
 
@@ -82,6 +94,7 @@ def test_observability_overview_route_returns_payload() -> None:
     assert response.json()["kpis"]["steps"] == 3
     assert response.json()["kpis"]["retrieval_searches"] == 4
     assert response.json()["kpis"]["uncached_input_tokens"] == 9
+    assert response.json()["kpis"]["gateway_calls"] == 5
 
 
 def test_observability_breakdowns_route_returns_role_rows() -> None:
@@ -92,6 +105,7 @@ def test_observability_breakdowns_route_returns_role_rows() -> None:
     assert response.status_code == 200
     assert response.json()["rows"][0]["tool_name"] == "shell"
     assert response.json()["role_rows"][0]["role_id"] == "coordinator"
+    assert response.json()["gateway_rows"][0]["gateway_operation"] == "session_prompt"
 
 
 def test_observability_breakdowns_route_requires_scope_id() -> None:

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 import json
 import os
 from pathlib import Path
 import re
+import threading
 import time
+from typing import cast
 from uuid import uuid4
 
 import httpx
+from agent_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
+from agent_teams.gateway.gateway_cli import _build_acp_stdio_runtime
+from pydantic import JsonValue
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
@@ -19,6 +25,12 @@ from integration_tests.support.environment import IntegrationEnvironment
 
 _CONNECTED_LABEL = re.compile(r"(Backend Connected|后端已连接)")
 _PROBE_SUCCESS_LABEL = re.compile(r"(Connected|连接成功)")
+_GATEWAY_SIGNALS_LABEL = re.compile(r"(Gateway Signals|Gateway 信号)")
+_GATEWAY_BREAKDOWN_LABEL = re.compile(r"(Gateway Breakdown|Gateway 拆解)")
+_GATEWAY_CALLS_LABEL = re.compile(r"(Gateway Calls|Gateway 调用)")
+_GATEWAY_FIRST_UPDATE_LABEL = re.compile(r"(Prompt First Update ms|首个更新 ms)")
+_GATEWAY_LATENCY_LABEL = re.compile(r"(Gateway Latency|Gateway 时延)")
+_GATEWAY_COLD_STARTS_LABEL = re.compile(r"(Gateway Cold Starts|Gateway 冷启动)")
 _LANG_PATTERN = re.compile(r"^(en|en-US|zh-CN)$")
 _VIEWPORT_WIDTH = 1600
 _VIEWPORT_HEIGHT = 1200
@@ -185,6 +197,7 @@ def test_browser_shell_settings_and_session_management(
     integration_env: IntegrationEnvironment,
 ) -> None:
     page = browser_page
+    _emit_gateway_observability_probe()
     _open_app(page, integration_env)
 
     baseline_session_ids = set(_session_ids(page))
@@ -338,6 +351,40 @@ def test_browser_shell_settings_and_session_management(
         )
     ):
         page.locator("#observability-global-btn").click()
+
+    gateway_signals = page.locator('[data-observability-section="gateway-signals"]')
+    expect(gateway_signals).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(gateway_signals).to_contain_text(
+        _GATEWAY_SIGNALS_LABEL,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator('[data-observability-metric="gateway_calls"]')).to_contain_text(
+        _GATEWAY_CALLS_LABEL, timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(page.locator('[data-observability-metric="gateway_calls"]')).to_contain_text(
+        "3", timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(
+        page.locator('[data-observability-metric="gateway_prompt_avg_first_update_ms"]')
+    ).to_contain_text(_GATEWAY_FIRST_UPDATE_LABEL, timeout=_WAIT_TIMEOUT_MS)
+
+    gateway_breakdowns = page.locator(
+        '[data-observability-section="gateway-breakdowns"]'
+    )
+    expect(gateway_breakdowns).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(gateway_breakdowns).to_contain_text(
+        _GATEWAY_BREAKDOWN_LABEL,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(
+        page.locator('[data-observability-chart="gateway-breakdown-calls"]')
+    ).to_contain_text(_GATEWAY_CALLS_LABEL, timeout=_WAIT_TIMEOUT_MS)
+    expect(
+        page.locator('[data-observability-chart="gateway-breakdown-duration"]')
+    ).to_contain_text(_GATEWAY_LATENCY_LABEL, timeout=_WAIT_TIMEOUT_MS)
+    expect(
+        page.locator('[data-observability-chart="gateway-breakdown-cold-starts"]')
+    ).to_contain_text(_GATEWAY_COLD_STARTS_LABEL, timeout=_WAIT_TIMEOUT_MS)
 
     page.locator("#observability-back-btn").click()
     expect(page.locator("#observability-view")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
@@ -1122,6 +1169,108 @@ def _project_card(page: Page, label: str, *, automation: bool = False):
         else ".project-card:not(.automation-project-card)"
     )
     return page.locator(selector).filter(has_text=label).first
+
+
+def _emit_gateway_observability_probe() -> None:
+    previous_computer_runtime = os.environ.get("AGENT_TEAMS_COMPUTER_RUNTIME")
+    os.environ["AGENT_TEAMS_COMPUTER_RUNTIME"] = "fake"
+    try:
+        runtime = _build_acp_stdio_runtime()
+        server = cast(AcpGatewayServer, getattr(runtime, "_server"))
+
+        async def discard_notify(_message: dict[str, JsonValue]) -> None:
+            return None
+
+        server.set_notify(discard_notify)
+        failure: list[BaseException] = []
+
+        def runner() -> None:
+            try:
+                asyncio.run(_run_gateway_observability_probe(server))
+            except BaseException as exc:  # pragma: no cover - re-raised below
+                failure.append(exc)
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join(timeout=30.0)
+        if thread.is_alive():
+            raise AssertionError(
+                "Timed out while emitting gateway observability probe."
+            )
+        if failure:
+            raise failure[0]
+    finally:
+        if previous_computer_runtime is None:
+            os.environ.pop("AGENT_TEAMS_COMPUTER_RUNTIME", None)
+        else:
+            os.environ["AGENT_TEAMS_COMPUTER_RUNTIME"] = previous_computer_runtime
+
+
+async def _run_gateway_observability_probe(server: AcpGatewayServer) -> None:
+    initialize_response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": 2},
+        },
+        request_context=_AcpRequestContext(
+            cold_start=True,
+            framed_input=False,
+            runtime_uptime_ms=0,
+        ),
+    )
+    assert isinstance(initialize_response, dict)
+    initialize_result = initialize_response.get("result")
+    assert isinstance(initialize_result, dict)
+
+    session_response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/new",
+            "params": {
+                "cwd": str(Path(__file__).resolve().parents[3]),
+            },
+        },
+        request_context=_AcpRequestContext(
+            cold_start=False,
+            framed_input=False,
+            runtime_uptime_ms=1,
+        ),
+    )
+    assert isinstance(session_response, dict)
+    session_result = session_response.get("result")
+    assert isinstance(session_result, dict)
+    session_id = session_result.get("sessionId")
+    assert isinstance(session_id, str)
+    assert session_id.strip()
+
+    prompt_response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [
+                    {
+                        "type": "text",
+                        "text": "请用一句话确认 gateway observability 浏览器视图已接通。",
+                    }
+                ],
+            },
+        },
+        request_context=_AcpRequestContext(
+            cold_start=False,
+            framed_input=False,
+            runtime_uptime_ms=2,
+        ),
+    )
+    assert isinstance(prompt_response, dict)
+    prompt_result = prompt_response.get("result")
+    assert isinstance(prompt_result, dict)
+    assert prompt_result.get("runStatus") == "completed"
 
 
 def _resolve_playwright_browser_root() -> Path:
