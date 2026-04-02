@@ -6,7 +6,11 @@ from typing import cast
 import httpx
 import pytest
 
-from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.tools.runtime import ToolExecutionError
 from agent_teams.tools.web_tools import websearch
 
@@ -49,7 +53,7 @@ def test_build_exa_search_request_uses_advanced_tool_defaults() -> None:
     assert arguments["highlightsQuery"] == "latest ai news"
 
 
-def test_build_provider_search_request_uses_provider_adapter() -> None:
+def test_build_provider_search_request_uses_exa_provider_adapter() -> None:
     prepared = websearch.build_provider_search_request(
         config=WebConfig(provider=WebProvider.EXA, api_key="secret"),
         request=websearch.WebSearchRequest(
@@ -71,27 +75,31 @@ def test_build_provider_search_request_uses_provider_adapter() -> None:
     assert "excludeDomains" not in arguments
 
 
-def test_build_search_result_projection_only_keeps_sanitized_internal_metadata() -> (
-    None
-):
+def test_build_search_result_projection_keeps_sanitized_internal_metadata() -> None:
     projection = websearch.build_search_result_projection(
         query="latest ai news",
-        provider=WebProvider.EXA,
-        hits=(
-            websearch.WebSearchHit(
-                title="Python Docs",
-                url="https://docs.python.org",
+        result=websearch.SearchExecutionResult(
+            provider=WebProvider.SEARXNG,
+            endpoint_host="search.example.test",
+            upstream_tool="search",
+            hits=(
+                websearch.WebSearchHit(
+                    title="Python Docs",
+                    url="https://docs.python.org",
+                ),
             ),
+            internal_data={
+                "fallback_from": "exa",
+                "primary_error_type": "rate_limited",
+                "searxng_instance_url": "https://search.example.test/",
+            },
         ),
         duration_ms=42,
-        endpoint_host="mcp.exa.ai",
-        upstream_tool="web_search_advanced_exa",
-        upstream_search_time=1.25,
     )
 
     assert projection.visible_data == {
         "query": "latest ai news",
-        "provider": "exa",
+        "provider": "searxng",
         "hits": [
             {
                 "title": "Python Docs",
@@ -106,9 +114,11 @@ def test_build_search_result_projection_only_keeps_sanitized_internal_metadata()
         "duration_ms": 42,
     }
     assert projection.internal_data == {
-        "endpoint_host": "mcp.exa.ai",
-        "upstream_tool": "web_search_advanced_exa",
-        "upstream_search_time": 1.25,
+        "endpoint_host": "search.example.test",
+        "upstream_tool": "search",
+        "fallback_from": "exa",
+        "primary_error_type": "rate_limited",
+        "searxng_instance_url": "https://search.example.test/",
     }
 
 
@@ -160,56 +170,91 @@ def test_extract_search_response_falls_back_to_legacy_text_blocks() -> None:
     assert extracted.hits[1].author is None
 
 
-def test_extract_search_response_scans_later_sse_frames_for_real_results() -> None:
-    response_text = (
-        "event: message\n"
-        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":"}]}}\n'
-        "event: message\n"
-        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":[{\\"title\\":\\"Python Docs\\",\\"url\\":\\"https://docs.python.org\\"}],\\"searchTime\\":1.25}","_meta":{"searchTime":1.25}}]}}\n'
+def test_build_searxng_hits_filters_domains_and_result_count() -> None:
+    hits = websearch.build_searxng_hits(
+        response_payload=websearch.SearxngSearchResponsePayload(
+            results=(
+                websearch.SearxngSearchResultPayload(
+                    title="Allowed",
+                    url="https://docs.python.org/3/",
+                    content="Docs",
+                ),
+                websearch.SearxngSearchResultPayload(
+                    title="Blocked",
+                    url="https://example.com",
+                    content="Nope",
+                ),
+                websearch.SearxngSearchResultPayload(
+                    title="Subdomain",
+                    url="https://blog.docs.python.org/post",
+                    content="Post",
+                ),
+            )
+        ),
+        request=websearch.WebSearchRequest(
+            query="python",
+            num_results=1,
+            allowed_domains=("docs.python.org",),
+        ),
     )
 
-    extracted = websearch.extract_search_response(response_text)
-
-    assert extracted.upstream_search_time == 1.25
-    assert len(extracted.hits) == 1
-    assert extracted.hits[0].title == "Python Docs"
-    assert extracted.hits[0].url == "https://docs.python.org"
-
-
-def test_extract_search_response_skips_invalid_sse_frames_before_valid_results() -> (
-    None
-):
-    response_text = (
-        "event: message\n"
-        "data: [DONE]\n"
-        "event: message\n"
-        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":[{\\"title\\":\\"Python Docs\\",\\"url\\":\\"https://docs.python.org\\"}],\\"searchTime\\":1.25}","_meta":{"searchTime":1.25}}]}}\n'
+    assert hits == (
+        websearch.WebSearchHit(
+            title="Allowed",
+            url="https://docs.python.org/3/",
+            text="Docs",
+        ),
     )
 
-    extracted = websearch.extract_search_response(response_text)
 
-    assert extracted.upstream_search_time == 1.25
-    assert len(extracted.hits) == 1
-    assert extracted.hits[0].title == "Python Docs"
-    assert extracted.hits[0].url == "https://docs.python.org"
-
-
-def test_extract_search_response_preserves_hits_when_later_frame_only_has_metadata() -> (
-    None
-):
-    response_text = (
-        "event: message\n"
-        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":[{\\"title\\":\\"Python Docs\\",\\"url\\":\\"https://docs.python.org\\"}],\\"searchTime\\":1.25}","_meta":{"searchTime":1.25}}]}}\n'
-        "event: message\n"
-        'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"searchTime\\":2.5}","_meta":{"searchTime":2.5}}]}}\n'
+def test_select_public_searxng_instances_filters_and_sorts_candidates() -> None:
+    payload = websearch.SearxngCatalogPayload(
+        instances={
+            "https://slow.example/": websearch.SearxngCatalogInstancePayload(
+                generator="searxng",
+                main=True,
+                analytics=False,
+                http=websearch.SearxngCatalogHttpPayload(status_code=200),
+                timing=websearch.SearxngCatalogTimingPayload(
+                    initial=websearch.SearxngCatalogTimingEntry(
+                        all=websearch.SearxngCatalogTimedValue(value=0.8)
+                    )
+                ),
+            ),
+            "https://fast.example/": websearch.SearxngCatalogInstancePayload(
+                generator="searxng",
+                main=True,
+                analytics=False,
+                http=websearch.SearxngCatalogHttpPayload(status_code=200),
+                timing=websearch.SearxngCatalogTimingPayload(
+                    initial=websearch.SearxngCatalogTimingEntry(
+                        all=websearch.SearxngCatalogTimedValue(value=0.2)
+                    )
+                ),
+            ),
+            "https://analytics.example/": websearch.SearxngCatalogInstancePayload(
+                generator="searxng",
+                main=True,
+                analytics=True,
+                http=websearch.SearxngCatalogHttpPayload(status_code=200),
+            ),
+        }
     )
 
-    extracted = websearch.extract_search_response(response_text)
+    selected = websearch.select_public_searxng_instances(payload)
 
-    assert extracted.upstream_search_time == 2.5
-    assert len(extracted.hits) == 1
-    assert extracted.hits[0].title == "Python Docs"
-    assert extracted.hits[0].url == "https://docs.python.org"
+    assert selected == [
+        websearch.SearxngInstanceCandidate(
+            base_url="https://fast.example/",
+            endpoint_host="fast.example",
+            source="public_pool",
+        ),
+        websearch.SearxngInstanceCandidate(
+            base_url="https://slow.example/",
+            endpoint_host="slow.example",
+            source="public_pool",
+        ),
+    ]
 
 
 @pytest.mark.asyncio
@@ -239,4 +284,89 @@ async def test_fetch_exa_search_response_classifies_http_errors() -> None:
         "provider": "exa",
         "endpoint_host": "mcp.exa.ai",
         "status_code": 500,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_to_searxng_after_exa_failure() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(429, request=request, text="limit reached")
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "title": "Python Docs",
+                        "url": "https://docs.python.org/3/",
+                        "content": "Reference",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(
+                provider=WebProvider.EXA,
+                fallback_provider=WebFallbackProvider.SEARXNG,
+                searxng_instance_url="https://search.example.test/",
+            ),
+            request=websearch.WebSearchRequest(query="python"),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.SEARXNG
+    assert result.endpoint_host == "search.example.test"
+    assert result.internal_data == {
+        "searxng_instance_url": "https://search.example.test/",
+        "instance_source": "configured",
+        "fallback_from": "exa",
+        "primary_error_type": "rate_limited",
+    }
+    assert result.hits == (
+        websearch.WebSearchHit(
+            title="Python Docs",
+            url="https://docs.python.org/3/",
+            text="Reference",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_preserves_primary_error_when_fallback_also_fails() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(500, request=request, text="exa down")
+        return httpx.Response(503, request=request, text="searxng down")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await websearch.execute_search(
+                client=client,
+                config=WebConfig(
+                    provider=WebProvider.EXA,
+                    fallback_provider=WebFallbackProvider.SEARXNG,
+                    searxng_instance_url="https://search.example.test/",
+                ),
+                request=websearch.WebSearchRequest(query="python"),
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "upstream_unavailable"
+    assert exc_info.value.details == {
+        "provider": "exa",
+        "endpoint_host": "mcp.exa.ai",
+        "status_code": 500,
+        "fallback_error_type": "upstream_unavailable",
+        "fallback_endpoint_host": "search.example.test",
+        "fallback_attempt_count": 1,
     }

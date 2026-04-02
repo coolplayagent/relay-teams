@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.env.web_secret_store import WebSecretStore
 
@@ -47,6 +51,8 @@ def test_get_web_config_defaults_to_exa_without_api_key(tmp_path: Path) -> None:
     assert service.get_web_config() == WebConfig(
         provider=WebProvider.EXA,
         api_key=None,
+        fallback_provider=None,
+        searxng_instance_url=None,
     )
 
 
@@ -70,11 +76,15 @@ def test_save_web_config_persists_provider_and_keyring_secret(
         WebConfig(
             provider=WebProvider.EXA,
             api_key="secret",
+            fallback_provider=WebFallbackProvider.SEARXNG,
+            searxng_instance_url="https://search.example.test/",
         )
     )
 
     assert (config_dir / ".env").read_text(encoding="utf-8") == (
         "AGENT_TEAMS_WEB_PROVIDER=exa\n"
+        "AGENT_TEAMS_WEB_FALLBACK_PROVIDER=searxng\n"
+        "AGENT_TEAMS_WEB_SEARXNG_INSTANCE_URL=https://search.example.test/\n"
     )
     assert secret_store.get_api_key(config_dir) == "secret"
 
@@ -102,4 +112,30 @@ def test_save_web_config_removes_plaintext_api_key_from_env(
 
     assert (config_dir / ".env").read_text(encoding="utf-8") == (
         "AGENT_TEAMS_WEB_PROVIDER=exa\n"
+    )
+
+
+def test_get_web_config_reads_fallback_provider_and_instance_url(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text(
+        (
+            "AGENT_TEAMS_WEB_PROVIDER=exa\n"
+            "AGENT_TEAMS_WEB_FALLBACK_PROVIDER=searxng\n"
+            "AGENT_TEAMS_WEB_SEARXNG_INSTANCE_URL=https://search.example.test\n"
+        ),
+        encoding="utf-8",
+    )
+    service = WebConfigService(
+        config_dir=config_dir,
+        secret_store=_FakeWebSecretStore(),
+    )
+
+    assert service.get_web_config() == WebConfig(
+        provider=WebProvider.EXA,
+        api_key=None,
+        fallback_provider=WebFallbackProvider.SEARXNG,
+        searxng_instance_url="https://search.example.test/",
     )

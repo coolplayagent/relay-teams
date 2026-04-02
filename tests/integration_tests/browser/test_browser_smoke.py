@@ -580,6 +580,12 @@ def test_browser_settings_save_role_and_agent_configs(
     web_response = api_client.get("/api/system/configs/web")
     web_response.raise_for_status()
     initial_web_api_key = str(web_response.json().get("api_key") or "")
+    initial_web_fallback_provider = str(
+        web_response.json().get("fallback_provider") or ""
+    )
+    initial_web_searxng_instance_url = str(
+        web_response.json().get("searxng_instance_url") or ""
+    )
 
     github_response = api_client.get("/api/system/configs/github")
     github_response.raise_for_status()
@@ -593,6 +599,7 @@ def test_browser_settings_save_role_and_agent_configs(
     notification_enabled_id = "notif-run_stopped-enabled"
     notification_browser_id = "notif-run_stopped-browser"
     web_api_key = f"browser-web-{uuid4().hex[:8]}"
+    web_searxng_instance_url = "https://search.example.test/"
     github_token = f"ghp_browser_{uuid4().hex[:12]}"
     proxy_url = "http://127.0.0.1:7890"
     agent_id = f"browser_agent_{uuid4().hex[:8]}"
@@ -649,7 +656,17 @@ def test_browser_settings_save_role_and_agent_configs(
         initial_web_api_key,
         timeout=_WAIT_TIMEOUT_MS,
     )
+    expect(page.locator("#web-fallback-provider")).to_have_value(
+        initial_web_fallback_provider,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#web-searxng-instance-url")).to_have_value(
+        initial_web_searxng_instance_url,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    page.locator("#web-fallback-provider").select_option("searxng")
     page.locator("#web-api-key").fill(web_api_key)
+    page.locator("#web-searxng-instance-url").fill(web_searxng_instance_url)
     with page.expect_request(
         lambda request: (
             request.method == "PUT"
@@ -658,9 +675,22 @@ def test_browser_settings_save_role_and_agent_configs(
     ) as save_web_request_info:
         page.locator("#save-web-btn").click()
     web_payload = json.loads(save_web_request_info.value.post_data or "{}")
-    assert web_payload == {"provider": "exa", "api_key": web_api_key}
+    assert web_payload == {
+        "provider": "exa",
+        "api_key": web_api_key,
+        "fallback_provider": "searxng",
+        "searxng_instance_url": web_searxng_instance_url,
+    }
     expect(page.locator("#web-api-key")).to_have_value(
         web_api_key,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#web-fallback-provider")).to_have_value(
+        "searxng",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#web-searxng-instance-url")).to_have_value(
+        web_searxng_instance_url,
         timeout=_WAIT_TIMEOUT_MS,
     )
 
