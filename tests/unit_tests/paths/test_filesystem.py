@@ -2,18 +2,29 @@
 from __future__ import annotations
 
 import builtins
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from typing import cast
 
 import pytest
 
 from agent_teams.paths import filesystem
 
 
+def _windows_path(raw_path: str) -> Path:
+    return cast(Path, PureWindowsPath(raw_path))
+
+
 def test_to_filesystem_path_prefixes_long_windows_drive_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
-    long_path = Path("C:/") / ("nested/" * 40) / "file.txt"
+    long_path = cast(
+        Path,
+        PureWindowsPath("C:/")
+        / PureWindowsPath("nested")
+        / ("nested/" * 39)
+        / "file.txt",
+    )
 
     resolved = filesystem.to_filesystem_path(long_path)
 
@@ -25,7 +36,13 @@ def test_to_filesystem_path_prefixes_long_windows_unc_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
-    long_unc = Path("//server/share") / ("nested/" * 40) / "file.txt"
+    long_unc = cast(
+        Path,
+        PureWindowsPath("//server/share")
+        / PureWindowsPath("nested")
+        / ("nested/" * 39)
+        / "file.txt",
+    )
 
     resolved = filesystem.to_filesystem_path(long_unc)
 
@@ -38,7 +55,7 @@ def test_to_filesystem_path_leaves_short_windows_path_unchanged(
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
 
-    resolved = filesystem.to_filesystem_path(Path("C:/demo/file.txt"))
+    resolved = filesystem.to_filesystem_path(_windows_path("C:/demo/file.txt"))
 
     assert resolved == "C:\\demo\\file.txt"
 
@@ -54,7 +71,13 @@ def test_path_exists_uses_extended_length_path_for_windows_long_path(
         return True
 
     monkeypatch.setattr(filesystem.os.path, "exists", fake_exists)
-    long_path = Path("C:/") / ("nested/" * 40) / "file.txt"
+    long_path = cast(
+        Path,
+        PureWindowsPath("C:/")
+        / PureWindowsPath("nested")
+        / ("nested/" * 39)
+        / "file.txt",
+    )
 
     assert filesystem.path_exists(long_path) is True
     assert calls == [filesystem.to_filesystem_path(long_path)]
@@ -78,7 +101,10 @@ def test_iter_dir_paths_uses_extended_length_path_for_windows_long_path(
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
     calls: list[str] = []
-    long_dir = Path("C:/") / ("nested/" * 40)
+    long_dir = cast(
+        Path,
+        PureWindowsPath("C:/") / PureWindowsPath("nested") / ("nested/" * 39),
+    )
 
     def fake_scandir(path: str) -> _FakeScandir:
         calls.append(path)
@@ -108,7 +134,13 @@ def test_open_text_file_uses_extended_length_path_for_windows_long_path(
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
     calls: list[tuple[str, str, str, str | None]] = []
-    long_path = Path("C:/") / ("nested/" * 40) / "file.txt"
+    long_path = cast(
+        Path,
+        PureWindowsPath("C:/")
+        / PureWindowsPath("nested")
+        / ("nested/" * 39)
+        / "file.txt",
+    )
 
     def fake_open(
         path: str,
@@ -132,7 +164,10 @@ def test_make_dirs_uses_extended_length_path_for_windows_long_path(
 ) -> None:
     monkeypatch.setattr(filesystem.sys, "platform", "win32")
     calls: list[tuple[str, bool]] = []
-    long_dir = Path("C:/") / ("nested/" * 40)
+    long_dir = cast(
+        Path,
+        PureWindowsPath("C:/") / PureWindowsPath("nested") / ("nested/" * 39),
+    )
 
     def fake_makedirs(path: str, exist_ok: bool) -> None:
         calls.append((path, exist_ok))
