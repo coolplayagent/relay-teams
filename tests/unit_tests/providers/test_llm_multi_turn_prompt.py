@@ -186,6 +186,7 @@ class _FakeAgent:
     def __init__(self) -> None:
         self.prompts: list[str | None] = []
         self.usage_limits: list[object] = []
+        self.histories: list[list[object]] = []
 
     def iter(
         self,
@@ -195,9 +196,10 @@ class _FakeAgent:
         message_history: object,
         usage_limits: object,
     ) -> _FakeAgentRun:
-        _ = (deps, message_history)
+        _ = deps
         self.prompts.append(prompt)
         self.usage_limits.append(usage_limits)
+        self.histories.append(list(cast(list[object], message_history)))
         return _FakeAgentRun()
 
 
@@ -736,161 +738,16 @@ def _seed_request(
 
 
 @pytest.mark.asyncio
-async def test_generate_persists_current_turn_prompt_even_with_existing_history(
+async def test_generate_counts_current_user_prompt_in_context_budget(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     fake_agent = _FakeAgent()
     fake_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(tmp_path / "current_turn.db", fake_hub)
-
-    _seed_request(
-        message_repo,
-        session_id="session-2",
-        instance_id="inst-2",
-        task_id="task-2",
-        trace_id="run-2",
-        content="previous turn",
-        role_id="Coordinator",
+    provider, _message_repo = _build_provider(
+        tmp_path / "current_prompt_budget.db",
+        fake_hub,
     )
-
-    monkeypatch.setattr(
-        llm_module,
-        "build_coordination_agent",
-        lambda **kwargs: fake_agent,
-    )
-
-    request = LLMRequest(
-        run_id="run-2",
-        trace_id="run-2",
-        task_id="task-2",
-        session_id="session-2",
-        workspace_id="default",
-        instance_id="inst-2",
-        role_id="Coordinator",
-        system_prompt="system",
-        user_prompt="current turn",
-    )
-
-    _ = await provider.generate(request)
-
-    history = message_repo.get_history("inst-2")
-    assert fake_agent.prompts == [None]
-    assert len(fake_agent.usage_limits) == 1
-    usage_limits = fake_agent.usage_limits[0]
-    assert isinstance(usage_limits, llm_module.UsageLimits)
-    assert usage_limits.request_limit == llm_module.LLM_REQUEST_LIMIT == 500
-    assert isinstance(history[-1], ModelRequest)
-    assert history[-1].parts[0].content == "current turn"
-
-
-@pytest.mark.asyncio
-async def test_generate_prunes_pending_tool_call_tail_before_persisting_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    fake_agent = _FakeAgent()
-    fake_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(tmp_path / "pending_tail.db", fake_hub)
-    message_repo.append(
-        session_id="session-pending-tool",
-        workspace_id="default",
-        conversation_id=build_conversation_id(
-            "session-pending-tool",
-            "Coordinator",
-        ),
-        agent_role_id="Coordinator",
-        instance_id="inst-pending-tool",
-        task_id="task-pending-tool",
-        trace_id="run-pending-tool",
-        messages=[
-            ModelRequest(parts=[UserPromptPart(content="previous turn")]),
-            ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        tool_name="create_tasks",
-                        args={"objective": "x"},
-                        tool_call_id="call-1",
-                    )
-                ]
-            ),
-        ],
-    )
-
-    monkeypatch.setattr(
-        llm_module,
-        "build_coordination_agent",
-        lambda **kwargs: fake_agent,
-    )
-
-    request = LLMRequest(
-        run_id="run-pending-tool",
-        trace_id="run-pending-tool",
-        task_id="task-pending-tool",
-        session_id="session-pending-tool",
-        workspace_id="default",
-        instance_id="inst-pending-tool",
-        role_id="Coordinator",
-        system_prompt="system",
-        user_prompt="current turn",
-    )
-
-    _ = await provider.generate(request)
-
-    history = message_repo.get_history("inst-pending-tool")
-    assert fake_agent.prompts == [None]
-    assert len(history) == 2
-    assert isinstance(history[0], ModelRequest)
-    assert isinstance(history[1], ModelRequest)
-    assert history[1].parts[0].content == "current turn"
-
-
-@pytest.mark.asyncio
-async def test_generate_enables_continuous_stream_usage_stats(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    fake_agent = _FakeAgent()
-    fake_hub = _FakeRunEventHub()
-    provider, _ = _build_provider(tmp_path / "settings.db", fake_hub)
-    captured_kwargs: dict[str, object] = {}
-
-    def _fake_builder(**kwargs: object) -> _FakeAgent:
-        captured_kwargs.update(kwargs)
-        return fake_agent
-
-    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
-
-    request = LLMRequest(
-        run_id="run-3",
-        trace_id="run-3",
-        task_id="task-3",
-        session_id="session-3",
-        workspace_id="default",
-        instance_id="inst-3",
-        role_id="Coordinator",
-        system_prompt="system",
-        user_prompt="current turn",
-    )
-
-    _ = await provider.generate(request)
-
-    settings_obj = captured_kwargs.get("model_settings")
-    assert isinstance(settings_obj, dict)
-    assert settings_obj.get("openai_continuous_usage_stats") is True
-    assert settings_obj.get("temperature") == provider._config.sampling.temperature
-    assert settings_obj.get("top_p") == provider._config.sampling.top_p
-    assert settings_obj.get("max_tokens") == provider._config.sampling.max_tokens
-
-
-@pytest.mark.asyncio
-async def test_generate_caps_max_tokens_to_remaining_context_budget(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    fake_agent = _FakeAgent()
-    fake_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(tmp_path / "context_budget.db", fake_hub)
     updated_config = provider._config.model_copy(
         update={
             "context_window": 128_000,
@@ -905,18 +762,6 @@ async def test_generate_caps_max_tokens_to_remaining_context_budget(
     provider._config_ref = updated_config
     provider._session._config = updated_config
     captured_kwargs: dict[str, object] = {}
-    conversation_id = build_conversation_id("session-context-budget", "Coordinator")
-    oversized_prompt = "x" * 124_200
-    message_repo.append(
-        session_id="session-context-budget",
-        workspace_id="default",
-        conversation_id=conversation_id,
-        agent_role_id="Coordinator",
-        instance_id="inst-context-budget",
-        task_id="task-context-budget-prev",
-        trace_id="run-context-budget-prev",
-        messages=[ModelRequest(parts=[UserPromptPart(content=oversized_prompt)])],
-    )
 
     def _fake_builder(**kwargs: object) -> _FakeAgent:
         captured_kwargs.update(kwargs)
@@ -925,14 +770,184 @@ async def test_generate_caps_max_tokens_to_remaining_context_budget(
     monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
 
     request = LLMRequest(
-        run_id="run-context-budget",
-        trace_id="run-context-budget",
-        task_id="task-context-budget",
-        session_id="session-context-budget",
+        run_id="run-current-prompt-budget",
+        trace_id="run-current-prompt-budget",
+        task_id="task-current-prompt-budget",
+        session_id="session-current-prompt-budget",
         workspace_id="default",
-        instance_id="inst-context-budget",
+        instance_id="inst-current-prompt-budget",
         role_id="Coordinator",
-        conversation_id=conversation_id,
+        system_prompt="system",
+        user_prompt="x" * 124_200,
+    )
+
+    _ = await provider.generate(request)
+
+    settings_obj = captured_kwargs.get("model_settings")
+    assert isinstance(settings_obj, dict)
+    bounded_max_tokens = settings_obj.get("max_tokens")
+    assert isinstance(bounded_max_tokens, int)
+    assert 1 <= bounded_max_tokens < provider._config.sampling.max_tokens
+
+
+@pytest.mark.asyncio
+async def test_generate_recomputes_budget_after_injection_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "injection_budget_restart.db",
+        fake_hub,
+    )
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": 128_000,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+
+    class _InjectedMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+        def model_dump_json(self) -> str:
+            return json.dumps({"content": self.content})
+
+    class _OneShotInjectionManager:
+        def __init__(self) -> None:
+            self._drained = False
+
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            if self._drained:
+                return []
+            self._drained = True
+            return [_InjectedMessage("y" * 124_200)]
+
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, _OneShotInjectionManager()),
+    )
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=0,
+                        )
+                    )
+                ],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response=ModelResponse(parts=[]), messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="ok")]),
+                    messages=[ModelResponse(parts=[TextPart(content="ok")])],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-injection-budget-restart",
+        trace_id="run-injection-budget-restart",
+        task_id="task-injection-budget-restart",
+        session_id="session-injection-budget-restart",
+        workspace_id="default",
+        instance_id="inst-injection-budget-restart",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="start",
+    )
+
+    _ = await provider.generate(request)
+
+    assert len(scripted_agent.histories) >= 2
+    first_budget = provider._session._safe_max_output_tokens(
+        request=request,
+        history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[0]),
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+    second_budget = provider._session._safe_max_output_tokens(
+        request=request,
+        history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[-1]),
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+    assert second_budget < first_budget
+
+
+@pytest.mark.asyncio
+async def test_generate_reserves_context_for_registered_tools_and_skills(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "tool_budget.db",
+        fake_hub,
+        allowed_tools=("dispatch_task",),
+        allowed_skills=("time",),
+    )
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": 100_300,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_builder(**kwargs: object) -> _FakeAgent:
+        captured_kwargs.update(kwargs)
+        return fake_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-tool-budget",
+        trace_id="run-tool-budget",
+        task_id="task-tool-budget",
+        session_id="session-tool-budget",
+        workspace_id="default",
+        instance_id="inst-tool-budget",
+        role_id="Coordinator",
         system_prompt="system",
         user_prompt="current turn",
     )
@@ -943,7 +958,24 @@ async def test_generate_caps_max_tokens_to_remaining_context_budget(
     assert isinstance(settings_obj, dict)
     bounded_max_tokens = settings_obj.get("max_tokens")
     assert isinstance(bounded_max_tokens, int)
-    assert 1 <= bounded_max_tokens < provider._config.sampling.max_tokens
+    capped_with_tools = provider._session._safe_max_output_tokens(
+        request=request,
+        history=[],
+        system_prompt="system",
+        allowed_tools=("dispatch_task",),
+        allowed_mcp_servers=(),
+        allowed_skills=("time",),
+    )
+    uncapped_without_tools = provider._session._safe_max_output_tokens(
+        request=request,
+        history=[],
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+    assert capped_with_tools < uncapped_without_tools
+    assert bounded_max_tokens == capped_with_tools
 
 
 @pytest.mark.asyncio

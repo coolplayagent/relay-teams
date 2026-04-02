@@ -329,30 +329,26 @@ class AgentLlmSession:
             conversation_id=resolved_conversation_id,
             system_prompt=agent_system_prompt,
         )
-        model_settings: OpenAIChatModelSettings = {
-            # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
-            # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
-            "openai_continuous_usage_stats": True,
-            "temperature": self._config.sampling.temperature,
-            "top_p": self._config.sampling.top_p,
-            "max_tokens": self._safe_max_output_tokens(
-                history=history,
-                system_prompt=agent_system_prompt,
-            ),
-        }
-        if request.thinking.enabled and request.thinking.effort is not None:
-            model_settings["openai_reasoning_effort"] = request.thinking.effort
+        allowed_tools = _resolve_allowed_tools(
+            self._tool_registry,
+            self._allowed_tools,
+            session_id=request.session_id,
+        )
+        model_settings = self._build_model_settings(
+            request=request,
+            history=history,
+            system_prompt=agent_system_prompt,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=self._allowed_mcp_servers,
+            allowed_skills=self._allowed_skills,
+        )
         agent = build_coordination_agent(
             model_name=self._config.model,
             base_url=self._config.base_url,
             api_key=self._config.api_key,
             headers=self._config.headers,
             system_prompt=agent_system_prompt,
-            allowed_tools=_resolve_allowed_tools(
-                self._tool_registry,
-                self._allowed_tools,
-                session_id=request.session_id,
-            ),
+            allowed_tools=allowed_tools,
             model_settings=model_settings,
             model_profile=resolve_openai_chat_model_profile(
                 base_url=self._config.base_url,
@@ -617,9 +613,31 @@ class AgentLlmSession:
                             )
                             attempt_messages_committed = True
                             # Restart iter() with injected messages appended to committed history
-                            history = self._filter_model_messages(
-                                self._message_repo.get_history_for_conversation(
-                                    resolved_conversation_id
+                            history = self._truncate_history_to_safe_boundary(
+                                self._filter_model_messages(
+                                    self._message_repo.get_history_for_conversation(
+                                        resolved_conversation_id
+                                    )
+                                )
+                            )
+                            history = await self._maybe_compact_history(
+                                request=request,
+                                history=history,
+                                conversation_id=resolved_conversation_id,
+                            )
+                            agent_system_prompt = self._inject_compaction_summary(
+                                session_id=request.session_id,
+                                conversation_id=resolved_conversation_id,
+                                system_prompt=request.system_prompt,
+                            )
+                            model_settings.update(
+                                self._build_model_settings(
+                                    request=request,
+                                    history=history,
+                                    system_prompt=agent_system_prompt,
+                                    allowed_tools=allowed_tools,
+                                    allowed_mcp_servers=self._allowed_mcp_servers,
+                                    allowed_skills=self._allowed_skills,
                                 )
                             )
                             seen_count = 0
@@ -1843,11 +1861,44 @@ class AgentLlmSession:
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
 
+    def _build_model_settings(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+        system_prompt: str,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> OpenAIChatModelSettings:
+        model_settings: OpenAIChatModelSettings = {
+            # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
+            # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
+            "openai_continuous_usage_stats": True,
+            "temperature": self._config.sampling.temperature,
+            "top_p": self._config.sampling.top_p,
+            "max_tokens": self._safe_max_output_tokens(
+                request=request,
+                history=history,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                allowed_mcp_servers=allowed_mcp_servers,
+                allowed_skills=allowed_skills,
+            ),
+        }
+        if request.thinking.enabled and request.thinking.effort is not None:
+            model_settings["openai_reasoning_effort"] = request.thinking.effort
+        return model_settings
+
     def _safe_max_output_tokens(
         self,
         *,
+        request: LLMRequest,
         history: Sequence[ModelRequest | ModelResponse],
         system_prompt: str,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
     ) -> int:
         configured_max_tokens = self._config.sampling.max_tokens
         context_window = self._config.context_window
@@ -1858,11 +1909,51 @@ class AgentLlmSession:
         estimated_system_prompt_tokens = max(
             1, (len(system_prompt.encode("utf-8")) // 4) + 8
         )
-        reserved_tokens = estimated_history_tokens + estimated_system_prompt_tokens + 32
+        estimated_user_prompt_tokens = max(
+            0,
+            estimator.estimate_message_tokens(
+                ModelRequest(
+                    parts=[UserPromptPart(content=str(request.user_prompt or ""))]
+                )
+            )
+            if request.user_prompt is not None and str(request.user_prompt).strip()
+            else 0,
+        )
+        reserved_tokens = (
+            estimated_history_tokens
+            + estimated_system_prompt_tokens
+            + estimated_user_prompt_tokens
+            + self._estimated_tool_context_tokens(
+                allowed_tools=allowed_tools,
+                allowed_mcp_servers=allowed_mcp_servers,
+                allowed_skills=allowed_skills,
+            )
+            + 32
+        )
         available_output_tokens = context_window - reserved_tokens
         if available_output_tokens <= 0:
             return 1
         return max(1, min(configured_max_tokens, available_output_tokens))
+
+    def _estimated_tool_context_tokens(
+        self,
+        *,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> int:
+        if not allowed_tools and not allowed_mcp_servers and not allowed_skills:
+            return 0
+        reserved_chars = 0
+        for tool_name in allowed_tools:
+            descriptor = describe_builtin_tool(tool_name)
+            if descriptor is not None:
+                reserved_chars += 200
+                continue
+            reserved_chars += 600
+        reserved_chars += len(allowed_mcp_servers) * 1200
+        reserved_chars += len(allowed_skills) * 800
+        return max(0, (reserved_chars // 4) + 8)
 
     async def _maybe_compact_history(
         self,
