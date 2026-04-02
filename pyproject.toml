@@ -60,7 +60,12 @@ version = { attr = "agent_teams._version.__version__" }
   "logging/*.ini",
   "roles/*.md",
   "skills/*/SKILL.md",
-  "skills/*/scripts/*.py",
+  "skills/*/*.json",
+  "skills/*/*.md",
+  "skills/*/scripts/*",
+  "skills/*/scripts/**/*",
+  "skills/*/styles/*",
+  "skills/*/tests/*",
 ]
 "agent_teams.tools" = ["*/*.txt"]
 
@@ -78,3 +83,7 @@ default-groups = ["evals"]
 [tool.pyright]
 extraPaths = ["src", "tests"]
 typeCheckingMode = "standard"
+exclude = ["src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
+
+[tool.ruff]
+extend-exclude = ["src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]

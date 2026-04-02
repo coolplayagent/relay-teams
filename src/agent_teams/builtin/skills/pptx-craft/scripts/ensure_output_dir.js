@@ -1,39 +1,29 @@
 #!/usr/bin/env node
+/**
+ * 确保输出目录存在并返回绝对路径
+ */
 
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
-const outputDirArg = process.argv[2];
-const skillRoot = path.resolve(__dirname, "..");
+const OUTPUT_DIR = process.argv[2];
 
-function isSubpath(parentPath, childPath) {
-  const parent = path.resolve(parentPath);
-  const child = path.resolve(childPath);
-  return child === parent || child.startsWith(parent + path.sep);
-}
-
-if (!outputDirArg) {
-  console.error("Error: Missing output directory argument");
-  process.exit(1);
-}
-
-const resolvedPath = path.resolve(process.cwd(), outputDirArg);
+// 防护检查：拒绝已包含 pages 的路径
+const resolvedPath = path.resolve(OUTPUT_DIR);
 if (path.basename(resolvedPath) === "pages") {
   console.error("Error: Do not pass a path ending in 'pages' to this script");
   process.exit(1);
 }
 
-if (isSubpath(skillRoot, resolvedPath)) {
-  console.error(`Error: Refusing to create output inside the skill directory: ${resolvedPath}`);
-  process.exit(1);
-}
-
-const pagesDir = path.join(resolvedPath, "pages");
+// 始终在传入目录下创建 "pages" 子目录
+const pagesDir = path.join(OUTPUT_DIR, "pages");
 fs.mkdirSync(pagesDir, { recursive: true });
 
+// 验证目录存在
 if (!fs.existsSync(pagesDir) || !fs.statSync(pagesDir).isDirectory()) {
   console.error(`Error: Failed to create directory ${pagesDir}`);
   process.exit(1);
 }
 
+// 返回创建的 pages 目录（而非传入的 OUTPUT_DIR）
 console.log(path.resolve(pagesDir));
