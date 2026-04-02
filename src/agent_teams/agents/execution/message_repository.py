@@ -777,6 +777,7 @@ def _history_ends_with_user_prompt(
     ).strip()
     return combined == target
 
+
 def _normalize_message_for_persistence(message: ModelMessage) -> ModelMessage:
     if not isinstance(message, ModelResponse):
         return message
@@ -793,6 +794,8 @@ def _normalize_message_for_persistence(message: ModelMessage) -> ModelMessage:
     if not changed:
         return message
     return replace(message, parts=next_parts)
+
+
 def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
     history_rows: list[tuple[int, Sequence[ModelMessage]]] = []
     for row in rows:
