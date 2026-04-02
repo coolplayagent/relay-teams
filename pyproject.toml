@@ -59,13 +59,7 @@ version = { attr = "agent_teams._version.__version__" }
   "config/*.json",
   "logging/*.ini",
   "roles/*.md",
-  "skills/*/SKILL.md",
-  "skills/*/*.json",
-  "skills/*/*.md",
-  "skills/*/scripts/*",
-  "skills/*/scripts/**/*",
-  "skills/*/styles/*",
-  "skills/*/tests/*",
+  "skills/**/*",
 ]
 "agent_teams.tools" = ["*/*.txt"]
 
