@@ -379,6 +379,29 @@ def test_runtime_environment_prompt_uses_runtime_shell_summary(
     assert "powershell.exe" in prompt
 
 
+def test_runtime_environment_prompt_includes_current_date_without_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeDate:
+        @staticmethod
+        def today() -> object:
+            return type("_IsoDate", (), {"isoformat": lambda self: "2026-04-02"})()
+
+    monkeypatch.setattr(system_prompts, "date", _FakeDate)
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "- Current Date: 2026-04-02" in prompt
+    assert "2026-04-02T" not in prompt
+
+
 def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_context() -> (
     None
 ):

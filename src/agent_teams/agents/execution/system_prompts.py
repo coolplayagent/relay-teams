@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 import os
 import platform
 from collections.abc import Sequence
@@ -119,6 +120,7 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     """Gather current runtime environment information for the system prompt.
     Linked with the workspace command runtime to ensure consistency.
     """
+    current_date = date.today().isoformat()
     system = platform.system()
     release = platform.release()
     machine = platform.machine()
@@ -136,6 +138,7 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
 
     lines = [
         "## Runtime Environment Information",
+        f"- Current Date: {current_date}",
         f"- Operating System: {system} ({release}) {machine}",
         f"- Working Directory: {cwd}",
         f"- Shell Type: {shell_info} (Path: {shell_path})",
