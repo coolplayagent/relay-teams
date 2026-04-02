@@ -12,7 +12,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
+from typing import IO, Callable, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -40,6 +42,7 @@ _BASH_STARTUP_ENV_KEYS = frozenset(
 )
 _BASH_STARTUP_ENV_PREFIXES = ("BASH_FUNC_",)
 _SIGKILL_GRACE_SECONDS = 5
+_SIGKILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 1_200_000
 _WINDOWS_POWERSHELL_CMDLET_PREFIXES = frozenset(
@@ -115,6 +118,155 @@ class ResolvedCommandRuntime(BaseModel):
     kind: CommandRuntimeKind
     executable: str
     display_name: str
+
+
+class _AsyncProcessWriter(Protocol):
+    def write(self, data: bytes) -> None: ...
+
+    async def drain(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class _PipeProcess(Protocol):
+    @property
+    def pid(self) -> int | None: ...
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    @property
+    def stdin(self) -> _AsyncProcessWriter | None: ...
+
+    @property
+    def stdout(self) -> asyncio.StreamReader | None: ...
+
+    @property
+    def stderr(self) -> asyncio.StreamReader | None: ...
+
+    async def wait(self) -> int | None: ...
+
+    def kill(self) -> None: ...
+
+
+class _WritableBinaryStream(Protocol):
+    def write(self, data: bytes) -> object: ...
+
+    def flush(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class _ThreadedProcessWriter:
+    def __init__(self, stream: _WritableBinaryStream) -> None:
+        self._stream = stream
+        self._pending = bytearray()
+        self._pending_lock = threading.Lock()
+
+    def write(self, data: bytes) -> None:
+        with self._pending_lock:
+            self._pending.extend(data)
+
+    async def drain(self) -> None:
+        payload = self._take_pending()
+        if not payload:
+            return None
+        await asyncio.to_thread(self._write_and_flush, payload)
+
+    def close(self) -> None:
+        self._stream.close()
+
+    def _take_pending(self) -> bytes:
+        with self._pending_lock:
+            if not self._pending:
+                return b""
+            payload = bytes(self._pending)
+            self._pending.clear()
+            return payload
+
+    def _write_and_flush(self, payload: bytes) -> None:
+        self._stream.write(payload)
+        self._stream.flush()
+
+
+class _ThreadedProcessAdapter:
+    def __init__(
+        self,
+        proc: subprocess.Popen[bytes],
+        *,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        self._proc = proc
+        self.stdin = (
+            _ThreadedProcessWriter(cast(_WritableBinaryStream, proc.stdin))
+            if proc.stdin is not None
+            else None
+        )
+        self.stdout = asyncio.StreamReader() if proc.stdout is not None else None
+        self.stderr = asyncio.StreamReader() if proc.stderr is not None else None
+        self._wait_future: asyncio.Future[int | None] = loop.create_future()
+        self._start_reader_thread(proc.stdout, self.stdout, loop)
+        self._start_reader_thread(proc.stderr, self.stderr, loop)
+        threading.Thread(
+            target=self._wait_for_process,
+            args=(loop,),
+            daemon=True,
+        ).start()
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    async def wait(self) -> int | None:
+        return await asyncio.shield(self._wait_future)
+
+    def kill(self) -> None:
+        self._proc.kill()
+
+    def _start_reader_thread(
+        self,
+        pipe: IO[bytes] | None,
+        reader: asyncio.StreamReader | None,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        if pipe is None or reader is None:
+            return
+        threading.Thread(
+            target=self._pump_pipe,
+            args=(pipe, reader, loop),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _pump_pipe(
+        pipe: IO[bytes],
+        reader: asyncio.StreamReader,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        try:
+            while True:
+                chunk = _read_pipe_chunk(pipe, 4096)
+                if not chunk:
+                    break
+                loop.call_soon_threadsafe(reader.feed_data, chunk)
+        finally:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(reader.feed_eof)
+            with contextlib.suppress(Exception):
+                pipe.close()
+
+    def _wait_for_process(self, loop: asyncio.AbstractEventLoop) -> None:
+        exit_code = self._proc.wait()
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(self._resolve_wait_future, exit_code)
+
+    def _resolve_wait_future(self, exit_code: int) -> None:
+        if not self._wait_future.done():
+            self._wait_future.set_result(exit_code)
 
 
 def resolve_bash_path() -> str:
@@ -341,6 +493,13 @@ def _prepend_powershell_utf8_prefix(command: str) -> str:
     )
 
 
+def _signal_process_group(pid: int, sig: int) -> None:
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        raise ProcessLookupError(pid)
+    killpg(pid, sig)
+
+
 def kill_process_tree_by_pid(pid: int) -> bool:
     if _is_windows():
         try:
@@ -356,13 +515,13 @@ def kill_process_tree_by_pid(pid: int) -> bool:
         return completed.returncode == 0
 
     try:
-        os.killpg(pid, signal.SIGTERM)
+        _signal_process_group(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return False
     if _wait_for_process_group_exit(pid, timeout_seconds=_SIGKILL_GRACE_SECONDS):
         return True
     try:
-        os.killpg(pid, signal.SIGKILL)
+        _signal_process_group(pid, _SIGKILL_SIGNAL)
     except ProcessLookupError:
         return True
     except PermissionError:
@@ -387,7 +546,7 @@ def _wait_for_process_group_exit(pid: int, *, timeout_seconds: float) -> bool:
 
 def _process_group_exists(pid: int) -> bool:
     try:
-        os.killpg(pid, 0)
+        _signal_process_group(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -395,7 +554,7 @@ def _process_group_exists(pid: int) -> bool:
     return True
 
 
-async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+async def _kill_process_tree(proc: _PipeProcess) -> None:
     if proc.returncode is not None:
         return
     pid = proc.pid
@@ -420,14 +579,14 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
         return
 
     try:
-        os.killpg(pid, signal.SIGTERM)
+        _signal_process_group(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
     try:
         await asyncio.wait_for(proc.wait(), timeout=_SIGKILL_GRACE_SECONDS)
     except asyncio.TimeoutError:
         try:
-            os.killpg(pid, signal.SIGKILL)
+            _signal_process_group(pid, _SIGKILL_SIGNAL)
         except (ProcessLookupError, PermissionError):
             pass
         try:
@@ -481,24 +640,69 @@ async def create_command_subprocess(
     stdin: int | None = None,
     stdout: int | None = None,
     stderr: int | None = None,
-) -> asyncio.subprocess.Process:
+) -> _PipeProcess:
     resolved_runtime = runtime or resolve_command_runtime(command=command)
     command_env = await build_command_env(
         env,
         runtime=resolved_runtime,
         command=command,
     )
-    return await asyncio.create_subprocess_exec(
-        *build_command_argv(
-            runtime=resolved_runtime,
-            command=command,
-            login=login,
-        ),
+    argv = build_command_argv(
+        runtime=resolved_runtime,
+        command=command,
+        login=login,
+    )
+    try:
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(cwd),
+            env=command_env,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=_start_new_session(),
+            creationflags=_creation_flags(),
+        )
+    except NotImplementedError:
+        if not _is_windows():
+            raise
+        loop = asyncio.get_running_loop()
+        return _create_threaded_subprocess(
+            argv=argv,
+            cwd=cwd,
+            env=command_env,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            loop=loop,
+        )
+
+
+def _create_threaded_subprocess(
+    *,
+    argv: tuple[str, ...],
+    cwd: Path,
+    env: dict[str, str],
+    stdin: int | None,
+    stdout: int | None,
+    stderr: int | None,
+    loop: asyncio.AbstractEventLoop,
+) -> _PipeProcess:
+    proc = subprocess.Popen(
+        list(argv),
         cwd=str(cwd),
-        env=command_env,
+        env=env,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
         start_new_session=_start_new_session(),
         creationflags=_creation_flags(),
     )
+    return _ThreadedProcessAdapter(proc, loop=loop)
+
+
+def _read_pipe_chunk(pipe: IO[bytes], size: int) -> bytes:
+    read1 = cast(Callable[[int], bytes] | None, getattr(pipe, "read1", None))
+    if read1 is not None:
+        return read1(size)
+    return pipe.read(size)
