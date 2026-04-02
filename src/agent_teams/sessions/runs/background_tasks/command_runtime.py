@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 
 from pydantic import BaseModel, ConfigDict
 
@@ -358,13 +359,40 @@ def kill_process_tree_by_pid(pid: int) -> bool:
         os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return False
-    return True
+    if _wait_for_process_group_exit(pid, timeout_seconds=_SIGKILL_GRACE_SECONDS):
+        return True
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return _wait_for_process_group_exit(pid, timeout_seconds=2)
 
 
 async def _kill_process_tree_by_pid(pid: int) -> bool:
-    if _is_windows():
-        return await asyncio.to_thread(kill_process_tree_by_pid, pid)
-    return kill_process_tree_by_pid(pid)
+    return await asyncio.to_thread(kill_process_tree_by_pid, pid)
+
+
+def _wait_for_process_group_exit(pid: int, *, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    while True:
+        if not _process_group_exists(pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        remaining = max(0.0, deadline - time.monotonic())
+        time.sleep(min(0.05, remaining))
+
+
+def _process_group_exists(pid: int) -> bool:
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:

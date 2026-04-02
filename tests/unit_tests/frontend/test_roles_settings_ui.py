@@ -497,7 +497,7 @@ const initialSkillOptions = document.getElementById("role-skills-picker").queryS
 initialSkillOptions[1].checked = true;
 await initialSkillOptions[1].onchange();
 const advisoryStillPresent = document.getElementById("role-skills-picker").innerHTML.includes(
-    "Roles that use skills usually work better with the shell tool enabled."
+    "Roles that use skills usually work better with the exec command tool enabled."
 );
 
 await document.getElementById("save-role-btn").onclick();
@@ -544,7 +544,7 @@ const toolOptions = document.getElementById("role-tools-picker").querySelectorAl
 toolOptions[2].checked = true;
 await toolOptions[2].onchange();
 const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML.includes(
-    "Roles that use skills usually work better with the shell tool enabled."
+    "Roles that use skills usually work better with the exec command tool enabled."
 );
 
 const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');

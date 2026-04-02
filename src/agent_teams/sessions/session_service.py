@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from collections.abc import Callable
+import contextlib
 from typing import TYPE_CHECKING, cast
 
 from agent_teams.agents.instances.models import AgentRuntimeRecord
@@ -27,6 +28,7 @@ from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from agent_teams.sessions.runs.event_log import EventLog
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.sessions.runs.run_state_repo import RunStateRepository
+from agent_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from agent_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
@@ -386,8 +388,16 @@ class SessionService:
                 workspace_ids=[],
             )
         self._approval_ticket_repo.delete_by_session(session_id)
+        background_task_records: tuple[BackgroundTaskRecord, ...] = ()
         if self._background_task_repository is not None:
+            background_task_records = self._background_task_repository.list_by_session(
+                session_id
+            )
             self._background_task_repository.delete_by_session(session_id)
+        self._delete_background_task_logs(
+            session=session,
+            background_task_records=background_task_records,
+        )
         self._run_runtime_repo.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
@@ -408,6 +418,33 @@ class SessionService:
             )
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
+
+    def _delete_background_task_logs(
+        self,
+        *,
+        session: SessionRecord,
+        background_task_records: tuple[BackgroundTaskRecord, ...],
+    ) -> None:
+        if self._workspace_manager is None or not background_task_records:
+            return
+        workspace = self._workspace_manager.resolve(
+            session_id=session.session_id,
+            role_id="background-task-cleanup",
+            instance_id=None,
+            workspace_id=session.workspace_id,
+        )
+        for record in background_task_records:
+            log_path = str(record.log_path).strip()
+            if not log_path:
+                continue
+            try:
+                resolved_log_path = workspace.resolve_read_path(log_path)
+            except Exception:
+                continue
+            if not resolved_log_path.is_file():
+                continue
+            with contextlib.suppress(OSError):
+                resolved_log_path.unlink()
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._session_repo.get(session_id)

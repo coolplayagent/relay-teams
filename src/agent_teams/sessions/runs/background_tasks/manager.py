@@ -1151,12 +1151,15 @@ class BackgroundTaskManager:
             if record.background_task_id not in protected and record.is_active
         ]
         for record in active_candidates[:required_slots]:
+            stopped_record: BackgroundTaskRecord | None = None
             with contextlib.suppress(KeyError):
-                _ = await self.stop_for_run(
+                stopped_record = await self.stop_for_run(
                     run_id=record.run_id,
                     background_task_id=record.background_task_id,
                     reason="lru_pruned",
                 )
+            if stopped_record is None or stopped_record.is_active:
+                continue
             self._repository.delete(record.background_task_id)
 
     def _publish_background_task_event(

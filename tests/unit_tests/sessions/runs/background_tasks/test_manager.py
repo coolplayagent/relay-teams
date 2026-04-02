@@ -1016,12 +1016,27 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
 
 @pytest.mark.asyncio
 async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-prune-active.db")
     hub = RunEventHub()
     manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
+
+    killed_pids: list[int] = []
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        killed_pids.append(pid)
+        return True
+
+    monkeypatch.setattr(
+        manager_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
 
     for index in range(MAX_BACKGROUND_TASKS):
         record = BackgroundTaskRecord(
@@ -1034,6 +1049,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
             command="sleep 30",
             cwd=str(tmp_path),
             status=BackgroundTaskStatus.RUNNING,
+            pid=4000 + index,
             created_at=created_at + timedelta(minutes=index),
             updated_at=created_at + timedelta(minutes=index),
         )
@@ -1046,5 +1062,58 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
 
     remaining_ids = {record.background_task_id for record in repo.list_all()}
 
+    assert killed_pids == [4000]
     assert len(remaining_ids) == MAX_BACKGROUND_TASKS - 1
     assert "exec_000" not in remaining_ids
+
+
+@pytest.mark.asyncio
+async def test_prune_sessions_if_needed_keeps_active_records_when_stop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-terminal-prune-active-stop-fail.db"
+    )
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        _ = pid
+        return False
+
+    monkeypatch.setattr(
+        manager_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    for index in range(MAX_BACKGROUND_TASKS):
+        record = BackgroundTaskRecord(
+            background_task_id=f"exec_{index:03d}",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id=f"call-{index}",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=5000 + index,
+            created_at=created_at + timedelta(minutes=index),
+            updated_at=created_at + timedelta(minutes=index),
+        )
+        repo.upsert(record)
+
+    try:
+        await manager._prune_sessions_if_needed()
+    finally:
+        await manager.close()
+
+    remaining_ids = {record.background_task_id for record in repo.list_all()}
+
+    assert len(remaining_ids) == MAX_BACKGROUND_TASKS
+    assert "exec_000" in remaining_ids

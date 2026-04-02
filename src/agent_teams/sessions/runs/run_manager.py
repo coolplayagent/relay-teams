@@ -370,16 +370,26 @@ class RunManager:
                 self._injection_manager.deactivate(run_id)
                 self._running_run_ids.discard(run_id)
 
-    def create_run(self, intent: IntentInput) -> tuple[str, str]:
+    def create_run(
+        self,
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
         if self._should_delegate_to_bound_loop():
             delegated_intent = intent.model_copy(deep=True)
             return self._call_in_bound_loop(
                 lambda: self._create_run_local(
                     delegated_intent,
                     allow_active_run_attach=True,
+                    source=source,
                 )
             )
-        return self._create_run_local(intent, allow_active_run_attach=True)
+        return self._create_run_local(
+            intent,
+            allow_active_run_attach=True,
+            source=source,
+        )
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         if self._should_delegate_to_bound_loop():
@@ -388,15 +398,21 @@ class RunManager:
                 lambda: self._create_run_local(
                     delegated_intent,
                     allow_active_run_attach=False,
+                    source=InjectionSource.USER,
                 )
             )
-        return self._create_run_local(intent, allow_active_run_attach=False)
+        return self._create_run_local(
+            intent,
+            allow_active_run_attach=False,
+            source=InjectionSource.USER,
+        )
 
     def _create_run_local(
         self,
         intent: IntentInput,
         *,
         allow_active_run_attach: bool,
+        source: InjectionSource,
     ) -> tuple[str, str]:
         session_id = self._ensure_session(intent.session_id)
         intent.session_id = session_id
@@ -447,7 +463,10 @@ class RunManager:
                 or self._injection_manager.is_active(active_run_id)
             ):
                 self._append_followup_to_coordinator(
-                    active_run_id, intent.intent, enqueue=True
+                    active_run_id,
+                    intent.intent,
+                    enqueue=True,
+                    source=source,
                 )
                 with bind_trace_context(
                     trace_id=active_run_id,
@@ -1477,7 +1496,7 @@ class RunManager:
             session_id=session_id,
             input=(TextContentPart(text=message),),
         )
-        new_run_id, _ = self.create_run(intent)
+        new_run_id, _ = self.create_run(intent, source=InjectionSource.SYSTEM)
         self.ensure_run_started(new_run_id)
         if active_run_before in {
             None,

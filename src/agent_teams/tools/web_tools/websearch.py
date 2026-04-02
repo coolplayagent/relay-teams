@@ -452,10 +452,29 @@ def extract_search_response(response_text: str) -> ExtractedSearchResponse:
                         }
                     )
                 if parsed.hits or parsed.upstream_search_time is not None:
-                    latest_candidate = parsed
+                    latest_candidate = _merge_extracted_search_response(
+                        latest_candidate,
+                        parsed,
+                    )
     if latest_candidate is not None:
         return latest_candidate
     return ExtractedSearchResponse()
+
+
+def _merge_extracted_search_response(
+    current: ExtractedSearchResponse | None,
+    candidate: ExtractedSearchResponse,
+) -> ExtractedSearchResponse:
+    if current is None:
+        return candidate
+    return ExtractedSearchResponse(
+        hits=candidate.hits if candidate.hits else current.hits,
+        upstream_search_time=(
+            candidate.upstream_search_time
+            if candidate.upstream_search_time is not None
+            else current.upstream_search_time
+        ),
+    )
 
 
 def _parse_search_content(content: str) -> ExtractedSearchResponse:

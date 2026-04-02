@@ -199,6 +199,14 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     )
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "artifact.txt").write_text("artifact", encoding="utf-8")
+    background_log_path = workspace_manager.resolve(
+        session_id="session-1",
+        role_id="time",
+        instance_id="inst-1",
+        workspace_id=session.workspace_id,
+    ).resolve_tmp_path("background_tasks/exec-1.log")
+    background_log_path.parent.mkdir(parents=True, exist_ok=True)
+    background_log_path.write_text("running\n", encoding="utf-8")
     exec_record = background_task_repository.upsert(
         BackgroundTaskRecord(
             background_task_id="exec-1",
@@ -263,6 +271,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         == ()
     )
     assert background_task_repository.get(exec_record.background_task_id) is None
+    assert not background_log_path.exists()
     assert not session_dir.exists()
     assert project_root.exists()
     with pytest.raises(KeyError):

@@ -343,6 +343,7 @@ def test_background_task_completion_attaches_to_existing_active_run_via_create_r
     )
     assert len(queued) == 1
     assert queued[0].content == "background task finished"
+    assert queued[0].source == InjectionSource.SYSTEM
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-newer"
 
 
