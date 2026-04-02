@@ -527,7 +527,7 @@ async def fetch_url(
             response = await _perform_request(
                 client=client, url=current_url, headers=headers
             )
-        block_kind = detect_automated_fetch_block(response)
+        block_kind = await detect_automated_fetch_block(response)
         if (
             block_kind == AutomatedFetchBlockKind.CLOUDFLARE_CHALLENGE
             and not used_fallback_user_agent
@@ -598,12 +598,12 @@ def build_direct_fetch_headers(
     return headers
 
 
-def detect_automated_fetch_block(
+async def detect_automated_fetch_block(
     response: httpx.Response,
 ) -> AutomatedFetchBlockKind | None:
     if is_cloudflare_challenge_response(response):
         return AutomatedFetchBlockKind.CLOUDFLARE_CHALLENGE
-    if is_textual_challenge_response(response):
+    if await is_textual_challenge_response(response):
         return AutomatedFetchBlockKind.CHALLENGE_PAGE
     return None
 
@@ -615,7 +615,7 @@ def is_cloudflare_challenge_response(response: httpx.Response) -> bool:
     )
 
 
-def is_textual_challenge_response(response: httpx.Response) -> bool:
+async def is_textual_challenge_response(response: httpx.Response) -> bool:
     content_type = normalize_content_type(response.headers.get("content-type", ""))
     if content_type not in TEXTUAL_CHALLENGE_CONTENT_TYPES:
         return False
@@ -624,7 +624,7 @@ def is_textual_challenge_response(response: httpx.Response) -> bool:
         and response.status_code not in ANTI_BOT_STATUS_CODES
     ):
         return False
-    body_text = response.text.lower()
+    body_text = (await response.aread()).decode("utf-8", errors="replace").lower()
     return any(marker in body_text for marker in ANTI_BOT_CHALLENGE_MARKERS)
 
 

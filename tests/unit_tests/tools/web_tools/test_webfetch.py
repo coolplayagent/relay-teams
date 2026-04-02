@@ -109,6 +109,18 @@ class _InterruptingStream(httpx.AsyncByteStream):
         return None
 
 
+class _StaticStream(httpx.AsyncByteStream):
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def __aiter__(self):
+        if self._data:
+            yield self._data
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _build_shared_store(tmp_path: Path) -> SharedStateRepository:
     return SharedStateRepository(tmp_path / "shared_state.db")
 
@@ -370,6 +382,41 @@ async def test_fetch_url_uses_reader_fallback_for_anti_bot_challenge() -> None:
         "https://example.com/protected",
         webfetch.build_reader_fallback_url("https://example.com/protected"),
     ]
+    await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_uses_reader_fallback_for_streaming_anti_bot_challenge() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://example.com/protected":
+            return httpx.Response(
+                403,
+                request=request,
+                headers={"content-type": "text/html"},
+                stream=_StaticStream(
+                    b"<html><body>Enable JavaScript and cookies to continue</body></html>"
+                ),
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="# Reader Result",
+            headers={"content-type": "text/plain; charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/protected",
+            response_format="markdown",
+        )
+    finally:
+        await client.aclose()
+
+    assert response.text == "# Reader Result"
     await response.aclose()
 
 
