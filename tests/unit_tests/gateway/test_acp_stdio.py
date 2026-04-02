@@ -14,6 +14,7 @@ from pydantic import JsonValue
 import agent_teams.gateway.acp_stdio as acp_stdio_module
 from agent_teams.gateway.acp_stdio import (
     AcpGatewayServer,
+    _AcpRequestContext,
     AcpStdioRuntime,
 )
 from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
@@ -23,6 +24,12 @@ from agent_teams.gateway.gateway_session_model_profile_store import (
 )
 from agent_teams.gateway.gateway_session_service import GatewaySessionService
 from agent_teams.media import MediaAssetService, content_parts_from_text
+from agent_teams.metrics import (
+    DEFAULT_DEFINITIONS,
+    MetricEvent,
+    MetricRecorder,
+    MetricRegistry,
+)
 from agent_teams.providers.token_usage_repo import RunTokenUsage
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.session_models import SessionRecord
@@ -202,6 +209,14 @@ class FakeWorkspaceService:
         )
         self.workspaces_by_root[resolved_root] = record
         return record
+
+
+class _MetricEventSink:
+    def __init__(self) -> None:
+        self.events: list[MetricEvent] = []
+
+    def record(self, event: MetricEvent) -> None:
+        self.events.append(event)
 
 
 @pytest.mark.asyncio
@@ -1908,11 +1923,152 @@ def test_acp_trace_messages_require_explicit_env(
     assert recorded_events == ["gateway.acp.outbound"]
 
 
+@pytest.mark.asyncio
+async def test_initialize_records_gateway_request_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink = _MetricEventSink()
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(sink,),
+    )
+    recorded_logs: list[dict[str, object]] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, JsonValue] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = exc_info
+        recorded_logs.append(
+            {
+                "event": event,
+                "message": message,
+                "payload": payload,
+                "duration_ms": duration_ms,
+            }
+        )
+
+    monkeypatch.setattr(acp_stdio_module, "log_event", fake_log_event)
+    server, _, _, _ = _build_server(tmp_path, metric_recorder=recorder)
+
+    response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": 2},
+        },
+        request_context=_AcpRequestContext(
+            cold_start=True,
+            framed_input=True,
+            runtime_uptime_ms=5,
+        ),
+    )
+
+    assert _require_result_object(response)["protocolVersion"] == 2
+    operation_events = [
+        event
+        for event in sink.events
+        if event.definition_name == "agent_teams.gateway.operations"
+    ]
+    assert len(operation_events) == 1
+    assert operation_events[0].tags.gateway_operation == "initialize"
+    assert operation_events[0].tags.gateway_phase == "request"
+    assert operation_events[0].tags.gateway_cold_start == "true"
+    assert recorded_logs[0]["event"] == "gateway.acp.request.completed"
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_records_gateway_prompt_phase_metrics(
+    tmp_path: Path,
+) -> None:
+    sink = _MetricEventSink()
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(sink,),
+    )
+    server, _, run_manager, _ = _build_server(
+        tmp_path,
+        metric_recorder=recorder,
+    )
+    run_manager.events_by_run["run-1"] = (
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.TEXT_DELTA,
+            {"text": "hello"},
+        ),
+        _event(
+            "session-1",
+            "run-1",
+            RunEventType.RUN_COMPLETED,
+            {},
+        ),
+    )
+
+    create_response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {},
+        }
+    )
+    gateway_session_id = _require_str(
+        _require_result_object(create_response), "sessionId"
+    )
+
+    prompt_response = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": gateway_session_id,
+                "prompt": [{"type": "text", "text": "hello"}],
+            },
+        },
+        request_context=_AcpRequestContext(
+            cold_start=False,
+            framed_input=False,
+            runtime_uptime_ms=42,
+        ),
+    )
+
+    assert _require_result_object(prompt_response)["runStatus"] == "completed"
+    operation_events = [
+        event
+        for event in sink.events
+        if event.definition_name == "agent_teams.gateway.operations"
+        and event.tags.gateway_operation == "session_prompt"
+    ]
+    assert {
+        (event.tags.gateway_phase, event.tags.status) for event in operation_events
+    } == {
+        ("request", "completed"),
+        ("run_start", "success"),
+        ("first_update", "success"),
+    }
+    request_event = next(
+        event for event in operation_events if event.tags.gateway_phase == "request"
+    )
+    assert request_event.tags.session_id == "session-1"
+    assert request_event.tags.run_id == "run-1"
+
+
 def _build_server(
     tmp_path: Path,
     *,
     workspace_service: FakeWorkspaceService | None = None,
     default_normal_root_role_id: str | None = None,
+    metric_recorder: MetricRecorder | None = None,
 ) -> tuple[
     AcpGatewayServer,
     FakeSessionService,
@@ -1949,6 +2105,7 @@ def _build_server(
         run_service=cast(RunManager, run_manager),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
+        metric_recorder=metric_recorder,
     )
     server.set_mcp_relay_outbound(send_request=send_request, send_notification=notify)
     return server, session_service, run_manager, notifications

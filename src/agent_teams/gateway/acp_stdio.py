@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import sys
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import BinaryIO, cast
 from uuid import uuid4
@@ -34,6 +36,8 @@ from agent_teams.media import (
     TextContentPart,
     infer_media_modality,
 )
+from agent_teams.metrics import MetricRecorder
+from agent_teams.metrics.adapters import record_gateway_operation
 from agent_teams.sessions import SessionService
 from agent_teams.sessions.runs.enums import RunEventType
 from agent_teams.sessions.runs.run_manager import RunManager
@@ -49,10 +53,17 @@ LOGGER = get_logger(__name__)
 
 
 class AcpProtocolError(ValueError):
-    def __init__(self, code: int, message: str) -> None:
+    def __init__(
+        self,
+        code: int,
+        message: str,
+        *,
+        status: str = "protocol_error",
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.status = status
 
 
 class _AcpRunStopResult(BaseModel):
@@ -64,6 +75,196 @@ class _AcpRunStopResult(BaseModel):
     recoverable: bool = False
     error_message: str | None = None
     clear_active_run: bool = True
+
+
+class _AcpRequestContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cold_start: bool = False
+    framed_input: bool | None = None
+    runtime_uptime_ms: int | None = None
+
+
+class _AcpRequestObserver:
+    def __init__(
+        self,
+        *,
+        metric_recorder: MetricRecorder | None,
+        operation: str,
+        method: str,
+        message_id: JsonRpcId | None,
+        params: Mapping[str, JsonValue],
+        request_context: _AcpRequestContext | None,
+    ) -> None:
+        self._metric_recorder = metric_recorder
+        self._operation = operation
+        self._method = method
+        self._message_id = message_id
+        self._request_context = request_context or _AcpRequestContext()
+        self._started_at = time.perf_counter()
+        self._first_update_recorded = False
+        self._workspace_id = ""
+        self._internal_session_id = ""
+        self._run_id = ""
+        self._gateway_session_id = _optional_str(params, "sessionId") or ""
+        self._connection_id = _optional_str(params, "connectionId") or ""
+        self._server_id = (
+            _optional_str(params, "acpId") or _optional_str(params, "serverId") or ""
+        )
+        self._gateway_transport = "stdio"
+        prompt_blocks = params.get("prompt")
+        self._prompt_block_count = (
+            len(prompt_blocks) if isinstance(prompt_blocks, list) else 0
+        )
+
+    @property
+    def operation(self) -> str:
+        return self._operation
+
+    @property
+    def gateway_session_id(self) -> str:
+        return self._gateway_session_id
+
+    @property
+    def internal_session_id(self) -> str:
+        return self._internal_session_id
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    def bind_gateway_session_id(self, gateway_session_id: str) -> None:
+        self._gateway_session_id = gateway_session_id
+
+    def bind_internal_session_id(self, internal_session_id: str) -> None:
+        self._internal_session_id = internal_session_id
+
+    def bind_workspace_id(self, workspace_id: str) -> None:
+        self._workspace_id = workspace_id
+
+    def bind_run_id(self, run_id: str) -> None:
+        self._run_id = run_id
+
+    def bind_connection_id(self, connection_id: str) -> None:
+        self._connection_id = connection_id
+
+    def bind_server_id(self, server_id: str) -> None:
+        self._server_id = server_id
+
+    def bind_transport(self, gateway_transport: str) -> None:
+        normalized = gateway_transport.strip()
+        if normalized:
+            self._gateway_transport = normalized
+
+    def record_request_completed(self, *, status: str) -> None:
+        self._record(
+            phase="request",
+            status=status,
+            event="gateway.acp.request.completed",
+            message="ACP gateway request completed",
+        )
+
+    def record_request_failed(
+        self,
+        *,
+        status: str,
+        message: str,
+        exc: Exception | None = None,
+    ) -> None:
+        self._record(
+            phase="request",
+            status=status,
+            event="gateway.acp.request.failed",
+            message=message,
+            exc=exc,
+        )
+
+    def record_prompt_run_start(self) -> None:
+        if self._operation != "session_prompt":
+            return
+        self._record(
+            phase="run_start",
+            status="success",
+            event="gateway.acp.request.completed",
+            message="ACP prompt run started",
+        )
+
+    def record_prompt_first_update(self) -> None:
+        if self._operation != "session_prompt" or self._first_update_recorded:
+            return
+        self._first_update_recorded = True
+        self._record(
+            phase="first_update",
+            status="success",
+            event="gateway.acp.prompt.first_update",
+            message="ACP prompt emitted first agent update",
+        )
+
+    def _record(
+        self,
+        *,
+        phase: str,
+        status: str,
+        event: str,
+        message: str,
+        exc: Exception | None = None,
+    ) -> None:
+        duration_ms = int((time.perf_counter() - self._started_at) * 1000)
+        payload = self._payload(phase=phase, status=status)
+        log_event(
+            LOGGER,
+            _gateway_log_level(status),
+            event=event,
+            message=message,
+            payload=payload,
+            duration_ms=duration_ms,
+            exc_info=exc,
+        )
+        if self._metric_recorder is None:
+            return
+        record_gateway_operation(
+            self._metric_recorder,
+            workspace_id=self._workspace_id,
+            session_id=self._internal_session_id,
+            run_id=self._run_id,
+            gateway_channel="acp_stdio",
+            gateway_operation=self._operation,
+            gateway_phase=phase,
+            gateway_transport=self._gateway_transport,
+            status=status,
+            cold_start=self._request_context.cold_start,
+            duration_ms=duration_ms,
+        )
+
+    def _payload(self, *, phase: str, status: str) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "method": self._method,
+            "gateway_operation": self._operation,
+            "gateway_phase": phase,
+            "gateway_channel": "acp_stdio",
+            "gateway_transport": self._gateway_transport,
+            "status": status,
+            "cold_start": self._request_context.cold_start,
+        }
+        if self._request_context.framed_input is not None:
+            payload["framed_input"] = self._request_context.framed_input
+        if self._request_context.runtime_uptime_ms is not None:
+            payload["runtime_uptime_ms"] = self._request_context.runtime_uptime_ms
+        if self._message_id is not None:
+            payload["message_id"] = self._message_id
+        if self._gateway_session_id:
+            payload["gateway_session_id"] = self._gateway_session_id
+        if self._internal_session_id:
+            payload["session_id"] = self._internal_session_id
+        if self._run_id:
+            payload["run_id"] = self._run_id
+        if self._connection_id:
+            payload["connection_id"] = self._connection_id
+        if self._server_id:
+            payload["server_id"] = self._server_id
+        if self._prompt_block_count > 0:
+            payload["prompt_block_count"] = self._prompt_block_count
+        return payload
 
 
 class _ResumeTextSuppressor:
@@ -98,15 +299,17 @@ class AcpGatewayServer:
         notify: AcpNotifier,
         mcp_relay: AcpMcpRelay | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        metric_recorder: MetricRecorder | None = None,
     ) -> None:
         self._gateway_session_service = gateway_session_service
         self._session_service = session_service
         self._run_service = run_service
         self._media_asset_service = media_asset_service
         self._notify = notify
+        self._metric_recorder = metric_recorder
         self._active_runs: dict[str, str] = {}
         self._zed_compat_mode = False
-        self._mcp_relay = mcp_relay or AcpMcpRelay()
+        self._mcp_relay = mcp_relay or AcpMcpRelay(metric_recorder=metric_recorder)
         self._session_ingress_service = session_ingress_service
 
     def set_notify(self, notify: AcpNotifier) -> None:
@@ -128,26 +331,89 @@ class AcpGatewayServer:
             send_notification=send_notification,
         )
 
+    def _build_request_observer(
+        self,
+        *,
+        method: str,
+        message_id: JsonRpcId | None,
+        params: dict[str, JsonValue],
+        request_context: _AcpRequestContext | None,
+    ) -> _AcpRequestObserver | None:
+        operation = _tracked_gateway_operation(method)
+        if operation is None:
+            return None
+        return _AcpRequestObserver(
+            metric_recorder=self._metric_recorder,
+            operation=operation,
+            method=method,
+            message_id=message_id,
+            params=params,
+            request_context=request_context,
+        )
+
+    def _bind_gateway_session_observer(
+        self,
+        observer: _AcpRequestObserver | None,
+        *,
+        gateway_session_id: str,
+    ) -> None:
+        if observer is None:
+            return
+        observer.bind_gateway_session_id(gateway_session_id)
+        try:
+            record = self._gateway_session_service.get_session(gateway_session_id)
+        except KeyError:
+            return
+        observer.bind_internal_session_id(record.internal_session_id)
+        try:
+            session = self._session_service.get_session(record.internal_session_id)
+        except KeyError:
+            return
+        observer.bind_workspace_id(session.workspace_id)
+
     async def handle_jsonrpc_message(
         self,
         message: dict[str, JsonValue],
+        request_context: _AcpRequestContext | None = None,
     ) -> dict[str, JsonValue] | None:
         message_id = _optional_id(message)
         method = _required_method(message)
         params = _params_object(message)
-
-        if message_id is None:
-            await self._handle_notification(method, params)
-            return None
+        observer = self._build_request_observer(
+            method=method,
+            message_id=message_id,
+            params=params,
+            request_context=request_context,
+        )
 
         try:
-            result = await self._handle_request(method, params, message_id)
+            if message_id is None:
+                await self._handle_notification(method, params, observer=observer)
+                if observer is not None:
+                    observer.record_request_completed(status="success")
+                return None
+            result = await self._handle_request(
+                method,
+                params,
+                message_id,
+                observer=observer,
+            )
+            if observer is not None:
+                observer.record_request_completed(
+                    status=_request_status_from_result(method=method, result=result)
+                )
             return {
                 "jsonrpc": "2.0",
                 "id": message_id,
                 "result": result,
             }
         except AcpProtocolError as exc:
+            if observer is not None:
+                observer.record_request_failed(
+                    status=exc.status,
+                    message="ACP gateway request failed",
+                    exc=exc,
+                )
             return {
                 "jsonrpc": "2.0",
                 "id": message_id,
@@ -157,6 +423,12 @@ class AcpGatewayServer:
                 },
             }
         except Exception as exc:
+            if observer is not None:
+                observer.record_request_failed(
+                    status="internal_error",
+                    message="ACP gateway request failed",
+                    exc=exc,
+                )
             return {
                 "jsonrpc": "2.0",
                 "id": message_id,
@@ -171,39 +443,41 @@ class AcpGatewayServer:
         method: str,
         params: dict[str, JsonValue],
         message_id: JsonRpcId,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         if method == "initialize":
             return self._initialize_result(params)
         if method == "session/new":
-            return self._create_session(params)
+            return self._create_session(params, observer=observer)
         if method == "session/load":
-            return await self._load_session(params)
+            return await self._load_session(params, observer=observer)
         if method == "session/prompt":
-            return await self._prompt_session(params, message_id)
+            return await self._prompt_session(params, message_id, observer=observer)
         if method == "session/resume":
-            return await self._resume_session(params)
+            return await self._resume_session(params, observer=observer)
         if method == "session/cancel":
-            return self._cancel_session(params)
+            return self._cancel_session(params, observer=observer)
         if method == "mcp/connect":
-            return await self._mcp_connect(params)
+            return await self._mcp_connect(params, observer=observer)
         if method == "mcp/message":
-            return await self._mcp_message(params, message_id)
+            return await self._mcp_message(params, message_id, observer=observer)
         if method == "mcp/disconnect":
-            return await self._mcp_disconnect(params)
+            return await self._mcp_disconnect(params, observer=observer)
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
     async def _handle_notification(
         self,
         method: str,
         params: dict[str, JsonValue],
+        observer: _AcpRequestObserver | None = None,
     ) -> None:
         if method == "session/cancel":
-            _ = self._cancel_session(params)
+            _ = self._cancel_session(params, observer=observer)
             return
         if method == "initialized":
             return
         if method == "mcp/message":
-            _ = await self._mcp_message(params, None)
+            _ = await self._mcp_message(params, None, observer=observer)
             return
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
@@ -233,7 +507,12 @@ class AcpGatewayServer:
             },
         }
 
-    def _create_session(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    def _create_session(
+        self,
+        params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
+    ) -> dict[str, JsonValue]:
         cwd = _optional_str(params, "cwd")
         capabilities = _optional_object(params, "capabilities")
         mcp_servers = _parse_mcp_servers(params.get("mcpServers"))
@@ -251,14 +530,28 @@ class AcpGatewayServer:
         except ValueError as exc:
             raise AcpProtocolError(-32602, str(exc)) from exc
         self._mcp_relay.bind_session_servers(record.gateway_session_id, mcp_servers)
+        if observer is not None:
+            observer.bind_gateway_session_id(record.gateway_session_id)
+            observer.bind_internal_session_id(record.internal_session_id)
+            observer.bind_workspace_id(
+                self._session_service.get_session(
+                    record.internal_session_id
+                ).workspace_id
+            )
         return {"sessionId": record.gateway_session_id}
 
     async def _load_session(
         self,
         params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         record = self._gateway_session_service.get_session(gateway_session_id)
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
         if "cwd" in params:
             cwd = _optional_str(params, "cwd")
             if cwd is not None:
@@ -270,7 +563,7 @@ class AcpGatewayServer:
                 except ValueError as exc:
                     raise AcpProtocolError(-32602, str(exc)) from exc
                 except RuntimeError as exc:
-                    raise AcpProtocolError(-32000, str(exc)) from exc
+                    raise AcpProtocolError(-32000, str(exc), status="failed") from exc
         if "mcpServers" in params:
             mcp_servers = _parse_mcp_servers(params.get("mcpServers"))
             record = self._gateway_session_service.set_session_mcp_servers(
@@ -306,12 +599,18 @@ class AcpGatewayServer:
         self,
         params: dict[str, JsonValue],
         message_id: JsonRpcId,
+        *,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         _ = message_id
         gateway_session_id = _required_str(params, "sessionId")
         prompt_blocks = _required_list(params, "prompt")
         record = self._gateway_session_service.get_session(gateway_session_id)
         session = self._session_service.get_session(record.internal_session_id)
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
         recoverable_run_id = self._recoverable_run_id(record.internal_session_id)
         prompt_input = self._prompt_blocks_to_content_parts(
             prompt_blocks=prompt_blocks,
@@ -320,7 +619,8 @@ class AcpGatewayServer:
         )
         if not prompt_input:
             raise AcpProtocolError(
-                -32602, "prompt must contain at least one supported content block"
+                -32602,
+                "prompt must contain at least one supported content block",
             )
         intent = IntentInput(
             session_id=record.internal_session_id,
@@ -337,9 +637,13 @@ class AcpGatewayServer:
                 raise AcpProtocolError(
                     -32000,
                     f"Session already has an active run: {exc.blocking_run_id}",
+                    status="busy",
                 )
             except RuntimeError as exc:
-                raise AcpProtocolError(-32000, str(exc)) from exc
+                raise AcpProtocolError(-32000, str(exc), status="failed") from exc
+            if observer is not None:
+                observer.bind_run_id(run_id)
+                observer.record_prompt_run_start()
             self._active_runs[gateway_session_id] = run_id
             _ = self._gateway_session_service.bind_active_run(
                 gateway_session_id, run_id
@@ -368,6 +672,7 @@ class AcpGatewayServer:
                 run_id=run_id,
                 after_event_id=after_event_id,
                 text_suppressor=text_suppressor,
+                observer=observer,
             )
 
         self._finalize_active_run_binding(
@@ -376,7 +681,11 @@ class AcpGatewayServer:
             clear_active_run=result.clear_active_run,
         )
         if result.error_message is not None:
-            raise AcpProtocolError(-32000, result.error_message)
+            raise AcpProtocolError(
+                -32000,
+                result.error_message,
+                status=result.run_status,
+            )
         return {
             "stopReason": result.stop_reason,
             "runId": result.run_id,
@@ -409,12 +718,20 @@ class AcpGatewayServer:
     async def _resume_session(
         self,
         params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         record = self._gateway_session_service.get_session(gateway_session_id)
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
         run_id = str(record.active_run_id or "").strip()
         if not run_id:
             raise AcpProtocolError(-32602, "Session has no active run to resume")
+        if observer is not None:
+            observer.bind_run_id(run_id)
         after_event_id, text_suppressor = self._resume_stream_state(
             internal_session_id=record.internal_session_id,
             run_id=run_id,
@@ -431,6 +748,7 @@ class AcpGatewayServer:
                 run_id=run_id,
                 after_event_id=after_event_id,
                 text_suppressor=text_suppressor,
+                observer=observer,
             )
 
         self._finalize_active_run_binding(
@@ -439,7 +757,11 @@ class AcpGatewayServer:
             clear_active_run=result.clear_active_run,
         )
         if result.error_message is not None:
-            raise AcpProtocolError(-32000, result.error_message)
+            raise AcpProtocolError(
+                -32000,
+                result.error_message,
+                status=result.run_status,
+            )
         return {
             "stopReason": result.stop_reason,
             "runId": result.run_id,
@@ -454,6 +776,7 @@ class AcpGatewayServer:
         run_id: str,
         after_event_id: int = 0,
         text_suppressor: _ResumeTextSuppressor | None = None,
+        observer: _AcpRequestObserver | None = None,
     ) -> _AcpRunStopResult:
         stop_reason = "end_turn"
         run_status = "running"
@@ -468,6 +791,7 @@ class AcpGatewayServer:
                 gateway_session_id=gateway_session_id,
                 event=event,
                 text_suppressor=text_suppressor,
+                observer=observer,
             )
             if maybe_result is None:
                 continue
@@ -566,12 +890,24 @@ class AcpGatewayServer:
                     collected.append(text)
         return "".join(collected)
 
+    async def _publish_agent_update(
+        self,
+        gateway_session_id: str,
+        update: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
+    ) -> None:
+        if observer is not None:
+            observer.record_prompt_first_update()
+        await self._publish_session_update(gateway_session_id, update)
+
     async def _map_run_event(
         self,
         *,
         gateway_session_id: str,
         event: RunEvent,
         text_suppressor: _ResumeTextSuppressor | None = None,
+        observer: _AcpRequestObserver | None = None,
     ) -> _AcpRunStopResult | None:
         payload = _load_payload(event.payload_json)
         if event.event_type == RunEventType.TEXT_DELTA:
@@ -579,7 +915,7 @@ class AcpGatewayServer:
             if text_suppressor is not None and text:
                 text = text_suppressor.strip(text)
             if text:
-                await self._publish_session_update(
+                await self._publish_agent_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "agent_message_chunk",
@@ -588,6 +924,7 @@ class AcpGatewayServer:
                             "text": text,
                         },
                     },
+                    observer=observer,
                 )
             return None
         if event.event_type == RunEventType.OUTPUT_DELTA:
@@ -599,12 +936,13 @@ class AcpGatewayServer:
                         if not filtered_text:
                             continue
                         content = {**content, "text": filtered_text}
-                await self._publish_session_update(
+                await self._publish_agent_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "agent_message_chunk",
                         "content": content,
                     },
+                    observer=observer,
                 )
             return None
         if event.event_type == RunEventType.GENERATION_PROGRESS:
@@ -619,7 +957,7 @@ class AcpGatewayServer:
                 else "in_progress"
             )
             if phase == "started":
-                await self._publish_session_update(
+                await self._publish_agent_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "tool_call",
@@ -627,6 +965,7 @@ class AcpGatewayServer:
                         "title": run_kind,
                         "status": "in_progress",
                     },
+                    observer=observer,
                 )
                 return None
             update_payload: dict[str, JsonValue] = {
@@ -637,12 +976,16 @@ class AcpGatewayServer:
             preview_asset_id = _optional_str(payload, "preview_asset_id")
             if preview_asset_id is not None:
                 update_payload["rawInput"] = preview_asset_id
-            await self._publish_session_update(gateway_session_id, update_payload)
+            await self._publish_agent_update(
+                gateway_session_id,
+                update_payload,
+                observer=observer,
+            )
             return None
         if event.event_type == RunEventType.THINKING_DELTA:
             text = _optional_text(payload, "text")
             if text:
-                await self._publish_session_update(
+                await self._publish_agent_update(
                     gateway_session_id,
                     {
                         "sessionUpdate": "agent_thought_chunk",
@@ -651,6 +994,7 @@ class AcpGatewayServer:
                             "text": text,
                         },
                     },
+                    observer=observer,
                 )
             return None
         if event.event_type == RunEventType.TOOL_CALL:
@@ -666,7 +1010,11 @@ class AcpGatewayServer:
             }
             if raw_input is not None:
                 update["rawInput"] = raw_input
-            await self._publish_session_update(gateway_session_id, update)
+            await self._publish_agent_update(
+                gateway_session_id,
+                update,
+                observer=observer,
+            )
             return None
         if event.event_type == RunEventType.TOOL_RESULT:
             tool_call_id = (
@@ -674,7 +1022,7 @@ class AcpGatewayServer:
             )
             status = "failed" if payload.get("error") is True else "completed"
             content = _tool_result_payload_to_acp_content(payload)
-            await self._publish_session_update(
+            await self._publish_agent_update(
                 gateway_session_id,
                 {
                     "sessionUpdate": "tool_call_update",
@@ -682,11 +1030,12 @@ class AcpGatewayServer:
                     "status": status,
                     "content": content,
                 },
+                observer=observer,
             )
             return None
         if event.event_type == RunEventType.RUN_PAUSED:
             pause_message = self._paused_run_message(payload)
-            await self._publish_session_update(
+            await self._publish_agent_update(
                 gateway_session_id,
                 {
                     "sessionUpdate": "agent_message_chunk",
@@ -695,6 +1044,7 @@ class AcpGatewayServer:
                         "text": pause_message,
                     },
                 },
+                observer=observer,
             )
             return _AcpRunStopResult(
                 stop_reason="end_turn",
@@ -734,13 +1084,24 @@ class AcpGatewayServer:
             )
         return None
 
-    def _cancel_session(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    def _cancel_session(
+        self,
+        params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
+    ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
         run_id = self._active_runs.get(gateway_session_id)
         if run_id is None:
             record = self._gateway_session_service.get_session(gateway_session_id)
             run_id = str(record.active_run_id or "").strip() or None
         if run_id is not None:
+            if observer is not None:
+                observer.bind_run_id(run_id)
             self._run_service.stop_run(run_id)
         return {"status": "ok"}
 
@@ -767,9 +1128,18 @@ class AcpGatewayServer:
             return f"Run paused: {error_message}\nSend session/resume to continue."
         return "Run paused. Send session/resume to continue."
 
-    async def _mcp_connect(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    async def _mcp_connect(
+        self,
+        params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
+    ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         server_id = _required_str(params, "acpId", fallback_key="serverId")
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
         try:
             server_spec = self._mcp_relay.session_server_spec(
                 session_id=gateway_session_id,
@@ -777,10 +1147,15 @@ class AcpGatewayServer:
             )
         except KeyError as exc:
             raise AcpProtocolError(-32602, str(exc)) from exc
+        if observer is not None:
+            observer.bind_server_id(server_id)
+            observer.bind_transport(server_spec.transport)
         connection = self._gateway_session_service.open_mcp_connection(
             gateway_session_id=gateway_session_id,
             server_id=server_id,
         )
+        if observer is not None:
+            observer.bind_connection_id(connection.connection_id)
         await self._mcp_relay.open_connection(
             session_id=gateway_session_id,
             connection_id=connection.connection_id,
@@ -796,10 +1171,21 @@ class AcpGatewayServer:
         self,
         params: dict[str, JsonValue],
         message_id: JsonRpcId | None,
+        *,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         connection_id = _required_str(params, "connectionId")
         method = _required_str(params, "method")
         forwarded_params = _optional_object(params, "params")
+        gateway_session_id = _optional_str(params, "sessionId")
+        if gateway_session_id is not None:
+            self._bind_gateway_session_observer(
+                observer,
+                gateway_session_id=gateway_session_id,
+            )
+        if observer is not None:
+            observer.bind_connection_id(connection_id)
+            observer.bind_transport("acp")
         try:
             return await self._mcp_relay.relay_inbound_message(
                 connection_id=connection_id,
@@ -811,10 +1197,20 @@ class AcpGatewayServer:
             raise AcpProtocolError(-32602, str(exc)) from exc
 
     async def _mcp_disconnect(
-        self, params: dict[str, JsonValue]
+        self,
+        params: dict[str, JsonValue],
+        *,
+        observer: _AcpRequestObserver | None = None,
     ) -> dict[str, JsonValue]:
         gateway_session_id = _required_str(params, "sessionId")
         connection_id = _required_str(params, "connectionId")
+        self._bind_gateway_session_observer(
+            observer,
+            gateway_session_id=gateway_session_id,
+        )
+        if observer is not None:
+            observer.bind_connection_id(connection_id)
+            observer.bind_transport("acp")
         _ = self._gateway_session_service.close_mcp_connection(
             gateway_session_id=gateway_session_id,
             connection_id=connection_id,
@@ -921,6 +1317,8 @@ class AcpStdioRuntime:
         self._pending_requests: dict[
             JsonRpcId, asyncio.Future[dict[str, JsonValue]]
         ] = {}
+        self._request_count = 0
+        self._started_at = time.perf_counter()
         self._server.set_zed_compat_mode(False)
         self._server.set_mcp_relay_outbound(
             send_request=self.send_request,
@@ -984,7 +1382,19 @@ class AcpStdioRuntime:
             if pending is not None and not pending.done():
                 pending.set_result(parsed)
                 return
-        response = await self._server.handle_jsonrpc_message(parsed)
+        request_context: _AcpRequestContext | None = None
+        if isinstance(method, str):
+            cold_start = self._request_count == 0
+            self._request_count += 1
+            request_context = _AcpRequestContext(
+                cold_start=cold_start,
+                framed_input=self._emit_framed_messages,
+                runtime_uptime_ms=int((time.perf_counter() - self._started_at) * 1000),
+            )
+        response = await self._server.handle_jsonrpc_message(
+            parsed,
+            request_context=request_context,
+        )
         if response is None:
             return
         await self.send_message(response)
@@ -1523,6 +1933,41 @@ def _load_payload(raw_payload: str) -> dict[str, JsonValue]:
     if isinstance(parsed, dict):
         return parsed
     return {}
+
+
+def _tracked_gateway_operation(method: str) -> str | None:
+    return {
+        "initialize": "initialize",
+        "session/new": "session_new",
+        "session/load": "session_load",
+        "session/prompt": "session_prompt",
+        "session/resume": "session_resume",
+        "session/cancel": "session_cancel",
+        "mcp/connect": "mcp_connect",
+        "mcp/message": "mcp_message",
+        "mcp/disconnect": "mcp_disconnect",
+    }.get(method)
+
+
+def _request_status_from_result(
+    *,
+    method: str,
+    result: dict[str, JsonValue],
+) -> str:
+    if method in {"session/prompt", "session/resume"}:
+        run_status = result.get("runStatus")
+        if isinstance(run_status, str) and run_status.strip():
+            return run_status.strip()
+    return "success"
+
+
+def _gateway_log_level(status: str) -> int:
+    normalized = status.strip().lower()
+    if normalized in {"failed", "internal_error"}:
+        return logging.ERROR
+    if normalized in {"busy", "protocol_error"}:
+        return logging.WARNING
+    return logging.INFO
 
 
 def _trace_acp_message(direction: str, message: dict[str, JsonValue]) -> None:

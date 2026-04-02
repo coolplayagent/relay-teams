@@ -6,6 +6,7 @@ import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar, Token
 import logging
+import time
 from typing import TYPE_CHECKING, cast
 
 import anyio
@@ -13,7 +14,10 @@ import mcp.types as mcp_types
 from pydantic import JsonValue
 from pydantic_ai.mcp import MCPServer
 
-from agent_teams.gateway.gateway_models import GatewayMcpServerSpec
+from agent_teams.gateway.gateway_models import (
+    GatewayMcpServerSpec,
+    GatewaySessionRecord,
+)
 from agent_teams.logger import get_logger, log_event
 from agent_teams.mcp.mcp_models import (
     McpConfigScope,
@@ -27,11 +31,14 @@ from agent_teams.mcp.mcp_registry import (
     get_effective_mcp_tool_name,
     get_mcp_tool_prefix,
 )
+from agent_teams.metrics.adapters import record_gateway_operation
+from agent_teams.trace import get_trace_context
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage
 
 if TYPE_CHECKING:
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+    from agent_teams.metrics import MetricRecorder
 
 
 type JsonRpcId = str | int
@@ -47,6 +54,7 @@ _CURRENT_GATEWAY_SESSION_ID: ContextVar[str | None] = ContextVar(
     default=None,
 )
 LOGGER = get_logger(__name__)
+type GatewaySessionLookup = Callable[[str], GatewaySessionRecord | None]
 
 
 class GatewayAwareMcpRegistry(McpRegistry):
@@ -273,13 +281,20 @@ class GatewayAwareMcpRegistry(McpRegistry):
 
 
 class AcpMcpRelay:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        metric_recorder: MetricRecorder | None = None,
+        gateway_session_lookup: GatewaySessionLookup | None = None,
+    ) -> None:
         self._request_sender: AcpRequestSender | None = None
         self._notification_sender: AcpNotificationSender | None = None
         self._connections: dict[str, _RelayConnection] = {}
         self._session_active_servers: dict[str, dict[str, str]] = {}
         self._session_specs: dict[str, dict[str, GatewayMcpServerSpec]] = {}
         self._session_toolsets: dict[tuple[str, str], MCPServer] = {}
+        self._metric_recorder = metric_recorder
+        self._gateway_session_lookup = gateway_session_lookup
 
     def set_outbound(
         self,
@@ -389,6 +404,8 @@ class AcpMcpRelay:
             connection_id=connection_id,
             send_request=cast(AcpRequestSender, self._request_sender),
             send_notification=cast(AcpNotificationSender, self._notification_sender),
+            metric_recorder=self._metric_recorder,
+            gateway_session_lookup=self._gateway_session_lookup,
         )
         connection = _RelayConnection(
             session_id=session_id,
@@ -458,11 +475,15 @@ class AcpMcpConnectionTransport:
         connection_id: str,
         send_request: AcpRequestSender,
         send_notification: AcpNotificationSender,
+        metric_recorder: MetricRecorder | None = None,
+        gateway_session_lookup: GatewaySessionLookup | None = None,
     ) -> None:
         self._session_id = session_id
         self._connection_id = connection_id
         self._send_request = send_request
         self._send_notification = send_notification
+        self._metric_recorder = metric_recorder
+        self._gateway_session_lookup = gateway_session_lookup
         self._connected_write_stream: MemoryObjectSendStream[SessionMessage] | None = (
             None
         )
@@ -587,14 +608,35 @@ class AcpMcpConnectionTransport:
                         message_kind = "request"
                         method_name = raw_message.method
                         message_id = raw_message.id
-                        response = await self._send_request(
-                            "mcp/message",
-                            _build_mcp_message_request(
-                                session_id=self._session_id,
-                                connection_id=self._connection_id,
+                        started = time.perf_counter()
+                        request_payload = _build_mcp_message_request(
+                            session_id=self._session_id,
+                            connection_id=self._connection_id,
+                            method=raw_message.method,
+                            params=_json_object(raw_message.params),
+                        )
+                        try:
+                            response = await self._send_request(
+                                "mcp/message",
+                                request_payload,
+                            )
+                        except Exception as exc:
+                            self._record_bridge_request(
                                 method=raw_message.method,
-                                params=_json_object(raw_message.params),
-                            ),
+                                status="failed",
+                                duration_ms=int((time.perf_counter() - started) * 1000),
+                                exc=exc,
+                            )
+                            raise
+                        bridge_status = (
+                            "failed"
+                            if isinstance(response.get("error"), dict)
+                            else "success"
+                        )
+                        self._record_bridge_request(
+                            method=raw_message.method,
+                            status=bridge_status,
+                            duration_ms=int((time.perf_counter() - started) * 1000),
                         )
                         await write_stream.send(
                             SessionMessage(
@@ -649,6 +691,69 @@ class AcpMcpConnectionTransport:
     def _next_message_id(self) -> int:
         self._message_id += 1
         return self._message_id
+
+    def _record_bridge_request(
+        self,
+        *,
+        method: str,
+        status: str,
+        duration_ms: int,
+        exc: Exception | None = None,
+    ) -> None:
+        trace_context = get_trace_context()
+        record = None
+        if self._gateway_session_lookup is not None:
+            record = self._gateway_session_lookup(self._session_id)
+        internal_session_id = trace_context.session_id or (
+            record.internal_session_id if record is not None else ""
+        )
+        run_id = trace_context.run_id or (
+            str(record.active_run_id or "") if record is not None else ""
+        )
+        payload: dict[str, JsonValue] = {
+            "gateway_session_id": self._session_id,
+            "connection_id": self._connection_id,
+            "method": method,
+            "status": status,
+            "gateway_operation": "mcp_bridge_request",
+            "gateway_phase": "request",
+            "gateway_transport": "acp",
+        }
+        if internal_session_id:
+            payload["session_id"] = internal_session_id
+        if run_id:
+            payload["run_id"] = run_id
+        log_event(
+            LOGGER,
+            logging.INFO if status == "success" else logging.ERROR,
+            event=(
+                "gateway.acp.mcp_bridge.completed"
+                if status == "success"
+                else "gateway.acp.mcp_bridge.failed"
+            ),
+            message="ACP MCP bridge request completed"
+            if status == "success"
+            else "ACP MCP bridge request failed",
+            payload=payload,
+            duration_ms=duration_ms,
+            exc_info=exc,
+        )
+        if self._metric_recorder is None:
+            return
+        record_gateway_operation(
+            self._metric_recorder,
+            session_id=internal_session_id,
+            run_id=run_id,
+            instance_id=trace_context.instance_id or "",
+            role_id=trace_context.role_id or "",
+            gateway_channel="acp_stdio",
+            gateway_operation="mcp_bridge_request",
+            gateway_phase="request",
+            gateway_transport="acp",
+            status=status,
+            cold_start=False,
+            duration_ms=duration_ms,
+        )
 
 
 class _RelayConnection:

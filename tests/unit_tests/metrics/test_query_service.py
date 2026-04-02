@@ -193,6 +193,99 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         tags=reviewer_tags,
         occurred_at=now,
     )
+    gateway_request_tags = MetricTagSet(
+        session_id="session-1",
+        run_id="run-1",
+        gateway_channel="acp_stdio",
+        gateway_operation="session_prompt",
+        gateway_phase="request",
+        gateway_transport="stdio",
+        gateway_cold_start="true",
+        status="completed",
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operations",
+        value=1,
+        tags=gateway_request_tags,
+        occurred_at=now,
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operation_duration_ms",
+        value=420,
+        tags=gateway_request_tags,
+        occurred_at=now,
+    )
+    gateway_prompt_start_tags = MetricTagSet(
+        session_id="session-1",
+        run_id="run-1",
+        gateway_channel="acp_stdio",
+        gateway_operation="session_prompt",
+        gateway_phase="run_start",
+        gateway_transport="stdio",
+        gateway_cold_start="true",
+        status="success",
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operations",
+        value=1,
+        tags=gateway_prompt_start_tags,
+        occurred_at=now,
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operation_duration_ms",
+        value=110,
+        tags=gateway_prompt_start_tags,
+        occurred_at=now,
+    )
+    gateway_first_update_tags = MetricTagSet(
+        session_id="session-1",
+        run_id="run-1",
+        gateway_channel="acp_stdio",
+        gateway_operation="session_prompt",
+        gateway_phase="first_update",
+        gateway_transport="stdio",
+        gateway_cold_start="true",
+        status="success",
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operations",
+        value=1,
+        tags=gateway_first_update_tags,
+        occurred_at=now,
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operation_duration_ms",
+        value=180,
+        tags=gateway_first_update_tags,
+        occurred_at=now,
+    )
+    gateway_mcp_tags = MetricTagSet(
+        session_id="session-1",
+        gateway_channel="acp_stdio",
+        gateway_operation="mcp_bridge_request",
+        gateway_phase="request",
+        gateway_transport="acp",
+        gateway_cold_start="false",
+        status="failed",
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operations",
+        value=1,
+        tags=gateway_mcp_tags,
+        occurred_at=now,
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operation_duration_ms",
+        value=75,
+        tags=gateway_mcp_tags,
+        occurred_at=now,
+    )
+    recorder.emit(
+        definition_name="agent_teams.gateway.operation_failures",
+        value=1,
+        tags=gateway_mcp_tags,
+        occurred_at=now,
+    )
 
     query = MetricsQueryService(store=store)
     overview = query.get_overview(
@@ -219,6 +312,13 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
     assert round(overview.kpis.retrieval_failure_rate, 2) == 0.25
     assert overview.kpis.retrieval_avg_duration_ms == 50
     assert overview.kpis.retrieval_document_count == 17
+    assert overview.kpis.gateway_calls == 2
+    assert round(overview.kpis.gateway_failure_rate, 2) == 0.5
+    assert round(overview.kpis.gateway_avg_duration_ms, 2) == 247.5
+    assert overview.kpis.gateway_prompt_avg_start_ms == 110
+    assert overview.kpis.gateway_prompt_avg_first_update_ms == 180
+    assert overview.kpis.gateway_mcp_calls == 1
+    assert overview.kpis.gateway_cold_start_calls == 1
     assert len(overview.trends) == 1
     assert len(breakdown.rows) == 2
     assert breakdown.rows[0].tool_name == "shell"
@@ -236,3 +336,15 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
     assert breakdown.role_rows[1].role_id == "reviewer"
     assert breakdown.role_rows[1].tool_calls == 1
     assert breakdown.role_rows[1].tool_success_rate == 1
+    assert len(breakdown.gateway_rows) == 4
+    gateway_rows = {
+        (
+            row.gateway_operation,
+            row.gateway_phase,
+            row.gateway_transport,
+        ): row
+        for row in breakdown.gateway_rows
+    }
+    session_prompt_request = gateway_rows[("session_prompt", "request", "stdio")]
+    assert session_prompt_request.calls == 1
+    assert session_prompt_request.cold_start_calls == 1
