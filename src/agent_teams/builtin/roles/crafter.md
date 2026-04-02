@@ -11,6 +11,9 @@ tools:
   - edit
   - write
   - shell
+  - list_background_tasks
+  - wait_background_task
+  - stop_background_task
   - webfetch
   - websearch
 ---

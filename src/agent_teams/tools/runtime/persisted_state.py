@@ -25,6 +25,13 @@ class ToolApprovalStatus(str, Enum):
     TIMEOUT = "timeout"
 
 
+class ToolApprovalMode(str, Enum):
+    UNKNOWN = "unknown"
+    YOLO = "yolo"
+    POLICY_EXEMPT = "policy_exempt"
+    APPROVAL_FLOW = "approval_flow"
+
+
 class ToolExecutionStatus(str, Enum):
     WAITING_APPROVAL = "waiting_approval"
     READY = "ready"
@@ -38,9 +45,13 @@ class PersistedToolCallState(BaseModel):
 
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
+    run_id: str = ""
+    session_id: str = ""
     instance_id: str = Field(min_length=1)
     role_id: str = Field(min_length=1)
     args_preview: str = ""
+    run_yolo: bool = False
+    approval_mode: ToolApprovalMode = ToolApprovalMode.UNKNOWN
     approval_status: ToolApprovalStatus = ToolApprovalStatus.PENDING
     approval_feedback: str = ""
     execution_status: ToolExecutionStatus = ToolExecutionStatus.WAITING_APPROVAL
@@ -75,9 +86,13 @@ def merge_tool_call_state(
     task_id: str,
     tool_call_id: str,
     tool_name: str,
+    run_id: str | None = None,
+    session_id: str | None = None,
     instance_id: str,
     role_id: str,
     args_preview: str | None = None,
+    run_yolo: bool | None = None,
+    approval_mode: ToolApprovalMode | None = None,
     approval_status: ToolApprovalStatus | None = None,
     approval_feedback: str | None = None,
     execution_status: ToolExecutionStatus | None = None,
@@ -94,9 +109,15 @@ def merge_tool_call_state(
         current = PersistedToolCallState(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
+            run_id=run_id or "",
+            session_id=session_id or "",
             instance_id=instance_id,
             role_id=role_id,
             args_preview=args_preview or "",
+            run_yolo=False if run_yolo is None else run_yolo,
+            approval_mode=(
+                ToolApprovalMode.UNKNOWN if approval_mode is None else approval_mode
+            ),
             updated_at=now,
         )
     update: dict[str, object] = {
@@ -105,8 +126,16 @@ def merge_tool_call_state(
         "role_id": role_id,
         "updated_at": now,
     }
+    if run_id is not None:
+        update["run_id"] = run_id
+    if session_id is not None:
+        update["session_id"] = session_id
     if args_preview is not None:
         update["args_preview"] = args_preview
+    if run_yolo is not None:
+        update["run_yolo"] = run_yolo
+    if approval_mode is not None:
+        update["approval_mode"] = approval_mode
     if approval_status is not None:
         update["approval_status"] = approval_status
     if approval_feedback is not None:
@@ -176,6 +205,8 @@ def update_tool_call_call_state(
         task_id=task_id,
         tool_call_id=tool_call_id,
         tool_name=tool_name,
+        run_id=None,
+        session_id=None,
         instance_id=instance_id,
         role_id=role_id,
         call_state=next_call_state,
@@ -211,6 +242,12 @@ def recover_tool_call_state_from_event_log(
         if event_type == RunEventType.TOOL_CALL.value:
             tool_args = _parse_tool_args(payload)
         tool_name = str(payload.get("tool_name") or (state.tool_name if state else ""))
+        run_id = str(payload.get("run_id") or (state.run_id if state else trace_id))
+        session_id = str(
+            payload.get("session_id")
+            or row.get("session_id")
+            or (state.session_id if state else "")
+        )
         instance_id = str(
             payload.get("instance_id")
             or row.get("instance_id")
@@ -228,9 +265,13 @@ def recover_tool_call_state_from_event_log(
             state = PersistedToolCallState(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
+                run_id=run_id,
+                session_id=session_id,
                 instance_id=instance_id,
                 role_id=role_id,
                 args_preview=args_preview,
+                run_yolo=False,
+                approval_mode=ToolApprovalMode.UNKNOWN,
                 approval_status=ToolApprovalStatus.NOT_REQUIRED,
                 execution_status=ToolExecutionStatus.READY,
             )
@@ -238,6 +279,8 @@ def recover_tool_call_state_from_event_log(
             state = state.model_copy(
                 update={
                     "tool_name": tool_name,
+                    "run_id": run_id,
+                    "session_id": session_id,
                     "instance_id": instance_id,
                     "role_id": role_id,
                     "args_preview": args_preview,
@@ -247,6 +290,7 @@ def recover_tool_call_state_from_event_log(
         if event_type == RunEventType.TOOL_APPROVAL_REQUESTED.value:
             state = state.model_copy(
                 update={
+                    "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
                     "approval_status": ToolApprovalStatus.PENDING,
                     "execution_status": ToolExecutionStatus.WAITING_APPROVAL,
                 }
@@ -258,6 +302,7 @@ def recover_tool_call_state_from_event_log(
                     update={
                         "approval_status": ToolApprovalStatus.APPROVE,
                         "approval_feedback": str(payload.get("feedback") or ""),
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
                         "execution_status": ToolExecutionStatus.READY,
                     }
                 )
@@ -266,6 +311,7 @@ def recover_tool_call_state_from_event_log(
                     update={
                         "approval_status": ToolApprovalStatus.DENY,
                         "approval_feedback": str(payload.get("feedback") or ""),
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
                         "execution_status": ToolExecutionStatus.FAILED,
                     }
                 )
@@ -273,6 +319,7 @@ def recover_tool_call_state_from_event_log(
                 state = state.model_copy(
                     update={
                         "approval_status": ToolApprovalStatus.TIMEOUT,
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
                         "execution_status": ToolExecutionStatus.FAILED,
                     }
                 )
@@ -281,6 +328,8 @@ def recover_tool_call_state_from_event_log(
             if isinstance(result, dict):
                 meta = result.get("meta")
                 approval_status = None
+                approval_mode = None
+                run_yolo = None
                 if isinstance(meta, dict):
                     approval_text = (
                         str(meta.get("approval_status") or "").strip().lower()
@@ -293,8 +342,17 @@ def recover_tool_call_state_from_event_log(
                         approval_status = ToolApprovalStatus.TIMEOUT
                     elif approval_text == ToolApprovalStatus.NOT_REQUIRED.value:
                         approval_status = ToolApprovalStatus.NOT_REQUIRED
+                    approval_mode = _parse_approval_mode(meta.get("approval_mode"))
+                    if isinstance(meta.get("run_yolo"), bool):
+                        run_yolo = bool(meta["run_yolo"])
                 state = state.model_copy(
                     update={
+                        "run_yolo": state.run_yolo if run_yolo is None else run_yolo,
+                        "approval_mode": (
+                            state.approval_mode
+                            if approval_mode is None
+                            else approval_mode
+                        ),
                         "approval_status": approval_status or state.approval_status,
                         "execution_status": ToolExecutionStatus.COMPLETED,
                         "result_envelope": result,
@@ -318,9 +376,13 @@ def recover_tool_call_state_from_event_log(
         task_id=task_id,
         tool_call_id=tool_call_id,
         tool_name=state.tool_name,
+        run_id=state.run_id,
+        session_id=state.session_id,
         instance_id=state.instance_id,
         role_id=state.role_id,
         args_preview=state.args_preview,
+        run_yolo=state.run_yolo,
+        approval_mode=state.approval_mode,
         approval_status=state.approval_status,
         approval_feedback=state.approval_feedback,
         execution_status=state.execution_status,
@@ -358,6 +420,16 @@ def _parse_tool_args(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
             return {}
         return decoded if isinstance(decoded, dict) else {}
     return {}
+
+
+def _parse_approval_mode(value: object) -> ToolApprovalMode | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    for mode in ToolApprovalMode:
+        if normalized == mode.value:
+            return mode
+    return None
 
 
 def _recover_call_state(

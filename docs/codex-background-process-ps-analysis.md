@@ -15,6 +15,9 @@
 - `/ps` 的作用是列出当前仍在运行的 background terminals，展示每个后台 terminal 的命令摘要和最近输出片段。命令定义在 `codex-rs/tui/src/slash_command.rs:52`、`codex-rs/tui/src/slash_command.rs:93`，UI 处理在 `codex-rs/tui/src/chatwidget.rs:5360`、`codex-rs/tui/src/chatwidget.rs:7493`。
 - `/stop` 的作用是停止所有 background terminals。命令定义在 `codex-rs/tui/src/slash_command.rs:53`、`codex-rs/tui/src/slash_command.rs:94`，执行在 `codex-rs/tui/src/chatwidget.rs:5363`、`codex-rs/tui/src/chatwidget.rs:7505`。
 - 底部状态栏会在有后台 terminal 时显示 `N background terminal(s) running · /ps to view · /stop to close`，实现见 `codex-rs/tui/src/bottom_pane/unified_exec_footer.rs:45`。
+- 这套 background terminal 语义不是 Node wrapper 提供的，而是 Rust `unified_exec` + `codex_utils_pty` 提供的统一会话抽象。Linux/Unix 走原生 PTY/process group 语义，Windows 走 ConPTY。
+- Windows 上要启用 unified exec，至少需要 ConPTY 可用；若系统过老不支持 ConPTY，则会退回非 unified exec 路径。
+- Windows restricted-token sandbox 主路径当前是 capture-only 执行模型，不是 session 模型，所以交互式 background terminal、`write_stdin`、`resize` 之类能力会被显式禁用。
 - 本 worktree 没有自己实现 `/ps` 或 background shell；它做的是把外部 ACP agent 作为 role backend 接进来。对于 Codex，本分支当前采用 `stdio` 方式，配置形态是 `command="codex"`、`args=("--serve",)`，可见于测试 `tests/unit_tests/external_agents/test_acp_client.py:42` 与 `tests/unit_tests/external_agents/test_config_service.py:71`。
 - 公开可检索的上游仓库里，我没有检索到 `--serve` 字面量定义；所以“`codex --serve` 是当前公开仓库明文可见的官方入口”这一点，现有证据不足。能确认的是：本分支明确按这个调用约定来对接 Codex，并且其 stdio transport 设计与 ACP JSON-RPC 消息流是自洽的，见 `src/agent_teams/external_agents/acp_client.py:146`。
 
@@ -216,6 +219,98 @@ TUI 侧维护了 `self.unified_exec_processes`。
 
 这说明 background terminal 不是无界的；它们是一个受控资源池。
 
+### 6.4 跨平台后端是怎么统一的
+
+`unified_exec` 并不直接依赖 Linux 或 Windows 的原生 API。它先把上层能力统一成：
+
+- `exec_command`
+- `write_stdin`
+- `ProcessHandle`
+- `SpawnedProcess`
+- `ProcessStore`
+
+真正的平台差异被下沉到 `codex-rs/utils/pty`：
+
+- `tty=true` 时，`open_session_with_exec_env()` 走 `codex_utils_pty::pty::spawn_process_with_inherited_fds(...)`
+- `tty=false` 时，走 `codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(...)`
+
+也就是说，background terminal 的产品语义是一套，平台后端是两套。
+
+#### Linux / Unix
+
+Linux/Unix 侧的特点：
+
+- PTY 后端主要使用 `portable_pty::native_pty_system()`
+- pipe 路径会在 `pre_exec` 里 `detach_from_tty()`，其内部优先 `setsid()`
+- Linux 额外使用 `PR_SET_PDEATHSIG`
+- 清理时尽量按 process group 杀掉整组进程，而不是只杀一个 pid
+
+这使得 Linux 上的 background terminal 很接近“真实的后台 shell/PTY 会话”。
+
+#### Windows
+
+Windows 侧不是模仿 Unix PTY，而是直接走 ConPTY：
+
+- 先检查 `conpty_supported()`
+- 要求系统 build `>= 17763`
+- 用 `CreatePseudoConsole` 创建 pseudo console
+- 再通过 `STARTUPINFOEXW + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
+- 最终 `CreateProcessW` 启动子进程
+
+然后再把这个 ConPTY 会话包装回统一的 `ProcessHandle` / `SpawnedProcess` 抽象，继续被 `unified_exec` 管理。
+
+因此，Windows 上 background terminal 的兼容方式本质上是：
+
+- 终端层换成 ConPTY
+- 上层 session 语义保持一致
+
+### 6.5 为什么 Windows sandbox 会禁用交互式 background terminal
+
+这部分是上游当前实现里最容易被误解的点。
+
+表面看，Windows sandbox crate 里已经有更强的 runner IPC：
+
+- `SpawnRequest`
+- `Stdin`
+- `Terminate`
+- `Output`
+- `Exit`
+
+而且 elevated runner 内部也支持：
+
+- `tty=true`
+- ConPTY 启动
+- stdin/terminate 控制帧
+- 输出流式回传
+
+但 Codex 当前主流程并没有把这条能力接成统一的 background terminal session，而是仍然把它封装成 capture 流程。
+
+直接证据是：
+
+- `exec_windows_sandbox()` 调的是 `run_windows_sandbox_capture_*`
+- 返回值是 `CaptureResult { exit_code, stdout, stderr, timed_out }`
+- elevated capture 在给 runner 发 `SpawnRequest` 时，实际写死的是 `tty: false`、`stdin_open: false`
+
+这意味着当前 Windows sandbox 主路径只承诺：
+
+- 运行命令
+- 收集输出
+- 返回结果
+
+而不承诺：
+
+- 返回一个长期存活的 session handle
+- 后续 `write_stdin`
+- 后续 `resize`
+- 后续把它列入 `/ps` 持续管理
+
+因此 tool 选择层和 app-server 才会显式拒绝：
+
+- Windows sandbox 下的 unified exec
+- Windows sandbox 进程的 `write`
+- Windows sandbox 进程的 `resize`
+- Windows sandbox 进程的交互式 streaming
+
 ## 7. `background process` 的用户使用方法
 
 基于上游文档页与源码，用户侧可以总结成下面这套心智模型。
@@ -374,10 +469,14 @@ CLI 则在：
 3. `/stop` = stop all background terminals
 4. unified exec process manager 会在 turn 结束后保活后台 terminal
 5. 本分支按 `codex --serve` 的 stdio ACP 方式接入 Codex
+6. Linux/Unix 通过原生 PTY 与 process group 语义支撑 background terminal
+7. Windows 通过 ConPTY 支撑 background terminal
+8. Windows restricted-token sandbox 当前只接成 capture 语义，因此禁用交互式 background terminal
 
 下面这项要保留边界：
 
 - 公开仓库里没有检索到 `--serve` 的字面定义，因此不能只凭公开源码证明当前所有 Codex 发行物都暴露这个 flag；这里只能说本分支的集成是按这一契约设计和测试的
+- Windows 的 PTY 单元测试是有的，但 unified exec 的大量集成测试仍然跳过 Windows，因此“代码支持”和“端到端覆盖成熟度”不能完全等同
 
 ## 10. 如果要在本分支里实际配置一个 Codex 外部 agent
 
@@ -450,14 +549,14 @@ CLI 则在：
 - `The maximum number of unified exec processes you can keep open is`
 - `background_terminal_max_timeout`
 - `write_stdin`
-- `Writes characters to an existing unified exec session and returns recent output.`
+- `Writes characters to an existing unified background task and returns recent output.`
 - `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
 
 这些字符串说明 shipped binary 本身就包含如下能力，而不是只在源码里“看起来存在”：
 
 1. background terminal 的用户文案
 2. `/ps` / `/stop` 的交互提示
-3. unified exec session 的持续交互模型
+3. unified background task 的持续交互模型
 4. `write_stdin` 这种针对已有后台 session 写 stdin / 轮询输出的工具语义
 5. 对后台 terminal 超时与数量限制的配置项
 
@@ -477,8 +576,8 @@ CLI 则在：
 - `Runs a command in a PTY, returning output or a session ID for ongoing interaction.`
 - `Session identifier to pass to write_stdin when the process is still running.`
 - `write_stdin`
-- `Writes characters to an existing unified exec session and returns recent output.`
-- `Identifier of the running unified exec session.`
+- `Writes characters to an existing unified background task and returns recent output.`
+- `Identifier of the running unified background task.`
 - `Bytes to write to stdin (may be empty to poll).`
 
 这组字符串非常关键，基本可以证明 shipped binary 的真实模型是：
@@ -508,7 +607,7 @@ CLI 则在：
 
 - `Stopping all background terminals.`
 - `CleanBackgroundTerminals`
-- `thread/backgroundTerminals/clean failed in app-server TUI`
+- `thread/backgroundTasks/clean failed in app-server TUI`
 - `struct variant ClientRequest::ThreadBackgroundTerminalsClean`
 
 这一组字符串把 `/stop` 的真实行为进一步钉实了：
@@ -570,7 +669,7 @@ CLI 则在：
 综合源码、文档、以及已安装原生二进制静态逆向，可以把结论升级为：
 
 - Codex 的 background process 能力真实存在于当前 shipped Rust 原生二进制中
-- 它的真实模型是 unified exec session / background terminal，而不是简单的一次性 shell 执行
+- 它的真实模型是 unified background task / background terminal，而不是简单的一次性 shell 执行
 - `/ps` 查看的是 Codex 内部维护的后台 terminal 列表
 - `/stop` 走的是专门的 background terminal 清理路径
 - 后续交互依赖 `write_stdin` 一类的持续会话机制，而不是重新启动命令

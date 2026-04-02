@@ -1,0 +1,5 @@
+Wait for a managed background task from the current run.
+
+- Pass `background_task_id` from `shell(background=true)` or `list_background_tasks`.
+- Use `wait_ms` to control how long to wait before returning.
+- The result includes current status and any output captured so far.

@@ -36,7 +36,7 @@ def test_health_endpoint(api_client: httpx.Client) -> None:
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
     tool_registry_sanity = body["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
-    assert tool_registry_sanity["has_write_tmp"] is True
+    assert "write" in tool_registry_sanity["available_tool_names"]
 
 
 def test_manual_run_stream_reaches_terminal(api_client: httpx.Client) -> None:
@@ -313,6 +313,11 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
         )
         restore_response.raise_for_status()
 
+    events = _session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+    )
     tool_calls = [
         json.loads(str(event["payload_json"]))
         for event in events
@@ -395,6 +400,11 @@ def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
         )
         restore_response.raise_for_status()
 
+    events = _session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+    )
     tool_calls = [
         json.loads(str(event["payload_json"]))
         for event in events
@@ -449,6 +459,23 @@ def _role_draft_payload(record: dict[str, object]) -> dict[str, object]:
         "memory_profile": record["memory_profile"],
         "system_prompt": record["system_prompt"],
     }
+
+
+def _session_run_events(
+    api_client: httpx.Client,
+    *,
+    session_id: str,
+    run_id: str,
+) -> list[dict[str, object]]:
+    response = api_client.get(f"/api/sessions/{session_id}/events")
+    response.raise_for_status()
+    payload = response.json()
+    assert isinstance(payload, list)
+    return [
+        event
+        for event in payload
+        if isinstance(event, dict) and str(event.get("trace_id") or "") == run_id
+    ]
 
 
 def _wait_for_role_tools(

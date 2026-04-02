@@ -304,11 +304,11 @@ console.log(JSON.stringify({
     )
 
     assert (
-        "Roles that use skills usually work better with the shell tool enabled."
+        "Roles that use skills usually work better with the exec command tool enabled."
         in cast(str, payload["advisoryBefore"])
     )
     assert (
-        "Roles that use skills usually work better with the shell tool enabled."
+        "Roles that use skills usually work better with the exec command tool enabled."
         not in cast(str, payload["advisoryAfter"])
     )
 
@@ -497,7 +497,7 @@ const initialSkillOptions = document.getElementById("role-skills-picker").queryS
 initialSkillOptions[1].checked = true;
 await initialSkillOptions[1].onchange();
 const advisoryStillPresent = document.getElementById("role-skills-picker").innerHTML.includes(
-    "Roles that use skills usually work better with the shell tool enabled."
+    "Roles that use skills usually work better with the exec command tool enabled."
 );
 
 await document.getElementById("save-role-btn").onclick();
@@ -512,8 +512,9 @@ console.log(JSON.stringify({
 
     initial_skills_html = cast(str, payload["initialSkillsHtml"])
     save_payload = cast(dict[str, JsonValue], payload["savePayload"])
-    assert "Roles that use skills usually work better with the shell tool enabled." in (
-        initial_skills_html
+    assert (
+        "Roles that use skills usually work better with the exec command tool enabled."
+        in (initial_skills_html)
     )
     assert payload["advisoryStillPresent"] is True
     assert save_payload["skills"] == ["builtin:diff", "builtin:time"]
@@ -543,7 +544,7 @@ const toolOptions = document.getElementById("role-tools-picker").querySelectorAl
 toolOptions[2].checked = true;
 await toolOptions[2].onchange();
 const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML.includes(
-    "Roles that use skills usually work better with the shell tool enabled."
+    "Roles that use skills usually work better with the exec command tool enabled."
 );
 
 const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
@@ -1095,7 +1096,7 @@ const translations = {
     "settings.roles.no_tools": "No tools loaded.",
     "settings.roles.no_mcp": "No MCP servers loaded.",
     "settings.roles.no_skills": "No skills loaded.",
-    "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the shell tool enabled.",
+    "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the exec command tool enabled.",
 };
 
 export function t(key) {

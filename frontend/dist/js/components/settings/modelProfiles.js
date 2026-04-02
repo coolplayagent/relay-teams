@@ -24,7 +24,7 @@ let draftApiKeyState = createDraftApiKeyState();
 let isModelMenuOpen = false;
 
 const PROVIDER_DEFAULT_BASE_URLS = {
-    bigmodel: 'https://open.bigmodel.cn/api/paas/v4',
+    bigmodel: 'https://open.bigmodel.cn/api/coding/paas/v4',
     minimax: 'https://api.minimaxi.com/v1',
 };
 

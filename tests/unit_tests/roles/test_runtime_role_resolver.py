@@ -59,13 +59,13 @@ def test_runtime_role_resolver_prefers_run_temporary_roles(tmp_path: Path) -> No
             name="Tmp Writer",
             description="temporary",
             system_prompt="tmp",
-            tools=("write_tmp",),
+            tools=("write",),
         ),
     )
 
     role = resolver.get_effective_role(run_id="run-1", role_id="tmp_writer")
     assert role.role_id == "tmp_writer"
-    assert role.tools == ("write_tmp",)
+    assert role.tools == ("write",)
 
 
 def test_runtime_role_resolver_rejects_reserved_ids(tmp_path: Path) -> None:

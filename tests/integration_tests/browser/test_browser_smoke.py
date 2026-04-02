@@ -200,7 +200,7 @@ def test_browser_shell_settings_and_session_management(
     _emit_gateway_observability_probe()
     _open_app(page, integration_env)
 
-    baseline_count = len(_session_ids(page))
+    baseline_session_ids = set(_session_ids(page))
     session_id = _create_session_via_sidebar(page)
     renamed_title = "Browser Smoke Session"
 
@@ -407,7 +407,7 @@ def test_browser_shell_settings_and_session_management(
     expect(
         page.locator(f'.session-item[data-session-id="{session_id}"]')
     ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
-    assert len(_session_ids(page)) == baseline_count
+    assert set(_session_ids(page)) == baseline_session_ids
 
 
 def test_browser_environment_variables_and_session_topology(
@@ -1080,8 +1080,28 @@ def _open_app(page: Page, integration_env: IntegrationEnvironment) -> None:
 
 def _create_session_via_sidebar(page: Page) -> str:
     existing_session_ids = set(_session_ids(page))
-    page.locator(".project-new-session-btn").first.click(force=True)
-    session_id = _wait_for_new_session_id(page, existing_session_ids)
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST"
+            and response.url.endswith("/api/sessions")
+            and response.ok
+        ),
+        timeout=_WAIT_TIMEOUT_MS,
+    ) as response_info:
+        page.locator(".project-new-session-btn").first.click(force=True)
+
+    response_payload = response_info.value.json()
+    session_id = (
+        str(response_payload.get("session_id") or "").strip()
+        if isinstance(response_payload, dict)
+        else ""
+    )
+    if not session_id:
+        session_id = _wait_for_new_session_id(page, existing_session_ids)
+    else:
+        expect(
+            page.locator(f'.session-item[data-session-id="{session_id}"]')
+        ).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
     expect(page.locator(".session-item.active")).to_have_attribute(
         "data-session-id",
         session_id,
