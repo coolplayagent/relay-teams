@@ -20,6 +20,7 @@ from agent_teams.media import ContentPart, MediaAssetService, MediaModality
 from agent_teams.metrics import MetricRecorder
 from agent_teams.net.llm_client import build_llm_http_client
 from agent_teams.providers.model_config import LlmRetryConfig
+from agent_teams.providers.openai_support import build_model_request_headers
 from agent_teams.providers.provider_contracts import (
     LLMProvider,
     LLMRequest,
@@ -313,10 +314,10 @@ class OpenAICompatibleProvider(LLMProvider):
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
         )
-        headers = {
-            "Authorization": f"Bearer {self._config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = build_model_request_headers(
+            self._config,
+            extra_headers={"Content-Type": "application/json"},
+        )
         response = await client.post(
             self._build_endpoint_url(endpoint_path),
             json=payload,
