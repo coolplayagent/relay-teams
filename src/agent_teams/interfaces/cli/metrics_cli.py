@@ -137,6 +137,16 @@ def _render_overview_table(payload: dict[str, object]) -> str:
         ("Avg Tool ms", _fmt_num(kpis.get("tool_avg_duration_ms"))),
         ("Skill Calls", _fmt_num(kpis.get("skill_calls"))),
         ("MCP Calls", _fmt_num(kpis.get("mcp_calls"))),
+        ("Gateway Calls", _fmt_num(kpis.get("gateway_calls"))),
+        ("Gateway Failure", _fmt_ratio(kpis.get("gateway_failure_rate"))),
+        ("Avg Gateway ms", _fmt_num(kpis.get("gateway_avg_duration_ms"))),
+        ("Prompt Start ms", _fmt_num(kpis.get("gateway_prompt_avg_start_ms"))),
+        (
+            "Prompt First Update ms",
+            _fmt_num(kpis.get("gateway_prompt_avg_first_update_ms")),
+        ),
+        ("Gateway MCP Calls", _fmt_num(kpis.get("gateway_mcp_calls"))),
+        ("Gateway Cold Starts", _fmt_num(kpis.get("gateway_cold_start_calls"))),
     ]
     width = max(len(name) for name, _ in rows)
     return "\n".join(f"{name.ljust(width)} : {value}" for name, value in rows)
@@ -144,25 +154,48 @@ def _render_overview_table(payload: dict[str, object]) -> str:
 
 def _render_breakdowns_table(payload: dict[str, object]) -> str:
     rows = payload.get("rows")
-    if not isinstance(rows, list) or not rows:
-        return "No breakdown rows available."
-    header = "Tool | Source | Calls | Success | Avg ms"
-    body = [header, "-" * len(header)]
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        body.append(
-            " | ".join(
-                [
-                    str(row.get("tool_name", "")),
-                    str(row.get("tool_source", "local") or "local"),
-                    _fmt_num(row.get("calls")),
-                    _fmt_ratio(row.get("success_rate")),
-                    _fmt_num(row.get("avg_duration_ms")),
-                ]
+    gateway_rows = payload.get("gateway_rows")
+    sections: list[str] = []
+    if isinstance(rows, list) and rows:
+        header = "Tool | Source | Calls | Success | Avg ms"
+        body = [header, "-" * len(header)]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            body.append(
+                " | ".join(
+                    [
+                        str(row.get("tool_name", "")),
+                        str(row.get("tool_source", "local") or "local"),
+                        _fmt_num(row.get("calls")),
+                        _fmt_ratio(row.get("success_rate")),
+                        _fmt_num(row.get("avg_duration_ms")),
+                    ]
+                )
             )
-        )
-    return "\n".join(body)
+        sections.append("\n".join(body))
+    if isinstance(gateway_rows, list) and gateway_rows:
+        header = "Gateway Operation | Phase | Transport | Calls | Success | Avg ms"
+        body = [header, "-" * len(header)]
+        for row in gateway_rows:
+            if not isinstance(row, dict):
+                continue
+            body.append(
+                " | ".join(
+                    [
+                        str(row.get("gateway_operation", "")),
+                        str(row.get("gateway_phase", "")),
+                        str(row.get("gateway_transport", "")),
+                        _fmt_num(row.get("calls")),
+                        _fmt_ratio(row.get("success_rate")),
+                        _fmt_num(row.get("avg_duration_ms")),
+                    ]
+                )
+            )
+        sections.append("\n".join(body))
+    if not sections:
+        return "No breakdown rows available."
+    return "\n\n".join(sections)
 
 
 def _render_prettylog_overview(payload: dict[str, object]) -> str:
@@ -173,23 +206,38 @@ def _render_prettylog_overview(payload: dict[str, object]) -> str:
         f"[metrics] scope={payload.get('scope')} scope_id={payload.get('scope_id') or '-'} "
         f"steps={_fmt_num(kpis.get('steps'))} input={_fmt_num(kpis.get('input_tokens'))} "
         f"output={_fmt_num(kpis.get('output_tokens'))} tool_calls={_fmt_num(kpis.get('tool_calls'))} "
-        f"tool_success={_fmt_ratio(kpis.get('tool_success_rate'))}"
+        f"tool_success={_fmt_ratio(kpis.get('tool_success_rate'))} "
+        f"gateway_calls={_fmt_num(kpis.get('gateway_calls'))} "
+        f"gateway_failure={_fmt_ratio(kpis.get('gateway_failure_rate'))} "
+        f"gateway_avg_ms={_fmt_num(kpis.get('gateway_avg_duration_ms'))}"
     )
 
 
 def _render_prettylog_breakdowns(payload: dict[str, object]) -> str:
     rows = payload.get("rows")
-    if not isinstance(rows, list) or not rows:
-        return "[metrics] no breakdown data"
+    gateway_rows = payload.get("gateway_rows")
     lines: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        lines.append(
-            f"[metrics] tool={row.get('tool_name')} source={row.get('tool_source') or 'local'} "
-            f"calls={_fmt_num(row.get('calls'))} success={_fmt_ratio(row.get('success_rate'))} "
-            f"avg_ms={_fmt_num(row.get('avg_duration_ms'))}"
-        )
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"[metrics] tool={row.get('tool_name')} source={row.get('tool_source') or 'local'} "
+                f"calls={_fmt_num(row.get('calls'))} success={_fmt_ratio(row.get('success_rate'))} "
+                f"avg_ms={_fmt_num(row.get('avg_duration_ms'))}"
+            )
+    if isinstance(gateway_rows, list):
+        for row in gateway_rows:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"[metrics] gateway_operation={row.get('gateway_operation')} "
+                f"phase={row.get('gateway_phase')} transport={row.get('gateway_transport')} "
+                f"calls={_fmt_num(row.get('calls'))} success={_fmt_ratio(row.get('success_rate'))} "
+                f"avg_ms={_fmt_num(row.get('avg_duration_ms'))}"
+            )
+    if not lines:
+        return "[metrics] no breakdown data"
     return "\n".join(lines)
 
 

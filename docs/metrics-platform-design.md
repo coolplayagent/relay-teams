@@ -43,6 +43,9 @@ Built-in metrics:
 - `agent_teams.retrieval.rebuilds`
 - `agent_teams.retrieval.rebuild_duration_ms`
 - `agent_teams.retrieval.document_count`
+- `agent_teams.gateway.operations`
+- `agent_teams.gateway.operation_duration_ms`
+- `agent_teams.gateway.operation_failures`
 
 Standard tags:
 - `workspace_id`
@@ -56,6 +59,11 @@ Standard tags:
 - `retrieval_backend`
 - `retrieval_scope_kind`
 - `retrieval_operation`
+- `gateway_channel`
+- `gateway_operation`
+- `gateway_phase`
+- `gateway_transport`
+- `gateway_cold_start`
 - `status`
 
 ## Storage And Queries
@@ -64,6 +72,9 @@ The current aggregate store writes normalized metric points into SQLite and expa
 - cached token ratio
 - tool success rate
 - average tool duration
+- gateway request failure rate
+- gateway request average latency
+- ACP prompt run-start and first-update average latency
 
 ## Extension Rules
 
@@ -89,3 +100,5 @@ Frontend:
   - cached vs uncached input token split
   - retrieval search volume/failure/latency/index-size KPIs
   - tool breakdown and role breakdown panels
+  - gateway ACP request volume/failure/latency KPIs
+  - gateway operation breakdown panel
