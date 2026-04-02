@@ -47,7 +47,7 @@ def _build_workspace_handle(
     )
 
 
-def test_resolve_read_path_rejects_absolute_path_outside_workspace(
+def test_resolve_read_path_allows_absolute_path_outside_workspace(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspace"
@@ -59,8 +59,9 @@ def test_resolve_read_path_rejects_absolute_path_outside_workspace(
     external_file.parent.mkdir(parents=True)
     external_file.write_text("notes\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="outside workspace read scope"):
-        workspace.resolve_read_path(str(external_file))
+    resolved = workspace.resolve_read_path(str(external_file))
+
+    assert resolved == external_file.resolve()
 
 
 def test_resolve_read_path_allows_absolute_path_inside_workspace(
@@ -79,7 +80,7 @@ def test_resolve_read_path_allows_absolute_path_inside_workspace(
     assert resolved == workspace_file.resolve()
 
 
-def test_resolve_read_path_rejects_relative_escape_outside_workspace(
+def test_resolve_read_path_allows_relative_escape_outside_workspace(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspace"
@@ -90,11 +91,12 @@ def test_resolve_read_path_rejects_relative_escape_outside_workspace(
     external_file = tmp_path / "outside.txt"
     external_file.write_text("outside\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="outside workspace read scope"):
-        workspace.resolve_read_path("../outside.txt")
+    resolved = workspace.resolve_read_path("../outside.txt")
+
+    assert resolved == external_file.resolve()
 
 
-def test_resolve_workdir_keeps_workspace_boundary_for_outside_path(
+def test_resolve_workdir_allows_outside_path(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspace"
@@ -103,8 +105,29 @@ def test_resolve_workdir_keeps_workspace_boundary_for_outside_path(
         scope_root=workspace_root,
     )
 
-    with pytest.raises(ValueError, match="outside workspace read scope"):
-        workspace.resolve_workdir("../outside")
+    resolved = workspace.resolve_workdir("../outside")
+
+    assert resolved == (tmp_path / "outside").resolve()
+
+
+def test_resolve_path_rejects_write_outside_workspace_with_allowed_roots(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace = _build_workspace_handle(
+        workspace_dir=workspace_root,
+        scope_root=workspace_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        workspace.resolve_path("../outside.txt", write=True)
+
+    message = str(exc_info.value)
+    assert "outside workspace write scope" in message
+    assert "requested=../outside.txt" in message
+    assert f"resolved={(tmp_path / 'outside.txt').resolve()}" in message
+    assert str(workspace_root.resolve()) in message
+    assert str((workspace_root / "tmp").resolve()) in message
 
 
 def test_resolve_path_routes_tmp_prefix_to_managed_tmp_root(tmp_path: Path) -> None:

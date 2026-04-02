@@ -41,6 +41,7 @@ from agent_teams.sessions.runs.background_tasks.repository import (
 from agent_teams.sessions.runs.run_models import RunEvent
 from agent_teams.sessions.runs.background_tasks.command_runtime import (
     ResolvedCommandRuntime,
+    _PipeProcess,
     _kill_process_tree,
     _kill_process_tree_by_pid,
     _start_new_session,
@@ -201,7 +202,7 @@ class _BackgroundTaskTransport(ABC):
 
 
 class _PipeTransport(_BackgroundTaskTransport):
-    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+    def __init__(self, proc: _PipeProcess) -> None:
         self._proc = proc
 
     @property

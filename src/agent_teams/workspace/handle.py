@@ -70,7 +70,11 @@ class WorkspaceHandle(BaseModel):
             if self._is_path_within_root(resolved_candidate, allowed_root):
                 return resolved_candidate
         action = "write" if write else "read"
-        raise ValueError(f"Path is outside workspace {action} scope: {raw_path}")
+        allowed_roots_text = ", ".join(str(root.resolve()) for root in allowed_roots)
+        raise ValueError(
+            f"Path is outside workspace {action} scope: requested={raw_path}, "
+            f"resolved={resolved_candidate}, allowed_roots=[{allowed_roots_text}]"
+        )
 
     def _resolve_candidate_path(self, raw_path: str) -> Path:
         normalized_path = self._normalize_raw_path(raw_path)
@@ -83,13 +87,17 @@ class WorkspaceHandle(BaseModel):
         return (self.execution_root / normalized_path).resolve()
 
     def resolve_read_path(self, path: str) -> Path:
-        return self.resolve_path(path, write=False)
+        return self._resolve_candidate_path(path)
 
     def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
         candidate = self._resolve_candidate_path(relative_path)
-        return self._validate_allowed_path(
-            candidate, write=write, raw_path=relative_path
-        )
+        if write:
+            return self._validate_allowed_path(
+                candidate,
+                write=True,
+                raw_path=relative_path,
+            )
+        return candidate
 
     def resolve_tmp_path(self, relative_path: str, *, write: bool = True) -> Path:
         requested_path = Path(relative_path)
@@ -123,4 +131,4 @@ class WorkspaceHandle(BaseModel):
     def resolve_workdir(self, relative_path: str | None = None) -> Path:
         if relative_path is None:
             return self.execution_root
-        return self.resolve_path(relative_path, write=False)
+        return self._resolve_candidate_path(relative_path)
