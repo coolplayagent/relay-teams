@@ -484,6 +484,7 @@ def _build_manager(
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         run_intent_repo=cast(RunIntentRepository, object()),
+        background_task_service=None,
         role_memory_service=cast(RoleMemoryService | None, None),
         tool_registry=cast(ToolRegistry, object()),
         get_mcp_registry=lambda: McpRegistry(),

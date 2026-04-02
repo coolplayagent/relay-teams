@@ -1,0 +1,5 @@
+Stop a managed background task from the current run.
+
+- Pass `background_task_id` from `shell(background=true)` or `list_background_tasks`.
+- Use this only for tasks started by the managed background-task runtime.
+- The result returns the final recorded task state.

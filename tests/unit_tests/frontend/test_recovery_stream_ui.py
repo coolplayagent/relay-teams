@@ -45,12 +45,28 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
 
     assert "Connect Stream" not in recovery_script
     assert "t('recovery.recoverable_run_active')" in recovery_script
+    assert "t('recovery.background_task.panel_label')" in recovery_script
+    assert "const host = ensureBackgroundTaskHost();" in recovery_script
+    assert (
+        "const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));"
+        in recovery_script
+    )
+    assert (
+        "const hidePanel = !runId || activeBackgroundTasks.length === 0;"
+        in recovery_script
+    )
+    assert "activeRun.status !== 'stopping'" in recovery_script
+    assert "!activeRun.should_show_recover" in recovery_script
     assert "t('recovery.run_still_stopping')" in recovery_script
     assert "activeRun.status === 'paused'" in recovery_script
     assert "activeRun.phase === 'awaiting_recovery'" in recovery_script
     assert "label: t('recovery.action.resume_run')" in recovery_script
     assert "t('recovery.stop_requested')" in recovery_script
     assert "isPrimaryOrReservedRoleId(roleId)" in recovery_script
+    assert (
+        "function syncRecoveryRailMode({ approvals = [], pausedSubagent = null } = {}) {"
+        in recovery_script
+    )
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
     assert (
@@ -66,6 +82,11 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "stopSessionContinuity(safeSessionId);" in recovery_script
     assert (
+        "const hasActiveBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || [])"
+        in recovery_script
+    )
+    assert "|| hasActiveBackgroundTasks" in recovery_script
+    assert (
         "detachActiveStreamForSessionSwitch({ focusPrompt: false });" in session_script
     )
     assert "clearAllStreamState({ preserveOverlay: true });" in session_script
@@ -73,6 +94,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "clearAllStreamState({ preserveOverlay: true });" in timeline_script
     assert "export function attachRunStream(" in stream_script
     assert "const backgroundStreams = new Map();" in stream_script
+    assert "const MAX_BACKGROUND_STREAMS = 2;" in stream_script
     assert "const unavailableSessionCooldownUntil = new Map();" in stream_script
     assert "const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert (
@@ -94,6 +116,18 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "const sessions = await fetchSessions();" in stream_script
     assert "reason: 'background-discovery'," in stream_script
     assert "const snapshot = await fetchSessionRecovery(sessionId);" in stream_script
+    assert (
+        "candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));"
+        in stream_script
+    )
+    assert (
+        "const focusedRunId = String(activeConnection?.runId || '').trim();"
+        in stream_script
+    )
+    assert "const backgroundRunIds = new Set();" in stream_script
+    assert "if (focusedRunId && runId === focusedRunId) {" in stream_script
+    assert "if (backgroundRunIds.has(runId)) {" in stream_script
+    assert "if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {" in stream_script
     assert (
         "finishActiveConnection(connection, { preserveRunStreamState: true });"
         in stream_script

@@ -48,6 +48,7 @@ class ToolRegistry:
         tools: dict[str, ToolRegister],
         *,
         hidden_from_config: tuple[str, ...] = (),
+        legacy_aliases: dict[str, str] | None = None,
     ) -> None:
         self._tools: dict[str, ToolRegister] = {}
         self._unavailable_tools: dict[str, ToolAvailabilityRecord] = {}
@@ -59,6 +60,11 @@ class ToolRegistry:
             self._tools[name] = register
         self._implicit_resolvers: list[ToolImplicitResolver] = []
         self._hidden_from_config = frozenset(hidden_from_config)
+        self._legacy_aliases = (
+            {}
+            if legacy_aliases is None
+            else {str(key): str(value) for key, value in legacy_aliases.items()}
+        )
 
     def register_implicit_resolver(self, resolver: ToolImplicitResolver) -> None:
         self._implicit_resolvers.append(resolver)
@@ -87,6 +93,11 @@ class ToolRegistry:
         consumer: str | None = None,
     ) -> tuple[str, ...]:
         resolved_names = self.resolve_names(names, context=context)
+        if not strict:
+            resolved_names = tuple(
+                self._legacy_aliases.get(name, name) for name in resolved_names
+            )
+            resolved_names = self._deduplicate_names(resolved_names)
         known_names = tuple(name for name in resolved_names if name in self._tools)
         unavailable_names = tuple(
             name for name in resolved_names if name in self._unavailable_tools

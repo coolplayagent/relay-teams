@@ -73,6 +73,7 @@ class ToolApprovalRequest(BaseModel):
     target_summary: str = ""
     source: str = ""
     execution_surface: ExecutionSurface | None = None
+    cache_key: str = ""
 
 
 class ToolApprovalDecision(BaseModel):

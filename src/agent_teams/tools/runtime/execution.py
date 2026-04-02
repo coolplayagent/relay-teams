@@ -36,6 +36,7 @@ from agent_teams.tools.runtime.models import (
 )
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
 from agent_teams.tools.runtime.persisted_state import (
+    ToolApprovalMode,
     ToolApprovalStatus,
     ToolExecutionStatus,
     merge_tool_call_state,
@@ -359,11 +360,22 @@ async def _handle_tool_approval(
         approval_request=approval_request,
     )
     approval_required = decision.required
+    run_yolo = _policy_uses_yolo(ctx.deps.tool_approval_policy)
     args_preview = _safe_json(args_summary)
     approval_preview = _safe_json(
         approval_args_summary if approval_args_summary is not None else args_summary
     )
+    meta["run_yolo"] = run_yolo
     meta["approval_required"] = approval_required
+    meta["approval_mode"] = (
+        ToolApprovalMode.YOLO.value
+        if run_yolo and not approval_required
+        else (
+            ToolApprovalMode.POLICY_EXEMPT.value
+            if not approval_required
+            else ToolApprovalMode.APPROVAL_FLOW.value
+        )
+    )
     if decision.permission_scope is not None:
         meta["permission_scope"] = decision.permission_scope.value
     if decision.risk_level is not None:
@@ -374,6 +386,7 @@ async def _handle_tool_approval(
         meta["source"] = decision.source
     if decision.execution_surface is not None:
         meta["execution_surface"] = decision.execution_surface.value
+    cache_key = approval_request.cache_key if approval_request is not None else ""
     if not approval_required:
         meta["approval_status"] = "not_required"
         return None, None
@@ -385,6 +398,7 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
+        cache_key=cache_key,
         signature_args_preview=approval_preview,
     )
     if reusable_ticket is not None:
@@ -427,6 +441,7 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
+        cache_key=cache_key,
         signature_args_preview=approval_preview,
     )
     return await _wait_for_ticket_resolution(
@@ -770,14 +785,19 @@ def _persist_tool_record(
     execution_status: ToolExecutionStatus,
 ) -> None:
     approval_status = _approval_status_from_meta(runtime_meta)
+    approval_mode = _approval_mode_from_meta(runtime_meta)
     merge_tool_call_state(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
         tool_call_id=tool_call_id,
         tool_name=tool_name,
+        run_id=ctx.deps.run_id,
+        session_id=ctx.deps.session_id,
         instance_id=ctx.deps.instance_id,
         role_id=ctx.deps.role_id,
         args_preview=_safe_json(args_summary),
+        run_yolo=bool(runtime_meta.get("run_yolo") is True),
+        approval_mode=approval_mode,
         approval_status=approval_status,
         approval_feedback=str(runtime_meta.get("approval_feedback") or ""),
         execution_status=execution_status,
@@ -803,3 +823,17 @@ def _approval_status_from_meta(
     if approval_text == ToolApprovalStatus.NOT_REQUIRED.value:
         return ToolApprovalStatus.NOT_REQUIRED
     return None
+
+
+def _approval_mode_from_meta(
+    runtime_meta: dict[str, JsonValue],
+) -> ToolApprovalMode | None:
+    approval_mode = str(runtime_meta.get("approval_mode") or "").strip().lower()
+    for candidate in ToolApprovalMode:
+        if approval_mode == candidate.value:
+            return candidate
+    return None
+
+
+def _policy_uses_yolo(policy: object) -> bool:
+    return bool(getattr(policy, "yolo", False))
