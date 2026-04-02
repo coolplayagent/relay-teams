@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from agent_teams.logger import get_logger, log_event
+from agent_teams.paths import make_dirs
 
 _GIT_TIMEOUT_SECONDS = 30.0
 _logger = get_logger(__name__)
@@ -55,7 +56,7 @@ class GitWorktreeClient:
         target_path: Path,
         start_point: str,
     ) -> None:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
+        make_dirs(target_path.parent, exist_ok=True)
         _ = self._run_git(
             (
                 "worktree",
