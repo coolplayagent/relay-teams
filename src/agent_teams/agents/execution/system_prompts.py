@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 import os
 import platform
 from collections.abc import Sequence
@@ -74,6 +75,12 @@ AVAILABLE_SKILLS_HEADING = "## Available Skills"
 AVAILABLE_SKILL_ITEM_PREFIX = "- "
 NONE_LABEL = "none"
 AUTHORIZED_RUNTIME_TOOLS_HEADING = "## Authorized Runtime Tools"
+TIME_TRUST_RULE = (
+    "- Time Trust Rule: Do not trust your internal knowledge for the current date or "
+    "time. When the user asks about today, current, recent, yesterday, tomorrow, or "
+    "this week, use the runtime date in this section as the default source of truth "
+    "and verify with tools when higher precision is needed."
+)
 
 
 class RuntimePromptBuildInput(BaseModel):
@@ -133,17 +140,41 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     runtime_shell = describe_runtime_shell()
     shell_info = runtime_shell.shell_info
     shell_path = runtime_shell.shell_path
+    current_date, runtime_timezone = _get_runtime_date_context()
 
     lines = [
         "## Runtime Environment Information",
         f"- Operating System: {system} ({release}) {machine}",
         f"- Working Directory: {cwd}",
         f"- Shell Type: {shell_info} (Path: {shell_path})",
+        f"- Current Date: {current_date}",
+        f"- Runtime Timezone: {runtime_timezone}",
+        TIME_TRUST_RULE,
     ]
     github_line = _build_github_cli_environment_line()
     if github_line:
         lines.append(github_line)
     return "\n".join(lines)
+
+
+def _get_runtime_date_context() -> tuple[str, str]:
+    now = datetime.now().astimezone()
+    current_date = now.date().isoformat()
+    timezone_name = now.tzname() or "local"
+    utc_offset = now.utcoffset()
+    if utc_offset is None:
+        return current_date, timezone_name
+    offset_text = _format_utc_offset(utc_offset)
+    if timezone_name == offset_text:
+        return current_date, f"UTC{offset_text}"
+    return current_date, f"{timezone_name} (UTC{offset_text})"
+
+
+def _format_utc_offset(offset: timedelta) -> str:
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    return f"{sign}{hours:02d}:{minutes:02d}"
 
 
 def _build_github_cli_environment_line() -> str | None:

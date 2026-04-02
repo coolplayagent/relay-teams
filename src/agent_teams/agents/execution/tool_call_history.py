@@ -16,6 +16,19 @@ from pydantic_ai.messages import (
 ToolResultDropLogger = Callable[[ModelRequestPart, bool], None]
 
 
+def clone_model_request_with_parts(
+    message: ModelRequest,
+    parts: Sequence[ModelRequestPart],
+) -> ModelRequest:
+    return ModelRequest(
+        parts=parts,
+        timestamp=message.timestamp,
+        instructions=message.instructions,
+        run_id=message.run_id,
+        metadata=message.metadata,
+    )
+
+
 def normalize_replayed_messages(
     messages: Sequence[ModelMessage],
     *,
@@ -43,7 +56,9 @@ def normalize_replayed_messages(
             on_drop=on_drop,
         )
         if next_parts:
-            sanitized_messages.append(ModelRequest(parts=next_parts))
+            sanitized_messages.append(
+                clone_model_request_with_parts(message, next_parts)
+            )
     return sanitized_messages
 
 
@@ -116,7 +131,9 @@ def normalize_replayed_messages_against_pending(
             on_drop=on_drop,
         )
         if next_parts:
-            sanitized_messages.append(ModelRequest(parts=next_parts))
+            sanitized_messages.append(
+                clone_model_request_with_parts(message, next_parts)
+            )
     return sanitized_messages
 
 

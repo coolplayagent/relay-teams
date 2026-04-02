@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from agent_teams.agents.execution.recoverable_openai_chat_model import (
     RecoverableOpenAIChatModel,
 )
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -13,6 +15,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.providers.openai import OpenAIProvider
 
 
 def test_map_tool_call_keeps_valid_json_arguments() -> None:
@@ -165,3 +168,38 @@ def test_sanitize_replayed_messages_drops_duplicate_late_tool_results() -> None:
     assert len(sanitized[2].parts) == 1
     assert isinstance(sanitized[2].parts[0], UserPromptPart)
     assert sanitized[2].parts[0].content == "optimize it"
+
+
+@pytest.mark.asyncio
+async def test_map_messages_keeps_system_message_when_replay_sanitizes_history() -> (
+    None
+):
+    model = RecoverableOpenAIChatModel(
+        "gpt-5.4",
+        provider=OpenAIProvider(base_url="https://example.test/v1", api_key="test"),
+    )
+    messages = [
+        ModelRequest(
+            parts=[UserPromptPart(content="你能使用哪些技能")],
+            instructions="System instructions",
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="write",
+                    tool_call_id="call-missing",
+                    content={"ok": False},
+                )
+            ]
+        ),
+    ]
+
+    mapped = await model._map_messages(messages, ModelRequestParameters())
+
+    system_messages = [
+        message
+        for message in mapped
+        if isinstance(message, dict) and message.get("role") == "system"
+    ]
+    assert len(system_messages) == 1
+    assert system_messages[0].get("content") == "System instructions"
