@@ -1,37 +1,21 @@
 {
   "name": "pptx-craft",
   "version": "1.0.0",
-  "description": "HTML 幻灯片生成技能，使用 HTML + Tailwind CSS 创建高信息密度、专业美观的演示文稿",
-  "private": true,
+  "description": "PPT 技能辅助资源，提供输出目录处理与 SVG 转 PPTX 脚本入口。",
+  "type": "module",
   "scripts": {
-    "check-deps": "node scripts/check-deps.js",
-    "setup-designer": "node scripts/setup_designer.js",
-    "convert-pages": "node scripts/convert_pages.js",
-    "install-browser": "npx playwright install chromium",
-    "smoke": "node tests/smoke_convert.js",
-    "test-slide-layout-qa-json-output": "node tests/slide_layout_qa_json_output.js",
-    "test-slide-layout-qa-context": "node tests/slide_layout_qa_browser_context.js",
-    "test-slide-layout-qa": "node tests/slide_layout_qa_regression.js",
-    "test-slide-layout-qa-report": "node tests/slide_layout_qa_report_output.js",
-    "test-export-qa-report": "node tests/export_qa_report_output.js",
-    "test-export-qa-structural": "node tests/export_qa_structural_regression.js",
-    "test-export-qa-visual-failure": "node tests/export_qa_visual_failure_regression.js",
-    "test-output-structure": "node tests/test_output_structure.js",
-    "postinstall": "node scripts/setup_designer.js --if-needed",
-    "test-slide-layout-three-card": "node tests/slide_layout_three_card_footer_regression.js"
+    "prepare-output": "node scripts/ensure_output_dir.js",
+    "timestamp-dir": "node scripts/generate_timestamp_dir.js",
+    "convert-svg": "python scripts/svg_to_pptx/svg_to_pptx.py"
   },
   "keywords": [
     "pptx",
-    "html",
-    "presentation",
-    "slides"
+    "svg",
+    "presentation"
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "playwright": "^1.40.0",
-    "pngjs": "^7.0.0"
-  },
+  "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
   }
