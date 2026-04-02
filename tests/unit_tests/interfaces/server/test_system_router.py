@@ -17,7 +17,11 @@ from agent_teams.external_agents import (
 from agent_teams.env.github_config_models import GitHubConfig
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
-from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.env.web_connectivity import WebConnectivityProbeResult
 from agent_teams.interfaces.server.deps import (
     get_config_status_service,
@@ -135,7 +139,12 @@ class _FakeSystemService:
         self.saved_proxy_config = config.model_dump(mode="json")
 
     def get_web_config(self) -> WebConfig:
-        return WebConfig(provider=WebProvider.EXA, api_key=None)
+        return WebConfig(
+            provider=WebProvider.EXA,
+            api_key=None,
+            fallback_provider=WebFallbackProvider.SEARXNG,
+            searxng_instance_url="https://search.example.test/",
+        )
 
     def list_agents(self) -> tuple[ExternalAgentSummary, ...]:
         return tuple(
@@ -661,6 +670,8 @@ def test_get_web_config() -> None:
     assert response.json() == {
         "provider": "exa",
         "api_key": None,
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
     }
 
 
@@ -703,6 +714,8 @@ def test_save_web_config() -> None:
         json={
             "provider": "exa",
             "api_key": "secret",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
         },
     )
 
@@ -711,6 +724,8 @@ def test_save_web_config() -> None:
     assert service.saved_web_config == {
         "provider": "exa",
         "api_key": "secret",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
     }
 
 

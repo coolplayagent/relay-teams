@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Sequence
 from urllib.parse import urlencode, urlparse
 from typing import Literal
 
@@ -18,8 +19,11 @@ from pydantic import (
 )
 from pydantic_ai import Agent
 
-from agent_teams.env.web_config_models import WebConfig
-from agent_teams.env.web_config_models import WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.net.clients import create_async_http_client
 from agent_teams.tools._description_loader import load_tool_description
 from agent_teams.tools.runtime import (
@@ -34,6 +38,17 @@ from agent_teams.tools.web_tools.common import load_runtime_web_config
 EXA_BASE_URL = "https://mcp.exa.ai"
 EXA_PATH = "/mcp"
 EXA_TOOL_NAME = "web_search_advanced_exa"
+SEARXNG_SEARCH_PATH = "/search"
+SEARXNG_SEARCH_TOOL_NAME = "search"
+SEARXNG_PUBLIC_INSTANCES_URL = "https://searx.space/data/instances.json"
+SEARXNG_INSTANCE_CACHE_TTL_SECONDS = 24 * 60 * 60
+SEARXNG_INSTANCE_COOLDOWN_SECONDS = 30 * 60
+SEARXNG_PUBLIC_INSTANCE_LIMIT = 10
+DEFAULT_SEARXNG_INSTANCE_SEEDS = (
+    "https://search.mdosch.de/",
+    "https://search.seddens.net/",
+    "https://search.wdpserver.com/",
+)
 DEFAULT_NUM_RESULTS = 8
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_TIMEOUT_SECONDS = 25.0
@@ -41,6 +56,9 @@ DEFAULT_TEXT_MAX_CHARACTERS = 300
 DEFAULT_HIGHLIGHTS_PER_URL = 3
 DEFAULT_HIGHLIGHT_SENTENCES = 2
 DESCRIPTION = load_tool_description(__file__)
+
+_SEARXNG_INSTANCE_CACHE: SearxngInstanceCache | None = None
+_SEARXNG_INSTANCE_COOLDOWNS: dict[str, float] = {}
 
 
 class WebSearchRequest(BaseModel):
@@ -116,6 +134,17 @@ class WebSearchResponse(BaseModel):
     duration_ms: int = Field(ge=0)
 
 
+class SearchExecutionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: WebProvider
+    endpoint_host: str
+    upstream_tool: str
+    hits: tuple[WebSearchHit, ...] = ()
+    upstream_search_time: float | None = None
+    internal_data: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class ExaSearchArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -176,6 +205,78 @@ class ExtractedSearchResponse(BaseModel):
     upstream_search_time: float | None = None
 
 
+class SearxngSearchResultPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    title: str | None = None
+    url: str | None = None
+    content: str | None = None
+    published_at: str | None = Field(default=None, alias="publishedDate")
+    author: str | None = None
+
+
+class SearxngSearchResponsePayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    results: tuple[SearxngSearchResultPayload, ...] = ()
+
+
+class SearxngCatalogHttpPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status_code: int | None = None
+
+
+class SearxngCatalogTimedValue(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    value: float | None = None
+
+
+class SearxngCatalogTimingEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    success_percentage: float | None = None
+    all: SearxngCatalogTimedValue | None = None
+
+
+class SearxngCatalogTimingPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    initial: SearxngCatalogTimingEntry | None = None
+
+
+class SearxngCatalogInstancePayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    analytics: bool = False
+    generator: str | None = None
+    main: bool = False
+    http: SearxngCatalogHttpPayload | None = None
+    timing: SearxngCatalogTimingPayload | None = None
+
+
+class SearxngCatalogPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    instances: dict[str, SearxngCatalogInstancePayload] = Field(default_factory=dict)
+
+
+class SearxngInstanceCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    base_url: str = Field(min_length=1)
+    endpoint_host: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+
+
+class SearxngInstanceCache(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fetched_at_monotonic: float
+    candidates: tuple[SearxngInstanceCandidate, ...]
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def websearch(
@@ -190,54 +291,32 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         async def _action() -> ToolResultProjection:
             config = load_runtime_web_config()
             started = time.perf_counter()
-            allowed_domain_filters = (
-                tuple(allowed_domains) if allowed_domains is not None else None
-            )
-            blocked_domain_filters = (
-                tuple(blocked_domains) if blocked_domains is not None else None
-            )
             request = WebSearchRequest(
                 query=query,
                 num_results=num_results or DEFAULT_NUM_RESULTS,
-                allowed_domains=allowed_domain_filters,
-                blocked_domains=blocked_domain_filters,
-            )
-            prepared_request = build_provider_search_request(
-                config=config,
-                request=request,
+                allowed_domains=(
+                    tuple(allowed_domains) if allowed_domains is not None else None
+                ),
+                blocked_domains=(
+                    tuple(blocked_domains) if blocked_domains is not None else None
+                ),
             )
             async with create_async_http_client(
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 follow_redirects=True,
             ) as client:
-                response_text = await fetch_exa_search_response(
+                result = await execute_search(
                     client=client,
-                    endpoint=prepared_request.endpoint,
-                    payload=prepared_request.payload,
+                    config=config,
+                    request=request,
                 )
 
-            extracted = extract_search_response(response_text)
             duration_ms = int((time.perf_counter() - started) * 1000)
             return build_search_result_projection(
                 query=request.query,
-                provider=prepared_request.provider,
-                hits=extracted.hits,
+                result=result,
                 duration_ms=duration_ms,
-                endpoint_host=prepared_request.endpoint_host,
-                upstream_tool=prepared_request.upstream_tool,
-                upstream_search_time=extracted.upstream_search_time,
             )
-
-        allowed_domains_summary: list[JsonValue] | None = None
-        if allowed_domains is not None:
-            allowed_domains_summary = [
-                _normalize_json_value(domain) for domain in allowed_domains
-            ]
-        blocked_domains_summary: list[JsonValue] | None = None
-        if blocked_domains is not None:
-            blocked_domains_summary = [
-                _normalize_json_value(domain) for domain in blocked_domains
-            ]
 
         return await execute_tool(
             ctx,
@@ -245,11 +324,471 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             args_summary={
                 "query": query,
                 "num_results": num_results,
-                "allowed_domains": allowed_domains_summary,
-                "blocked_domains": blocked_domains_summary,
+                "allowed_domains": _normalize_domain_summary(allowed_domains),
+                "blocked_domains": _normalize_domain_summary(blocked_domains),
             },
             action=_action,
         )
+
+
+async def execute_search(
+    *,
+    client: httpx.AsyncClient,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> SearchExecutionResult:
+    try:
+        return await execute_provider_search(
+            client=client,
+            provider=config.provider,
+            config=config,
+            request=request,
+        )
+    except ToolExecutionError as primary_exc:
+        if not should_fallback_from_exa(config=config, primary_error=primary_exc):
+            raise
+        try:
+            fallback_result = await execute_provider_search(
+                client=client,
+                provider=WebProvider.SEARXNG,
+                config=config,
+                request=request,
+            )
+        except ToolExecutionError as fallback_exc:
+            raise build_failed_fallback_error(
+                primary_error=primary_exc,
+                fallback_error=fallback_exc,
+            ) from primary_exc
+        return fallback_result.model_copy(
+            update={
+                "internal_data": {
+                    **fallback_result.internal_data,
+                    "fallback_from": WebProvider.EXA.value,
+                    "primary_error_type": primary_exc.error_type,
+                }
+            }
+        )
+
+
+def should_fallback_from_exa(
+    *,
+    config: WebConfig,
+    primary_error: ToolExecutionError,
+) -> bool:
+    _ = primary_error
+    return (
+        config.provider == WebProvider.EXA
+        and config.fallback_provider == WebFallbackProvider.SEARXNG
+    )
+
+
+def build_failed_fallback_error(
+    *,
+    primary_error: ToolExecutionError,
+    fallback_error: ToolExecutionError,
+) -> ToolExecutionError:
+    details = dict(primary_error.details)
+    details["fallback_error_type"] = fallback_error.error_type
+    fallback_endpoint_host = fallback_error.details.get("endpoint_host")
+    if isinstance(fallback_endpoint_host, str) and fallback_endpoint_host:
+        details["fallback_endpoint_host"] = fallback_endpoint_host
+    fallback_attempt_count = fallback_error.details.get("attempt_count")
+    if isinstance(fallback_attempt_count, int):
+        details["fallback_attempt_count"] = fallback_attempt_count
+    return ToolExecutionError(
+        error_type=primary_error.error_type,
+        message=str(primary_error),
+        retryable=primary_error.retryable,
+        details=details,
+    )
+
+
+async def execute_provider_search(
+    *,
+    client: httpx.AsyncClient,
+    provider: WebProvider,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> SearchExecutionResult:
+    if provider == WebProvider.EXA:
+        prepared_request = build_provider_search_request(
+            config=config.model_copy(update={"provider": provider}),
+            request=request,
+        )
+        response_text = await fetch_exa_search_response(
+            client=client,
+            endpoint=prepared_request.endpoint,
+            payload=prepared_request.payload,
+        )
+        extracted = extract_search_response(response_text)
+        return SearchExecutionResult(
+            provider=provider,
+            endpoint_host=prepared_request.endpoint_host,
+            upstream_tool=prepared_request.upstream_tool,
+            hits=extracted.hits,
+            upstream_search_time=extracted.upstream_search_time,
+        )
+    if provider == WebProvider.SEARXNG:
+        return await execute_searxng_search(
+            client=client,
+            config=config,
+            request=request,
+        )
+    raise ValueError(f"Unsupported web provider: {provider.value}")
+
+
+async def execute_searxng_search(
+    *,
+    client: httpx.AsyncClient,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> SearchExecutionResult:
+    candidates = await resolve_searxng_instance_candidates(client=client, config=config)
+    if not candidates:
+        raise ToolExecutionError(
+            error_type="upstream_unavailable",
+            message="No SearXNG instances are available",
+            retryable=True,
+            details={"provider": WebProvider.SEARXNG.value},
+        )
+
+    available_candidates = select_available_searxng_candidates(candidates)
+    last_error: ToolExecutionError | None = None
+    attempt_count = 0
+    for candidate in available_candidates:
+        attempt_count += 1
+        try:
+            response_payload = await fetch_searxng_search_response(
+                client=client,
+                base_url=candidate.base_url,
+                query=request.query,
+            )
+            hits = build_searxng_hits(
+                response_payload=response_payload,
+                request=request,
+            )
+            return SearchExecutionResult(
+                provider=WebProvider.SEARXNG,
+                endpoint_host=candidate.endpoint_host,
+                upstream_tool=SEARXNG_SEARCH_TOOL_NAME,
+                hits=hits,
+                internal_data={
+                    "searxng_instance_url": candidate.base_url,
+                    "instance_source": candidate.source,
+                },
+            )
+        except ToolExecutionError as exc:
+            mark_searxng_candidate_failure(candidate)
+            last_error = ToolExecutionError(
+                error_type=exc.error_type,
+                message=str(exc),
+                retryable=exc.retryable,
+                details={**exc.details, "attempt_count": attempt_count},
+            )
+
+    if last_error is not None:
+        raise last_error
+    raise ToolExecutionError(
+        error_type="upstream_unavailable",
+        message="SearXNG search failed without returning an error",
+        retryable=True,
+        details={
+            "provider": WebProvider.SEARXNG.value,
+            "attempt_count": attempt_count,
+        },
+    )
+
+
+async def resolve_searxng_instance_candidates(
+    *,
+    client: httpx.AsyncClient,
+    config: WebConfig,
+) -> tuple[SearxngInstanceCandidate, ...]:
+    if config.searxng_instance_url:
+        return (
+            build_searxng_instance_candidate(
+                base_url=config.searxng_instance_url,
+                source="configured",
+            ),
+        )
+    public_candidates = await fetch_public_searxng_instance_candidates(client=client)
+    if public_candidates:
+        return public_candidates
+    return tuple(
+        build_searxng_instance_candidate(base_url=base_url, source="seed")
+        for base_url in DEFAULT_SEARXNG_INSTANCE_SEEDS
+    )
+
+
+def select_available_searxng_candidates(
+    candidates: Sequence[SearxngInstanceCandidate],
+) -> tuple[SearxngInstanceCandidate, ...]:
+    now = time.monotonic()
+    available = tuple(
+        candidate
+        for candidate in candidates
+        if _SEARXNG_INSTANCE_COOLDOWNS.get(candidate.endpoint_host, 0.0) <= now
+    )
+    if available:
+        return available
+    return tuple(candidates)
+
+
+async def fetch_public_searxng_instance_candidates(
+    *,
+    client: httpx.AsyncClient,
+) -> tuple[SearxngInstanceCandidate, ...]:
+    cached = get_cached_searxng_instance_candidates()
+    if cached is not None:
+        return cached
+
+    endpoint_host = httpx.URL(SEARXNG_PUBLIC_INSTANCES_URL).host or ""
+    try:
+        response = await client.get(
+            SEARXNG_PUBLIC_INSTANCES_URL,
+            headers={"Accept": "application/json"},
+        )
+    except (httpx.TimeoutException, httpx.RequestError):
+        if _SEARXNG_INSTANCE_CACHE is not None:
+            return _SEARXNG_INSTANCE_CACHE.candidates
+        return ()
+
+    if response.status_code >= 400:
+        _SEARXNG_INSTANCE_COOLDOWNS[endpoint_host] = (
+            time.monotonic() + SEARXNG_INSTANCE_COOLDOWN_SECONDS
+        )
+        if _SEARXNG_INSTANCE_CACHE is not None:
+            return _SEARXNG_INSTANCE_CACHE.candidates
+        return ()
+
+    try:
+        payload = SearxngCatalogPayload.model_validate_json(response.text)
+    except Exception:
+        if _SEARXNG_INSTANCE_CACHE is not None:
+            return _SEARXNG_INSTANCE_CACHE.candidates
+        return ()
+
+    candidates = tuple(select_public_searxng_instances(payload))
+    set_cached_searxng_instance_candidates(candidates)
+    return candidates
+
+
+def get_cached_searxng_instance_candidates() -> (
+    tuple[SearxngInstanceCandidate, ...] | None
+):
+    cache = _SEARXNG_INSTANCE_CACHE
+    if cache is None:
+        return None
+    age_seconds = time.monotonic() - cache.fetched_at_monotonic
+    if age_seconds >= SEARXNG_INSTANCE_CACHE_TTL_SECONDS:
+        return None
+    return cache.candidates
+
+
+def set_cached_searxng_instance_candidates(
+    candidates: tuple[SearxngInstanceCandidate, ...],
+) -> None:
+    global _SEARXNG_INSTANCE_CACHE
+    _SEARXNG_INSTANCE_CACHE = SearxngInstanceCache(
+        fetched_at_monotonic=time.monotonic(),
+        candidates=candidates,
+    )
+
+
+def select_public_searxng_instances(
+    payload: SearxngCatalogPayload,
+) -> list[SearxngInstanceCandidate]:
+    ranked: list[tuple[float, SearxngInstanceCandidate]] = []
+    for base_url, raw_instance in payload.instances.items():
+        if raw_instance.generator != "searxng":
+            continue
+        if not raw_instance.main:
+            continue
+        if raw_instance.analytics:
+            continue
+        if raw_instance.http is None or raw_instance.http.status_code != 200:
+            continue
+        initial_latency = (
+            raw_instance.timing.initial.all.value
+            if raw_instance.timing is not None
+            and raw_instance.timing.initial is not None
+            and raw_instance.timing.initial.all is not None
+            and raw_instance.timing.initial.all.value is not None
+            else 9999.0
+        )
+        ranked.append(
+            (
+                initial_latency,
+                build_searxng_instance_candidate(
+                    base_url=base_url,
+                    source="public_pool",
+                ),
+            )
+        )
+    ranked.sort(key=lambda item: item[0])
+    return [candidate for _, candidate in ranked[:SEARXNG_PUBLIC_INSTANCE_LIMIT]]
+
+
+def build_searxng_instance_candidate(
+    *,
+    base_url: str,
+    source: str,
+) -> SearxngInstanceCandidate:
+    normalized_base_url = normalize_searxng_base_url(base_url)
+    endpoint_host = httpx.URL(normalized_base_url).host or ""
+    return SearxngInstanceCandidate(
+        base_url=normalized_base_url,
+        endpoint_host=endpoint_host,
+        source=source,
+    )
+
+
+def normalize_searxng_base_url(base_url: str) -> str:
+    parsed = httpx.URL(base_url.strip())
+    normalized_path = parsed.path or "/"
+    return str(
+        parsed.copy_with(
+            path=normalized_path,
+            query=None,
+            fragment=None,
+            username=None,
+            password=None,
+        )
+    )
+
+
+def mark_searxng_candidate_failure(candidate: SearxngInstanceCandidate) -> None:
+    _SEARXNG_INSTANCE_COOLDOWNS[candidate.endpoint_host] = (
+        time.monotonic() + SEARXNG_INSTANCE_COOLDOWN_SECONDS
+    )
+
+
+async def fetch_searxng_search_response(
+    *,
+    client: httpx.AsyncClient,
+    base_url: str,
+    query: str,
+) -> SearxngSearchResponsePayload:
+    endpoint = str(httpx.URL(base_url).join(SEARXNG_SEARCH_PATH))
+    endpoint_host = httpx.URL(endpoint).host or ""
+    try:
+        response = await client.get(
+            endpoint,
+            headers={"Accept": "application/json"},
+            params={"q": query, "format": "json"},
+        )
+    except httpx.TimeoutException as exc:
+        raise ToolExecutionError(
+            error_type="network_timeout",
+            message=f"SearXNG web search timed out: {endpoint_host}",
+            retryable=True,
+            details={
+                "provider": WebProvider.SEARXNG.value,
+                "endpoint_host": endpoint_host,
+            },
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ToolExecutionError(
+            error_type="network_error",
+            message=f"SearXNG web search request failed: {exc}",
+            retryable=True,
+            details={
+                "provider": WebProvider.SEARXNG.value,
+                "endpoint_host": endpoint_host,
+            },
+        ) from exc
+
+    if response.status_code >= 400:
+        raise ToolExecutionError(
+            error_type=_search_status_error_type(response.status_code),
+            message=_search_status_error_message(
+                provider_label="SearXNG",
+                response=response,
+            ),
+            retryable=response.status_code in {429} or response.status_code >= 500,
+            details={
+                "provider": WebProvider.SEARXNG.value,
+                "endpoint_host": endpoint_host,
+                "status_code": response.status_code,
+            },
+        )
+
+    try:
+        return SearxngSearchResponsePayload.model_validate_json(response.text)
+    except Exception as exc:
+        raise ToolExecutionError(
+            error_type="upstream_error",
+            message=f"SearXNG web search returned an invalid JSON response: {endpoint_host}",
+            retryable=False,
+            details={
+                "provider": WebProvider.SEARXNG.value,
+                "endpoint_host": endpoint_host,
+            },
+        ) from exc
+
+
+def build_searxng_hits(
+    *,
+    response_payload: SearxngSearchResponsePayload,
+    request: WebSearchRequest,
+) -> tuple[WebSearchHit, ...]:
+    projected_hits = tuple(
+        hit
+        for raw_hit in response_payload.results
+        if (hit := project_searxng_search_hit(raw_hit)) is not None
+    )
+    return filter_web_search_hits(
+        hits=projected_hits,
+        allowed_domains=request.allowed_domains,
+        blocked_domains=request.blocked_domains,
+        num_results=request.num_results,
+    )
+
+
+def project_searxng_search_hit(
+    raw_hit: SearxngSearchResultPayload,
+) -> WebSearchHit | None:
+    url = _normalize_optional_text(raw_hit.url)
+    if url is None:
+        return None
+    title = _normalize_optional_text(raw_hit.title) or url
+    return WebSearchHit(
+        title=title,
+        url=url,
+        published_at=_normalize_optional_text(raw_hit.published_at),
+        author=_normalize_optional_text(raw_hit.author),
+        text=_normalize_optional_text(raw_hit.content),
+    )
+
+
+def filter_web_search_hits(
+    *,
+    hits: Sequence[WebSearchHit],
+    allowed_domains: tuple[str, ...] | None,
+    blocked_domains: tuple[str, ...] | None,
+    num_results: int,
+) -> tuple[WebSearchHit, ...]:
+    filtered: list[WebSearchHit] = []
+    for hit in hits:
+        hit_host = (urlparse(hit.url).hostname or "").strip().lower().strip(".")
+        if allowed_domains is not None and not _matches_domain_filters(
+            hit_host,
+            allowed_domains,
+        ):
+            continue
+        if blocked_domains is not None and _matches_domain_filters(
+            hit_host,
+            blocked_domains,
+        ):
+            continue
+        filtered.append(hit)
+        if len(filtered) >= num_results:
+            break
+    return tuple(filtered)
+
+
+def _matches_domain_filters(host: str, filters: tuple[str, ...]) -> bool:
+    return any(host == domain or host.endswith(f".{domain}") for domain in filters)
 
 
 def build_provider_search_request(
@@ -280,27 +819,24 @@ def build_provider_search_request(
 def build_search_result_projection(
     *,
     query: str,
-    provider: WebProvider,
-    hits: tuple[WebSearchHit, ...],
+    result: SearchExecutionResult,
     duration_ms: int,
-    endpoint_host: str,
-    upstream_tool: str,
-    upstream_search_time: float | None,
 ) -> ToolResultProjection:
-    result = WebSearchResponse(
+    response = WebSearchResponse(
         query=query,
-        provider=provider,
-        hits=hits,
+        provider=result.provider,
+        hits=result.hits,
         duration_ms=duration_ms,
     )
     internal_data: dict[str, JsonValue] = {
-        "endpoint_host": endpoint_host,
-        "upstream_tool": upstream_tool,
+        "endpoint_host": result.endpoint_host,
+        "upstream_tool": result.upstream_tool,
     }
-    if upstream_search_time is not None:
-        internal_data["upstream_search_time"] = upstream_search_time
+    if result.upstream_search_time is not None:
+        internal_data["upstream_search_time"] = result.upstream_search_time
+    internal_data.update(result.internal_data)
     return ToolResultProjection(
-        visible_data=result.model_dump(mode="json"),
+        visible_data=response.model_dump(mode="json"),
         internal_data=internal_data,
     )
 
@@ -385,7 +921,10 @@ async def fetch_exa_search_response(
     if response.status_code >= 400:
         raise ToolExecutionError(
             error_type=_search_status_error_type(response.status_code),
-            message=_search_status_error_message(response),
+            message=_search_status_error_message(
+                provider_label="Exa",
+                response=response,
+            ),
             retryable=response.status_code in {429} or response.status_code >= 500,
             details={
                 "provider": WebProvider.EXA.value,
@@ -408,9 +947,13 @@ def _search_status_error_type(status_code: int) -> str:
     return "upstream_error"
 
 
-def _search_status_error_message(response: httpx.Response) -> str:
+def _search_status_error_message(
+    *,
+    provider_label: str,
+    response: httpx.Response,
+) -> str:
     detail = response.text.strip()
-    base = f"Exa web search returned HTTP {response.status_code}"
+    base = f"{provider_label} web search returned HTTP {response.status_code}"
     if detail:
         return f"{base}: {detail}"
     return base
@@ -447,9 +990,7 @@ def extract_search_response(response_text: str) -> ExtractedSearchResponse:
                     search_time, (int, float)
                 ):
                     parsed = parsed.model_copy(
-                        update={
-                            "upstream_search_time": float(search_time),
-                        }
+                        update={"upstream_search_time": float(search_time)}
                     )
                 if parsed.hits or parsed.upstream_search_time is not None:
                     latest_candidate = _merge_extracted_search_response(
@@ -661,3 +1202,11 @@ def _join_optional_text(lines: list[str]) -> str | None:
     if not normalized_lines:
         return None
     return "\n".join(normalized_lines)
+
+
+def _normalize_domain_summary(
+    domains: list[str] | None,
+) -> list[JsonValue] | None:
+    if domains is None:
+        return None
+    return [_normalize_json_value(domain) for domain in domains]

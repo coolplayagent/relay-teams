@@ -97,13 +97,23 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
         captured["method"] = method
         captured["path"] = path
         captured["payload"] = payload
-        return {"provider": "exa", "api_key": None}
+        return {
+            "provider": "exa",
+            "api_key": None,
+            "fallback_provider": None,
+            "searxng_instance_url": None,
+        }
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
     response = client.get_web_config()
 
-    assert response == {"provider": "exa", "api_key": None}
+    assert response == {
+        "provider": "exa",
+        "api_key": None,
+        "fallback_provider": None,
+        "searxng_instance_url": None,
+    }
     assert captured == {
         "method": "GET",
         "path": "/api/system/configs/web",
@@ -193,7 +203,12 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.save_web_config(provider="exa", api_key="secret")
+    response = client.save_web_config(
+        provider="exa",
+        api_key="secret",
+        fallback_provider="searxng",
+        searxng_instance_url="https://search.example.test/",
+    )
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -202,6 +217,8 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
         "payload": {
             "provider": "exa",
             "api_key": "secret",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
         },
     }
 

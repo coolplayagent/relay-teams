@@ -23,26 +23,36 @@ bindWebSettingsHandlers();
 await loadWebSettingsPanel();
 
 document.getElementById("web-provider").value = "exa";
+document.getElementById("web-fallback-provider").value = "searxng";
 document.getElementById("web-api-key").value = "secret";
+document.getElementById("web-searxng-instance-url").value = "https://search.example.test";
 
 await document.getElementById("save-web-btn").onclick();
 
 console.log(JSON.stringify({
     notifications,
     provider: document.getElementById("web-provider").value,
+    fallbackProvider: document.getElementById("web-fallback-provider").value,
     apiKey: document.getElementById("web-api-key").value,
+    searxngInstanceUrl: document.getElementById("web-searxng-instance-url").value,
     savePayload: globalThis.__saveWebPayload,
+    providerSiteHref: document.getElementById("web-provider-site-link").href,
 }));
 """.strip(),
     )
 
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
     assert payload["provider"] == "exa"
+    assert payload["fallbackProvider"] == "searxng"
     assert payload["apiKey"] == "secret"
+    assert payload["searxngInstanceUrl"] == "https://search.example.test"
     assert payload["savePayload"] == {
         "provider": "exa",
         "api_key": "secret",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test",
     }
+    assert payload["providerSiteHref"] == "https://exa.ai"
     assert notifications == [
         {
             "title": "Web Settings Saved",
@@ -76,6 +86,8 @@ def _run_web_settings_script(tmp_path: Path, runner_source: str) -> dict[str, ob
 let currentConfig = {
     provider: "exa",
     api_key: null,
+    fallback_provider: null,
+    searxng_instance_url: null,
 };
 
 export async function fetchWebConfig() {
@@ -155,7 +167,10 @@ function createElement(initialDisplay = "block") {{
 function createElements() {{
     return new Map([
         ["web-provider", createElement("block")],
+        ["web-fallback-provider", createElement("block")],
         ["web-api-key", createElement("block")],
+        ["web-searxng-instance-url", createElement("block")],
+        ["web-provider-site-link", createElement("block")],
         ["save-web-btn", createElement("block")],
     ]);
 }}
