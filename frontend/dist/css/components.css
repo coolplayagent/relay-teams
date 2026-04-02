@@ -6690,6 +6690,15 @@ body.light-theme .composer-mode-inline-select {
     margin-top: 1rem;
 }
 
+.observability-section-stack {
+    display: grid;
+    gap: 1rem;
+}
+
+.observability-section-stack-card {
+    margin-top: 1rem;
+}
+
 .observability-section-card {
     padding: 1rem 1.1rem;
 }
