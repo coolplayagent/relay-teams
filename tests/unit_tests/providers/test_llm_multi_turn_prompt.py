@@ -35,6 +35,9 @@ from agent_teams.agents.orchestration.task_execution_service import TaskExecutio
 from agent_teams.media import MediaAssetService
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
+from agent_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionService,
+)
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from agent_teams.providers.provider_contracts import LLMRequest
 from agent_teams.providers.openai_compatible import OpenAICompatibleProvider
@@ -114,6 +117,36 @@ class _FakeInjectionManager:
     def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
         _ = (run_id, instance_id)
         return []
+
+
+class _FakeConversationCompactionService:
+    def __init__(self, prompt_sections: list[str]) -> None:
+        self._prompt_sections = list(prompt_sections)
+        self._build_calls = 0
+
+    async def maybe_compact(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+        history: list[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        _ = (session_id, role_id, conversation_id)
+        return list(history)
+
+    def build_prompt_section(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> str:
+        _ = (session_id, conversation_id)
+        if not self._prompt_sections:
+            return ""
+        index = min(self._build_calls, len(self._prompt_sections) - 1)
+        self._build_calls += 1
+        return self._prompt_sections[index]
 
 
 class _FakeSkillRegistry:
@@ -790,6 +823,64 @@ async def test_generate_counts_current_user_prompt_in_context_budget(
     assert 1 <= bounded_max_tokens < provider._config.sampling.max_tokens
 
 
+def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "persisted_prompt_budget.db",
+        fake_hub,
+    )
+    updated_config = provider._config.model_copy(
+        update={
+            "context_window": 128_000,
+            "sampling": SamplingConfig(
+                temperature=provider._config.sampling.temperature,
+                top_p=provider._config.sampling.top_p,
+                max_tokens=100_000,
+                top_k=provider._config.sampling.top_k,
+            ),
+        }
+    )
+    provider._config_ref = updated_config
+    provider._session._config = updated_config
+
+    request = LLMRequest(
+        run_id="run-persisted-prompt-budget",
+        trace_id="run-persisted-prompt-budget",
+        task_id="task-persisted-prompt-budget",
+        session_id="session-persisted-prompt-budget",
+        workspace_id="default",
+        instance_id="inst-persisted-prompt-budget",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="x" * 124_200,
+    )
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="x" * 124_200)]),
+    ]
+
+    persisted_budget = provider._session._safe_max_output_tokens(
+        request=request,
+        history=history,
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+    deduped_request = request.model_copy(update={"user_prompt": None})
+    deduped_budget = provider._session._safe_max_output_tokens(
+        request=deduped_request,
+        history=history,
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert persisted_budget == deduped_budget
+
+
 @pytest.mark.asyncio
 async def test_generate_recomputes_budget_after_injection_restart(
     monkeypatch: pytest.MonkeyPatch,
@@ -904,6 +995,105 @@ async def test_generate_recomputes_budget_after_injection_restart(
         allowed_skills=(),
     )
     assert second_budget < first_budget
+
+
+@pytest.mark.asyncio
+async def test_generate_rebuilds_agent_when_restart_updates_compaction_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "restart_compaction_prompt.db",
+        fake_hub,
+    )
+
+    class _InjectedMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+        def model_dump_json(self) -> str:
+            return json.dumps({"content": self.content})
+
+    class _OneShotInjectionManager:
+        def __init__(self) -> None:
+            self._drained = False
+
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            if self._drained:
+                return []
+            self._drained = True
+            return [_InjectedMessage("restart with compaction summary")]
+
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, _OneShotInjectionManager()),
+    )
+    provider._session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        _FakeConversationCompactionService(
+            ["", "## Compacted Conversation Summary\nsummary after restart"]
+        ),
+    )
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=0,
+                        )
+                    )
+                ],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response=ModelResponse(parts=[]), messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="ok")]),
+                    messages=[ModelResponse(parts=[TextPart(content="ok")])],
+                ),
+            ),
+        ]
+    )
+    captured_system_prompts: list[str] = []
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+
+    def _fake_builder(**kwargs: object) -> _SequentialAgent:
+        system_prompt = kwargs.get("system_prompt")
+        assert isinstance(system_prompt, str)
+        captured_system_prompts.append(system_prompt)
+        return scripted_agent
+
+    monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
+
+    request = LLMRequest(
+        run_id="run-restart-compaction-prompt",
+        trace_id="run-restart-compaction-prompt",
+        task_id="task-restart-compaction-prompt",
+        session_id="session-restart-compaction-prompt",
+        workspace_id="default",
+        instance_id="inst-restart-compaction-prompt",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="start",
+    )
+
+    response = await provider.generate(request)
+
+    assert response == "ok"
+    assert len(captured_system_prompts) == 2
+    assert captured_system_prompts[0] == "system"
+    assert captured_system_prompts[1].endswith("summary after restart")
 
 
 @pytest.mark.asyncio

@@ -630,15 +630,33 @@ class AgentLlmSession:
                                 conversation_id=resolved_conversation_id,
                                 system_prompt=request.system_prompt,
                             )
-                            model_settings.update(
-                                self._build_model_settings(
-                                    request=request,
-                                    history=history,
-                                    system_prompt=agent_system_prompt,
-                                    allowed_tools=allowed_tools,
-                                    allowed_mcp_servers=self._allowed_mcp_servers,
-                                    allowed_skills=self._allowed_skills,
-                                )
+                            model_settings = self._build_model_settings(
+                                request=request,
+                                history=history,
+                                system_prompt=agent_system_prompt,
+                                allowed_tools=allowed_tools,
+                                allowed_mcp_servers=self._allowed_mcp_servers,
+                                allowed_skills=self._allowed_skills,
+                            )
+                            agent = build_coordination_agent(
+                                model_name=self._config.model,
+                                base_url=self._config.base_url,
+                                api_key=self._config.api_key,
+                                headers=self._config.headers,
+                                system_prompt=agent_system_prompt,
+                                allowed_tools=allowed_tools,
+                                model_settings=model_settings,
+                                model_profile=resolve_openai_chat_model_profile(
+                                    base_url=self._config.base_url,
+                                    model_name=self._config.model,
+                                ),
+                                ssl_verify=self._config.ssl_verify,
+                                connect_timeout_seconds=self._config.connect_timeout_seconds,
+                                allowed_mcp_servers=self._allowed_mcp_servers,
+                                allowed_skills=self._allowed_skills,
+                                tool_registry=self._tool_registry,
+                                mcp_registry=self._mcp_registry,
+                                skill_registry=self._skill_registry,
                             )
                             seen_count = 0
                             buffered_messages = []
@@ -1909,15 +1927,16 @@ class AgentLlmSession:
         estimated_system_prompt_tokens = max(
             1, (len(system_prompt.encode("utf-8")) // 4) + 8
         )
-        estimated_user_prompt_tokens = max(
-            0,
+        user_prompt = str(request.user_prompt or "").strip()
+        should_reserve_user_prompt_tokens = bool(user_prompt) and (
+            not self._history_ends_with_user_prompt(history, user_prompt)
+        )
+        estimated_user_prompt_tokens = (
             estimator.estimate_message_tokens(
-                ModelRequest(
-                    parts=[UserPromptPart(content=str(request.user_prompt or ""))]
-                )
+                ModelRequest(parts=[UserPromptPart(content=user_prompt)])
             )
-            if request.user_prompt is not None and str(request.user_prompt).strip()
-            else 0,
+            if should_reserve_user_prompt_tokens
+            else 0
         )
         reserved_tokens = (
             estimated_history_tokens
