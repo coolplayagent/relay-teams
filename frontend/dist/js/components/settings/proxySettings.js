@@ -162,7 +162,7 @@ function writeProxyFormValues(config) {
     setInputValue('proxy-no-proxy', config.no_proxy);
     setInputValue('proxy-username', config.proxy_username);
     setInputValue('proxy-password', config.proxy_password);
-    setInputValue('proxy-ssl-verify', serializeTriStateValue(config.ssl_verify));
+    setInputValue('proxy-ssl-verify', serializeProxySslVerifyValue(config.ssl_verify));
 }
 
 function readProxyFormValues() {
@@ -202,6 +202,13 @@ function parseTriStateValue(value) {
         return false;
     }
     return null;
+}
+
+function serializeProxySslVerifyValue(value) {
+    if (value === null || value === undefined) {
+        return 'false';
+    }
+    return serializeTriStateValue(value);
 }
 
 function serializeTriStateValue(value) {

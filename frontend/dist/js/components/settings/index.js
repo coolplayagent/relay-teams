@@ -714,7 +714,7 @@ function createModal() {
                                                 <select id="proxy-ssl-verify">
                                                     <option value="" data-i18n="settings.proxy.inherit_default">Inherit Default</option>
                                                     <option value="true" data-i18n="settings.proxy.verify">Verify</option>
-                                                    <option value="false" data-i18n="settings.proxy.skip_verify">Skip Verify</option>
+                                                    <option value="false" selected data-i18n="settings.proxy.skip_verify">Skip Verify</option>
                                                 </select>
                                             </div>
                                         </div>
