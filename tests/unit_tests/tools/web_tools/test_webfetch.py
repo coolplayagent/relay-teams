@@ -109,6 +109,18 @@ class _InterruptingStream(httpx.AsyncByteStream):
         return None
 
 
+class _StaticStream(httpx.AsyncByteStream):
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def __aiter__(self):
+        if self._data:
+            yield self._data
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _build_shared_store(tmp_path: Path) -> SharedStateRepository:
     return SharedStateRepository(tmp_path / "shared_state.db")
 
@@ -324,6 +336,87 @@ async def test_fetch_url_retries_cloudflare_challenge() -> None:
 
     assert response.status_code == 200
     assert calls == [webfetch.BROWSER_USER_AGENT, webfetch.FALLBACK_USER_AGENT]
+    await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_uses_reader_fallback_for_anti_bot_challenge() -> None:
+    requested_urls: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == "https://example.com/protected":
+            return httpx.Response(
+                403,
+                request=request,
+                text="<html><body>Enable JavaScript and cookies to continue</body></html>",
+                headers={"content-type": "text/html"},
+            )
+        assert str(request.url) == webfetch.build_reader_fallback_url(
+            "https://example.com/protected"
+        )
+        assert request.headers["X-Respond-With"] == "markdown"
+        return httpx.Response(
+            200,
+            request=request,
+            text="# Reader Result",
+            headers={"content-type": "text/plain; charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/protected",
+            response_format="markdown",
+        )
+    finally:
+        await client.aclose()
+
+    assert response.text == "# Reader Result"
+    assert (
+        webfetch.resolve_webfetch_response_url(response)
+        == "https://example.com/protected"
+    )
+    assert requested_urls == [
+        "https://example.com/protected",
+        webfetch.build_reader_fallback_url("https://example.com/protected"),
+    ]
+    await response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_uses_reader_fallback_for_streaming_anti_bot_challenge() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://example.com/protected":
+            return httpx.Response(
+                403,
+                request=request,
+                headers={"content-type": "text/html"},
+                stream=_StaticStream(
+                    b"<html><body>Enable JavaScript and cookies to continue</body></html>"
+                ),
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="# Reader Result",
+            headers={"content-type": "text/plain; charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/protected",
+            response_format="markdown",
+        )
+    finally:
+        await client.aclose()
+
+    assert response.text == "# Reader Result"
     await response.aclose()
 
 
@@ -651,12 +744,19 @@ async def test_fetch_url_classifies_invalid_redirect_port_as_upstream_error() ->
 
 
 @pytest.mark.asyncio
-async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
+async def test_fetch_url_raises_anti_bot_challenge_when_reader_fallback_fails() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://example.com":
+            return httpx.Response(
+                403,
+                request=request,
+                headers={"cf-mitigated": "challenge"},
+            )
         return httpx.Response(
-            403,
+            502,
             request=request,
-            headers={"cf-mitigated": "challenge"},
+            text="bad gateway",
+            headers={"content-type": "text/plain"},
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
@@ -674,8 +774,8 @@ async def test_fetch_url_raises_anti_bot_challenge_after_retry() -> None:
     assert exc_info.value.retryable is False
     assert exc_info.value.details == {
         "url_host": "example.com",
-        "status_code": 403,
-        "mitigation": "cloudflare_challenge",
+        "mitigation": "reader_fallback_failed",
+        "fallback_status_code": 502,
     }
 
 
@@ -758,6 +858,110 @@ async def test_fetch_url_classifies_egress_blocked_proxy_errors() -> None:
         "status_code": 403,
         "proxy_error": "blocked-by-allowlist",
     }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_source_access_denied() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            request=request,
+            text="Forbidden",
+            headers={"content-type": "text/plain"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/forbidden",
+                response_format="text",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "source_access_denied"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "example.com",
+        "status_code": 403,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_enterprise_proxy_blocks() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            text="HIS Proxy Notification",
+            headers={"content-type": "text/html"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url=(
+                    "http://114.114.114.114:9421/proxycontrolwarn/httpwarning_2907.html"
+                ),
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "proxy_blocked"
+    assert exc_info.value.retryable is False
+    assert exc_info.value.details == {
+        "url_host": "114.114.114.114:9421",
+        "blocked_url": (
+            "http://114.114.114.114:9421/proxycontrolwarn/httpwarning_2907.html"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_tunnel_failures() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("ERR_TUNNEL_CONNECTION_FAILED", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/protected",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "tunnel_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {"url_host": "example.com"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_classifies_generic_proxy_failures() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError("proxy refused connection", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await webfetch.fetch_url(
+                client=client,
+                url="https://example.com/protected",
+                response_format="markdown",
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "proxy_error"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details == {"url_host": "example.com"}
 
 
 @pytest.mark.asyncio
