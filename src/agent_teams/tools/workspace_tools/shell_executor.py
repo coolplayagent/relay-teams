@@ -16,7 +16,12 @@ import sys
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
+from agent_teams.env import (
+    build_github_cli_env,
+    build_subprocess_env,
+    bind_subprocess_python_env,
+    get_env_var,
+)
 from agent_teams.env.github_config_service import GitHubConfigService
 from agent_teams.env.runtime_env import get_app_config_dir
 from agent_teams.tools.workspace_tools.github_cli import get_gh_path
@@ -571,6 +576,7 @@ async def build_shell_env(
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    shell_env = bind_subprocess_python_env(shell_env)
     return _sanitize_shell_env(shell_env, shell=resolved_shell)
 
 
@@ -585,6 +591,7 @@ def build_shell_env_sync(
     gh_path = _resolve_gh_path_sync()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    shell_env = bind_subprocess_python_env(shell_env)
     return _sanitize_shell_env(shell_env, shell=resolved_shell)
 
 

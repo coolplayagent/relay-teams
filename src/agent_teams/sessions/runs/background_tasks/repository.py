@@ -183,7 +183,7 @@ class BackgroundTaskRepository:
                 SELECT *
                 FROM background_tasks
                 WHERE run_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (run_id,),
             ).fetchall()
@@ -196,7 +196,7 @@ class BackgroundTaskRepository:
                 SELECT *
                 FROM background_tasks
                 WHERE session_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (session_id,),
             ).fetchall()
@@ -208,7 +208,7 @@ class BackgroundTaskRepository:
                 """
                 SELECT *
                 FROM background_tasks
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
@@ -220,7 +220,7 @@ class BackgroundTaskRepository:
                 SELECT *
                 FROM background_tasks
                 WHERE status IN (?, ?)
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (
                     BackgroundTaskStatus.RUNNING.value,

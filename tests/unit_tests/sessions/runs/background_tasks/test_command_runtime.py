@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 import signal
+from unittest.mock import AsyncMock
 
 import pytest
+import agent_teams.env.python_env as python_env_module
 
+from agent_teams.env import AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY
 from agent_teams.sessions.runs.background_tasks import command_runtime as runtime_module
 from agent_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
@@ -160,6 +164,89 @@ def test_kill_process_tree_by_pid_requires_posix_exit_after_sigkill(
     assert kill_process_tree_by_pid(3210) is False
     assert signals == [signal.SIGTERM, runtime_module._SIGKILL_SIGNAL]
     assert wait_calls == [runtime_module._SIGKILL_GRACE_SECONDS, 2]
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_prefers_python_from_target_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    system_python = tmp_path / "system" / "python"
+    system_python.parent.mkdir(parents=True)
+    system_python.write_text("", encoding="utf-8")
+    fallback_python = tmp_path / "fallback" / "python"
+    fallback_python.parent.mkdir(parents=True)
+    fallback_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        runtime_module.os, "environ", {"PATH": str(system_python.parent)}
+    )
+    monkeypatch.setattr(
+        python_env_module.shutil,
+        "which",
+        lambda command, path=None: (
+            str(system_python)
+            if command == "python" and path == str(system_python.parent)
+            else None
+        ),
+    )
+    monkeypatch.setattr(python_env_module.sys, "executable", str(fallback_python))
+
+    env = await runtime_module.build_command_env(
+        runtime=ResolvedCommandRuntime(
+            kind=CommandRuntimeKind.BASH,
+            executable="bash",
+            display_name="Bash",
+        )
+    )
+
+    assert env[AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY] == str(system_python.resolve())
+    assert env["PATH"] == str(system_python.parent)
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_does_not_duplicate_current_python_dir_at_path_front(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fallback_python = tmp_path / "fallback" / "python"
+    fallback_python.parent.mkdir(parents=True)
+    fallback_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": str(fallback_python.parent)},
+    )
+    monkeypatch.setattr(
+        python_env_module.shutil,
+        "which",
+        lambda command, path=None: None,
+    )
+    monkeypatch.setattr(python_env_module.sys, "executable", str(fallback_python))
+
+    env = await runtime_module.build_command_env(
+        runtime=ResolvedCommandRuntime(
+            kind=CommandRuntimeKind.POWERSHELL,
+            executable="powershell.exe",
+            display_name="PowerShell",
+        )
+    )
+
+    assert env[AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY] == str(fallback_python.resolve())
+    assert env["PATH"] == str(fallback_python.parent)
 
 
 @pytest.mark.asyncio

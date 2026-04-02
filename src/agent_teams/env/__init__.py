@@ -40,6 +40,11 @@ from agent_teams.env.github_connectivity import (
     GitHubConnectivityProbeResult,
     GitHubConnectivityProbeService,
 )
+from agent_teams.env.python_env import (
+    AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY,
+    bind_subprocess_python_env,
+    resolve_subprocess_python_executable,
+)
 from agent_teams.env.github_env import (
     GH_NO_EXTENSION_UPDATE_NOTIFIER_ENV_KEY,
     GH_NO_UPDATE_NOTIFIER_ENV_KEY,
@@ -88,6 +93,7 @@ __all__ = [
     "ProxyConfigService",
     "apply_proxy_env_to_process_env",
     "build_subprocess_env",
+    "bind_subprocess_python_env",
     "extract_proxy_env_vars",
     "build_github_cli_env",
     "get_app_env_file_path",
@@ -104,9 +110,11 @@ __all__ = [
     "parse_no_proxy_rules",
     "proxy_applies_to_url",
     "resolve_proxy_env_config",
+    "resolve_subprocess_python_executable",
     "normalize_github_token",
     "resolve_github_token_from_env",
     "sync_proxy_env_to_process_env",
+    "AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY",
     "WebConnectivityProbeDiagnostics",
     "WebConnectivityProbeRequest",
     "WebConnectivityProbeResult",

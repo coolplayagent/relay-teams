@@ -9,6 +9,9 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+import agent_teams.env.python_env as python_env_module
+
+from agent_teams.env import AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY
 
 
 class TestExtractPathsFromCommand:
@@ -242,6 +245,83 @@ def test_describe_runtime_shell_reports_powershell_when_git_bash_is_missing(
 
     assert summary.shell_info == "PowerShell"
     assert summary.shell_path.endswith("powershell.exe")
+
+
+def test_build_shell_env_sync_prefers_python_from_target_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    system_python = tmp_path / "system" / "python"
+    system_python.parent.mkdir(parents=True)
+    system_python.write_text("", encoding="utf-8")
+    fallback_python = tmp_path / "fallback" / "python"
+    fallback_python.parent.mkdir(parents=True)
+    fallback_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_resolve_gh_path_sync", lambda: None)
+    monkeypatch.setattr(
+        shell_executor.os, "environ", {"PATH": str(system_python.parent)}
+    )
+    monkeypatch.setattr(
+        python_env_module.shutil,
+        "which",
+        lambda command, path=None: (
+            str(system_python)
+            if command == "python" and path == str(system_python.parent)
+            else None
+        ),
+    )
+    monkeypatch.setattr(python_env_module.sys, "executable", str(fallback_python))
+
+    env = shell_executor.build_shell_env_sync(
+        shell=shell_executor.ResolvedShell(
+            kind=shell_executor.ShellKind.BASH,
+            executable="bash",
+            display_name="Bash",
+        )
+    )
+
+    assert env[AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY] == str(system_python.resolve())
+    assert env["PATH"] == str(system_python.parent)
+
+
+def test_build_shell_env_sync_does_not_duplicate_current_python_dir_at_path_front(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    fallback_python = tmp_path / "fallback" / "python"
+    fallback_python.parent.mkdir(parents=True)
+    fallback_python.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_resolve_gh_path_sync", lambda: None)
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {"PATH": str(fallback_python.parent)},
+    )
+    monkeypatch.setattr(
+        python_env_module.shutil,
+        "which",
+        lambda command, path=None: None,
+    )
+    monkeypatch.setattr(python_env_module.sys, "executable", str(fallback_python))
+
+    env = shell_executor.build_shell_env_sync(
+        shell=shell_executor.ResolvedShell(
+            kind=shell_executor.ShellKind.BASH,
+            executable="bash",
+            display_name="Bash",
+        )
+    )
+
+    assert env[AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY] == str(fallback_python.resolve())
+    assert env["PATH"] == str(fallback_python.parent)
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +599,8 @@ async def test_spawn_shell_injects_github_token_and_bundled_path(
     assert env["GH_TOKEN"] == "ghp_secret"
     assert env["GITHUB_TOKEN"] == "ghp_secret"
     assert env["GH_PROMPT_DISABLED"] == "1"
-    assert str(gh.parent) == env["PATH"].split(os.pathsep)[0]
+    assert env[AGENT_TEAMS_PYTHON_EXECUTABLE_ENV_KEY]
+    assert str(gh.parent) in env["PATH"].split(os.pathsep)
 
 
 @pytest.mark.asyncio

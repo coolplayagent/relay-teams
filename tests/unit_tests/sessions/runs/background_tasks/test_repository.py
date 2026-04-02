@@ -194,3 +194,44 @@ def test_background_task_repository_can_interrupt_specific_records(
     assert interrupted is not None
     assert interrupted.status == BackgroundTaskStatus.STOPPED
     assert interrupted.pid is None
+
+
+def test_background_task_repository_uses_rowid_as_stable_tiebreak_for_equal_timestamps(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-terminals-ordering.db"
+    repo = BackgroundTaskRepository(db_path)
+    shared_time = datetime.now(tz=timezone.utc)
+
+    first = BackgroundTaskRecord(
+        background_task_id="exec-1",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        log_path="tmp/background_tasks/exec-1.log",
+        created_at=shared_time,
+        updated_at=shared_time,
+    )
+    second = BackgroundTaskRecord(
+        background_task_id="exec-2",
+        run_id="run-1",
+        session_id="session-1",
+        command="echo done",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.COMPLETED,
+        log_path="tmp/background_tasks/exec-2.log",
+        created_at=shared_time,
+        updated_at=shared_time,
+    )
+
+    repo.upsert(first)
+    repo.upsert(second)
+
+    listed = repo.list_by_run("run-1")
+
+    assert tuple(record.background_task_id for record in listed) == (
+        "exec-2",
+        "exec-1",
+    )
